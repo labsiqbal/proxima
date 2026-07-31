@@ -41,6 +41,22 @@ def _client(tmp_path: Path):
     return app, client
 
 
+def _decision_arguments(title: str = "Decision") -> dict:
+    return {
+        "title": title,
+        "prompt": "Choose A or B.",
+        "context": "The Task is waiting for the owner's choice.",
+        "response": {
+            "type": "choice",
+            "choices": [
+                {"id": "a", "label": "Option A"},
+                {"id": "b", "label": "Option B"},
+            ],
+        },
+        "task_id": 1,
+    }
+
+
 def test_fresh_master_thread_receives_bounded_durable_history():
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
@@ -292,9 +308,15 @@ def test_invalid_envelope_rejects_valid_mutation_in_same_round(
         ).fetchone()
     )
     valid = (
-        '<proxima-tool>{"name":"create_attention","arguments":'
-        '{"title":"Must not exist","message":"No partial action"}}'
-        "</proxima-tool>"
+        "<proxima-tool>"
+        + json.dumps(
+            {
+                "name": "create_attention",
+                "arguments": _decision_arguments("Must not exist"),
+            },
+            separators=(",", ":"),
+        )
+        + "</proxima-tool>"
     )
 
     results = handle_master_response(
@@ -913,7 +935,7 @@ def test_tool_round_cap_fails_visibly_without_executing_action(tmp_path: Path):
     envelope = json.dumps(
         {
             "name": "create_attention",
-            "arguments": {"title": "Hidden action", "message": "Must not happen"},
+            "arguments": _decision_arguments("Hidden action"),
         }
     )
 
@@ -965,10 +987,15 @@ def test_request_and_call_caps_reject_the_whole_round_before_actions(
         "oversized",
     )
     envelopes = "".join(
-        (
-            '<proxima-tool>{"name":"create_attention","arguments":'
-            f'{{"title":"Call {index}","message":"no"}}}}</proxima-tool>'
+        "<proxima-tool>"
+        + json.dumps(
+            {
+                "name": "create_attention",
+                "arguments": _decision_arguments(f"Call {index}"),
+            },
+            separators=(",", ":"),
         )
+        + "</proxima-tool>"
         for index in range(9)
     )
     too_many = run_for(envelopes, "too many")

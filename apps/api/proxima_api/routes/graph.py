@@ -11,6 +11,7 @@ from fastapi import Depends, HTTPException, status
 
 from .. import (
     artifact_registry,
+    master_decisions,
     container_registry,
     features,
     repo_remote,
@@ -1137,6 +1138,14 @@ def register(app, deps):
     ):
         require_graph()
         job = graph_job_or_404(job_id, user)
+        pending_decision = master_decisions.pending_decision_for_job(db(), job_id)
+        if pending_decision:
+            raise HTTPException(
+                status_code=409,
+                detail=master_decisions.pending_decision_conflict(
+                    int(pending_decision["id"])
+                ),
+            )
         ensure_correctable(job)
         incomplete = db().execute(
             "SELECT 1 FROM node_states WHERE job_id = ? AND status != 'done' LIMIT 1",
@@ -1144,41 +1153,126 @@ def register(app, deps):
         ).fetchone()
         if incomplete:
             raise HTTPException(status_code=409, detail="all graph nodes must be done")
-        # Repo plan (slice 2, flag-gated): the final approve is the merge point
-        # (T1 local-first) - land the plan's branch on its base branch before
-        # the plan closes. Refusals and conflicts surface as 409 and PARK the
-        # plan in review (worktree kept for resolution); approve again after
-        # resolving to retry. Same contract as the linear approve.
+        # Repo plan (slice 2, flag-gated): claim a durable approval generation
+        # before any Git side effect so decision creation cannot land mid-merge.
+        # Never hold db_lock across external Git work. Same contract as linear.
+        wt = None
+        needs_git_merge = False
         if features.enabled(app.state.config, features.REPO_WORKTREES):
             wt = worktrees.job_worktree_row(db(), job_id)
             if wt and wt["status"] in ("active", "conflict", "merging"):
+                needs_git_merge = True
+        use_approval_intent = bool(
+            wt is not None
+            and wt["status"] in ("active", "conflict", "merging", "merged")
+        )
+        approval_intent = None
+        resume_merged = False
+        if use_approval_intent:
+            conn = db()
+            with app.state.db_lock:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    approval_intent, resume_merged = (
+                        master_decisions.claim_final_approval_intent(
+                            conn,
+                            job_id=job_id,
+                            actor_user_id=int(user["id"]),
+                            allow_resume_merged=True,
+                        )
+                    )
+                    conn.execute("COMMIT")
+                except master_decisions.MasterDecisionError as exc:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK")
+                    if exc.code == "master_decision_pending":
+                        pending = master_decisions.pending_decision_for_job(
+                            db(), job_id
+                        )
+                        detail = (
+                            master_decisions.pending_decision_conflict(
+                                int(pending["id"])
+                            )
+                            if pending is not None
+                            else {"code": exc.code, "message": str(exc)}
+                        )
+                    else:
+                        detail = {"code": exc.code, "message": str(exc)}
+                    raise HTTPException(
+                        status_code=exc.status_code, detail=detail
+                    ) from exc
+                except Exception:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK")
+                    raise
+            if needs_git_merge and not resume_merged:
                 try:
                     merged = worktrees.merge_job_worktree(db(), job, wt)
-                    try:
-                        from ..code_graph_lifecycle import notify_task_merged
-                        notify_task_merged(app, merged)
-                    except Exception:
-                        logging.getLogger("proxima.graph").exception(
-                            "Code graph post-merge hook failed (plan stays merged)"
-                        )
                 except worktrees.WorktreeError as exc:
+                    conn = db()
+                    with app.state.db_lock:
+                        conn.execute("BEGIN IMMEDIATE")
+                        try:
+                            master_decisions.release_final_approval_intent(
+                                conn,
+                                job_id=job_id,
+                                generation=int(approval_intent["generation"]),
+                                error=str(exc),
+                            )
+                            conn.execute("COMMIT")
+                        except Exception:
+                            if conn.in_transaction:
+                                conn.execute("ROLLBACK")
+                            raise
                     raise HTTPException(
                         status_code=409,
                         detail=f"merge blocked - plan stays in review: {exc}",
                     ) from exc
-                # T9 (slice 11): push AFTER the local merge, only on explicit
-                # per-area opt-in. A failed push never un-merges and never
-                # fails the approve - it surfaces on the worktree row as a
-                # job-level blocker (retry: POST /api/jobs/{id}/push).
+                try:
+                    from ..code_graph_lifecycle import notify_task_merged
+                    notify_task_merged(app, merged)
+                except Exception:
+                    logging.getLogger("proxima.graph").exception(
+                        "Code graph post-merge hook failed (plan stays merged)"
+                    )
                 try:
                     repo_remote.push_after_merge(db(), merged)
                 except Exception:
-                    logging.getLogger("proxima.graph").exception("push after merge failed unexpectedly (plan stays merged)")
+                    logging.getLogger("proxima.graph").exception(
+                        "push after merge failed unexpectedly (plan stays merged)"
+                    )
         conn = db()
         notify_sessions: set[int] = set()
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                if approval_intent is not None:
+                    if not master_decisions.intent_is_live_generation(
+                        conn,
+                        job_id=job_id,
+                        generation=int(approval_intent["generation"]),
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "code": "final_approval_generation_mismatch",
+                                "message": (
+                                    "Final approval generation is no longer live; "
+                                    "retry approve if the plan is still in review"
+                                ),
+                            },
+                        )
+                else:
+                    pending_decision = master_decisions.pending_decision_for_job(
+                        conn, job_id
+                    )
+                    if pending_decision:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=master_decisions.pending_decision_conflict(
+                                int(pending_decision["id"])
+                            ),
+                        )
                 approved = state.guarded_transition(
                     conn,
                     "jobs",
@@ -1191,7 +1285,16 @@ def register(app, deps):
                     ),
                 )
                 if not approved:
-                    conn.execute("ROLLBACK")
+                    if approval_intent is not None:
+                        master_decisions.release_final_approval_intent(
+                            conn,
+                            job_id=job_id,
+                            generation=int(approval_intent["generation"]),
+                            error="graph job left review before finalize",
+                        )
+                        conn.execute("COMMIT")
+                    else:
+                        conn.execute("ROLLBACK")
                     raise HTTPException(
                         status_code=409,
                         detail="graph job changed concurrently",
@@ -1208,6 +1311,22 @@ def register(app, deps):
                     mutation="review_approved",
                 )
                 notify_sessions.add(task_event["session_id"])
+                if approval_intent is not None:
+                    if not master_decisions.finalize_final_approval_intent(
+                        conn,
+                        job_id=job_id,
+                        generation=int(approval_intent["generation"]),
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "code": "final_approval_generation_mismatch",
+                                "message": (
+                                    "Final approval generation changed during "
+                                    "finalize"
+                                ),
+                            },
+                        )
                 conn.execute("COMMIT")
             except Exception:
                 if conn.in_transaction:

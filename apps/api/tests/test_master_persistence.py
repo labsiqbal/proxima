@@ -198,6 +198,25 @@ def _alpha_v30_database(path: Path, workspace: Path) -> dict[str, int]:
             ),
         ).lastrowid
     )
+    decision_attention_id = int(
+        conn.execute(
+            "INSERT INTO attention_items("
+            "kind, title, target_json, source_key"
+            ") VALUES ('alpha_decision', 'Choose rollout window', ?, ?)",
+            (
+                json.dumps(
+                    {
+                        "view": "alpha",
+                        "alpha_session_id": alpha_session_id,
+                        "origin_message_id": message_id,
+                        "job_id": job_id,
+                        "message": "Should rollout happen Saturday or Sunday?",
+                    }
+                ),
+                f"alpha:{alpha_session_id}:rollout-window",
+            ),
+        ).lastrowid
+    )
     conn.executemany(
         "INSERT INTO app_settings(key, value) VALUES (?, ?)",
         (
@@ -232,6 +251,7 @@ def _alpha_v30_database(path: Path, workspace: Path) -> dict[str, int]:
         "delegation_id": delegation_id,
         "checkpoint_id": checkpoint_id,
         "attention_id": attention_id,
+        "decision_attention_id": decision_attention_id,
     }
 
 
@@ -261,7 +281,26 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
 
-    assert current_version(app.state.db) == 54
+    assert current_version(app.state.db) == 55
+    assert app.state.db.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'master_decisions'"
+    ).fetchone()
+    migrated_decision = app.state.db.execute(
+        "SELECT attention_item_id, master_session_id, origin_message_id, "
+        "requesting_job_id, prompt, context, state "
+        "FROM master_decisions WHERE attention_item_id = ?",
+        (ids["decision_attention_id"],),
+    ).fetchone()
+    assert dict(migrated_decision) == {
+        "attention_item_id": ids["decision_attention_id"],
+        "master_session_id": ids["session_id"],
+        "origin_message_id": ids["message_id"],
+        "requesting_job_id": ids["job_id"],
+        "prompt": "Should rollout happen Saturday or Sunday?",
+        "context": "Preserved from an earlier Master decision request.",
+        "state": "pending",
+    }
     profile = app.state.db.execute(
         "SELECT id, slug, name, system_kind FROM profiles WHERE system_kind = 'master'"
     ).fetchone()

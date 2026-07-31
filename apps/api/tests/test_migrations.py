@@ -491,9 +491,9 @@ def test_v48_retains_published_successor_ordering_gap(tmp_path: Path):
         recovery_json=_recovery_payload(ids["job_id"], 2),
     )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54, 55]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 54
+    assert current_version(conn) == 55
     gap = dict(
         conn.execute(
             "SELECT id, task_event_id, recovery_json, state, "
@@ -630,7 +630,7 @@ def test_v48_keeps_unpublished_recoveries_strictly_orderable(
             ),
         )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54, 55]
     assert [
         tuple(row)
         for row in conn.execute(
@@ -727,9 +727,9 @@ def test_v50_schema_separates_markers_and_recovery_coverage(
         "schema-46-final-contract.db",
     )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54, 55]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 54
+    assert current_version(conn) == 55
     assert {
         row[1]
         for row in conn.execute(
@@ -908,7 +908,7 @@ def test_v49_detects_reversals_and_aggregates_corrections_per_task(
         ).fetchall()
     ]
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54, 55]
     assert run_migrations(conn, str(db_path)) == []
     assert [
         tuple(row)
@@ -1074,7 +1074,7 @@ def test_v50_preserves_multiple_delivered_v47_markers_before_v48(
     conn.commit()
 
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54, 55]
     assert run_migrations(conn, str(db_path)) == []
     after_corrections = [
         tuple(row)
@@ -1179,7 +1179,7 @@ def test_v50_recovers_multiple_delivered_markers_from_v48_history(
         ).fetchall()
     ] == sorted(correction_ids)
 
-    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53, 54]
+    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53, 54, 55]
     assert [
         int(row["id"])
         for row in conn.execute(
@@ -1253,7 +1253,7 @@ def test_v50_records_pre_staging_identity_loss_without_inventing_markers(
     )
     conn.execute("DROP TABLE task_recovery_delivered_marker_staging")
 
-    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53, 54]
+    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53, 54, 55]
     assert conn.execute(
         "SELECT COUNT(*) FROM task_recovery_corrections"
     ).fetchone()[0] == 0
@@ -1297,7 +1297,7 @@ def test_recovery_audit_identity_survives_task_source_deletion(
         for index, correction_id in enumerate(correction_ids, start=1)
     ]
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54, 55]
     source_before = [
         (int(row["id"]), int(row["task_event_id"]))
         for row in conn.execute(
@@ -1433,7 +1433,7 @@ def test_recovery_source_identity_survives_event_and_later_cascades(
         "recovery-source-event-cascade.db",
     )
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54, 55]
     source_before = [
         (int(row["id"]), int(row["task_event_id"]))
         for row in conn.execute(
@@ -1558,7 +1558,7 @@ def test_v52_completes_partial_recovery_tombstone_atomically(
         (ids["job_id"],),
     ).fetchone()[0] == 0
 
-    assert run_migrations(conn, str(db_path)) == [52, 53, 54]
+    assert run_migrations(conn, str(db_path)) == [52, 53, 54, 55]
     assert run_migrations(conn, str(db_path)) == []
     tombstone = dict(
         conn.execute(
@@ -1660,7 +1660,7 @@ def test_v53_repairs_v51_node_session_guess_from_event_provenance(
         (ids["job_id"],),
     ).fetchone()[0] == node_session_id
 
-    assert run_migrations(conn, str(db_path)) == [53, 54]
+    assert run_migrations(conn, str(db_path)) == [53, 54, 55]
     assert run_migrations(conn, str(db_path)) == []
     assert conn.execute(
         "SELECT task_session_id FROM task_recovery_history_tombstones "
@@ -1744,7 +1744,7 @@ def test_v53_never_promotes_mixed_graph_sessions_to_task_identity(
         (job_id,),
     ).fetchone()[0] == node_session_ids[0]
 
-    assert run_migrations(conn, str(db_path)) == [53, 54]
+    assert run_migrations(conn, str(db_path)) == [53, 54, 55]
     assert conn.execute(
         "SELECT task_session_id FROM task_recovery_history_tombstones "
         "WHERE job_id = ?",
@@ -1989,7 +1989,7 @@ def test_v54_backfills_schedule_timezone_project_and_disables_missing_sources(
         """
     )
 
-    assert run_migrations(conn, str(db_path), migrations=[MIGRATIONS[-1]]) == [54]
+    assert run_migrations(conn, str(db_path), migrations=[next(m for m in MIGRATIONS if m[0] == 54)]) == [54]
     row = conn.execute(
         "SELECT project_id, timezone, enabled FROM schedules WHERE id = 9"
     ).fetchone()
@@ -2060,7 +2060,7 @@ def test_v54_rewrites_legacy_last_run_minute_so_current_minute_cannot_double_fir
         """
     )
 
-    assert run_migrations(conn, str(db_path), migrations=[MIGRATIONS[-1]]) == [54]
+    assert run_migrations(conn, str(db_path), migrations=[next(m for m in MIGRATIONS if m[0] == 54)]) == [54]
     rewritten = conn.execute(
         "SELECT last_run_minute, timezone, enabled FROM schedules WHERE id = 9"
     ).fetchone()
@@ -2136,10 +2136,10 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
 
     assert run_migrations(conn, str(db_path)) == [
         32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
-        49, 50, 51, 52, 53, 54,
+        49, 50, 51, 52, 53, 54, 55
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 54
+    assert current_version(conn) == 55
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -2500,6 +2500,7 @@ def test_v19_adds_job_target_binding_and_worktrees(tmp_path: Path):
     a repo job's worktree row dies with its job (ON DELETE CASCADE)."""
     conn = connect(tmp_path / "m.db")
     conn.executescript("""
+      CREATE TABLE users(id INTEGER PRIMARY KEY);
       CREATE TABLE messages(id INTEGER PRIMARY KEY);
       CREATE TABLE profiles(id INTEGER PRIMARY KEY);
       CREATE TABLE runs(id INTEGER PRIMARY KEY);
@@ -2635,9 +2636,13 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
     assert run_migrations(conn, str(db_path)) == [
         28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
         44,
-        45, 46, 47, 48, 49, 50, 51, 52, 53, 54
+        45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55
     ]
-    assert current_version(conn) == 54
+    assert current_version(conn) == 55
+    assert conn.execute(
+        "SELECT path_identity FROM projects WHERE id = ?",
+        (container_id,),
+    ).fetchone()["path_identity"].startswith(("posix:", "windows:"))
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -2680,9 +2685,9 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
 
     assert run_migrations(conn, str(db_path)) == [
         29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
-        46, 47, 48, 49, 50, 51, 52, 53, 54
+        46, 47, 48, 49, 50, 51, 52, 53, 54, 55
     ]
-    assert current_version(conn) == 54
+    assert current_version(conn) == 55
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -2896,10 +2901,10 @@ def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
     db_path, conn = _prepare_schema_35_graph_fixture(tmp_path)
 
     assert run_migrations(conn, str(db_path)) == [
-        36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54
+        36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 54
+    assert current_version(conn) == 55
 
     columns = {
         row[1] for row in conn.execute("PRAGMA table_info(graph_states)")
@@ -2998,9 +3003,9 @@ def test_v39_preserves_epoch_identity_and_recovers_pending_fleet(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54
+        39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55
     ]
-    assert current_version(conn) == 54
+    assert current_version(conn) == 55
     state = conn.execute(
         "SELECT pending_focus, pending_container_id "
         "FROM master_focus_state WHERE master_session_id = 3"
@@ -3098,7 +3103,7 @@ def test_v40_persists_task_focus_after_origin_message_deletion(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54
+        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55
     ]
     captured = conn.execute(
         "SELECT origin_focus_epoch_id, origin_focus_captured "
@@ -3227,7 +3232,7 @@ def test_v42_preserves_historical_master_scope_after_container_deletion(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54
+        42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55
     ]
     conn.execute("DELETE FROM projects WHERE id = 7")
     context = conn.execute(
@@ -3267,3 +3272,122 @@ def test_v42_preserves_historical_master_scope_after_container_deletion(
             "UPDATE message_focus SET focus_epoch_id = NULL "
             "WHERE message_id = 17"
         )
+
+
+def test_master_decision_migration_skips_start_failure_and_keeps_owner(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "legacy-decisions.db"
+    conn = connect(db_path)
+    conn.executescript(SCHEMA)
+    owner_id = conn.execute(
+        "INSERT INTO users(username, os_user) VALUES ('owner', 'owner')"
+    ).lastrowid
+    session_id = conn.execute(
+        "INSERT INTO sessions(title, mode, owner_user_id, project_id) "
+        "VALUES ('Master', 'master', ?, NULL)",
+        (owner_id,),
+    ).lastrowid
+    message_id = conn.execute(
+        "INSERT INTO messages(session_id, role, content, author) "
+        "VALUES (?, 'user', 'Choose a window', 'owner')",
+        (session_id,),
+    ).lastrowid
+    job_id = conn.execute(
+        "INSERT INTO jobs(title, status, engine, created_by, "
+        "origin_master_session_id) VALUES ('Ship', 'queued', 'linear', ?, ?)",
+        (owner_id, session_id),
+    ).lastrowid
+    owner_attention_id = conn.execute(
+        "INSERT INTO attention_items("
+        "kind, title, target_json, status, source_key"
+        ") VALUES ("
+        "'master_decision', 'Choose rollout window', ?, 'open', ?"
+        ")",
+        (
+            json.dumps(
+                {
+                    "view": "master",
+                    "message": "Should rollout happen Saturday or Sunday?",
+                    "origin_message_id": message_id,
+                    "job_id": job_id,
+                    "origin_master_session_id": session_id,
+                }
+            ),
+            f"master:{session_id}:rollout-window",
+        ),
+    ).lastrowid
+    start_attention_id = conn.execute(
+        "INSERT INTO attention_items("
+        "kind, title, target_json, status, source_key"
+        ") VALUES ("
+        "'master_decision', 'Master could not start queued work', ?, 'open', ?"
+        ")",
+        (
+            json.dumps(
+                {
+                    "view": "master",
+                    "job_id": job_id,
+                    "error": "runner missing",
+                    "origin_master_session_id": session_id,
+                }
+            ),
+            f"master-start:{job_id}",
+        ),
+    ).lastrowid
+    # Simulate a pre-v55 database: ledger tables are absent, Attention remains.
+    conn.execute("DROP TABLE IF EXISTS master_decisions")
+    conn.execute("DROP TABLE IF EXISTS job_final_approval_intents")
+    conn.commit()
+
+    migration = next(item for item in MIGRATIONS if item[0] == 55)
+    migration[2](conn)
+
+    owner_row = conn.execute(
+        "SELECT prompt, requesting_job_id, state FROM master_decisions "
+        "WHERE attention_item_id = ?",
+        (owner_attention_id,),
+    ).fetchone()
+    assert dict(owner_row) == {
+        "prompt": "Should rollout happen Saturday or Sunday?",
+        "requesting_job_id": job_id,
+        "state": "pending",
+    }
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM master_decisions "
+            "WHERE attention_item_id = ?",
+            (start_attention_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    bare = conn.execute(
+        "SELECT kind, status, target_json FROM attention_items WHERE id = ?",
+        (start_attention_id,),
+    ).fetchone()
+    assert bare["kind"] == "master_decision"
+    assert bare["status"] == "open"
+    assert "decision_id" not in json.loads(bare["target_json"])
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'job_final_approval_intents'"
+    ).fetchone()
+
+    # Idempotent re-apply: owner decision stays singular, start-failure stays bare.
+    migration[2](conn)
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM master_decisions "
+            "WHERE attention_item_id = ?",
+            (start_attention_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM master_decisions "
+            "WHERE attention_item_id = ?",
+            (owner_attention_id,),
+        ).fetchone()[0]
+        == 1
+    )

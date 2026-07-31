@@ -467,6 +467,201 @@ describe('MasterScreen', () => {
     expect(screen.queryByRole('button', { name: /work panel/i })).not.toBeInTheDocument()
   })
 
+  it('focuses the durable origin message once after Master mounts', async () => {
+    const onFocusMessageConsumed = vi.fn()
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      messages: [
+        {
+          id: 21,
+          role: 'user',
+          content: 'Need a rollout window',
+          author: 'owner',
+        },
+      ],
+    } as never)
+
+    render(
+      <MasterScreen
+        token="token"
+        runners={runners as never}
+        onOpenJob={vi.fn()}
+        focusMessageId={21}
+        onFocusMessageConsumed={onFocusMessageConsumed}
+      />,
+    )
+
+    expect(await screen.findByText('Need a rollout window')).toBeInTheDocument()
+    expect(document.querySelector('[data-message-id="21"]')).not.toBeNull()
+    await vi.waitFor(() => {
+      expect(onFocusMessageConsumed).toHaveBeenCalledTimes(1)
+    })
+    expect(actions.setHistory).toHaveBeenCalledWith({ kind: 'roving' })
+  })
+
+  it('restores durable decision context with Task and conversation cross-links', async () => {
+    const onOpenJob = vi.fn()
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      desk: {
+        ...state.desk,
+        decisions: [
+          {
+            id: 8,
+            attention_item_id: 11,
+            master_session_id: 9,
+            origin_message_id: 21,
+            requesting_job_id: 3,
+            title: 'Choose rollout window',
+            prompt: 'Which rollout window should the release use?',
+            context: 'Both choices include two hours of planned downtime.',
+            response_shape: {
+              type: 'choice',
+              choices: [
+                { id: 'saturday', label: 'Saturday 02:00 UTC' },
+                { id: 'sunday', label: 'Sunday 02:00 UTC' },
+              ],
+            },
+            state: 'deferred',
+            response: null,
+            version: 2,
+            created_at: '2026-01-01 00:00:00',
+            updated_at: '2026-01-01 00:01:00',
+            legacy_without_task: false,
+            task: {
+              id: 3,
+              title: 'Review Task',
+              status: 'review',
+              engine: 'legacy',
+            },
+          },
+        ],
+      },
+    } as never)
+    render(
+      <MasterScreen
+        token="token"
+        runners={runners as never}
+        onOpenJob={onOpenJob}
+      />,
+    )
+
+    expect(
+      screen.getByText('Which rollout window should the release use?'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Deferred')).toBeInTheDocument()
+    await userEvent.setup().click(
+      screen.getByRole('button', { name: 'Open Task #3' }),
+    )
+    expect(onOpenJob).toHaveBeenCalledWith(3, 'legacy')
+    await userEvent.setup().click(
+      screen.getByRole('button', { name: 'Open Master conversation' }),
+    )
+    expect(actions.setHistory).toHaveBeenCalledWith({ kind: 'roving' })
+  })
+
+  it('shows bare master_decision attention while hiding ledger-backed duplicates', async () => {
+    const onOpenJob = vi.fn()
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      desk: {
+        ...state.desk,
+        decisions: [
+          {
+            id: 8,
+            attention_item_id: 11,
+            master_session_id: 9,
+            origin_message_id: 21,
+            requesting_job_id: 3,
+            title: 'Choose rollout window',
+            prompt: 'Which rollout window should the release use?',
+            context: 'Both choices include two hours of planned downtime.',
+            response_shape: {
+              type: 'choice',
+              choices: [
+                { id: 'saturday', label: 'Saturday 02:00 UTC' },
+                { id: 'sunday', label: 'Sunday 02:00 UTC' },
+              ],
+            },
+            state: 'pending',
+            response: null,
+            version: 1,
+            created_at: '2026-01-01 00:00:00',
+            updated_at: '2026-01-01 00:00:00',
+            legacy_without_task: false,
+            task: {
+              id: 3,
+              title: 'Review Task',
+              status: 'review',
+              engine: 'legacy',
+            },
+          },
+        ],
+        attention: [
+          {
+            id: 'attention:11',
+            kind: 'master_decision',
+            title: 'Choose rollout window',
+            target: { view: 'master', decision_id: 8, job_id: 3 },
+            inline_ok: false,
+            actions: [],
+            status: 'open',
+            created_at: '2026-01-01 00:00:00',
+            decision: {
+              id: 8,
+              title: 'Choose rollout window',
+              prompt: 'Which rollout window should the release use?',
+            },
+          },
+          {
+            id: 'attention:99',
+            kind: 'master_decision',
+            title: 'Master could not start queued work',
+            target: { view: 'master', job_id: 7 },
+            inline_ok: false,
+            actions: [],
+            status: 'open',
+            created_at: '2026-01-01 00:00:00',
+          },
+          {
+            id: 'job:3',
+            kind: 'job_review',
+            title: 'Review Task needs review',
+            target: { view: 'task', job_id: 3 },
+            inline_ok: true,
+            actions: ['approve', 'reject'],
+            status: 'open',
+            created_at: '2026-01-01 00:00:00',
+          },
+        ],
+      },
+    } as never)
+    render(
+      <MasterScreen
+        token="token"
+        runners={runners as never}
+        onOpenJob={onOpenJob}
+      />,
+    )
+
+    expect(
+      screen.getByText('Which rollout window should the release use?'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Master could not start queued work'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Review Task needs review')).toBeInTheDocument()
+    // ledger-backed duplicate title is only shown via the decision card prompt/context,
+    // not as a second generic attention row heading
+    expect(
+      screen.getAllByText('Choose rollout window').length,
+    ).toBeLessThanOrEqual(1)
+    await userEvent.setup().click(
+      screen.getByRole('button', { name: /Master could not start queued work/ }),
+    )
+    expect(onOpenJob).toHaveBeenCalledWith(7, undefined)
+  })
+
   it('keeps Fleet Work, Decisions, and Safety as independent accordions with bounded lists', async () => {
     render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
     const panels = document.querySelectorAll<HTMLDetailsElement>('.master-side-section')

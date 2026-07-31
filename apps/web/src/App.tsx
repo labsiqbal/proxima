@@ -332,6 +332,21 @@ export function isDelegateDestination(view: View): boolean {
   return view === 'master' || view === 'activity' || view === 'artifacts' || view === 'task'
 }
 
+/** Plan Work-mode Open Master conversation: always enter Delegate, then focus. */
+export function planOpenMasterConversation(
+  originMessageId?: number | null,
+  masterOrchestrator = true,
+): { enterDelegate: true; pendingMasterMessageId: number | null } | null {
+  if (!masterOrchestrator) return null
+  const pendingMasterMessageId =
+    typeof originMessageId === 'number' &&
+    Number.isSafeInteger(originMessageId) &&
+    originMessageId > 0
+      ? originMessageId
+      : null
+  return { enterDelegate: true, pendingMasterMessageId }
+}
+
 function ViewFallback({ label = 'Loading...' }: { label?: string }) {
   return <section className="placeholder-view"><div className="assistant-bubble compact"><p className="muted">{label}</p></div></section>
 }
@@ -450,6 +465,7 @@ export function App() {
   const [runRecipeLabel, setRunRecipeLabel] = React.useState<string | undefined>(undefined)
   const [runRecipeInstantResult, setRunRecipeInstantResult] = React.useState<string | undefined>(undefined)
   const [pendingFile, setPendingFile] = React.useState<{ slug: string; path: string } | null>(null)
+  const [pendingMasterMessageId, setPendingMasterMessageId] = React.useState<number | null>(null)
   const [pendingArtifact, setPendingArtifact] = React.useState<OutputLink | null>(null)
   const reviewDraftNonce = React.useRef(0)
   const [reviewDraft, setReviewDraft] = React.useState<{ text: string; nonce: number } | null>(null)
@@ -466,6 +482,7 @@ export function App() {
     setDesignProjectSlug(null)
     setPendingFile(null)
     setPendingArtifact(null)
+    setPendingMasterMessageId(null)
     setReturnToChat(null)
   }, [])
   const clearDeepStack = React.useCallback(() => {
@@ -586,20 +603,6 @@ export function App() {
     }))
     setView('design')
   }, [])
-  const openAttentionTarget = React.useCallback((target: { view?: string; job_id?: number; engine?: string }) => {
-    if (target.job_id != null) {
-      openJobByEngine(target.job_id, target.engine, view)
-      return
-    }
-    if (target.view === 'master' || target.view === 'alpha') {
-      clearPendingNavigation()
-      clearDeepStack()
-      if (features.masterOrchestrator) setView('master')
-      return
-    }
-    if (target.view === 'settings') { clearPendingNavigation(); clearDeepStack(); setView('settings'); return }
-    if (target.view === 'activity') { clearPendingNavigation(); clearDeepStack(); setView('activity') }
-  }, [clearPendingNavigation, clearDeepStack, features.masterOrchestrator, openJobByEngine, view])
   const viewEnabled = React.useCallback((v: View) => isFeatureViewEnabled(v, features), [features])
   // When GraphScreen reports stage=editor from an in-surface open (library → plan),
   // ensure chrome Back + project lock know about the deep frame.
@@ -702,6 +705,26 @@ export function App() {
     setShellMode(mode)
     if (!options?.fromUrl) pushWorkHistory()
   }, [clearDeepStack, clearPendingNavigation, features.masterOrchestrator, pushWorkHistory, view])
+  const openMasterConversation = React.useCallback((originMessageId?: number | null) => {
+    const plan = planOpenMasterConversation(originMessageId, features.masterOrchestrator)
+    if (!plan) return
+    // Shared Delegate transition clears pending navigation; install the focus
+    // target afterward so Work-mode Attention/Task cross-links still land.
+    changeShellMode('delegate')
+    setPendingMasterMessageId(plan.pendingMasterMessageId)
+  }, [changeShellMode, features.masterOrchestrator])
+  const openAttentionTarget = React.useCallback((target: { view?: string; job_id?: number; engine?: string; origin_message_id?: number }) => {
+    if (target.job_id != null) {
+      openJobByEngine(target.job_id, target.engine, view)
+      return
+    }
+    if (target.view === 'master' || target.view === 'alpha') {
+      openMasterConversation(target.origin_message_id)
+      return
+    }
+    if (target.view === 'settings') { clearPendingNavigation(); clearDeepStack(); setView('settings'); return }
+    if (target.view === 'activity') { clearPendingNavigation(); clearDeepStack(); setView('activity') }
+  }, [clearPendingNavigation, clearDeepStack, openJobByEngine, openMasterConversation, view])
   const goView = (v: View) => {
     if (v === 'master') {
       changeShellMode('delegate')
@@ -1568,7 +1591,7 @@ export function App() {
       {!delegateActive && <HermesBanner token={token} runnerId={activeProfile?.runner_id} />}
       {!delegateActive && view === 'home' && !features.masterOrchestrator && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
         onActiveProject={setActiveProject} onActiveProfile={setActiveProfile} onCreateTask={createTask} onOpenJob={openJobByEngine} onSelectView={goView} />}
-      {features.masterOrchestrator && pane('master', masterHomeActive, <React.Suspense fallback={<ViewFallback label="Loading Master home..." />}><MasterScreen active={masterHomeActive} token={token} runners={runners} activeProject={null} onOpenJob={(id, engine) => openJobByEngine(id, engine, masterActive ? 'master' : 'home')} /></React.Suspense>)}
+      {features.masterOrchestrator && pane('master', masterHomeActive, <React.Suspense fallback={<ViewFallback label="Loading Master home..." />}><MasterScreen active={masterHomeActive} token={token} runners={runners} activeProject={null} onOpenJob={(id, engine) => openJobByEngine(id, engine, masterActive ? 'master' : 'home')} focusMessageId={pendingMasterMessageId} onFocusMessageConsumed={() => setPendingMasterMessageId(null)} /></React.Suspense>)}
       {(() => {
         // Keep Chat mounted (hidden when inactive) so draft text + busy run re-attach after leave/return.
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
@@ -1597,7 +1620,7 @@ export function App() {
           setDesignItemId(id)
           setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'task', originLabel: 'Task' }))
           setView('design')
-        } : undefined} onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }} /></section></React.Suspense>}
+        } : undefined} onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }} onOpenJob={(id, engine) => openJobByEngine(id, engine, 'task')} onOpenMaster={originMessageId => openMasterConversation(originMessageId)} /></section></React.Suspense>}
       {features.workflowGraph && view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} /></React.Suspense>}
       {features.designStudio && keep('design') && pane('design', designActive, <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={resolveDesignStudioProject(projects, designProjectSlug, activeProject)} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onStageChange={handleDesignStageChange} exitNonce={designExitNonce} /></React.Suspense>)}
       {!features.designStudio && designActive && (

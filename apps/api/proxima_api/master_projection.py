@@ -87,6 +87,18 @@ _ATTENTION_PAYLOAD_FIELDS = {
     "task_id",
     "toast_key",
 }
+_DECISION_PAYLOAD_FIELDS = {
+    "area_id",
+    "attention_id",
+    "attention_kind",
+    "attention_required",
+    "closed_without_owner_response",
+    "container_id",
+    "decision_id",
+    "decision_state",
+    "task_id",
+    "toast_key",
+}
 
 
 def _source_table_for(projection_type: str) -> str:
@@ -108,6 +120,8 @@ def _event_payload_fields(projection_type: str) -> set[str]:
         and projection_type != "master.satpam.recovery_failed"
     ):
         return _SATPAM_PAYLOAD_FIELDS
+    if projection_type.startswith("master.decision."):
+        return _DECISION_PAYLOAD_FIELDS
     return _ATTENTION_PAYLOAD_FIELDS
 
 
@@ -168,6 +182,17 @@ def _validate_event_payload(
             not in {"applied", "pending", "approved", "dismissed"}
         ):
             raise ValueError("Master Satpam projection payload is invalid")
+    elif projection_type.startswith("master.decision."):
+        expected_state = projection_type.rsplit(".", 1)[-1]
+        if (
+            not _positive_id(payload.get("attention_id"))
+            or payload.get("attention_kind") != "master_decision"
+            or not _positive_id(payload.get("decision_id"))
+            or payload.get("decision_state") != expected_state
+            or payload.get("task_id") is None
+            or not isinstance(payload.get("closed_without_owner_response"), bool)
+        ):
+            raise ValueError("Master decision projection payload is invalid")
     else:
         if (
             not _positive_id(payload.get("attention_id"))
@@ -191,6 +216,21 @@ def _safe_projection_content(
     payload: Mapping[str, Any],
 ) -> str:
     task_id = payload.get("task_id")
+    if projection_type == "master.decision.deferred":
+        return (
+            f"Owner deferred decision #{payload['decision_id']} "
+            f"for Task #{task_id}."
+        )
+    if projection_type == "master.decision.resolved":
+        if payload.get("closed_without_owner_response"):
+            return (
+                f"Decision #{payload['decision_id']} for Task #{task_id} "
+                "was closed because the Task left review."
+            )
+        return (
+            f"Owner resolved decision #{payload['decision_id']} "
+            f"for Task #{task_id}. The Task is continuing."
+        )
     if projection_type == "master.task.review_ready":
         content = f"Task #{task_id} is ready for review."
         if payload.get("checkpoint_id") is not None:
@@ -1263,6 +1303,30 @@ class MasterProjectionService:
             )
             return None
 
+    def safe_project_decision(
+        self,
+        decision_id: int,
+        *,
+        conn: sqlite3.Connection | None = None,
+        connection: sqlite3.Connection | None = None,
+        external_transaction: bool = False,
+        notify_sessions: set[int] | None = None,
+    ) -> dict[str, Any] | None:
+        try:
+            return self.project_decision(
+                decision_id,
+                conn=conn,
+                connection=connection,
+                external_transaction=external_transaction,
+                notify_sessions=notify_sessions,
+            )
+        except Exception:
+            log.exception(
+                "Master decision projection failed for decision %s",
+                decision_id,
+            )
+            return None
+
     def safe_project_satpam(
         self, intervention_id: int
     ) -> dict[str, Any] | None:
@@ -1916,7 +1980,6 @@ class MasterProjectionService:
             (owner_user_id, projection_key),
         ).fetchone()
         return dict(row) if row else {}
-
     def _task(
         self,
         job_id: int,
@@ -2346,6 +2409,82 @@ class MasterProjectionService:
             },
         )
 
+    def project_decision(
+        self,
+        decision_id: int,
+        *,
+        conn: sqlite3.Connection | None = None,
+        connection: sqlite3.Connection | None = None,
+        external_transaction: bool = False,
+        notify_sessions: set[int] | None = None,
+    ) -> dict[str, Any] | None:
+        write_conn = connection if connection is not None else conn
+        read_conn = write_conn if write_conn is not None else self.conn
+        row = read_conn.execute(
+            "SELECT decision.*, attention.kind AS attention_kind, "
+            "job.project_id, job.target_area_id "
+            "FROM master_decisions decision "
+            "JOIN attention_items attention "
+            "ON attention.id = decision.attention_item_id "
+            "LEFT JOIN jobs job ON job.id = decision.requesting_job_id "
+            "WHERE decision.id = ?",
+            (decision_id,),
+        ).fetchone()
+        if (
+            row is None
+            or row["state"] not in {"deferred", "resolved"}
+            or row["requesting_job_id"] is None
+        ):
+            return None
+        projection_type = f"master.decision.{row['state']}"
+        task_id = _as_int(row["requesting_job_id"])
+        response = {}
+        if row["response_json"]:
+            try:
+                decoded = json.loads(row["response_json"])
+            except (TypeError, json.JSONDecodeError):
+                decoded = {}
+            if isinstance(decoded, dict):
+                response = decoded
+        closed_without_owner_response = (
+            response.get("value") == "__task_left_review__"
+        )
+        payload = {
+            "attention_id": _as_int(row["attention_item_id"]),
+            "attention_kind": row["attention_kind"],
+            "decision_id": _as_int(row["id"]),
+            "decision_state": row["state"],
+            "task_id": task_id,
+            "container_id": row["project_id"],
+            "area_id": row["target_area_id"],
+            "attention_required": False,
+            "toast_key": f"decision:{decision_id}:{row['state']}",
+            "closed_without_owner_response": closed_without_owner_response,
+        }
+        deferred = notify_sessions
+        if external_transaction:
+            if write_conn is None:
+                raise ValueError(
+                    "external decision projection requires a connection"
+                )
+            if deferred is None:
+                # Caller notifies from the returned row after commit.
+                deferred = set()
+        return self._insert(
+            owner_user_id=_as_int(row["owner_user_id"]),
+            master_session_id=_as_int(row["master_session_id"]),
+            projection_key=f"decision:{decision_id}:{row['state']}",
+            projection_type=projection_type,
+            source_table="attention_items",
+            source_id=_as_int(row["attention_item_id"]),
+            task_id=task_id,
+            origin_message_id=row["origin_message_id"],
+            content=_safe_projection_content(projection_type, payload),
+            payload=payload,
+            connection=write_conn,
+            notify_sessions=deferred,
+        )
+
     def observe_worker_event(
         self,
         *,
@@ -2567,6 +2706,21 @@ class MasterProjectionService:
         ).fetchall()
         for row in attentions:
             self.safe_project_attention(_as_int(row["source_id"]))
+        decisions = self.conn.execute(
+            "SELECT decision.id AS decision_id "
+            "FROM master_decisions decision "
+            "WHERE decision.state IN ('deferred', 'resolved') "
+            "AND decision.requesting_job_id IS NOT NULL "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM master_projections projection "
+            "  WHERE projection.source_table = 'attention_items' "
+            "  AND projection.source_id = decision.attention_item_id "
+            "  AND projection.projection_type = "
+            "    'master.decision.' || decision.state"
+            ") ORDER BY decision.id"
+        ).fetchall()
+        for row in decisions:
+            self.safe_project_decision(_as_int(row["decision_id"]))
         after = self.conn.execute(
             "SELECT COUNT(*) AS c FROM master_projections"
         ).fetchone()["c"]
@@ -2577,6 +2731,7 @@ class MasterProjectionService:
                 + len(correction_rows)
                 + len(interventions)
                 + len(attentions)
+                + len(decisions)
             ),
             "created": _as_int(after) - _as_int(before),
         }

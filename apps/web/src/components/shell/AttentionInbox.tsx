@@ -1,6 +1,7 @@
 import React from 'react'
 import { actAttention, getAttention, type AttentionItem } from '../../api/master'
 import { formatRunAge, runStatusLabel } from '../../lib/runProjection'
+import { MasterDecisionCard } from '../master/MasterDecisionCard'
 
 const labelForKind = (kind: string) => ({
   job_review: 'Review', job_diff: 'Changes', satpam_restart: 'Watchdog', script_trust: 'Script',
@@ -54,8 +55,30 @@ export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenT
       {error && <div className="attention-error" role="alert"><strong>Inbox could not update</strong><p>{error}</p><button type="button" onClick={() => void load()}>Try again</button></div>}
       {loading ? <div className="attention-state" role="status"><span className="ui-spinner" /> Loading attention…</div>
         : <ul className="attention-list">{items.map(item => <li key={item.id}>
-            <button type="button" className="attention-main" onClick={() => go(item)}><span>{labelForKind(item.kind)}</span><strong>{item.title}</strong><small>{item.run_projection ? `${runStatusLabel(item.run_projection.status)} · ${formatRunAge(item.run_projection, item.created_at)}` : 'Open linked workspace'}</small></button>
-            {item.inline_ok && item.actions.length > 0 && <div className="attention-actions">{item.actions.map(action => <button type="button" key={action} disabled={!!busy} className={action === 'approve' ? 'attention-approve' : ''} onClick={() => void act(item, action)}>{busy === `${item.id}:${action}` ? 'Working…' : action.charAt(0).toUpperCase() + action.slice(1)}</button>)}</div>}
+            {item.kind === 'master_decision' && item.decision ? (
+              <MasterDecisionCard
+                token={token}
+                decision={item.decision}
+                compact
+                onChanged={load}
+                onOpenJob={(jobId, engine) => {
+                  setOpen(false)
+                  onOpenTarget({ view: 'task', job_id: jobId, engine })
+                }}
+                onOpenMaster={originMessageId => {
+                  setOpen(false)
+                  onOpenTarget({
+                    view: 'master',
+                    origin_message_id: originMessageId ?? undefined,
+                  })
+                }}
+              />
+            ) : (
+              <>
+                <button type="button" className="attention-main" onClick={() => go(item)}><span>{labelForKind(item.kind)}</span><strong>{item.title}</strong><small>{item.run_projection ? `${runStatusLabel(item.run_projection.status)} · ${formatRunAge(item.run_projection, item.created_at)}` : 'Open linked workspace'}</small></button>
+                {item.inline_ok && item.actions.length > 0 && <div className="attention-actions">{item.actions.map(action => <button type="button" key={action} disabled={!!busy} className={action === 'approve' ? 'attention-approve' : ''} onClick={() => void act(item, action)}>{busy === `${item.id}:${action}` ? 'Working…' : action.charAt(0).toUpperCase() + action.slice(1)}</button>)}</div>}
+              </>
+            )}
           </li>)}</ul>}
     </section>}
   </div>

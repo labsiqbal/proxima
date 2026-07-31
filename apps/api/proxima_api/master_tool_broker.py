@@ -20,8 +20,7 @@ from typing import Any, Callable, Mapping
 from fastapi import HTTPException
 from jsonschema import Draft202012Validator
 
-from . import container_registry
-from .auth import iso_now
+from . import container_registry, master_decisions
 from .task_delegation import (
     DependencyRequest,
     TaskDelegationError,
@@ -191,6 +190,56 @@ _TASK_SCHEMA = _object(
     },
     required=("title", "brief", "container_id", "area_id", "profile_id"),
 )
+_DECISION_RESPONSE_SCHEMA = {
+    "oneOf": [
+        _object(
+            {
+                "type": {"const": "choice"},
+                "choices": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 10,
+                    "items": _object(
+                        {
+                            "id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80,
+                            },
+                            "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200,
+                            },
+                            "description": {
+                                "type": "string",
+                                "maxLength": 500,
+                            },
+                        },
+                        required=("id", "label"),
+                    ),
+                },
+            },
+            required=("type", "choices"),
+        ),
+        _object(
+            {
+                "type": {"const": "text"},
+                "max_length": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4000,
+                },
+                "placeholder": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                },
+            },
+            required=("type",),
+        ),
+    ]
+}
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "list_containers": _object({"limit": _LIMIT}),
@@ -245,18 +294,31 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "create_attention": _object(
         {
             "title": {"type": "string", "minLength": 1, "maxLength": 200},
-            "message": {
+            "prompt": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 4_000,
             },
+            "context": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4_000,
+            },
+            "response": _DECISION_RESPONSE_SCHEMA,
+            "task_id": _ID,
             "idempotency_key": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 200,
             },
         },
-        required=("title", "message"),
+        required=(
+            "title",
+            "prompt",
+            "context",
+            "response",
+            "task_id",
+        ),
     ),
 }
 
@@ -273,7 +335,10 @@ _TOOL_DESCRIPTIONS = {
     ),
     "delegate_tasks": "Atomically create an idempotent Task batch or dependency DAG.",
     "start_tasks": "Start existing Master-owned Tasks through the delegation service.",
-    "create_attention": "Create one idempotent owner Attention item.",
+    "create_attention": (
+        "Request one durable owner decision for a Master Task waiting in review. "
+        "Define either bounded choices or a free-text response."
+    ),
 }
 
 _MASTER_DYNAMIC_TOOLS_JSON = json.dumps(
@@ -1080,30 +1145,31 @@ class MasterToolBroker:
                 "create_attention requires a turn-derived idempotency key",
             )
         source_key = f"master:{self.origin_master_session_id}:{key}"
-        target: dict[str, Any] = {
-            "view": "master",
-            "message": str(args["message"]).strip(),
-        }
-        if self.origin_message_id is not None:
-            target["origin_message_id"] = self.origin_message_id
-        self.conn.execute(
-            "INSERT OR IGNORE INTO attention_items("
-            "kind, title, target_json, inline_ok, status, source_key"
-            ") VALUES ('master_decision', ?, ?, 0, 'open', ?)",
-            (
-                str(args["title"]).strip(),
-                json.dumps(target, ensure_ascii=False),
-                source_key,
-            ),
-        )
-        row = self.conn.execute(
-            "SELECT id FROM attention_items WHERE source_key = ?", (source_key,)
-        ).fetchone()
-        if row is None:
+        if self.origin_message_id is None:
             raise MasterToolError(
-                "attention_failed", "Proxima could not create Attention"
+                "decision_message_required",
+                "create_attention requires the requesting Master message",
             )
-        projection = getattr(self.app.state, "master_projection", None)
-        if projection is not None:
-            projection.safe_project_attention(_as_int(row["id"]))
-        return {"attention_id": _as_int(row["id"]), "created_at": iso_now()}
+        try:
+            decision = master_decisions.create_decision(
+                self.conn,
+                self.app,
+                self.user,
+                master_session_id=self.origin_master_session_id,
+                origin_message_id=self.origin_message_id,
+                source_key=source_key,
+                title=args["title"],
+                prompt=args["prompt"],
+                context=args["context"],
+                response_shape=args["response"],
+                task_id=args["task_id"],
+            )
+        except master_decisions.MasterDecisionError as exc:
+            raise MasterToolError(exc.code, str(exc)) from exc
+        return {
+            "attention_id": _as_int(decision["attention_item_id"]),
+            "decision_id": _as_int(decision["id"]),
+            "task_id": _as_int(decision["requesting_job_id"]),
+            "state": decision["state"],
+            "created_at": decision["created_at"],
+        }

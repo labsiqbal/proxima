@@ -5839,6 +5839,360 @@ def _harden_schedule_automation_contract(conn: sqlite3.Connection) -> None:
                 (schedule_id,),
             )
 
+def _expand_master_projection_decision_types(conn: sqlite3.Connection) -> None:
+    """Widen projection_type checks for decision events.
+
+    Rebuilds master_projections under foreign_keys=OFF so later outbox tables
+    that reference projection rows keep working across the rename.
+    """
+    table = conn.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'master_projections'"
+    ).fetchone()
+    if table is None or "master.decision.resolved" in str(table["sql"]):
+        return
+    columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(master_projections)"
+        ).fetchall()
+    }
+    required_columns = {
+        "id",
+        "owner_user_id",
+        "master_session_id",
+        "projection_key",
+        "projection_type",
+        "source_table",
+        "source_id",
+        "task_id",
+        "message_id",
+        "event_id",
+        "payload_json",
+        "created_at",
+        "updated_at",
+    }
+    if not required_columns <= columns:
+        # Historical migration unit fixtures use a deliberately reduced
+        # projection table to isolate earlier data-preservation behavior.
+        # Real schema-53 databases have the complete projection ledger.
+        return
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "ALTER TABLE master_projections "
+            "RENAME TO master_projections_before_decisions"
+        )
+        conn.execute(
+            """
+            CREATE TABLE master_projections (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              owner_user_id INTEGER NOT NULL
+                REFERENCES users(id) ON DELETE CASCADE,
+              master_session_id INTEGER NOT NULL
+                REFERENCES sessions(id) ON DELETE CASCADE,
+              projection_key TEXT NOT NULL
+                CHECK (length(projection_key) BETWEEN 1 AND 300),
+              projection_type TEXT NOT NULL CHECK (projection_type IN (
+                'master.task.started',
+                'master.task.review_ready',
+                'master.task.completed',
+                'master.task.failed',
+                'master.task.cancelled',
+                'master.task.blocked',
+                'master.attention.required',
+                'master.decision.deferred',
+                'master.decision.resolved',
+                'master.supervisor.outcome',
+                'master.satpam.steered',
+                'master.satpam.restart_queued',
+                'master.satpam.restarted',
+                'master.satpam.recovery_failed',
+                'master.satpam.escalated'
+              )),
+              source_table TEXT NOT NULL CHECK (
+                source_table IN (
+                  'jobs', 'attention_items', 'satpam_interventions'
+                )
+              ),
+              source_id INTEGER NOT NULL CHECK (source_id > 0),
+              task_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+              message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
+              event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
+              payload_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              CHECK (
+                (projection_type LIKE 'master.task.%'
+                  AND source_table = 'jobs' AND task_id = source_id)
+                OR
+                (projection_type LIKE 'master.satpam.%'
+                  AND projection_type != 'master.satpam.recovery_failed'
+                  AND source_table = 'satpam_interventions'
+                  AND task_id IS NOT NULL)
+                OR
+                (projection_type IN (
+                  'master.attention.required',
+                  'master.decision.deferred',
+                  'master.decision.resolved',
+                  'master.supervisor.outcome',
+                  'master.satpam.recovery_failed'
+                ) AND source_table = 'attention_items')
+              ),
+              UNIQUE(owner_user_id, projection_key)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO master_projections("
+            "id, owner_user_id, master_session_id, projection_key, "
+            "projection_type, source_table, source_id, task_id, message_id, "
+            "event_id, payload_json, created_at, updated_at"
+            ") SELECT id, owner_user_id, master_session_id, projection_key, "
+            "projection_type, source_table, source_id, task_id, message_id, "
+            "event_id, payload_json, created_at, updated_at "
+            "FROM master_projections_before_decisions"
+        )
+        conn.execute("DROP TABLE master_projections_before_decisions")
+        conn.execute(
+            "CREATE INDEX idx_master_projections_session "
+            "ON master_projections(master_session_id, id)"
+        )
+        conn.execute(
+            "CREATE INDEX idx_master_projections_source "
+            "ON master_projections(source_table, source_id, projection_type)"
+        )
+        # Intentionally omit uq_master_projections_source_type: migration 45
+        # dropped that uniqueness so recovery outbox can project multiple
+        # lifecycle states for one source row.
+        conn.execute(
+            "CREATE UNIQUE INDEX uq_master_projections_message "
+            "ON master_projections(message_id) WHERE message_id IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX uq_master_projections_event "
+            "ON master_projections(event_id) WHERE event_id IS NOT NULL"
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _legacy_owner_decision_prompt(target: dict[str, Any], title: Any) -> str | None:
+    """Return the owner prompt for a genuine legacy decision Attention row.
+
+    Owner decisions always carried a non-empty ``message`` prompt in target_json.
+    Supervisor start-failure rows instead carry an ``error`` and no owner message -
+    those stay bare Attention and must not become master_decisions ledger rows.
+    """
+    del title  # title alone is not enough to prove an owner decision
+    if not isinstance(target, dict):
+        return None
+    message = target.get("message")
+    if not isinstance(message, str):
+        return None
+    prompt = message.strip()
+    if not prompt:
+        return None
+    return prompt[:4000]
+
+
+def _add_master_decisions(conn: sqlite3.Connection) -> None:
+    """Add the durable owner-response ledger and preserve legacy requests."""
+    _expand_master_projection_decision_types(conn)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS master_decisions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          attention_item_id INTEGER NOT NULL UNIQUE
+            REFERENCES attention_items(id) ON DELETE CASCADE,
+          owner_user_id INTEGER NOT NULL
+            REFERENCES users(id) ON DELETE CASCADE,
+          master_session_id INTEGER NOT NULL
+            REFERENCES sessions(id) ON DELETE CASCADE,
+          origin_message_id INTEGER
+            REFERENCES messages(id) ON DELETE SET NULL,
+          requesting_job_id INTEGER
+            REFERENCES jobs(id) ON DELETE SET NULL,
+          title TEXT NOT NULL,
+          prompt TEXT NOT NULL,
+          context TEXT NOT NULL,
+          response_shape_json TEXT NOT NULL,
+          request_fingerprint TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'pending'
+            CHECK (state IN ('pending', 'deferred', 'resolved')),
+          response_json TEXT,
+          version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+          deferred_by_user_id INTEGER
+            REFERENCES users(id) ON DELETE SET NULL,
+          deferred_at TEXT,
+          resolved_by_user_id INTEGER
+            REFERENCES users(id) ON DELETE SET NULL,
+          resolved_at TEXT,
+          task_message_id INTEGER UNIQUE
+            REFERENCES messages(id) ON DELETE SET NULL,
+          continuation_run_id INTEGER UNIQUE
+            REFERENCES runs(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_master_decisions_owner_state "
+        "ON master_decisions(owner_user_id, state, updated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_master_decisions_task "
+        "ON master_decisions(requesting_job_id, created_at DESC)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_final_approval_intents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id INTEGER NOT NULL
+            REFERENCES jobs(id) ON DELETE CASCADE,
+          generation INTEGER NOT NULL CHECK (generation > 0),
+          actor_user_id INTEGER NOT NULL
+            REFERENCES users(id) ON DELETE CASCADE,
+          state TEXT NOT NULL DEFAULT 'live'
+            CHECK (state IN ('live', 'finalized', 'released')),
+          error TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (job_id, generation)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_final_approval_live "
+        "ON job_final_approval_intents(job_id) WHERE state = 'live'"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_final_approval_job "
+        "ON job_final_approval_intents(job_id, generation DESC)"
+    )
+
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'attention_items'"
+    ).fetchone() is None:
+        return
+    rows = conn.execute(
+        "SELECT * FROM attention_items "
+        "WHERE kind = 'master_decision' "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM master_decisions decision "
+        "  WHERE decision.attention_item_id = attention_items.id"
+        ") ORDER BY id"
+    ).fetchall()
+    for row in rows:
+        try:
+            target = json.loads(row["target_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            target = {}
+        if not isinstance(target, dict):
+            target = {}
+        prompt = _legacy_owner_decision_prompt(target, row["title"])
+        if prompt is None:
+            # Bare supervisor start-failure Attention (error, no owner message)
+            # stays generic and is not fabricated into the decision ledger.
+            continue
+        source_parts = str(row["source_key"] or "").split(":")
+        session_id = target.get("origin_master_session_id")
+        if session_id is None:
+            session_id = target.get("alpha_session_id")
+        if session_id is None and len(source_parts) >= 3 and source_parts[0] in {
+            "master",
+            "alpha",
+        }:
+            session_id = source_parts[1]
+        try:
+            session_id = int(session_id)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        session = conn.execute(
+            "SELECT id, owner_user_id FROM sessions "
+            "WHERE id = ? AND mode = 'master' AND project_id IS NULL",
+            (session_id,),
+        ).fetchone()
+        if session is None:
+            continue
+        job_id = target.get("job_id")
+        try:
+            job_id = int(job_id) if job_id is not None else None
+        except (TypeError, ValueError, OverflowError):
+            job_id = None
+        if job_id is not None and conn.execute(
+            "SELECT 1 FROM jobs WHERE id = ? "
+            "AND origin_master_session_id = ? AND created_by = ?",
+            (job_id, session_id, session["owner_user_id"]),
+        ).fetchone() is None:
+            job_id = None
+        origin_message_id = target.get("origin_message_id")
+        try:
+            origin_message_id = (
+                int(origin_message_id) if origin_message_id is not None else None
+            )
+        except (TypeError, ValueError, OverflowError):
+            origin_message_id = None
+        if origin_message_id is not None and conn.execute(
+            "SELECT 1 FROM messages WHERE id = ? AND session_id = ?",
+            (origin_message_id, session_id),
+        ).fetchone() is None:
+            origin_message_id = None
+        state = "pending" if row["status"] == "open" else "resolved"
+        decision_cursor = conn.execute(
+            "INSERT INTO master_decisions("
+            "attention_item_id, owner_user_id, master_session_id, "
+            "origin_message_id, requesting_job_id, title, prompt, context, "
+            "response_shape_json, request_fingerprint, state, created_at, "
+            "updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                row["id"],
+                session["owner_user_id"],
+                session_id,
+                origin_message_id,
+                job_id,
+                str(row["title"]).strip()[:200],
+                prompt,
+                "Preserved from an earlier Master decision request.",
+                json.dumps(
+                    {
+                        "type": "text",
+                        "max_length": 2000,
+                        "placeholder": "Enter your decision",
+                    },
+                    separators=(",", ":"),
+                ),
+                f"legacy-attention:{row['id']}",
+                state,
+                row["created_at"],
+                row["resolved_at"] or row["created_at"],
+            ),
+        )
+        target.update(
+            {
+                "view": "master",
+                "decision_id": int(decision_cursor.lastrowid),
+                "origin_master_session_id": session_id,
+            }
+        )
+        if job_id is not None:
+            target["job_id"] = job_id
+        conn.execute(
+            "UPDATE attention_items SET target_json = ? WHERE id = ?",
+            (
+                json.dumps(target, ensure_ascii=False, separators=(",", ":")),
+                row["id"],
+            ),
+        )
 
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
@@ -5989,6 +6343,12 @@ MIGRATIONS: list[Migration] = [
         54,
         "add schedule timezone and disable unresolved unattended inputs",
         _harden_schedule_automation_contract,
+    ),
+    (
+        55,
+        "add durable Master decisions and final-approval intents",
+        _add_master_decisions,
+        {"no_auto_tx": True},
     ),
 ]
 

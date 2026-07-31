@@ -539,6 +539,8 @@ export type Job = {
 		depends_on_task_id: number;
 		required_status: "review" | "done";
 	}[];
+	// A non-approval owner decision supersedes the generic review verdict.
+	master_decision?: import("./api/master").MasterDecision;
 	schedule_id: number | null;
 	created_by: number | null;
 	created_at: string;

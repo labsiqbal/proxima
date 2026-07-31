@@ -17,6 +17,7 @@ from fastapi import Depends, Header, HTTPException
 from ..auth import iso_now
 from .. import artifact_registry
 from .. import features
+from .. import master_decisions
 from .. import repo_remote
 from .. import schedule_policy
 from .. import satpam
@@ -262,6 +263,15 @@ def register(app, deps):
         ).fetchall()
         if dependencies:
             d["dependencies"] = [dict(row) for row in dependencies]
+        decision = db().execute(
+            "SELECT * FROM master_decisions WHERE requesting_job_id = ? "
+            "AND state IN ('pending', 'deferred') ORDER BY id DESC LIMIT 1",
+            (d["id"],),
+        ).fetchone()
+        if decision:
+            d["master_decision"] = master_decisions.decision_payload(
+                db(), decision
+            )
         return canonical_job_payload(d, connection=db())
 
     def _job_or_404(job_id: int, user: dict[str, Any]) -> sqlite3.Row:
@@ -551,6 +561,14 @@ def register(app, deps):
     @app.post("/api/jobs/{job_id}/approve")
     def approve_job(job_id: int, payload: JobApproveRequest | None = None, user: dict[str, Any] = Depends(current_user)):
         job = _job_or_404(job_id, user)
+        pending_decision = master_decisions.pending_decision_for_job(db(), job_id)
+        if pending_decision:
+            raise HTTPException(
+                status_code=409,
+                detail=master_decisions.pending_decision_conflict(
+                    int(pending_decision["id"])
+                ),
+            )
         if job["status"] != "review":
             return _job_payload(job)  # nothing to approve; idempotent
         if not job["session_id"]:
@@ -570,6 +588,16 @@ def register(app, deps):
             with app.state.db_lock:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
+                    pending_decision = master_decisions.pending_decision_for_job(
+                        conn, job_id
+                    )
+                    if pending_decision:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=master_decisions.pending_decision_conflict(
+                                int(pending_decision["id"])
+                            ),
+                        )
                     # Mid-workflow gate cleared. Claim review->running and enqueue the
                     # next run atomically so a failed insert cannot strand the job.
                     claimed = conn.execute(
@@ -605,18 +633,92 @@ def register(app, deps):
             app.state.worker.add_event(run_id, job["session_id"], job["project_id"], "run.queued", {"runner": profile["runner_id"], "job": job_id})
         else:
             # Repo job (slice 2, flag-gated): the final approve is the merge
-            # point (T1 local-first) - land the job branch on its base branch
-            # before the job closes. Refusals and conflicts surface as 409 and
-            # PARK the job in review (worktree kept for resolution); approve
-            # again after resolving to retry. Never forced, never silent.
+            # point (T1 local-first). Claim a durable approval generation before
+            # any Git side effect so decision creation cannot land mid-merge;
+            # never hold db_lock across external Git work.
+            wt = None
+            needs_git_merge = False
             if features.enabled(app.state.config, features.REPO_WORKTREES):
                 wt = worktrees.job_worktree_row(db(), job_id)
                 if wt and wt["status"] in ("active", "conflict", "merging"):
+                    needs_git_merge = True
+            # Any worktree-backed final approve takes a durable intent so merge
+            # and decision creation stay mutually exclusive. Already-merged rows
+            # resume finalize for the live generation without merging again.
+            use_approval_intent = bool(
+                wt is not None
+                and wt["status"] in ("active", "conflict", "merging", "merged")
+            )
+            approval_intent = None
+            resume_merged = False
+            if use_approval_intent:
+                conn = db()
+                with app.state.db_lock:
+                    conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        approval_intent, resume_merged = (
+                            master_decisions.claim_final_approval_intent(
+                                conn,
+                                job_id=job_id,
+                                actor_user_id=int(user["id"]),
+                                allow_resume_merged=True,
+                            )
+                        )
+                        conn.execute("COMMIT")
+                    except master_decisions.MasterDecisionError as exc:
+                        _rollback(conn)
+                        if exc.code == "master_decision_pending":
+                            pending = master_decisions.pending_decision_for_job(
+                                db(), job_id
+                            )
+                            detail = (
+                                master_decisions.pending_decision_conflict(
+                                    int(pending["id"])
+                                )
+                                if pending is not None
+                                else {
+                                    "code": exc.code,
+                                    "message": str(exc),
+                                }
+                            )
+                        else:
+                            detail = {
+                                "code": exc.code,
+                                "message": str(exc),
+                            }
+                        raise HTTPException(
+                            status_code=exc.status_code, detail=detail
+                        ) from exc
+                    except Exception:
+                        _rollback(conn)
+                        raise
+                if needs_git_merge and not resume_merged:
                     try:
                         merged = worktrees.merge_job_worktree(db(), job, wt)
                     except worktrees.WorktreeError as exc:
-                        raise HTTPException(status_code=409, detail=f"merge blocked - job stays in review: {exc}") from exc
-                    # Group 10: mark this Area's Code graph stale and enqueue rebuild.
+                        conn = db()
+                        with app.state.db_lock:
+                            conn.execute("BEGIN IMMEDIATE")
+                            try:
+                                master_decisions.release_final_approval_intent(
+                                    conn,
+                                    job_id=job_id,
+                                    generation=int(
+                                        approval_intent["generation"]
+                                    ),
+                                    error=str(exc),
+                                )
+                                conn.execute("COMMIT")
+                            except Exception:
+                                _rollback(conn)
+                                raise
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "merge blocked - job stays in review: "
+                                f"{exc}"
+                            ),
+                        ) from exc
                     try:
                         from ..code_graph_lifecycle import notify_task_merged
                         notify_task_merged(app, merged)
@@ -624,15 +726,13 @@ def register(app, deps):
                         logging.getLogger("proxima.work").exception(
                             "Code graph post-merge hook failed (job stays merged)"
                         )
-                    # T9 (slice 11): push the merged main line AFTER the local
-                    # merge, only when the area's toggle is explicitly ON. A
-                    # failed push never un-merges and never fails the approve -
-                    # it lands on the worktree row as a job-level blocker with
-                    # the exact command output (retry: POST /jobs/{id}/push).
                     try:
                         repo_remote.push_after_merge(db(), merged)
                     except Exception:
-                        logging.getLogger("proxima.work").exception("push after merge failed unexpectedly (job stays merged)")
+                        logging.getLogger("proxima.work").exception(
+                            "push after merge failed unexpectedly "
+                            "(job stays merged)"
+                        )
             # Final review, Task invalidation, and deliverable verdict commit
             # together so every reader observes one lifecycle state.
             conn = db()
@@ -640,6 +740,36 @@ def register(app, deps):
             with app.state.db_lock:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
+                    if approval_intent is not None:
+                        if not master_decisions.intent_is_live_generation(
+                            conn,
+                            job_id=job_id,
+                            generation=int(approval_intent["generation"]),
+                        ):
+                            raise HTTPException(
+                                status_code=409,
+                                detail={
+                                    "code": "final_approval_generation_mismatch",
+                                    "message": (
+                                        "Final approval generation is no longer "
+                                        "live; retry approve if the Task is still "
+                                        "in review"
+                                    ),
+                                },
+                            )
+                    else:
+                        pending_decision = (
+                            master_decisions.pending_decision_for_job(
+                                conn, job_id
+                            )
+                        )
+                        if pending_decision:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=master_decisions.pending_decision_conflict(
+                                    int(pending_decision["id"])
+                                ),
+                            )
                     claimed = conn.execute(
                         "UPDATE jobs SET status='done', "
                         "finished_at=CURRENT_TIMESTAMP, "
@@ -648,7 +778,16 @@ def register(app, deps):
                         (job_id,),
                     )
                     if claimed.rowcount == 0:
-                        conn.execute("ROLLBACK")
+                        if approval_intent is not None:
+                            master_decisions.release_final_approval_intent(
+                                conn,
+                                job_id=job_id,
+                                generation=int(approval_intent["generation"]),
+                                error="task left review before finalize",
+                            )
+                            conn.execute("COMMIT")
+                        else:
+                            conn.execute("ROLLBACK")
                         return _job_payload(_job_or_404(job_id, user))
                     conn.execute(
                         "UPDATE jobs SET steps_state=?, "
@@ -669,6 +808,22 @@ def register(app, deps):
                         mutation="review_approved",
                     )
                     notify_sessions.add(task_event["session_id"])
+                    if approval_intent is not None:
+                        if not master_decisions.finalize_final_approval_intent(
+                            conn,
+                            job_id=job_id,
+                            generation=int(approval_intent["generation"]),
+                        ):
+                            raise HTTPException(
+                                status_code=409,
+                                detail={
+                                    "code": "final_approval_generation_mismatch",
+                                    "message": (
+                                        "Final approval generation changed during "
+                                        "finalize"
+                                    ),
+                                },
+                            )
                     conn.execute("COMMIT")
                 except Exception:
                     _rollback(conn)
@@ -692,9 +847,12 @@ def register(app, deps):
         if job["status"] != "review":
             raise HTTPException(status_code=409, detail="only a job waiting for review can be rejected")
         # Claim first (this is the review verdict mutex - a concurrent approve
-        # and reject cannot both win), tear down after.
+        # and reject cannot both win), settle linked Master decisions in the
+        # same transition so Attention cannot stay open on a dead Task, then
+        # tear down after commit.
         conn = db()
         notify_sessions: set[int] = set()
+        settled_decision_ids: list[int] = []
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -711,12 +869,28 @@ def register(app, deps):
                         status_code=409,
                         detail="job is no longer waiting for review",
                     )
+                live_intent = master_decisions.live_final_approval_for_job(
+                    conn, job_id
+                )
+                if live_intent is not None:
+                    master_decisions.release_final_approval_intent(
+                        conn,
+                        job_id=job_id,
+                        generation=int(live_intent["generation"]),
+                        error="task rejected during final approval",
+                    )
                 task_event = append_task_update(
                     conn,
                     job_id=job_id,
                     mutation="review_rejected",
                 )
                 notify_sessions.add(task_event["session_id"])
+                settled_decision_ids = master_decisions.settle_open_decisions_for_job(
+                    conn,
+                    job_id=job_id,
+                    actor_user_id=user.get("id"),
+                    reason=payload.reason,
+                )
                 conn.execute("COMMIT")
             except Exception:
                 _rollback(conn)
@@ -724,6 +898,7 @@ def register(app, deps):
         for session_id in notify_sessions:
             app.state.hub.notify(session_id)
         _process_task_projection(task_event)
+        master_decisions.project_settled_decisions(app, settled_decision_ids)
         # Flag-independent, like delete: a flag flip must not orphan a
         # worktree. Cleanup trouble is logged, not raised - the verdict stands
         # either way and discard_job_worktree is idempotent on retry.
@@ -827,7 +1002,34 @@ def register(app, deps):
             worktrees.discard_job_worktree(db(), job_id)
         except worktrees.WorktreeError:
             logging.getLogger("proxima.worktrees").exception("job %s worktree cleanup failed (job deleted anyway)", job_id)
-        db().execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        conn = db()
+        notify_sessions: list[int] = []
+        with app.state.db_lock:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                # Settle + project while the Task row still exists so the durable
+                # Master audit payload materializes task identity before the
+                # requesting_job FK is nulled by ON DELETE SET NULL.
+                settled_decision_ids = master_decisions.settle_open_decisions_for_job(
+                    conn,
+                    job_id=job_id,
+                    actor_user_id=user.get("id"),
+                    reason="Task deleted",
+                )
+                notify_sessions = master_decisions.project_settled_decisions(
+                    app,
+                    settled_decision_ids,
+                    conn=conn,
+                    external_transaction=True,
+                )
+                conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+                conn.execute("COMMIT")
+            except Exception:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        for session_id in set(notify_sessions):
+            app.state.hub.notify(session_id)
         return {"ok": True, "id": job_id}
 
     # --- Schedules (recurring workflow triggers / cron) ---

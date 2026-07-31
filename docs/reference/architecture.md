@@ -340,7 +340,16 @@ by the database in the same transaction that completes an Ops Task;
 state plus git/worktree refs (never a DB backup or filesystem zip);
 `turn_file_journals` stores bounded before-content for paths changed by a Chat turn
 and cascades with the session; `attention_items` stores durable Master, budget, and
-permission needs-you items while review/satpam items are projected into the same API.
+permission needs-you items while review/satpam items are projected into the same API;
+`master_decisions` stores each non-approval owner question, bounded response contract,
+pending/deferred/resolved state, response attribution, and exact links to its
+Attention row, requesting Task, origin Master message, Task response message, and
+single continuation run. Bare supervisor start-failure Attention rows stay generic
+Attention and are not fabricated into this ledger. `job_final_approval_intents`
+holds one identity-bound generation while a worktree-backed final approve runs so
+merge/push side effects and decision creation stay mutually exclusive without holding
+the database lock across Git work; restart reconciliation finalizes a merged live
+generation or releases an incomplete one.
 Settings under `master.*` hold unattended state, turn/wall/optional-token budgets, and
 core-tour completion. Startup asserts one project-unbound Master identity per owner
 and refuses ambiguous dual identities or conflicting old/new origin columns. The
@@ -595,7 +604,16 @@ owner message -> queued Master chat-only run
       -> one authenticated MasterStateProvider resumes the durable cursor
       -> Master home + popup share thread, composer, Focus, target, active run, and scroll
       -> named durable transitions may coalesce into one focus-neutral shell toast
-      -> global Attention deep-links owner decisions
+      -> global Attention surfaces owner decisions inline
+      -> non-approval create_attention writes one durable Master decision
+      -> Master Decisions and global Attention render the full question and response contract
+      -> defer persists the decision but removes it from the global needs-you badge
+      -> versioned resolution validates the response and atomically queues one Task continuation
+      -> Task reject/delete settles open decisions closed without a continuation run
+      -> the requesting Task rejects generic approval while its decision remains unresolved
+      -> worktree-backed final approve claims a durable generation before merge/push
+      -> decision creation refuses while that generation is live; merge failure releases it
+      -> decision projection appends one human-readable defer, resolve, or left-review event
 ```
 
 There is no agent-to-localhost control plane. The streaming parser rejects malformed,
@@ -658,7 +676,8 @@ Authority is singular: **Master dispatches and prioritizes; satpam alone detects
 steers, or restarts stuck runs.** Master never calls satpam restart machinery.
 
 `MasterProjectionService` projects important Task status, checkpoint, Attention, and
-Satpam rows into the same durable Master conversation. One
+Satpam rows, plus Master decision defer and resolution transitions, into the same
+durable Master conversation. One
 `master_projections` row links one concise `messages` row and one named Master-session
 event to the authoritative source row. Unique owner-scoped projection keys make
 retry, reconnect, and restart reconciliation idempotent. Cross-surface Task mutation,
@@ -1099,19 +1118,22 @@ GET /api/jobs/{id}/diff  →  snapshot outstanding edits onto the job branch
     then per-file status + unified patch vs base_commit (slice-4 review surface;
     the same noise paths are omitted from the rendered file list/patch)
     ▼
-POST /api/jobs/{id}/approve (final step)  →  guarded local merge --no-ff into
-    the branch the worktree was cut from (T1 local-first)
+POST /api/jobs/{id}/approve (final step)  →  claim job_final_approval_intents
+    generation (mutually exclusive with unresolved Master decisions), then
+    guarded local merge --no-ff into the branch the worktree was cut from
+    (T1 local-first; db lock is not held across Git)
     ├─ success: merge_commit recorded on job_worktrees, worktree + branch torn
-    │  down - then, ONLY if the code area's push_on_merge toggle is on (T9,
-    │  slice 11, default off) AND the repo's remote URL still matches the one
-    │  pinned at opt-in (audit F3), a hardened `git push` via the host's own
-    │  git (credential helpers + hooks neutralized). A failed or refused push
-    │  never un-merges and never fails the
-    │  approve: push_status='failed' + the exact command output land on the
+    │  down, same generation finalizes the Task to done - then, ONLY if the
+    │  code area's push_on_merge toggle is on (T9, slice 11, default off) AND
+    │  the repo's remote URL still matches the one pinned at opt-in (audit F3),
+    │  a hardened `git push` via the host's own git (credential helpers + hooks
+    │  neutralized). A failed or refused push never un-merges and never fails
+    │  the approve: push_status='failed' + the exact command output land on the
     │  job_worktrees row and surface as a blocker card with a retry action
     │  (POST /api/jobs/{id}/push, either engine).
-    └─ refusal/conflict: 409, job PARKS in review with the surfaced error;
-       worktree kept - resolve, approve again to retry. Never forced.
+    └─ refusal/conflict: 409, generation released, job PARKS in review with the
+       surfaced error; worktree kept - resolve, approve again to retry. Never
+       forced.
 POST /api/jobs/{id}/reject  {reason}  →  the other verdict door (slice 4, either
     engine): job → failed with jobs.rejected_reason recorded; the worktree is
     discarded UNMERGED (flag-independent teardown, like delete) - the primary

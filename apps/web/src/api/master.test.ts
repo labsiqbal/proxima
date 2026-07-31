@@ -58,4 +58,5 @@ test('legacy Alpha desk payloads normalize to canonical Master ownership', () =>
   assert.equal(payload.attention[0].target.origin_master_session_id, 7)
   assert.equal('alpha_session_id' in payload.attention[0].target, false)
   assert.equal(payload.attention[0].kind, 'master_budget')
+  assert.deepEqual(payload.decisions, [])
 })

@@ -9,6 +9,7 @@ import type {
 } from '../types'
 import { getJob, approveJob, deleteJob } from '../api/jobs'
 import { ChangesReview } from '../components/tasks/ChangesReview'
+import { MasterDecisionCard } from '../components/master/MasterDecisionCard'
 import { SatpamCard } from '../components/tasks/SatpamCard'
 import { MessageContent } from '../components/chat/MessageContent'
 import { confirmDialog } from '../components/ui/Dialog'
@@ -42,6 +43,8 @@ export function TaskWorkspace({
   designStudioEnabled = false,
   onOpenDesign,
   onOpenFile,
+  onOpenJob,
+  onOpenMaster,
   projects = [],
   containers = [],
   areasByContainer = {},
@@ -58,6 +61,8 @@ export function TaskWorkspace({
   designStudioEnabled?: boolean
   onOpenDesign?: (id: string, projectSlug?: string | null) => void
   onOpenFile?: (slug: string, path: string) => void
+  onOpenJob?: (id: number, engine?: string) => void
+  onOpenMaster?: (originMessageId: number | null) => void
   projects?: Project[]
   containers?: Container[]
   areasByContainer?: Record<number, ContainerAreas>
@@ -237,7 +242,20 @@ export function TaskWorkspace({
       <StatusPill status={projectedStatus} />
       <button className="row-action danger jfd-delete" title="Delete task" aria-label="Delete task" onClick={() => void remove()} disabled={!!busyAction}><IconTrash size={15} /></button>
     </div>
-    {isReview && (isMidGate
+    {isReview && job.master_decision
+      ? <div className="task-master-decision">
+          <MasterDecisionCard
+            token={token}
+            decision={job.master_decision}
+            onChanged={() => {
+              void load()
+              onChanged?.()
+            }}
+            onOpenJob={onOpenJob}
+            onOpenMaster={onOpenMaster}
+          />
+        </div>
+      : isReview && (isMidGate
       ? <div className="task-review-bar wf-review-mid">
           <span>⏸ Paused for your review — step {job.current_step_idx + 1}{reviewStep ? `: ${reviewStep.name}` : ''}.</span>
           <button className="primary-button" onClick={() => void approve(reviewStep && edited.trim() !== (reviewStep.output_summary || '') ? { edited_output: edited } : undefined)} disabled={!!busyAction}>{busyAction === 'approve' ? 'Approving…' : '✓ Approve & continue'}</button>
@@ -265,7 +283,10 @@ export function TaskWorkspace({
       jobStatus={job.status}
       worktree={job.worktree}
       rejectedReason={job.rejected_reason}
-      canDecide={isReview && !isMidGate}
+      canDecide={isReview && !isMidGate && !job.master_decision}
+      decideBlockedNote={job.master_decision
+        ? 'Resolve the Master decision above instead of approving or rejecting here.'
+        : undefined}
       onApprove={() => approveJob(token, jobId)}
       onChanged={() => { void load(); onChanged?.() }}
     />}

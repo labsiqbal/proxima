@@ -507,9 +507,15 @@ def _create_app(
         db,
         app.state.graph_context,
     )
-    # Durable start intent is committed before the retryable start step. Resume
-    # any request that was interrupted in that gap before serving new traffic.
+    # Final-approval recovery finalizes merged intents and fans out prerequisite
+    # starts before durable start resume, so dependents observe completed work.
     if not cfg.get("candidate_mode", False) and not maintenance_mode:
+        try:
+            from . import master_decisions as master_decision_recovery
+
+            master_decision_recovery.recover_final_approval_intents(app)
+        except Exception:
+            logger.exception("final approval intent recovery failed")
         try:
             app.state.task_delegation.resume_committed()
         except Exception:

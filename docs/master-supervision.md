@@ -54,7 +54,7 @@ inside the restore transaction. Delivery publishes the recovery message and even
 after commit. Both boundaries read existing authoritative rows:
 
 - `jobs`, `runs`, `node_states`, `job_checkpoints`
-- `attention_items`
+- `attention_items`, `master_decisions`
 - `satpam_interventions`
 
 Task payload and projection status hydrate their linear steps or graph node state
@@ -150,6 +150,8 @@ Task events:
 Supervision events:
 
 - `master.attention.required`
+- `master.decision.deferred`
+- `master.decision.resolved`
 - `master.supervisor.outcome`
 - `master.satpam.steered`
 - `master.satpam.restart_queued`

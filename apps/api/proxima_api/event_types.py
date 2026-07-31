@@ -26,6 +26,8 @@ MASTER_TASK_RECOVERY_EVENT_TYPES = frozenset(
 MASTER_SUPERVISION_EVENT_TYPES = frozenset(
     {
         "master.attention.required",
+        "master.decision.deferred",
+        "master.decision.resolved",
         "master.supervisor.outcome",
         "master.satpam.steered",
         "master.satpam.restart_queued",

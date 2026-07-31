@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-188 endpoints across 18 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+191 endpoints across 18 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -17,7 +17,7 @@
 - [`routes/files.py`](#routes-files-py) - 32 endpoints
 - [`routes/graph.py`](#routes-graph-py) - 14 endpoints
 - [`routes/graphs.py`](#routes-graphs-py) - 2 endpoints
-- [`routes/master.py`](#routes-master-py) - 17 endpoints
+- [`routes/master.py`](#routes-master-py) - 20 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) - 12 endpoints
 - [`routes/projects.py`](#routes-projects-py) - 12 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) - 6 endpoints
@@ -195,6 +195,9 @@
 | PUT | `/api/jobs/{job_id}/checkpoint/{checkpoint_id}/pin` | `pin_job_checkpoint` |  |
 | GET | `/api/jobs/{job_id}/checkpoint/{checkpoint_id}/restore` | `preview_checkpoint_restore` |  |
 | GET | `/api/jobs/{job_id}/checkpoints` | `get_job_checkpoints` |  |
+| GET | `/api/master/decisions/{decision_id}` | `get_master_decision` |  |
+| POST | `/api/master/decisions/{decision_id}/defer` | `defer_master_decision` |  |
+| POST | `/api/master/decisions/{decision_id}/resolve` | `resolve_master_decision` |  |
 | GET | `/api/master/desk` | `get_master_desk` |  |
 | PUT | `/api/master/focus` | `put_master_focus` |  |
 | POST | `/api/master/messages` | `create_master_message` |  |
