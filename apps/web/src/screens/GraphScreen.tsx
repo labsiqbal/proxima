@@ -288,16 +288,19 @@ export function GraphScreen({
   const listLoadSeq = React.useRef(0)
   const jobLoadSeq = React.useRef(0)
   const wantedJobIdRef = React.useRef<number | null>(null)
+  const focusedJobIdRef = React.useRef<number | null>(null)
   const draftSeq = React.useRef(0)
 
   // Intentional navigation / create / start paths retarget focus.
   const focusJob = React.useCallback((next: GraphJob | null) => {
     wantedJobIdRef.current = next?.id ?? null
+    focusedJobIdRef.current = next?.id ?? null
     setJob(next)
   }, [])
   // Autosave, live poll, and other same-job refreshes must never steal focus.
   const applyFocusedJob = React.useCallback((next: GraphJob) => {
     if (wantedJobIdRef.current !== next.id) return false
+    focusedJobIdRef.current = next.id
     setJob(next)
     return true
   }, [])
@@ -554,6 +557,7 @@ export function GraphScreen({
     } catch (cause) {
       if (!background && mounted.current && seq === jobLoadSeq.current && wantedJobIdRef.current === jobId) {
         setError(String(cause))
+        wantedJobIdRef.current = focusedJobIdRef.current
       }
       return null
     }
