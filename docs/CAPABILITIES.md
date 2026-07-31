@@ -1094,7 +1094,7 @@ plus optional lexical and resolved identities, so one unexpandable root does not
 valid siblings and a retained selection stays bound to its original owning root. Later
 resolution failure cannot fall back to a containing root. Each browse response carries
 an opaque configured-root ID, and every later navigation plus link/create request
-returns that ID. Canonical paths from symlink-root aliases therefore retain their
+must send that ID back. Canonical paths from symlink-root aliases therefore retain their
 original owner; any later request without an ID fails closed. If no allowed ancestor
 is readable, the chooser retains its selection and explicit invalid state instead of
 reporting an empty success.
@@ -1112,8 +1112,8 @@ filesystem resolution also compares the stored identity and rejects path replace
 Startup backfills readable legacy Project rows with their current platform identity;
 an unreachable legacy path receives a fail-closed unavailable marker instead of silently
 opting out of later identity checks.
-**Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
-`PATCH/DELETE /api/projects/{slug}`.
+**Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional, `root_id` required),
+`GET /api/fs/dirs` (`root_id` required once a path is selected), `PATCH/DELETE /api/projects/{slug}`.
 
 ### Container Areas and physical Ops storage
 
