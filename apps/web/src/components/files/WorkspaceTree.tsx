@@ -147,7 +147,7 @@ function writableAdapter(fs: ReadOnlyFsAdapter | FsAdapter): FsAdapter | null {
 
 export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSignal = 0, onOpenFile, onChange, activePath, activePathKind = 'file', fileFilter, defaultExt }: { fs: ReadOnlyFsAdapter | FsAdapter; title: string; className?: string; refreshSignal?: number; onOpenFile?: (path: string, target?: FileTarget) => void; onChange?: () => void; activePath?: string | null; activePathKind?: 'root' | 'directory' | 'file'; fileFilter?: (name: string) => boolean; defaultExt?: string }) {
   const [refreshKey, setRefreshKey] = React.useState(0)
-const [editing, setEditing] = React.useState<{ path: string; target?: FileTarget } | null>(null)
+  const [editing, setEditing] = React.useState<{ path: string; target?: FileTarget } | null>(null)
   const [browsePath, setBrowsePath] = React.useState<string | null>(null)
   const [treeError, setTreeError] = React.useState<string | null>(null)
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
@@ -159,15 +159,19 @@ const [editing, setEditing] = React.useState<{ path: string; target?: FileTarget
   const actionSeq = React.useRef(0)
   const treeScrollRef = React.useRef<HTMLDivElement | null>(null)
   const editingDirtyRef = React.useRef(false)
+  const [editingDirty, setEditingDirty] = React.useState(false)
   const writableFs = writableAdapter(fs)
+  const retainDirtyBuffer = !!(editing && editingDirty && !writableFs)
   const refresh = () => setRefreshKey(k => k + 1)
   const clearEditing = React.useCallback(() => {
     editingDirtyRef.current = false
+    setEditingDirty(false)
     setBrowsePath(null)
     setEditing(null)
   }, [])
   const onEditorDirtyChange = React.useCallback((dirty: boolean) => {
     editingDirtyRef.current = dirty
+    setEditingDirty(dirty)
   }, [])
   React.useEffect(() => {
     mountedRef.current = true
@@ -265,7 +269,7 @@ const [editing, setEditing] = React.useState<{ path: string; target?: FileTarget
     }
   }
 
-const childRef = (parent: FileTarget | undefined, displayPath: string, name: string): FileRef => {
+  const childRef = (parent: FileTarget | undefined, displayPath: string, name: string): FileRef => {
     if (!parent) return displayPath
     const targetPath = parent.path ? `${parent.path}/${name}` : name
     return retargetFile(parent, targetPath)
@@ -364,7 +368,11 @@ if (
       )
     : undefined
 
-  return <aside className={className}>
+  const rootClassName = retainDirtyBuffer
+    ? `${className} files-retain-dirty`.trim()
+    : className
+
+  return <aside className={rootClassName}>
     <div className="tree-toolbar"><strong>{title}</strong><div className="tree-actions">
       {writableFs
         ? <>
@@ -375,7 +383,7 @@ if (
     </div></div>
     {treeError && <p className="tree-error">{treeError}</p>}
     <div className="tree-scroll" ref={treeScrollRef} onContextMenu={writableFs ? e => { if (e.target === e.currentTarget) t.openMenu(e, null, true) } : undefined}><Level dir="" depth={0} t={t} /></div>
-{!onOpenFile && editing && <React.Suspense fallback={<div className="file-editor"><div className="file-editor-head"><strong>{base(editing.path)}</strong></div><p className="muted" style={{ padding: '10px' }}>Loading editor…</p></div>}><FileEditor fs={fs} write={writableFs?.write} path={editing.path} target={editing.target} onClose={clearEditing} onDirtyChange={onEditorDirtyChange} /></React.Suspense>}
+{!onOpenFile && editing && <React.Suspense fallback={<div className={`file-editor${retainDirtyBuffer ? ' file-editor-retained' : ''}`}><div className="file-editor-head"><strong>{base(editing.path)}</strong></div><p className="muted file-editor-loading">Loading editor…</p></div>}><FileEditor fs={fs} write={writableFs?.write} path={editing.path} target={editing.target} onClose={clearEditing} onDirtyChange={onEditorDirtyChange} /></React.Suspense>}
     {writableFs && menu && <div className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={e => e.stopPropagation()}>
       <button onClick={() => { startCreate(menuDir, 'file', menuDirTarget); setMenu(null) }} disabled={busy}>New File</button>
       <button onClick={() => { startCreate(menuDir, 'dir', menuDirTarget); setMenu(null) }} disabled={busy}>New Folder</button>

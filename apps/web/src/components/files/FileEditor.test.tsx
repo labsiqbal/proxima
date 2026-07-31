@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { FileEditor } from './FileEditor'
 import type { ReadOnlyFsAdapter } from '../../api/fsAdapter'
+import { confirmDialog } from '../ui/Dialog'
 
 vi.mock('@uiw/react-codemirror', () => ({
   default: ({
@@ -23,6 +24,10 @@ vi.mock('@uiw/react-codemirror', () => ({
       onChange={e => onChange?.(e.target.value)}
     />
   ),
+}))
+
+vi.mock('../ui/Dialog', () => ({
+  confirmDialog: vi.fn(async () => true),
 }))
 
 function mockFs(content: string, read = vi.fn(async () => ({ content }))): ReadOnlyFsAdapter & { read: ReturnType<typeof vi.fn> } {
@@ -151,6 +156,39 @@ describe('FileEditor fs adapter swaps', () => {
     })
     expect(screen.getByDisplayValue('sticky unsaved')).toBeVisible()
     expect(screen.getByTitle('notes/todo.md')).toHaveTextContent('•')
+    expect(view.container.querySelector('.file-editor')).toHaveClass('file-editor-retained')
+    expect(screen.getByText(/inspection tree stays available/i)).toBeVisible()
     expect(inspectionRead).not.toHaveBeenCalled()
+  })
+
+  it('confirms before Close discards unsaved edits', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    const confirm = vi.mocked(confirmDialog)
+    confirm.mockResolvedValueOnce(false)
+
+    render(
+      <FileEditor
+        fs={mockFs('project bytes')}
+        write={vi.fn(async () => ({}))}
+        path="notes/todo.md"
+        onClose={onClose}
+      />,
+    )
+    await screen.findByDisplayValue('project bytes')
+    await user.type(screen.getByTestId('codemirror-stub'), ' x')
+
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Discard unsaved edits?',
+      confirmLabel: 'Discard',
+      danger: true,
+    }))
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByDisplayValue('project bytes x')).toBeVisible()
+
+    confirm.mockResolvedValueOnce(true)
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })

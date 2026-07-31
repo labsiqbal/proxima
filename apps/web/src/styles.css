@@ -2141,28 +2141,67 @@ button:disabled {
 	background: var(--ui-bg-editor, #fff);
 	z-index: 5;
 }
+/* Dirty project buffer kept during Ops recovery inspection: dock under the
+   tree instead of covering it so inspection browse stays operable. */
+.file-editor.file-editor-retained,
+.files-retain-dirty .file-editor {
+	position: relative;
+	inset: auto;
+	z-index: auto;
+	flex: 0 1 auto;
+	max-height: 42%;
+	min-height: 0;
+	border-top: 1px solid var(--ui-stroke-secondary);
+	box-shadow: 0 -1px 0 color-mix(in srgb, var(--ui-stroke-tertiary) 80%, transparent);
+}
+.files-retain-dirty {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+.files-retain-dirty .tree-scroll {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: auto;
+}
 .file-editor-head {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
-	padding: 8px 10px;
+	padding: var(--space-2) var(--space-3);
 	border-bottom: 1px solid var(--ui-stroke-tertiary, #e5e7eb);
 }
 .file-editor-head button {
-	margin-left: 6px;
+	margin-left: var(--space-2);
+}
+.file-editor-retain-banner {
+	flex: 0 0 auto;
+	padding: var(--space-1) var(--space-3);
+	border-bottom: 1px solid color-mix(in srgb, var(--ui-warning) 35%, var(--ui-stroke-tertiary));
+	background: var(--ui-warning-bg);
+	color: var(--ui-warning-text);
+	font-size: var(--text-xs);
+}
+.file-editor-loading {
+	padding: var(--space-3);
 }
 .file-editor textarea {
 	flex: 1;
 	width: 100%;
 	border: 0;
-	padding: 10px;
+	padding: var(--space-3);
 	font-family: ui-monospace, monospace;
 	font-size: var(--text-sm);
 	resize: none;
 	box-sizing: border-box;
 }
+.file-editor .cm-wrap {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: auto;
+}
 .file-editor-status {
-	padding: 4px 10px;
+	padding: var(--space-1) var(--space-3);
 	font-size: var(--text-xs);
 }
 .tree-error {
@@ -3830,9 +3869,10 @@ button:disabled {
 .tool-pane-hint {
 	padding: var(--space-4);
 }
-/* Files tool: the shared workspace tree, shaped for the panel. Its inline
-   editor is absolutely positioned, so the pane is the positioning context —
-   an opened file fills the panel and Close returns to the tree. */
+/* Files tool: the shared workspace tree, shaped for the panel. A clean inline
+   editor is absolutely positioned over the pane; a dirty buffer retained during
+   Ops recovery inspection docks under the tree (.files-retain-dirty) so browse
+   stays operable without discarding unsaved project bytes. */
 .tool-files {
 	position: relative;
 	display: flex;
@@ -3840,6 +3880,10 @@ button:disabled {
 	flex: 1;
 	min-height: 0;
 	min-width: 0;
+}
+.tool-files.files-retain-dirty .tree-scroll {
+	flex: 1 1 auto;
+	min-height: var(--space-8);
 }
 .tool-files .tree-toolbar {
 	display: flex;

@@ -11,6 +11,7 @@ import { css } from '@codemirror/lang-css'
 import type { ReadOnlyFsAdapter } from '../../api/fsAdapter'
 import type { FileRef } from '../../api/files'
 import type { FileTarget } from '../../types'
+import { confirmDialog } from '../ui/Dialog'
 
 function langFor(path: string) {
   const ext = path.split('.').pop()?.toLowerCase()
@@ -109,8 +110,23 @@ const ref = target || path
 
   const saveKey = React.useMemo(() => keymap.of([{ key: 'Mod-s', preventDefault: true, run: () => { saveRef.current(); return true } }]), [])
 
+  const requestClose = React.useCallback(async () => {
+    if (status === 'saving') return
+    if (dirty) {
+      const discard = await confirmDialog({
+        title: 'Discard unsaved edits?',
+        message: 'Your unsaved project edits will be lost.',
+        confirmLabel: 'Discard',
+        danger: true,
+      })
+      if (!discard) return
+    }
+    onClose()
+  }, [dirty, onClose, status])
+
   const displayPath = pathRef.current || path
   const name = displayPath.split('/').pop()
+  const retained = dirty && !write
   const statusText = status === 'saved'
     ? 'Saved'
     : status === 'saving'
@@ -122,13 +138,14 @@ const ref = target || path
           : status === 'loading'
             ? 'Loading…'
             : status
-  return <div className="file-editor">
+  return <div className={`file-editor${retained ? ' file-editor-retained' : ''}`}>
     <div className="file-editor-head">
       <strong title={displayPath}>{name}{dirty ? ' •' : ''}</strong>
-      <div>{write && <button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button>}<button className="ghost-button" onClick={onClose} disabled={status === 'saving'}>Close</button></div>
+      <div>{write && <button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button>}<button className="ghost-button" onClick={() => void requestClose()} disabled={status === 'saving'}>Close</button></div>
     </div>
+    {retained && <div className="file-editor-retain-banner">Unsaved project edits · inspection tree stays available</div>}
     {status === 'loading'
-      ? <p className="muted" style={{ padding: '10px' }}>Loading…</p>
+      ? <p className="muted file-editor-loading">Loading…</p>
       : <div className="cm-wrap"><CodeMirror value={content} height="100%" theme={isDark ? oneDark : 'light'} editable={!!write} extensions={[...(write ? [saveKey] : []), ...langFor(displayPath)]} onChange={write ? v => { editVersion.current += 1; setContent(v); setDirty(true); setStatus('ready') } : undefined} basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: true }} /></div>}
     <div className="file-editor-status muted" role="status" aria-live="polite">{statusText}</div>
   </div>
