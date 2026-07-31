@@ -118,7 +118,14 @@ def test_linux_reinstall_preserves_master_on_and_safe_update_off(
     config_file.write_text(original, encoding="utf-8")
 
     stub = '#!/bin/sh\nprintf "%s\\n" "$0 $*" >> "$CALL_LOG"\n'
-    for name in ("uv", "npm", "node", "systemctl", "loginctl"):
+    for name in (
+        "uv",
+        "npm",
+        "node",
+        "systemctl",
+        "loginctl",
+        "check-preview-drained",
+    ):
         path = fake_bin / name
         path.write_text(stub, encoding="utf-8")
         path.chmod(0o755)
@@ -142,6 +149,7 @@ def test_linux_reinstall_preserves_master_on_and_safe_update_off(
     assert result.returncode == 0, result.stderr
     assert config_file.read_text(encoding="utf-8") == original
     calls = call_log.read_text(encoding="utf-8")
+    assert "check-preview-drained --protocol proxima-preview-supervisor-v2:user" in calls
     assert "systemctl --user restart proxima.service" in calls
     assert "systemctl --user enable --now proxima-backup.timer" in calls
     assert (config_home / "systemd" / "user" / "proxima.service").is_file()

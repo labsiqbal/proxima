@@ -54,7 +54,12 @@ elif systemctl --user is-active --quiet proxima.service; then
 fi
 
 echo "==> Verifying legacy previews are drained"
-run "$ROOT/scripts/check-preview-drained" \
+if command -v check-preview-drained >/dev/null 2>&1; then
+  CHECK_PREVIEW_DRAINED="$(command -v check-preview-drained)"
+else
+  CHECK_PREVIEW_DRAINED="$ROOT/scripts/check-preview-drained"
+fi
+run "$CHECK_PREVIEW_DRAINED" \
   --protocol proxima-preview-supervisor-v2:user
 
 echo "==> Building backend deps"
