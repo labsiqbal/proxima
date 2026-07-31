@@ -13,10 +13,24 @@ import sqlite3
 from typing import Any, Mapping
 
 from .event_types import MASTER_PROJECTION_EVENT_TYPES
+from .event_payloads import (
+    MAX_DURABLE_EVENT_PAYLOAD_BYTES,
+    encode_bounded_event_payload,
+)
+from .master_persistence import canonical_job_payload
+from .run_projection import effective_job_status_sql
+from .task_state_events import (
+    RecoveryAttributionError,
+    claim_task_projection_generation,
+    publish_master_recovery,
+    publish_master_recovery_correction,
+    task_projection_epoch,
+    task_projection_state,
+)
 from . import master_focus
 
 log = logging.getLogger("proxima.master_projection")
-MAX_PROJECTION_PAYLOAD_BYTES = 16 * 1024
+MAX_PROJECTION_PAYLOAD_BYTES = MAX_DURABLE_EVENT_PAYLOAD_BYTES
 _SAFE_TOKEN = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,199}$")
 _BASE_PAYLOAD_FIELDS = {
     "event_id",
@@ -30,6 +44,17 @@ _BASE_PAYLOAD_FIELDS = {
     "source",
     "subject_container_id",
 }
+
+
+class ProjectionAttributionError(ValueError):
+    def __init__(self, code: str):
+        if code not in {
+            "focus_attribution_unavailable",
+            "projection_scope_unavailable",
+        }:
+            raise ValueError("invalid projection attribution failure")
+        self.code = code
+        super().__init__(code.replace("_", " "))
 _TASK_PAYLOAD_FIELDS = {
     "area_id",
     "area_kind",
@@ -210,6 +235,21 @@ def _as_int(value: Any) -> int:
     return int(value)
 
 
+def _task_projection_key(
+    job_id: int,
+    key_suffix: str,
+    projection_epoch: int,
+    projection_revision: int,
+) -> str:
+    if projection_revision > 0:
+        return (
+            f"task:{job_id}:revision:{projection_revision}:{key_suffix}"
+        )
+    if projection_epoch <= 0:
+        return f"task:{job_id}:{key_suffix}"
+    return f"task:{job_id}:epoch:{projection_epoch}:{key_suffix}"
+
+
 def _json_object(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
@@ -260,8 +300,9 @@ def assert_master_projection_ledger(conn: sqlite3.Connection) -> None:
             "PRAGMA index_list(master_projections)"
         ).fetchall()
     }
+    if indexes.get("idx_master_projections_source") is not False:
+        raise RuntimeError("Master projection ledger indexes are incomplete")
     for name in (
-        "uq_master_projections_source_type",
         "uq_master_projections_message",
         "uq_master_projections_event",
     ):
@@ -389,6 +430,775 @@ def assert_master_projection_ledger(conn: sqlite3.Connection) -> None:
             raise RuntimeError("Master projection ledger source link is incomplete")
 
 
+def assert_task_projection_outbox(
+    conn: sqlite3.Connection,
+    *,
+    require_ordered: bool | None = None,
+    require_state_generation: bool | None = None,
+    require_legacy_ordering: bool | None = None,
+    require_aggregated_recovery_corrections: bool | None = None,
+    require_recovery_correction_coverage: bool | None = None,
+) -> None:
+    table = conn.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'task_projection_outbox'"
+    ).fetchone()
+    if table is None:
+        raise RuntimeError("Task projection outbox is missing")
+    schema_sql = " ".join(str(table["sql"] or "").lower().split())
+    version_row = conn.execute(
+        "SELECT COALESCE(MAX(version), 0) AS version "
+        "FROM schema_migrations"
+    ).fetchone()
+    ordered = (
+        require_ordered
+        if require_ordered is not None
+        else _as_int(version_row["version"]) >= 45
+    )
+    state_generation = (
+        require_state_generation
+        if require_state_generation is not None
+        else _as_int(version_row["version"]) >= 46
+    )
+    legacy_ordering = (
+        require_legacy_ordering
+        if require_legacy_ordering is not None
+        else _as_int(version_row["version"]) >= 47
+    )
+    aggregated_recovery_corrections = (
+        require_aggregated_recovery_corrections
+        if require_aggregated_recovery_corrections is not None
+        else _as_int(version_row["version"]) >= 48
+    )
+    recovery_correction_coverage = (
+        require_recovery_correction_coverage
+        if require_recovery_correction_coverage is not None
+        else _as_int(version_row["version"]) >= 49
+    )
+    if not ordered:
+        if (
+            "unique(task_event_id)" not in schema_sql
+            or "state = 'projected' and projection_id is not null"
+            not in schema_sql
+        ):
+            raise RuntimeError("Task projection outbox schema is incomplete")
+        return
+    columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(task_projection_outbox)"
+        ).fetchall()
+    }
+    if "projection_revision" not in columns:
+        raise RuntimeError("Task projection revision is missing")
+    required_schema = (
+        "'failed_attribution', 'superseded'",
+        "references jobs(id) on delete cascade",
+        "references events(id) on delete cascade",
+        "references master_projections(id) on delete set null",
+        "unique(task_event_id)",
+        "state = 'projected' and projection_id is not null",
+        "superseded_by_event_id is not null",
+    )
+    if any(token not in schema_sql for token in required_schema):
+        raise RuntimeError("Task projection outbox schema is incomplete")
+    expected_foreign_keys = {
+        "job_id": ("jobs", "CASCADE"),
+        "task_event_id": ("events", "CASCADE"),
+        "projection_id": ("master_projections", "SET NULL"),
+        "superseded_by_event_id": ("events", "SET NULL"),
+    }
+    foreign_keys = {
+        str(row[3]): (str(row[2]), str(row[6]).upper())
+        for row in conn.execute(
+            "PRAGMA foreign_key_list(task_projection_outbox)"
+        ).fetchall()
+    }
+    if foreign_keys != expected_foreign_keys:
+        raise RuntimeError("Task projection outbox foreign keys are incomplete")
+    indexes = {
+        str(row[1]): bool(row[2])
+        for row in conn.execute(
+            "PRAGMA index_list(task_projection_outbox)"
+        ).fetchall()
+    }
+    if indexes.get("idx_task_projection_outbox_state") is not False:
+        raise RuntimeError("Task projection outbox indexes are incomplete")
+    if not indexes.get("uq_task_projection_outbox_revision"):
+        raise RuntimeError("Task projection outbox indexes are incomplete")
+    recovery = conn.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'task_recovery_outbox'"
+    ).fetchone()
+    if recovery is None:
+        raise RuntimeError("Task recovery outbox is missing")
+    recovery_schema = " ".join(
+        str(recovery["sql"] or "").lower().split()
+    )
+    recovery_columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(task_recovery_outbox)"
+        ).fetchall()
+    }
+    recovery_tokens = (
+        "unique(task_event_id)",
+        "state = 'projected' and message_id is not null",
+    )
+    if any(token not in recovery_schema for token in recovery_tokens):
+        raise RuntimeError("Task recovery outbox schema is incomplete")
+    has_ordering_gap = "ordering_successor_id" in recovery_columns
+    if state_generation:
+        if (
+            not all(
+                state in recovery_schema
+                for state in (
+                    "'pending'",
+                    "'projected'",
+                    "'failed_attribution'",
+                )
+            )
+            or "superseded_by_event_id" in recovery_columns
+            or "projection_revision" in recovery_columns
+        ):
+            raise RuntimeError("Task recovery outbox schema is incomplete")
+        if legacy_ordering and (
+            not has_ordering_gap
+            or "'legacy_ordering_gap'" not in recovery_schema
+            or "ordering_successor_id is not null" not in recovery_schema
+        ):
+            raise RuntimeError("Task recovery ordering gaps are incomplete")
+    else:
+        old_recovery = "superseded_by_event_id" in recovery_columns
+        if old_recovery and (
+            "'failed_attribution', 'superseded'" not in recovery_schema
+            or "superseded_by_event_id is not null" not in recovery_schema
+        ):
+            raise RuntimeError("Task recovery outbox schema is incomplete")
+        if not old_recovery and not all(
+            state in recovery_schema
+            for state in ("'pending'", "'projected'", "'failed_attribution'")
+        ):
+            raise RuntimeError("Task recovery outbox schema is incomplete")
+    recovery_foreign_keys = {
+        str(row[3]): (str(row[2]), str(row[6]).upper())
+        for row in conn.execute(
+            "PRAGMA foreign_key_list(task_recovery_outbox)"
+        ).fetchall()
+    }
+    expected_recovery_foreign_keys = {
+        "job_id": ("jobs", "CASCADE"),
+        "task_event_id": ("events", "CASCADE"),
+        "master_session_id": ("sessions", "SET NULL"),
+        "message_id": ("messages", "RESTRICT"),
+        "event_id": ("events", "RESTRICT"),
+    }
+    if has_ordering_gap:
+        expected_recovery_foreign_keys["ordering_successor_id"] = (
+            "task_recovery_outbox",
+            "CASCADE",
+        )
+    if not state_generation and "superseded_by_event_id" in recovery_columns:
+        expected_recovery_foreign_keys["superseded_by_event_id"] = (
+            "events",
+            "SET NULL",
+        )
+    if recovery_foreign_keys != expected_recovery_foreign_keys:
+        raise RuntimeError("Task recovery outbox foreign keys are incomplete")
+    recovery_indexes = {
+        str(row[1]): bool(row[2])
+        for row in conn.execute(
+            "PRAGMA index_list(task_recovery_outbox)"
+        ).fetchall()
+    }
+    if recovery_indexes.get("idx_task_recovery_outbox_state") is not False:
+        raise RuntimeError("Task recovery outbox indexes are incomplete")
+    if legacy_ordering:
+        correction = conn.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'task_recovery_corrections'"
+        ).fetchone()
+        if correction is None:
+            raise RuntimeError("Task recovery corrections are missing")
+        correction_schema = " ".join(
+            str(correction["sql"] or "").lower().split()
+        )
+        correction_tokens = (
+            "state = 'projected' and message_id is not null",
+            "gap_count > 0",
+        )
+        if any(
+            token not in correction_schema for token in correction_tokens
+        ):
+            raise RuntimeError("Task recovery corrections are incomplete")
+        if aggregated_recovery_corrections and (
+            "first_successor_task_event_id" not in correction_schema
+            or "last_successor_task_event_id" not in correction_schema
+        ):
+            raise RuntimeError("Task recovery correction ranges are incomplete")
+        if recovery_correction_coverage and (
+            "(marker_kind = 'legacy_partial' and state = 'projected'"
+            not in correction_schema
+            or "(marker_kind = 'aggregate' and (" not in correction_schema
+        ):
+            raise RuntimeError("Task recovery marker kinds are incomplete")
+        correction_columns = {
+            str(row[1]): row
+            for row in conn.execute(
+                "PRAGMA table_info(task_recovery_corrections)"
+            ).fetchall()
+        }
+        if recovery_correction_coverage and any(
+            str(correction_columns[column][4]) not in ("1", "'1'")
+            for column in (
+                "first_successor_task_event_id",
+                "last_successor_task_event_id",
+            )
+            if column in correction_columns
+        ):
+            raise RuntimeError("Task recovery correction defaults are incomplete")
+        expected_correction_foreign_keys = {
+            "job_id": ("jobs", "CASCADE"),
+            "successor_outbox_id": (
+                "task_recovery_outbox",
+                "CASCADE",
+            ),
+            "master_session_id": ("sessions", "SET NULL"),
+            "message_id": ("messages", "RESTRICT"),
+            "event_id": ("events", "RESTRICT"),
+        }
+        correction_foreign_keys = {
+            str(row[3]): (str(row[2]), str(row[6]).upper())
+            for row in conn.execute(
+                "PRAGMA foreign_key_list(task_recovery_corrections)"
+            ).fetchall()
+        }
+        if correction_foreign_keys != expected_correction_foreign_keys:
+            raise RuntimeError("Task recovery correction links are incomplete")
+        correction_indexes = {
+            str(row[1]): bool(row[2])
+            for row in conn.execute(
+                "PRAGMA index_list(task_recovery_corrections)"
+            ).fetchall()
+        }
+        if (
+            correction_indexes.get("idx_task_recovery_corrections_state")
+            is not False
+        ):
+            raise RuntimeError("Task recovery correction indexes are incomplete")
+        unique_job_index = any(
+            bool(row[2])
+            and [
+                str(column[2])
+                for column in conn.execute(
+                    f"PRAGMA index_info({str(row[1])})"
+                ).fetchall()
+            ]
+            == ["job_id"]
+            for row in conn.execute(
+                "PRAGMA index_list(task_recovery_corrections)"
+            ).fetchall()
+        )
+        if aggregated_recovery_corrections and not unique_job_index:
+            raise RuntimeError("Task recovery correction uniqueness is incomplete")
+        if (
+            not aggregated_recovery_corrections
+            and "unique(successor_outbox_id)" not in correction_schema
+            and not unique_job_index
+        ):
+            raise RuntimeError("Task recovery correction uniqueness is incomplete")
+        if recovery_correction_coverage:
+            if not correction_indexes.get(
+                "uq_task_recovery_corrections_active_job"
+            ):
+                raise RuntimeError(
+                    "Task recovery active correction uniqueness is incomplete"
+                )
+            correction_trigger = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'trigger' "
+                "AND name = "
+                "'task_recovery_correction_projected_immutable'"
+            ).fetchone()
+            if correction_trigger is None:
+                raise RuntimeError(
+                    "Delivered Task recovery corrections are mutable"
+                )
+        trigger = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'trigger' "
+            "AND name = 'task_recovery_ordering_gap_immutable'"
+        ).fetchone()
+        if trigger is None:
+            raise RuntimeError("Task recovery ordering gaps are mutable")
+        if conn.execute(
+            "SELECT 1 FROM task_recovery_outbox AS predecessor "
+            "WHERE predecessor.state IN ('pending', 'failed_attribution') "
+            "AND EXISTS ("
+            "SELECT 1 FROM task_recovery_outbox AS successor "
+            "WHERE successor.job_id = predecessor.job_id "
+            "AND successor.task_event_id > predecessor.task_event_id "
+            "AND successor.state = 'projected'"
+            ") LIMIT 1"
+        ).fetchone():
+            raise RuntimeError("Task recovery ordering gap is unresolved")
+        if conn.execute(
+            "SELECT 1 FROM task_recovery_outbox AS gap "
+            "LEFT JOIN task_recovery_outbox AS successor "
+            "ON successor.id = gap.ordering_successor_id "
+            "WHERE gap.state = 'legacy_ordering_gap' AND ("
+            "successor.id IS NULL OR successor.job_id != gap.job_id "
+            "OR successor.task_event_id <= gap.task_event_id "
+            "OR successor.state != 'projected'"
+            ") LIMIT 1"
+        ).fetchone():
+            raise RuntimeError("Task recovery ordering gap link is invalid")
+        if aggregated_recovery_corrections:
+            gap_table = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'task_recovery_ordering_gaps'"
+            ).fetchone()
+            if gap_table is None:
+                raise RuntimeError("Task recovery gap ledger is missing")
+            gap_schema = " ".join(
+                str(gap_table["sql"] or "").lower().split()
+            )
+            gap_tokens = (
+                "'unpublished_predecessor', 'projected_reversal'",
+                "unique(predecessor_outbox_id, successor_outbox_id, kind)",
+                "predecessor_publication_event_id",
+                "successor_publication_event_id",
+            )
+            if any(token not in gap_schema for token in gap_tokens):
+                raise RuntimeError("Task recovery gap ledger is incomplete")
+            expected_gap_foreign_keys = {
+                "job_id": ("jobs", "CASCADE"),
+                "predecessor_outbox_id": (
+                    "task_recovery_outbox",
+                    "CASCADE",
+                ),
+                "successor_outbox_id": (
+                    "task_recovery_outbox",
+                    "CASCADE",
+                ),
+                "predecessor_publication_event_id": (
+                    "events",
+                    "RESTRICT",
+                ),
+                "successor_publication_event_id": (
+                    "events",
+                    "RESTRICT",
+                ),
+            }
+            gap_foreign_keys = {
+                str(row[3]): (str(row[2]), str(row[6]).upper())
+                for row in conn.execute(
+                    "PRAGMA foreign_key_list(task_recovery_ordering_gaps)"
+                ).fetchall()
+            }
+            if gap_foreign_keys != expected_gap_foreign_keys:
+                raise RuntimeError("Task recovery gap links are incomplete")
+            gap_indexes = {
+                str(row[1]): bool(row[2])
+                for row in conn.execute(
+                    "PRAGMA index_list(task_recovery_ordering_gaps)"
+                ).fetchall()
+            }
+            if (
+                gap_indexes.get("idx_task_recovery_ordering_gaps_job")
+                is not False
+            ):
+                raise RuntimeError("Task recovery gap indexes are incomplete")
+            gap_trigger = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'trigger' "
+                "AND name = 'task_recovery_ordering_gaps_immutable'"
+            ).fetchone()
+            if gap_trigger is None:
+                raise RuntimeError("Task recovery gap records are mutable")
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_ordering_gaps AS gap "
+                "JOIN task_recovery_outbox AS predecessor "
+                "ON predecessor.id = gap.predecessor_outbox_id "
+                "JOIN task_recovery_outbox AS successor "
+                "ON successor.id = gap.successor_outbox_id "
+                "WHERE predecessor.job_id != gap.job_id "
+                "OR successor.job_id != gap.job_id "
+                "OR predecessor.task_event_id "
+                "!= gap.predecessor_task_event_id "
+                "OR successor.task_event_id "
+                "!= gap.successor_task_event_id "
+                "OR successor.state != 'projected' "
+                "OR successor.event_id "
+                "!= gap.successor_publication_event_id "
+                "OR (gap.kind = 'unpublished_predecessor' AND ("
+                "predecessor.state != 'legacy_ordering_gap' "
+                "OR predecessor.event_id IS NOT NULL "
+                "OR gap.predecessor_publication_event_id IS NOT NULL"
+                ")) OR (gap.kind = 'projected_reversal' AND ("
+                "predecessor.state != 'projected' "
+                "OR predecessor.event_id "
+                "!= gap.predecessor_publication_event_id "
+                "OR predecessor.event_id <= successor.event_id"
+                ")) LIMIT 1"
+            ).fetchone():
+                raise RuntimeError("Task recovery gap audit is invalid")
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_outbox AS gap "
+                "WHERE gap.state = 'legacy_ordering_gap' "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM task_recovery_ordering_gaps AS audit "
+                "WHERE audit.predecessor_outbox_id = gap.id "
+                "AND audit.successor_outbox_id = gap.ordering_successor_id "
+                "AND audit.kind = 'unpublished_predecessor'"
+                ") LIMIT 1"
+            ).fetchone():
+                raise RuntimeError("Task recovery gap audit is missing")
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_outbox AS predecessor "
+                "WHERE predecessor.state = 'projected' "
+                "AND EXISTS ("
+                "SELECT 1 FROM task_recovery_outbox AS successor "
+                "WHERE successor.job_id = predecessor.job_id "
+                "AND successor.state = 'projected' "
+                "AND successor.task_event_id > predecessor.task_event_id "
+                "AND successor.event_id < predecessor.event_id"
+                ") AND NOT EXISTS ("
+                "SELECT 1 FROM task_recovery_ordering_gaps AS audit "
+                "WHERE audit.predecessor_outbox_id = predecessor.id "
+                "AND audit.kind = 'projected_reversal' "
+                "AND audit.successor_outbox_id = ("
+                "SELECT successor.id "
+                "FROM task_recovery_outbox AS successor "
+                "WHERE successor.job_id = predecessor.job_id "
+                "AND successor.state = 'projected' "
+                "AND successor.task_event_id > predecessor.task_event_id "
+                "AND successor.event_id < predecessor.event_id "
+                "ORDER BY successor.task_event_id, successor.id LIMIT 1"
+                ")) LIMIT 1"
+            ).fetchone():
+                raise RuntimeError("Task recovery reversal audit is missing")
+            if recovery_correction_coverage:
+                coverage = conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'task_recovery_correction_gaps'"
+                ).fetchone()
+                if coverage is None:
+                    raise RuntimeError(
+                        "Task recovery correction coverage is missing"
+                    )
+                expected_coverage_foreign_keys = {
+                    "correction_id": (
+                        "task_recovery_corrections",
+                        "CASCADE",
+                    ),
+                    "gap_id": (
+                        "task_recovery_ordering_gaps",
+                        "CASCADE",
+                    ),
+                }
+                coverage_foreign_keys = {
+                    str(row[3]): (
+                        str(row[2]),
+                        str(row[6]).upper(),
+                    )
+                    for row in conn.execute(
+                        "PRAGMA foreign_key_list("
+                        "task_recovery_correction_gaps)"
+                    ).fetchall()
+                }
+                if (
+                    coverage_foreign_keys
+                    != expected_coverage_foreign_keys
+                ):
+                    raise RuntimeError(
+                        "Task recovery correction coverage links "
+                        "are incomplete"
+                    )
+                coverage_indexes = {
+                    str(row[1]): bool(row[2])
+                    for row in conn.execute(
+                        "PRAGMA index_list("
+                        "task_recovery_correction_gaps)"
+                    ).fetchall()
+                }
+                if (
+                    coverage_indexes.get(
+                        "idx_task_recovery_correction_gaps_gap"
+                    )
+                    is not False
+                ):
+                    raise RuntimeError(
+                        "Task recovery correction coverage indexes "
+                        "are incomplete"
+                    )
+                if conn.execute(
+                    "SELECT 1 FROM task_recovery_corrections AS correction "
+                    "JOIN task_recovery_outbox AS successor "
+                    "ON successor.id = correction.successor_outbox_id "
+                    "LEFT JOIN ("
+                    "SELECT link.correction_id, COUNT(*) AS gap_count, "
+                    "MIN(gap.predecessor_task_event_id) "
+                    "AS first_task_event_id, "
+                    "MAX(gap.predecessor_task_event_id) "
+                    "AS last_task_event_id, "
+                    "MIN(gap.successor_task_event_id) "
+                    "AS first_successor_task_event_id, "
+                    "MAX(gap.successor_task_event_id) "
+                    "AS last_successor_task_event_id "
+                    "FROM task_recovery_correction_gaps AS link "
+                    "JOIN task_recovery_ordering_gaps AS gap "
+                    "ON gap.id = link.gap_id "
+                    "GROUP BY link.correction_id"
+                    ") AS covered ON covered.correction_id = correction.id "
+                    "WHERE successor.state != 'projected' "
+                    "OR successor.job_id != correction.job_id "
+                    "OR covered.gap_count IS NULL "
+                    "OR covered.gap_count != correction.gap_count "
+                    "OR covered.first_task_event_id "
+                    "!= correction.first_task_event_id "
+                    "OR covered.last_task_event_id "
+                    "!= correction.last_task_event_id "
+                    "OR covered.first_successor_task_event_id "
+                    "!= correction.first_successor_task_event_id "
+                    "OR covered.last_successor_task_event_id "
+                    "!= correction.last_successor_task_event_id "
+                    "OR EXISTS ("
+                    "SELECT 1 FROM task_recovery_correction_gaps AS link "
+                    "JOIN task_recovery_ordering_gaps AS gap "
+                    "ON gap.id = link.gap_id "
+                    "WHERE link.correction_id = correction.id "
+                    "AND gap.job_id != correction.job_id"
+                    ") LIMIT 1"
+                ).fetchone():
+                    raise RuntimeError(
+                        "Task recovery correction coverage is invalid"
+                    )
+                if conn.execute(
+                    "SELECT 1 FROM task_recovery_ordering_gaps AS gap "
+                    "WHERE NOT EXISTS ("
+                    "SELECT 1 FROM task_recovery_correction_gaps AS link "
+                    "WHERE link.gap_id = gap.id"
+                    ") AND NOT EXISTS ("
+                    "SELECT 1 FROM task_recovery_legacy_loss_gaps AS link "
+                    "WHERE link.gap_id = gap.id"
+                    ") LIMIT 1"
+                ).fetchone():
+                    raise RuntimeError(
+                        "Task recovery correction coverage is incomplete"
+                    )
+                if conn.execute(
+                    "SELECT 1 FROM task_recovery_corrections AS active "
+                    "JOIN task_recovery_correction_gaps AS active_link "
+                    "ON active_link.correction_id = active.id "
+                    "WHERE active.state IN ("
+                    "'pending', 'failed_attribution'"
+                    ") AND (EXISTS ("
+                    "SELECT 1 "
+                    "FROM task_recovery_correction_gaps AS delivered_link "
+                    "JOIN task_recovery_corrections AS delivered "
+                    "ON delivered.id = delivered_link.correction_id "
+                    "WHERE delivered_link.gap_id = active_link.gap_id "
+                    "AND delivered.state = 'projected'"
+                    ") OR EXISTS ("
+                    "SELECT 1 FROM task_recovery_legacy_loss_gaps AS loss "
+                    "WHERE loss.gap_id = active_link.gap_id"
+                    ")) LIMIT 1"
+                ).fetchone():
+                    raise RuntimeError(
+                        "Task recovery correction aggregate overlaps "
+                        "delivered history"
+                    )
+                for correction_row in conn.execute(
+                    "SELECT correction.*, "
+                    "event.session_id AS event_session_id, "
+                    "event.type, event.payload, "
+                    "message.session_id AS message_session_id "
+                    "FROM task_recovery_corrections AS correction "
+                    "JOIN events AS event ON event.id = correction.event_id "
+                    "JOIN messages AS message "
+                    "ON message.id = correction.message_id "
+                    "WHERE correction.state = 'projected'"
+                ).fetchall():
+                    try:
+                        payload = json.loads(
+                            str(correction_row["payload"])
+                        )
+                    except (TypeError, json.JSONDecodeError) as exc:
+                        raise RuntimeError(
+                            "Delivered Task recovery correction payload "
+                            "is invalid"
+                        ) from exc
+                    expected_payload = {
+                        "message_id": int(correction_row["message_id"]),
+                        "task_id": int(correction_row["job_id"]),
+                        "gap_count": int(correction_row["gap_count"]),
+                        "first_task_event_id": int(
+                            correction_row["first_task_event_id"]
+                        ),
+                        "last_task_event_id": int(
+                            correction_row["last_task_event_id"]
+                        ),
+                        "successor_task_event_id": int(
+                            conn.execute(
+                                "SELECT task_event_id "
+                                "FROM task_recovery_outbox WHERE id = ?",
+                                (
+                                    correction_row[
+                                        "successor_outbox_id"
+                                    ],
+                                ),
+                            ).fetchone()[0]
+                        ),
+                    }
+                    if not isinstance(payload, dict) or any(
+                        payload.get(key) != value
+                        for key, value in expected_payload.items()
+                    ):
+                        raise RuntimeError(
+                            "Delivered Task recovery correction payload "
+                            "does not match its marker"
+                        )
+                    if (
+                        correction_row["marker_kind"] == "aggregate"
+                        and (
+                            payload.get(
+                                "first_successor_task_event_id"
+                            )
+                            != int(
+                                correction_row[
+                                    "first_successor_task_event_id"
+                                ]
+                            )
+                            or payload.get(
+                                "last_successor_task_event_id"
+                            )
+                            != int(
+                                correction_row[
+                                    "last_successor_task_event_id"
+                                ]
+                            )
+                        )
+                    ):
+                        raise RuntimeError(
+                            "Delivered Task recovery aggregate payload "
+                            "does not match its marker"
+                        )
+                    if (
+                        int(correction_row["event_session_id"])
+                        != int(correction_row["master_session_id"])
+                        or int(correction_row["message_session_id"])
+                        != int(correction_row["master_session_id"])
+                        or correction_row["type"]
+                        != "master.task.recovery_history_corrected"
+                    ):
+                        raise RuntimeError(
+                            "Delivered Task recovery correction event "
+                            "is invalid"
+                        )
+                if conn.execute(
+                    "SELECT 1 FROM task_recovery_legacy_losses AS loss "
+                    "LEFT JOIN ("
+                    "SELECT loss_id, COUNT(*) AS gap_count "
+                    "FROM task_recovery_legacy_loss_gaps GROUP BY loss_id"
+                    ") AS covered ON covered.loss_id = loss.id "
+                    "JOIN events AS event ON event.id = loss.event_id "
+                    "JOIN messages AS message "
+                    "ON message.id = loss.message_id "
+                    "WHERE covered.gap_count IS NULL "
+                    "OR covered.gap_count != loss.gap_count "
+                    "OR event.session_id != loss.master_session_id "
+                    "OR message.session_id != loss.master_session_id "
+                    "OR event.type != "
+                    "'master.task.recovery_history_corrected' "
+                    "OR event.payload != loss.event_payload LIMIT 1"
+                ).fetchone():
+                    raise RuntimeError(
+                        "Legacy Task recovery loss record is invalid"
+                    )
+            elif conn.execute(
+                "SELECT 1 FROM task_recovery_ordering_gaps AS gap "
+                "WHERE NOT EXISTS ("
+                "SELECT 1 FROM task_recovery_corrections AS correction "
+                "WHERE correction.job_id = gap.job_id"
+                ") LIMIT 1"
+            ).fetchone():
+                raise RuntimeError(
+                    "Task recovery correction intent is missing"
+                )
+        else:
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_corrections AS correction "
+                "JOIN task_recovery_outbox AS successor "
+                "ON successor.id = correction.successor_outbox_id "
+                "LEFT JOIN ("
+                "SELECT ordering_successor_id, job_id, "
+                "COUNT(*) AS gap_count, "
+                "MIN(task_event_id) AS first_task_event_id, "
+                "MAX(task_event_id) AS last_task_event_id "
+                "FROM task_recovery_outbox "
+                "WHERE state = 'legacy_ordering_gap' "
+                "GROUP BY ordering_successor_id, job_id"
+                ") AS gaps ON gaps.ordering_successor_id "
+                "= correction.successor_outbox_id "
+                "AND gaps.job_id = correction.job_id "
+                "WHERE successor.state != 'projected' "
+                "OR successor.job_id != correction.job_id "
+                "OR gaps.gap_count IS NULL "
+                "OR gaps.gap_count != correction.gap_count "
+                "OR gaps.first_task_event_id "
+                "!= correction.first_task_event_id "
+                "OR gaps.last_task_event_id "
+                "!= correction.last_task_event_id LIMIT 1"
+            ).fetchone():
+                raise RuntimeError("Task recovery correction audit is invalid")
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_outbox AS gap "
+                "WHERE gap.state = 'legacy_ordering_gap' "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM task_recovery_corrections AS correction "
+                "WHERE correction.job_id = gap.job_id "
+                "AND correction.successor_outbox_id "
+                "= gap.ordering_successor_id"
+                ") LIMIT 1"
+            ).fetchone():
+                raise RuntimeError(
+                    "Task recovery correction intent is missing"
+                )
+    job_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+    }
+    if "projection_revision" not in job_columns or (
+        state_generation and "projection_state" not in job_columns
+    ):
+        raise RuntimeError("Task projection revision is missing")
+    if state_generation:
+        legacy_triggers = {
+            str(row["name"])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                "AND name IN ("
+                "'jobs_projection_revision_update', "
+                "'node_states_projection_revision_insert', "
+                "'node_states_projection_revision_update', "
+                "'node_states_projection_revision_delete'"
+                ")"
+            ).fetchall()
+        }
+        if legacy_triggers:
+            raise RuntimeError("Task projection revision still follows raw progress")
+        if conn.execute(
+            "SELECT 1 FROM task_recovery_outbox "
+            "WHERE state = 'superseded' LIMIT 1"
+        ).fetchone():
+            raise RuntimeError("Task recovery audit history was superseded")
+    projection_indexes = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA index_list(master_projections)"
+        ).fetchall()
+    }
+    if "uq_master_projections_source_type" in projection_indexes:
+        raise RuntimeError("Task projection lifecycle history is unavailable")
+
+
 class MasterProjectionService:
     """One projection boundary for Task and supervision state."""
 
@@ -400,6 +1210,45 @@ class MasterProjectionService:
             return self.project_task(job_id)
         except Exception:
             log.exception("Master Task projection failed for Task %s", job_id)
+            return None
+
+    def safe_process_task_outbox(
+        self,
+        outbox_id: int,
+    ) -> dict[str, Any] | None:
+        try:
+            return self.process_task_outbox(outbox_id)
+        except Exception:
+            log.exception(
+                "Master Task projection outbox failed for row %s",
+                outbox_id,
+            )
+            return None
+
+    def safe_process_recovery_outbox(
+        self,
+        outbox_id: int,
+    ) -> dict[str, Any] | None:
+        try:
+            return self.process_recovery_outbox(outbox_id)
+        except Exception:
+            log.exception(
+                "Master recovery outbox failed for row %s",
+                outbox_id,
+            )
+            return None
+
+    def safe_process_recovery_correction(
+        self,
+        correction_id: int,
+    ) -> dict[str, Any] | None:
+        try:
+            return self.process_recovery_correction(correction_id)
+        except Exception:
+            log.exception(
+                "Master recovery correction failed for row %s",
+                correction_id,
+            )
             return None
 
     def safe_project_attention(
@@ -437,6 +1286,397 @@ class MasterProjectionService:
     def conn(self) -> sqlite3.Connection:
         return self.app.state.worker_db
 
+    def _record_outbox_attempt(
+        self,
+        outbox_id: int,
+        *,
+        state: str,
+        projection_id: int | None,
+        failure_code: str | None,
+    ) -> None:
+        with self.app.state.db_lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute(
+                    "UPDATE task_projection_outbox SET state = ?, "
+                    "projection_id = ?, failure_code = ?, "
+                    "attempt_count = attempt_count + 1, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND state != 'superseded'",
+                    (
+                        state,
+                        projection_id,
+                        failure_code,
+                        outbox_id,
+                    ),
+                )
+                self.conn.execute("COMMIT")
+            except Exception:
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
+                raise
+
+    @staticmethod
+    def _has_earlier_unresolved(
+        conn: sqlite3.Connection,
+        *,
+        job_id: int,
+        task_event_id: int,
+    ) -> bool:
+        return conn.execute(
+            "SELECT 1 FROM ("
+            "SELECT task_event_id FROM task_projection_outbox "
+            "WHERE job_id = ? AND task_event_id < ? "
+            "AND state IN ('pending', 'failed_attribution') "
+            "UNION ALL "
+            "SELECT task_event_id FROM task_recovery_outbox "
+            "WHERE job_id = ? AND task_event_id < ? "
+            "AND state IN ('pending', 'failed_attribution')"
+            ") ORDER BY task_event_id LIMIT 1",
+            (job_id, task_event_id, job_id, task_event_id),
+        ).fetchone() is not None
+
+    def process_task_outbox(
+        self,
+        outbox_id: int,
+    ) -> dict[str, Any] | None:
+        notify_sessions: set[int] = set()
+        try:
+            with self.app.state.db_lock:
+                self.conn.execute("BEGIN IMMEDIATE")
+                try:
+                    row = self.conn.execute(
+                        "SELECT * FROM task_projection_outbox WHERE id = ?",
+                        (outbox_id,),
+                    ).fetchone()
+                    if row is None or row["state"] == "superseded":
+                        self.conn.execute("COMMIT")
+                        return None
+                    if (
+                        row["state"] == "projected"
+                        and row["projection_id"] is not None
+                    ):
+                        projection = self.conn.execute(
+                            "SELECT * FROM master_projections WHERE id = ?",
+                            (row["projection_id"],),
+                        ).fetchone()
+                        self.conn.execute("COMMIT")
+                        return dict(projection) if projection else None
+                    if self._has_earlier_unresolved(
+                        self.conn,
+                        job_id=_as_int(row["job_id"]),
+                        task_event_id=_as_int(row["task_event_id"]),
+                    ):
+                        self.conn.execute("COMMIT")
+                        return None
+                    projection = self._project_task(
+                        _as_int(row["job_id"]),
+                        connection=self.conn,
+                        notify_sessions=notify_sessions,
+                        status_override=str(row["task_status"]),
+                        projection_epoch_override=_as_int(
+                            row["projection_epoch"]
+                        ),
+                        projection_revision_override=_as_int(
+                            row["projection_revision"]
+                        ),
+                    )
+                    if projection is None:
+                        raise ProjectionAttributionError(
+                            "projection_scope_unavailable"
+                        )
+                    self.conn.execute(
+                        "UPDATE task_projection_outbox SET state = 'projected', "
+                        "projection_id = ?, failure_code = NULL, "
+                        "attempt_count = attempt_count + 1, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (_as_int(projection["id"]), outbox_id),
+                    )
+                    self.conn.execute("COMMIT")
+                except Exception:
+                    if self.conn.in_transaction:
+                        self.conn.execute("ROLLBACK")
+                    raise
+        except ProjectionAttributionError as exc:
+            self._record_outbox_attempt(
+                outbox_id,
+                state="failed_attribution",
+                projection_id=None,
+                failure_code=exc.code,
+            )
+            return None
+        except Exception:
+            self._record_outbox_attempt(
+                outbox_id,
+                state="pending",
+                projection_id=None,
+                failure_code="projection_failed",
+            )
+            raise
+        for session_id in notify_sessions:
+            self.app.state.hub.notify(session_id)
+        return projection
+
+    def _record_recovery_attempt(
+        self,
+        outbox_id: int,
+        *,
+        state: str,
+        failure_code: str | None,
+    ) -> None:
+        with self.app.state.db_lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute(
+                    "UPDATE task_recovery_outbox SET state = ?, "
+                    "failure_code = ?, attempt_count = attempt_count + 1, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND state != 'legacy_ordering_gap'",
+                    (state, failure_code, outbox_id),
+                )
+                self.conn.execute("COMMIT")
+            except Exception:
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
+                raise
+
+    def process_recovery_outbox(
+        self,
+        outbox_id: int,
+    ) -> dict[str, Any] | None:
+        result: dict[str, Any] | None = None
+        try:
+            with self.app.state.db_lock:
+                self.conn.execute("BEGIN IMMEDIATE")
+                try:
+                    row = self.conn.execute(
+                        "SELECT * FROM task_recovery_outbox WHERE id = ?",
+                        (outbox_id,),
+                    ).fetchone()
+                    if row is None or row["state"] == "legacy_ordering_gap":
+                        self.conn.execute("COMMIT")
+                        return None
+                    if (
+                        row["state"] == "projected"
+                        and row["message_id"] is not None
+                        and row["event_id"] is not None
+                    ):
+                        result = {
+                            "session_id": row["master_session_id"],
+                            "message_id": row["message_id"],
+                            "event_id": row["event_id"],
+                        }
+                        self.conn.execute("COMMIT")
+                        return result
+                    if self._has_earlier_unresolved(
+                        self.conn,
+                        job_id=_as_int(row["job_id"]),
+                        task_event_id=_as_int(row["task_event_id"]),
+                    ):
+                        self.conn.execute("COMMIT")
+                        return None
+                    result = publish_master_recovery(
+                        self.conn,
+                        outbox=dict(row),
+                    )
+                    self.conn.execute(
+                        "UPDATE task_recovery_outbox SET state = 'projected', "
+                        "master_session_id = ?, message_id = ?, event_id = ?, "
+                        "failure_code = NULL, "
+                        "attempt_count = attempt_count + 1, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (
+                            result["session_id"],
+                            result["message_id"],
+                            result["event_id"],
+                            outbox_id,
+                        ),
+                    )
+                    self.conn.execute("COMMIT")
+                except Exception:
+                    if self.conn.in_transaction:
+                        self.conn.execute("ROLLBACK")
+                    raise
+        except RecoveryAttributionError as exc:
+            self._record_recovery_attempt(
+                outbox_id,
+                state="failed_attribution",
+                failure_code=exc.code,
+            )
+            return None
+        except Exception:
+            self._record_recovery_attempt(
+                outbox_id,
+                state="pending",
+                failure_code="projection_failed",
+            )
+            raise
+        assert result is not None
+        self.app.state.hub.notify(_as_int(result["session_id"]))
+        return result
+
+    def _record_recovery_correction_attempt(
+        self,
+        correction_id: int,
+        *,
+        state: str,
+        failure_code: str | None,
+    ) -> None:
+        with self.app.state.db_lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute(
+                    "UPDATE task_recovery_corrections SET state = ?, "
+                    "failure_code = ?, attempt_count = attempt_count + 1, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ?",
+                    (state, failure_code, correction_id),
+                )
+                self.conn.execute("COMMIT")
+            except Exception:
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
+                raise
+
+    @staticmethod
+    def _recovery_correction_ready(
+        conn: sqlite3.Connection,
+        *,
+        job_id: int,
+    ) -> bool:
+        if conn.execute(
+            "SELECT 1 FROM ("
+            "SELECT id FROM task_projection_outbox "
+            "WHERE job_id = ? "
+            "AND state IN ('pending', 'failed_attribution') "
+            "UNION ALL "
+            "SELECT id FROM task_recovery_outbox "
+            "WHERE job_id = ? "
+            "AND state IN ('pending', 'failed_attribution')"
+            ") LIMIT 1",
+            (job_id, job_id),
+        ).fetchone():
+            return False
+        job = conn.execute(
+            "SELECT * FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        if job is None:
+            return False
+        status = str(
+            canonical_job_payload(
+                dict(job),
+                connection=conn,
+            )["run_projection"]["status"]
+        )
+        expected_state = task_projection_state(
+            status,
+            blocked_reason=job["blocked_reason"],
+        )
+        if str(job["projection_state"]) != expected_state:
+            return False
+        if expected_state == "none":
+            return True
+        revision = _as_int(job["projection_revision"])
+        if revision > 0:
+            projection_key = (
+                f"task:{job_id}:revision:{revision}:{expected_state}"
+            )
+            return conn.execute(
+                "SELECT 1 FROM master_projections "
+                "WHERE source_table = 'jobs' AND source_id = ? "
+                "AND projection_key = ?",
+                (job_id, projection_key),
+            ).fetchone() is not None
+        projection_type = {
+            "started": "master.task.started",
+            "review": "master.task.review_ready",
+            "completed": "master.task.completed",
+            "failed": "master.task.failed",
+            "cancelled": "master.task.cancelled",
+            "blocked": "master.task.blocked",
+        }[expected_state]
+        return conn.execute(
+            "SELECT 1 FROM master_projections "
+            "WHERE source_table = 'jobs' AND source_id = ? "
+            "AND projection_type = ?",
+            (job_id, projection_type),
+        ).fetchone() is not None
+
+    def process_recovery_correction(
+        self,
+        correction_id: int,
+    ) -> dict[str, Any] | None:
+        result: dict[str, Any] | None = None
+        try:
+            with self.app.state.db_lock:
+                self.conn.execute("BEGIN IMMEDIATE")
+                try:
+                    row = self.conn.execute(
+                        "SELECT * FROM task_recovery_corrections WHERE id = ?",
+                        (correction_id,),
+                    ).fetchone()
+                    if row is None:
+                        self.conn.execute("COMMIT")
+                        return None
+                    if (
+                        row["state"] == "projected"
+                        and row["message_id"] is not None
+                        and row["event_id"] is not None
+                    ):
+                        result = {
+                            "session_id": row["master_session_id"],
+                            "message_id": row["message_id"],
+                            "event_id": row["event_id"],
+                        }
+                        self.conn.execute("COMMIT")
+                        return result
+                    if not self._recovery_correction_ready(
+                        self.conn,
+                        job_id=_as_int(row["job_id"]),
+                    ):
+                        self.conn.execute("COMMIT")
+                        return None
+                    result = publish_master_recovery_correction(
+                        self.conn,
+                        correction=dict(row),
+                    )
+                    self.conn.execute(
+                        "UPDATE task_recovery_corrections "
+                        "SET state = 'projected', master_session_id = ?, "
+                        "message_id = ?, event_id = ?, failure_code = NULL, "
+                        "attempt_count = attempt_count + 1, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (
+                            result["session_id"],
+                            result["message_id"],
+                            result["event_id"],
+                            correction_id,
+                        ),
+                    )
+                    self.conn.execute("COMMIT")
+                except Exception:
+                    if self.conn.in_transaction:
+                        self.conn.execute("ROLLBACK")
+                    raise
+        except RecoveryAttributionError as exc:
+            self._record_recovery_correction_attempt(
+                correction_id,
+                state="failed_attribution",
+                failure_code=exc.code,
+            )
+            return None
+        except Exception:
+            self._record_recovery_correction_attempt(
+                correction_id,
+                state="pending",
+                failure_code="projection_failed",
+            )
+            raise
+        assert result is not None
+        self.app.state.hub.notify(_as_int(result["session_id"]))
+        return result
+
     def _insert(
         self,
         *,
@@ -450,6 +1690,8 @@ class MasterProjectionService:
         payload: dict[str, Any],
         task_id: int | None = None,
         origin_message_id: int | None = None,
+        connection: sqlite3.Connection | None = None,
+        notify_sessions: set[int] | None = None,
     ) -> dict[str, Any]:
         if projection_type not in MASTER_PROJECTION_EVENT_TYPES:
             raise ValueError(f"unknown Master projection type {projection_type!r}")
@@ -457,11 +1699,17 @@ class MasterProjectionService:
             raise ValueError(
                 f"{projection_type!r} cannot project {source_table!r}"
             )
-        conn = self.conn
+        conn = connection or self.conn
+        owns_transaction = not conn.in_transaction
+        if not owns_transaction and notify_sessions is None:
+            raise ValueError(
+                "transactional Master projection requires deferred notifications"
+            )
         created = False
         event_id: int | None = None
         with self.app.state.db_lock:
-            conn.execute("BEGIN IMMEDIATE")
+            if owns_transaction:
+                conn.execute("BEGIN IMMEDIATE")
             try:
                 session = conn.execute(
                     "SELECT owner_user_id, mode, project_id FROM sessions "
@@ -483,13 +1731,10 @@ class MasterProjectionService:
                     raise ValueError(
                         "Master projection message is not canonical"
                     )
-                encoded_payload = json.dumps(
+                encode_bounded_event_payload(
                     payload,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-                if len(encoded_payload) > MAX_PROJECTION_PAYLOAD_BYTES:
-                    raise ValueError("Master projection payload is too large")
+                    max_bytes=MAX_PROJECTION_PAYLOAD_BYTES,
+                )
                 try:
                     cursor = conn.execute(
                         "INSERT INTO master_projections("
@@ -529,7 +1774,8 @@ class MasterProjectionService:
                         raise ValueError(
                             "existing Master projection is incomplete"
                         )
-                    conn.execute("COMMIT")
+                    if owns_transaction:
+                        conn.execute("COMMIT")
                     return dict(row)
 
                 projection_id = _as_int(cursor.lastrowid)
@@ -561,8 +1807,8 @@ class MasterProjectionService:
                             and source["epoch_session_id"] != master_session_id
                         )
                     ):
-                        raise ValueError(
-                            "projection Focus origin is unavailable"
+                        raise ProjectionAttributionError(
+                            "focus_attribution_unavailable"
                         )
                     subject_container_id = source["container_id"]
                     focus_epoch_id = source["origin_focus_epoch_id"]
@@ -577,8 +1823,8 @@ class MasterProjectionService:
                         (origin_message_id, master_session_id),
                     ).fetchone()
                     if captured is None:
-                        raise ValueError(
-                            "projection Focus origin is unavailable"
+                        raise ProjectionAttributionError(
+                            "focus_attribution_unavailable"
                         )
                     focus_epoch_id = captured["focus_epoch_id"]
                 # Notifications retain originating Focus while their subject
@@ -596,8 +1842,8 @@ class MasterProjectionService:
                         (focus_epoch_id,),
                     ).fetchone()
                     if epoch is None:
-                        raise ValueError(
-                            "projection Focus origin is unavailable"
+                        raise ProjectionAttributionError(
+                            "focus_attribution_unavailable"
                         )
                     focus_container_id = _as_int(epoch["container_id"])
                 event_payload = {
@@ -621,25 +1867,18 @@ class MasterProjectionService:
                         payload.get("container_id"),
                         projection_id,
                         projection_type,
-                        json.dumps(
+                        encode_bounded_event_payload(
                             event_payload,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
+                            max_bytes=MAX_PROJECTION_PAYLOAD_BYTES,
                         ),
                     ),
                 )
                 event_id = _as_int(event_cursor.lastrowid)
                 event_payload["event_id"] = event_id
-                final_payload_json = json.dumps(
+                final_payload_json = encode_bounded_event_payload(
                     event_payload,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
+                    max_bytes=MAX_PROJECTION_PAYLOAD_BYTES,
                 )
-                if (
-                    len(final_payload_json.encode("utf-8"))
-                    > MAX_PROJECTION_PAYLOAD_BYTES
-                ):
-                    raise ValueError("Master projection event payload is too large")
                 conn.execute(
                     "UPDATE events SET payload = ? WHERE id = ?",
                     (final_payload_json, event_id),
@@ -658,14 +1897,19 @@ class MasterProjectionService:
                     "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (master_session_id,),
                 )
-                conn.execute("COMMIT")
+                if owns_transaction:
+                    conn.execute("COMMIT")
                 created = True
             except Exception:
-                if conn.in_transaction:
+                if owns_transaction and conn.in_transaction:
                     conn.execute("ROLLBACK")
                 raise
         if created and event_id is not None:
-            self.app.state.hub.notify(master_session_id)
+            if owns_transaction:
+                self.app.state.hub.notify(master_session_id)
+            else:
+                assert notify_sessions is not None
+                notify_sessions.add(master_session_id)
         row = conn.execute(
             "SELECT * FROM master_projections WHERE owner_user_id = ? "
             "AND projection_key = ?",
@@ -673,8 +1917,14 @@ class MasterProjectionService:
         ).fetchone()
         return dict(row) if row else {}
 
-    def _task(self, job_id: int) -> sqlite3.Row | None:
-        return self.conn.execute(
+    def _task(
+        self,
+        job_id: int,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> sqlite3.Row | None:
+        conn = connection or self.conn
+        return conn.execute(
             "SELECT j.*, ms.owner_user_id AS master_owner_user_id, "
             "ms.mode AS master_mode, p.name AS container_name, "
             "p.slug AS container_slug, pa.kind AS area_kind, "
@@ -693,45 +1943,164 @@ class MasterProjectionService:
             (job_id,),
         ).fetchone()
 
+    def _next_unresolved_outbox(
+        self,
+        job_id: int,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> sqlite3.Row | None:
+        conn = connection or self.conn
+        return conn.execute(
+            "SELECT kind, id, state FROM ("
+            "SELECT 'status' AS kind, id, state, task_event_id "
+            "FROM task_projection_outbox "
+            "WHERE job_id = ? "
+            "AND state IN ('pending', 'failed_attribution') "
+            "UNION ALL "
+            "SELECT 'recovery' AS kind, id, state, task_event_id "
+            "FROM task_recovery_outbox "
+            "WHERE job_id = ? "
+            "AND state IN ('pending', 'failed_attribution')"
+            ") ORDER BY task_event_id LIMIT 1",
+            (job_id, job_id),
+        ).fetchone()
+
     def project_task(self, job_id: int) -> dict[str, Any] | None:
-        job = self._task(job_id)
+        notify_sessions: set[int] = set()
+        with self.app.state.db_lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                if self._next_unresolved_outbox(
+                    job_id,
+                    connection=self.conn,
+                ) is not None:
+                    self.conn.execute("COMMIT")
+                    return None
+                job = self._task(job_id, connection=self.conn)
+                if job is None:
+                    self.conn.execute("COMMIT")
+                    return None
+                status = str(
+                    canonical_job_payload(
+                        dict(job),
+                        connection=self.conn,
+                    )["run_projection"]["status"]
+                )
+                revision, projection_state, _changed = (
+                    claim_task_projection_generation(
+                        self.conn,
+                        job_id=job_id,
+                        status=status,
+                        blocked_reason=job["blocked_reason"],
+                    )
+                )
+                projection = self._project_task(
+                    job_id,
+                    connection=self.conn,
+                    notify_sessions=notify_sessions,
+                    status_override=status,
+                    projection_revision_override=revision,
+                    projection_state_override=projection_state,
+                )
+                self.conn.execute("COMMIT")
+            except Exception:
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
+                raise
+        for session_id in notify_sessions:
+            self.app.state.hub.notify(session_id)
+        return projection
+
+    def _project_task(
+        self,
+        job_id: int,
+        *,
+        connection: sqlite3.Connection | None = None,
+        notify_sessions: set[int] | None = None,
+        status_override: str | None = None,
+        projection_epoch_override: int | None = None,
+        projection_revision_override: int | None = None,
+        projection_state_override: str | None = None,
+    ) -> dict[str, Any] | None:
+        conn = connection or self.conn
+        job = self._task(job_id, connection=conn)
         if job is None:
             return None
-        status = str(job["status"])
+        status = (
+            str(status_override)
+            if status_override is not None
+            else str(
+                canonical_job_payload(
+                    dict(job),
+                    connection=conn,
+                )["run_projection"]["status"]
+            )
+        )
+        if status not in {
+            "queued",
+            "running",
+            "review",
+            "done",
+            "failed",
+            "cancelled",
+        }:
+            raise ValueError("Task projection status is invalid")
+        projection_epoch = (
+            _as_int(projection_epoch_override)
+            if projection_epoch_override is not None
+            else task_projection_epoch(
+                conn,
+                job_id=job_id,
+            )
+        )
+        if projection_epoch < 0:
+            raise ValueError("Task projection epoch is invalid")
+        projection_revision = (
+            _as_int(projection_revision_override)
+            if projection_revision_override is not None
+            else _as_int(job["projection_revision"])
+        )
+        if projection_revision < 0:
+            raise ValueError("Task projection revision is invalid")
         reason = str(job["blocked_reason"] or "").strip()
+        projection_state = (
+            str(projection_state_override)
+            if projection_state_override is not None
+            else task_projection_state(
+                status,
+                blocked_reason=reason,
+                queued_is_blocked=(
+                    status_override is not None and status == "queued"
+                ),
+            )
+        )
+        projected_blocker = projection_state == "blocked"
         projection_type: str
         verb: str
-        key_suffix: str
-        if status == "running":
+        if projection_state == "started":
             projection_type = "master.task.started"
             verb = "Started"
-            key_suffix = "started"
-        elif status == "done":
+        elif projection_state == "completed":
             projection_type = "master.task.completed"
             verb = "Completed"
-            key_suffix = "completed"
-        elif status == "failed":
+        elif projection_state == "failed":
             projection_type = "master.task.failed"
             verb = "Failed"
-            key_suffix = "failed"
-        elif status == "cancelled":
+        elif projection_state == "cancelled":
             projection_type = "master.task.cancelled"
             verb = "Cancelled"
-            key_suffix = "cancelled"
-        elif status == "review":
+        elif projection_state == "review":
             projection_type = "master.task.review_ready"
             verb = "Ready for review"
-            key_suffix = "review"
-        elif status == "queued" and reason.startswith("Blocked by prerequisite"):
+        elif projected_blocker:
             projection_type = "master.task.blocked"
             verb = "Blocked"
-            key_suffix = "blocked"
         else:
             return None
 
         checkpoint = None
         if status == "review":
-            checkpoint = self.conn.execute(
+            checkpoint = conn.execute(
                 "SELECT id FROM job_checkpoints WHERE job_id = ? "
                 "ORDER BY created_at DESC, id DESC LIMIT 1",
                 (job_id,),
@@ -744,6 +2113,12 @@ class MasterProjectionService:
         elif status == "queued":
             content = f"Task #{job_id} is blocked by a prerequisite."
 
+        projection_key = _task_projection_key(
+            job_id,
+            projection_state,
+            projection_epoch,
+            projection_revision,
+        )
         payload = {
             "task_id": job_id,
             "task_status": status,
@@ -752,19 +2127,23 @@ class MasterProjectionService:
             "area_id": job["target_area_id"],
             "area_kind": job["area_kind"],
             "checkpoint_id": checkpoint["id"] if checkpoint else None,
-            "attention_required": status == "review" or bool(reason),
-            "toast_key": f"task:{job_id}:{key_suffix}",
+            "attention_required": (
+                status == "review" or projected_blocker or bool(reason)
+            ),
+            "toast_key": projection_key,
         }
         return self._insert(
             owner_user_id=_as_int(job["master_owner_user_id"]),
             master_session_id=_as_int(job["origin_master_session_id"]),
-            projection_key=f"task:{job_id}:{key_suffix}",
+            projection_key=projection_key,
             projection_type=projection_type,
             source_table="jobs",
             source_id=job_id,
             task_id=job_id,
             content=content,
             payload=payload,
+            connection=conn,
+            notify_sessions=notify_sessions,
         )
 
     def project_satpam(self, intervention_id: int) -> dict[str, Any] | None:
@@ -1024,22 +2403,79 @@ class MasterProjectionService:
         before = self.conn.execute(
             "SELECT COUNT(*) AS c FROM master_projections"
         ).fetchone()["c"]
+        outbox_rows = self.conn.execute(
+            "SELECT kind, id FROM ("
+            "SELECT 'status' AS kind, outbox.id, outbox.task_event_id "
+            "FROM task_projection_outbox AS outbox "
+            "LEFT JOIN task_delegations AS delegation "
+            "ON delegation.job_id = outbox.job_id "
+            "WHERE outbox.state = 'pending' OR ("
+            "outbox.state = 'failed_attribution' "
+            "AND outbox.failure_code = 'focus_attribution_unavailable' "
+            "AND delegation.origin_focus_captured = 1"
+            ") UNION ALL "
+            "SELECT 'recovery' AS kind, outbox.id, outbox.task_event_id "
+            "FROM task_recovery_outbox AS outbox "
+            "LEFT JOIN task_delegations AS delegation "
+            "ON delegation.job_id = outbox.job_id "
+            "WHERE outbox.state = 'pending' OR ("
+            "outbox.state = 'failed_attribution' "
+            "AND outbox.failure_code = 'focus_attribution_unavailable' "
+            "AND delegation.origin_focus_captured = 1"
+            ")) ORDER BY task_event_id"
+        ).fetchall()
+        for row in outbox_rows:
+            if row["kind"] == "status":
+                self.safe_process_task_outbox(_as_int(row["id"]))
+            else:
+                self.safe_process_recovery_outbox(_as_int(row["id"]))
+        effective_status = effective_job_status_sql("j")
         jobs = self.conn.execute(
-            "WITH candidate AS ("
+            "WITH effective AS ("
+            "  SELECT j.*, "
+            f"    {effective_status} AS effective_status, "
+            "    COALESCE(("
+            "      SELECT MAX(event.id) FROM events AS event "
+            "      WHERE event.session_id = j.session_id "
+            "      AND event.type = 'job.update' "
+            "      AND json_extract(event.payload, '$.job_id') = j.id "
+            "      AND json_extract(event.payload, '$.mutation') "
+            "        = 'checkpoint_restored'"
+            "    ), 0) AS projection_epoch "
+            "  FROM jobs j"
+            "), candidate AS ("
             "  SELECT j.id AS source_id, "
             "    COALESCE(j.updated_at, j.created_at) AS ordering, "
+            "    j.projection_epoch, "
+            "    j.projection_revision, "
             "    CASE "
-            "      WHEN j.status = 'running' THEN 'master.task.started' "
-            "      WHEN j.status = 'done' THEN 'master.task.completed' "
-            "      WHEN j.status = 'failed' THEN 'master.task.failed' "
-            "      WHEN j.status = 'cancelled' THEN 'master.task.cancelled' "
-            "      WHEN j.status = 'review' THEN 'master.task.review_ready' "
-            "      WHEN j.status = 'queued' "
+            "      WHEN j.effective_status = 'running' "
+            "        THEN 'master.task.started' "
+            "      WHEN j.effective_status = 'done' "
+            "        THEN 'master.task.completed' "
+            "      WHEN j.effective_status = 'failed' "
+            "        THEN 'master.task.failed' "
+            "      WHEN j.effective_status = 'cancelled' "
+            "        THEN 'master.task.cancelled' "
+            "      WHEN j.effective_status = 'review' "
+            "        THEN 'master.task.review_ready' "
+            "      WHEN j.effective_status = 'queued' "
             "        AND j.blocked_reason LIKE 'Blocked by prerequisite%' "
             "        THEN 'master.task.blocked' "
             "      ELSE NULL "
-            "    END AS expected_type "
-            "  FROM jobs j JOIN sessions ms "
+            "    END AS expected_type, "
+            "    CASE "
+            "      WHEN j.effective_status = 'running' THEN 'started' "
+            "      WHEN j.effective_status = 'done' THEN 'completed' "
+            "      WHEN j.effective_status = 'failed' THEN 'failed' "
+            "      WHEN j.effective_status = 'cancelled' THEN 'cancelled' "
+            "      WHEN j.effective_status = 'review' THEN 'review' "
+            "      WHEN j.effective_status = 'queued' "
+            "        AND j.blocked_reason LIKE 'Blocked by prerequisite%' "
+            "        THEN 'blocked' "
+            "      ELSE NULL "
+            "    END AS expected_suffix "
+            "  FROM effective j JOIN sessions ms "
             "    ON ms.id = j.origin_master_session_id "
             "  WHERE ms.mode = 'master' AND j.created_by = ms.owner_user_id"
             ") "
@@ -1049,12 +2485,30 @@ class MasterProjectionService:
             "  SELECT 1 FROM master_projections mp "
             "  WHERE mp.source_table = 'jobs' "
             "  AND mp.source_id = c.source_id "
-            "  AND mp.projection_type = c.expected_type"
+            "  AND mp.projection_key = CASE "
+            "    WHEN c.projection_revision > 0 THEN "
+            "      'task:' || c.source_id || ':revision:' "
+            "      || c.projection_revision || ':' || c.expected_suffix "
+            "    WHEN c.projection_epoch > 0 THEN "
+            "      'task:' || c.source_id || ':epoch:' "
+            "      || c.projection_epoch || ':' || c.expected_suffix "
+            "    ELSE 'task:' || c.source_id || ':' || c.expected_suffix "
+            "  END"
             ") "
             "ORDER BY c.ordering, c.source_id"
         ).fetchall()
         for row in jobs:
             self.safe_project_task(_as_int(row["source_id"]))
+        correction_rows = self.conn.execute(
+            "SELECT correction.id "
+            "FROM task_recovery_corrections AS correction "
+            "WHERE correction.state = 'pending' OR ("
+            "correction.state = 'failed_attribution' "
+            "AND correction.failure_code = 'focus_attribution_unavailable'"
+            ") ORDER BY correction.id"
+        ).fetchall()
+        for row in correction_rows:
+            self.safe_process_recovery_correction(_as_int(row["id"]))
         interventions = self.conn.execute(
             "WITH candidate AS ("
             "  SELECT si.id AS source_id, "
@@ -1117,6 +2571,12 @@ class MasterProjectionService:
             "SELECT COUNT(*) AS c FROM master_projections"
         ).fetchone()["c"]
         return {
-            "observed": len(jobs) + len(interventions) + len(attentions),
+            "observed": (
+                len(outbox_rows)
+                + len(jobs)
+                + len(correction_rows)
+                + len(interventions)
+                + len(attentions)
+            ),
             "created": _as_int(after) - _as_int(before),
         }

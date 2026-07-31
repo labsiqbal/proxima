@@ -28,6 +28,8 @@ from ..task_delegation import (
     new_idempotency_key,
 )
 from ..master_persistence import canonical_job_payload
+from ..run_projection import effective_job_status_sql
+from ..task_state_events import append_task_update
 from ..schemas import (
     JobApproveRequest, JobCreateRequest, JobRejectRequest, JobRunLinkRequest,
     ScheduleCreateRequest, ScheduleUpdateRequest, WorkflowCreateRequest,
@@ -56,6 +58,12 @@ def register(app, deps):
     session_payload = deps["session_payload"]
     _can_access = deps["_can_access"]
     _member_project_id = deps["_member_project_id"]
+
+    def _process_task_projection(task_event: dict[str, int]) -> None:
+        outbox_id = task_event.get("projection_outbox_id")
+        projection = getattr(app.state, "master_projection", None)
+        if outbox_id is not None and projection is not None:
+            projection.safe_process_task_outbox(outbox_id)
 
     def _workflow_payload(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         d = dict(row)
@@ -248,7 +256,7 @@ def register(app, deps):
         ).fetchall()
         if dependencies:
             d["dependencies"] = [dict(row) for row in dependencies]
-        return canonical_job_payload(d)
+        return canonical_job_payload(d, connection=db())
 
     def _job_or_404(job_id: int, user: dict[str, Any]) -> sqlite3.Row:
         row = db().execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -459,6 +467,7 @@ def register(app, deps):
         safe_limit = max(0, min(_as_int(limit), 200))
         safe_offset = max(0, _as_int(offset))
         status_filter = status or None
+        status_expression = effective_job_status_sql("jobs")
         filters = (
             user["id"], user["id"], 1 if include_archived else 0,
             status_filter, status_filter, workflow_id, workflow_id,
@@ -470,7 +479,7 @@ def register(app, deps):
             "(SELECT id FROM projects WHERE owner_user_id = ?)) "
             "AND COALESCE(engine,'linear') = 'linear' "
             "AND (? = 1 OR archived_at IS NULL) "
-            "AND (? IS NULL OR status = ?) "
+            f"AND (? IS NULL OR {status_expression} = ?) "
             "AND (? IS NULL OR workflow_id = ?) "
             "AND (? IS NULL OR project_id = ?)",
             filters,
@@ -481,7 +490,7 @@ def register(app, deps):
             "(SELECT id FROM projects WHERE owner_user_id = ?)) "
             "AND COALESCE(engine,'linear') = 'linear' "
             "AND (? = 1 OR archived_at IS NULL) "
-            "AND (? IS NULL OR status = ?) "
+            f"AND (? IS NULL OR {status_expression} = ?) "
             "AND (? IS NULL OR workflow_id = ?) "
             "AND (? IS NULL OR project_id = ?) "
             "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
@@ -551,6 +560,7 @@ def register(app, deps):
             inputs = _decode_json(job["input"]) if job["input"] else {}
             prompt = wf.build_step_prompt(steps[nxt], nxt, len(steps), inputs)
             conn = db()
+            notify_sessions: set[int] = set()
             with app.state.db_lock:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
@@ -573,10 +583,19 @@ def register(app, deps):
                     steps[nxt]["run_id"] = run_id
                     steps[nxt]["started_at"] = iso_now()
                     conn.execute("UPDATE jobs SET steps_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (json.dumps(steps), job_id))
+                    task_event = append_task_update(
+                        conn,
+                        job_id=job_id,
+                        mutation="review_approved",
+                    )
+                    notify_sessions.add(task_event["session_id"])
                     conn.execute("COMMIT")
                 except Exception:
                     _rollback(conn)
                     raise
+            for session_id in notify_sessions:
+                app.state.hub.notify(session_id)
+            _process_task_projection(task_event)
             app.state.worker.add_event(run_id, job["session_id"], job["project_id"], "run.queued", {"runner": profile["runner_id"], "job": job_id})
         else:
             # Repo job (slice 2, flag-gated): the final approve is the merge
@@ -608,20 +627,51 @@ def register(app, deps):
                         repo_remote.push_after_merge(db(), merged)
                     except Exception:
                         logging.getLogger("proxima.work").exception("push after merge failed unexpectedly (job stays merged)")
-            # Final review -> done (atomic claim).
-            claimed = db().execute("UPDATE jobs SET status='done', finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='review'", (job_id,))
-            if claimed.rowcount == 0:
-                return _job_payload(_job_or_404(job_id, user))
-            db().execute("UPDATE jobs SET steps_state=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (json.dumps(steps), job_id))
-            # One status, two doors (T4): approving the job auto-approves the
-            # deliverable records it produced. Best-effort - the verdict stands
-            # even if the registry write fails.
-            try:
-                artifact_registry.approve_records_for_job(db(), job_id)
-            except Exception:
-                logging.getLogger("proxima.work").exception("registry approve sync failed (non-fatal)")
+            # Final review, Task invalidation, and deliverable verdict commit
+            # together so every reader observes one lifecycle state.
+            conn = db()
+            notify_sessions: set[int] = set()
+            with app.state.db_lock:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    claimed = conn.execute(
+                        "UPDATE jobs SET status='done', "
+                        "finished_at=CURRENT_TIMESTAMP, "
+                        "updated_at=CURRENT_TIMESTAMP "
+                        "WHERE id=? AND status='review'",
+                        (job_id,),
+                    )
+                    if claimed.rowcount == 0:
+                        conn.execute("ROLLBACK")
+                        return _job_payload(_job_or_404(job_id, user))
+                    conn.execute(
+                        "UPDATE jobs SET steps_state=?, "
+                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (json.dumps(steps), job_id),
+                    )
+                    # One status, two doors (T4): approving the job
+                    # auto-approves its deliverable records.
+                    try:
+                        artifact_registry.approve_records_for_job(conn, job_id)
+                    except Exception:
+                        logging.getLogger("proxima.work").exception(
+                            "registry approve sync failed (non-fatal)"
+                        )
+                    task_event = append_task_update(
+                        conn,
+                        job_id=job_id,
+                        mutation="review_approved",
+                    )
+                    notify_sessions.add(task_event["session_id"])
+                    conn.execute("COMMIT")
+                except Exception:
+                    _rollback(conn)
+                    raise
+            for session_id in notify_sessions:
+                app.state.hub.notify(session_id)
+            _process_task_projection(task_event)
             app.state.task_delegation.prerequisite_changed(
-                job_id, connection=db()
+                job_id, connection=conn
             )
         return _job_payload(_job_or_404(job_id, user))
 
@@ -637,13 +687,37 @@ def register(app, deps):
             raise HTTPException(status_code=409, detail="only a job waiting for review can be rejected")
         # Claim first (this is the review verdict mutex - a concurrent approve
         # and reject cannot both win), tear down after.
-        claimed = db().execute(
-            "UPDATE jobs SET status='failed', rejected_reason=?, finished_at=CURRENT_TIMESTAMP, "
-            "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='review'",
-            (payload.reason, job_id),
-        )
-        if claimed.rowcount == 0:
-            raise HTTPException(status_code=409, detail="job is no longer waiting for review")
+        conn = db()
+        notify_sessions: set[int] = set()
+        with app.state.db_lock:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                claimed = conn.execute(
+                    "UPDATE jobs SET status='failed', rejected_reason=?, "
+                    "finished_at=CURRENT_TIMESTAMP, "
+                    "updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='review'",
+                    (payload.reason, job_id),
+                )
+                if claimed.rowcount == 0:
+                    conn.execute("ROLLBACK")
+                    raise HTTPException(
+                        status_code=409,
+                        detail="job is no longer waiting for review",
+                    )
+                task_event = append_task_update(
+                    conn,
+                    job_id=job_id,
+                    mutation="review_rejected",
+                )
+                notify_sessions.add(task_event["session_id"])
+                conn.execute("COMMIT")
+            except Exception:
+                _rollback(conn)
+                raise
+        for session_id in notify_sessions:
+            app.state.hub.notify(session_id)
+        _process_task_projection(task_event)
         # Flag-independent, like delete: a flag flip must not orphan a
         # worktree. Cleanup trouble is logged, not raised - the verdict stands
         # either way and discard_job_worktree is idempotent on retry.
@@ -654,7 +728,7 @@ def register(app, deps):
                 "job %s worktree cleanup failed (job rejected anyway)", job_id
             )
         app.state.task_delegation.prerequisite_changed(
-            job_id, connection=db()
+            job_id, connection=conn
         )
         return _job_payload(_job_or_404(job_id, user))
 

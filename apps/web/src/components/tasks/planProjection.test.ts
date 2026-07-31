@@ -155,9 +155,9 @@ describe('planStatusLabel / planStatusTone', () => {
     return plan
   }
 
-  it('says fix-or-rerun (and tones failed) when a review plan has a failed step', () => {
+  it('uses the shared failed projection when a review plan has a failed step', () => {
     const plan = base('review', { only: 'failed' })
-    expect(planStatusLabel(plan)).toBe('Step failed — fix or rerun')
+    expect(planStatusLabel(plan)).toBe('Failed')
     expect(planStatusTone(plan)).toBe('failed')
   })
 

@@ -26,6 +26,32 @@ const MASTER_TASK_STATUS: Record<string, MasterJob['status']> = {
   'master.task.blocked': 'queued',
 }
 
+const MASTER_JOB_STATUSES = new Set<MasterJob['status']>([
+  'queued',
+  'running',
+  'review',
+  'done',
+  'failed',
+  'cancelled',
+])
+
+function resolveProjectedTaskStatus(
+  type: string,
+  payload: Record<string, unknown>,
+): MasterJob['status'] | null {
+  if (type === 'master.task.recovered') {
+    const raw = typeof payload.task_status === 'string'
+      ? payload.task_status
+      : typeof payload.restored_status === 'string'
+        ? payload.restored_status
+        : null
+    return raw != null && MASTER_JOB_STATUSES.has(raw as MasterJob['status'])
+      ? raw as MasterJob['status']
+      : null
+  }
+  return MASTER_TASK_STATUS[type] ?? null
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
@@ -61,6 +87,72 @@ function safeProjectionContent(
   }
   if (type === 'master.task.blocked' && taskId != null) {
     return `Task #${taskId} is blocked by a prerequisite.`
+  }
+  if (type === 'master.task.recovered' && taskId != null) {
+    const checkpointId = positiveInteger(payload.checkpoint_id)
+    const actor = isRecord(payload.actor)
+      && typeof payload.actor.username === 'string'
+      ? payload.actor.username
+      : null
+    const prior = typeof payload.prior_status === 'string'
+      ? payload.prior_status
+      : null
+    const restored = typeof payload.restored_status === 'string'
+      ? payload.restored_status
+      : null
+    const discarded = Array.isArray(payload.discarded_progress)
+      && payload.discarded_progress.every(item => typeof item === 'string')
+      ? payload.discarded_progress
+      : null
+    const conflicting = Array.isArray(payload.conflicting_progress)
+      && payload.conflicting_progress.every(item => typeof item === 'string')
+      ? payload.conflicting_progress
+      : null
+    if (
+      checkpointId == null
+      || actor == null
+      || prior == null
+      || restored == null
+      || discarded == null
+      || conflicting == null
+    ) return null
+    const title = (value: string) => (
+      value ? `${value[0].toUpperCase()}${value.slice(1)}` : value
+    )
+    const discardedText = discarded.length
+      ? `Discarded progress: ${discarded.join('; ')}.`
+      : 'No later progress was discarded.'
+    const conflictText = conflicting.length
+      ? `Conflicting progress: ${conflicting.join('; ')}.`
+      : 'No conflicting progress was present.'
+    return `${actor} restored Task #${taskId} from checkpoint #${checkpointId}: ${title(prior)} to ${title(restored)}. ${discardedText} ${conflictText}`
+  }
+  if (
+    type === 'master.task.recovery_history_corrected'
+    && taskId != null
+  ) {
+    const gapCount = positiveInteger(payload.gap_count)
+    const firstTaskEventId = positiveInteger(payload.first_task_event_id)
+    const lastTaskEventId = positiveInteger(payload.last_task_event_id)
+    const firstSuccessorTaskEventId = positiveInteger(
+      payload.first_successor_task_event_id,
+    )
+    const lastSuccessorTaskEventId = positiveInteger(
+      payload.last_successor_task_event_id,
+    )
+    if (
+      gapCount == null
+      || firstTaskEventId == null
+      || lastTaskEventId == null
+      || firstSuccessorTaskEventId == null
+      || lastSuccessorTaskEventId == null
+    ) return null
+    const noun = gapCount === 1 ? 'audit' : 'audits'
+    const pronoun = gapCount === 1 ? 'It was' : 'They were'
+    const gapLabel = gapCount === 1
+      ? 'a legacy ordering gap'
+      : 'legacy ordering gaps'
+    return `Retained ${gapCount} checkpoint recovery ${noun} for Task #${taskId} as ${gapLabel} across Task events #${firstTaskEventId}-#${lastTaskEventId} and successor events #${firstSuccessorTaskEventId}-#${lastSuccessorTaskEventId}. ${pronoun} contained without replaying older history after a later publication.`
   }
   const satpamLabels: Record<string, string> = {
     'master.satpam.steered': 'steered',
@@ -198,9 +290,10 @@ function updateProjectedJob(
   event: RunEvent,
   payload: Record<string, unknown>,
 ): MasterDesk {
-  const status = MASTER_TASK_STATUS[event.type]
+  const status = resolveProjectedTaskStatus(event.type, payload)
   const taskId = positiveInteger(payload.task_id)
   if (!status || taskId == null) return desk
+  const terminal = ['done', 'failed', 'cancelled'].includes(status)
   const index = desk.jobs.findIndex(job => job.id === taskId)
   if (index < 0) {
     const now = event.created_at
@@ -229,7 +322,7 @@ function updateProjectedJob(
       created_at: now,
       updated_at: now,
       started_at: status === 'running' ? now : null,
-      finished_at: ['done', 'failed', 'cancelled'].includes(status) ? now : null,
+      finished_at: terminal ? now : null,
       archived_at: null,
       blocked_reason: event.type === 'master.task.blocked'
         ? 'Waiting for a prerequisite'
@@ -238,18 +331,22 @@ function updateProjectedJob(
     return { ...desk, jobs: [projected, ...desk.jobs] }
   }
   const jobs = desk.jobs.slice()
+  const current = jobs[index]
   jobs[index] = {
-    ...jobs[index],
+    ...current,
     status,
     desk_status: status,
-    run_status: status === 'running' ? 'running' : jobs[index].run_status,
+    run_status: status === 'running' ? 'running' : null,
     blocked_reason: event.type === 'master.task.blocked'
-      ? jobs[index].blocked_reason || 'Waiting for a prerequisite'
+      ? current.blocked_reason || 'Waiting for a prerequisite'
       : null,
     updated_at: event.created_at,
-    finished_at: ['done', 'failed', 'cancelled'].includes(status)
-      ? event.created_at
-      : jobs[index].finished_at,
+    started_at: status === 'queued'
+      ? null
+      : status === 'running'
+        ? current.started_at ?? event.created_at
+        : current.started_at,
+    finished_at: terminal ? event.created_at : null,
   }
   return { ...desk, jobs }
 }

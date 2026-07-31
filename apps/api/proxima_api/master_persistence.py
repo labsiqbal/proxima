@@ -11,6 +11,8 @@ import sqlite3
 from collections.abc import Mapping
 from typing import Any
 
+from .run_projection import canonicalize_api_timestamps, project_job_run
+
 MASTER_PROFILE_KIND = "master"
 MASTER_SESSION_MODE = "master"
 LEGACY_PROFILE_KIND = "alpha"
@@ -661,13 +663,91 @@ def master_identity_rows(
     return profile, session
 
 
-def canonical_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize only the durable ownership surface of one job payload.
+def _authoritative_run_payload(
+    conn: sqlite3.Connection,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    try:
+        job_id = int(payload.get("id"))
+    except (TypeError, ValueError, OverflowError):
+        return dict(payload)
+    row = conn.execute(
+        "SELECT status, created_at, started_at, finished_at, steps_state, engine "
+        "FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    if row is None:
+        return dict(payload)
+    authoritative = {**payload, **dict(row)}
+    try:
+        authoritative["steps_state"] = json.loads(
+            authoritative.get("steps_state") or "[]"
+        )
+    except (TypeError, json.JSONDecodeError):
+        authoritative["steps_state"] = []
+    if authoritative.get("engine") == "graph":
+        authoritative["node_states"] = [
+            dict(state)
+            for state in conn.execute(
+                "SELECT status, started_at, finished_at FROM node_states "
+                "WHERE job_id = ? ORDER BY id",
+                (job_id,),
+            ).fetchall()
+        ]
+    return canonicalize_api_timestamps(authoritative)
+
+
+def _projection_repair_payload(
+    conn: sqlite3.Connection,
+    payload: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    try:
+        job_id = int(payload.get("id"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    row = conn.execute(
+        "SELECT kind, state, failure_code, task_event_id FROM ("
+        "SELECT 'status' AS kind, state, failure_code, task_event_id "
+        "FROM task_projection_outbox WHERE job_id = ? "
+        "AND state IN ('pending', 'failed_attribution') "
+        "UNION ALL "
+        "SELECT 'recovery' AS kind, state, failure_code, task_event_id "
+        "FROM task_recovery_outbox WHERE job_id = ? "
+        "AND state IN ('pending', 'failed_attribution') "
+        "UNION ALL "
+        "SELECT 'recovery_history' AS kind, correction.state, "
+        "correction.failure_code, successor.task_event_id "
+        "FROM task_recovery_corrections AS correction "
+        "JOIN task_recovery_outbox AS successor "
+        "ON successor.id = correction.successor_outbox_id "
+        "WHERE correction.job_id = ? "
+        "AND correction.state IN ('pending', 'failed_attribution')"
+        ") ORDER BY task_event_id DESC LIMIT 1",
+        (job_id, job_id, job_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "kind": str(row["kind"]),
+        "state": str(row["state"]),
+        "failure_code": row["failure_code"],
+        "task_event_id": int(row["task_event_id"]),
+    }
+
+
+def canonical_job_payload(
+    payload: Mapping[str, Any],
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> dict[str, Any]:
+    """Normalize the ownership, timestamp, and run projection of one job payload.
 
     Job input is user-extensible domain data. Its legacy ownership keys are
     canonicalized only when the job is known to be Master-owned.
     """
     normalized = dict(payload)
+    normalized.pop("projection_revision", None)
+    normalized.pop("projection_state", None)
     legacy_origin = normalized.pop(LEGACY_ORIGIN_COLUMN, None)
     master_origin = normalized.get(ORIGIN_MASTER_COLUMN)
     if (
@@ -683,4 +763,17 @@ def canonical_job_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         master_origin = legacy_origin
     if master_origin is not None and isinstance(normalized.get("input"), dict):
         normalized["input"] = canonicalize_master_payload(normalized["input"])
+    normalized = canonicalize_api_timestamps(normalized)
+    projection_payload = (
+        _authoritative_run_payload(connection, normalized)
+        if connection is not None
+        else normalized
+    )
+    normalized["run_projection"] = project_job_run(projection_payload)
+    if master_origin is not None:
+        normalized["projection_repair"] = (
+            _projection_repair_payload(connection, normalized)
+            if connection is not None
+            else None
+        )
     return normalized

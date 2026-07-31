@@ -178,7 +178,7 @@ class TaskDelegationService:
         ).fetchall()
         if dependencies:
             payload["dependencies"] = [dict(row) for row in dependencies]
-        return canonical_job_payload(payload)
+        return canonical_job_payload(payload, connection=conn)
 
     def _validate_master_start_contract(
         self,

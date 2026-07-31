@@ -40,6 +40,7 @@ import { RunModal } from '../components/workflows/RunModal'
 import { AuthoringChat, type WorkflowChatHandle } from '../components/workflows/AuthoringChat'
 import { buildGraphPrompt, buildNodeTestPrompt, parseGraphDraft, stripGraphBlock } from '../components/workflows/graphPrompt'
 import { useDragWidth } from '../hooks/useDragWidth'
+import { useEventStream } from '../hooks/useEventStream'
 import { usePolling } from '../hooks/usePolling'
 import { useProjectMentionItems } from '../hooks/useProjectMentionItems'
 import type {
@@ -58,6 +59,7 @@ import type {
   WorkflowInput,
 } from '../types'
 import { planStatusLabel, planStatusTone } from '../components/tasks/planProjection'
+import { formatRunAge, formatRunDuration, projectRun } from '../lib/runProjection'
 import { layoutGraph } from './graphLayout'
 
 const OUTPUT_KINDS: GraphOutputKind[] = ['text', 'json', 'artifact-ref']
@@ -106,34 +108,6 @@ function readWorkflowHomeTab(): WorkflowHomeTab {
     if (value === 'drafts' || value === 'workflows' || value === 'runs') return value
   } catch { /* storage disabled */ }
   return 'workflows'
-}
-
-function relativeTime(value?: string | null): string {
-  if (!value) return 'Unknown'
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return 'Unknown'
-  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000))
-  if (seconds < 60) return 'Just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return days === 1 ? 'Yesterday' : `${days}d ago`
-}
-
-function jobDuration(item: GraphJob): string {
-  if (!item.started_at) return 'Not started'
-  const start = Date.parse(item.started_at)
-  const end = item.finished_at ? Date.parse(item.finished_at) : Date.now()
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 'Unknown'
-  const seconds = Math.max(0, Math.round((end - start) / 1000))
-  const minutes = Math.floor(seconds / 60)
-  const remainder = seconds % 60
-  if (minutes < 1) return `${remainder}s`
-  if (minutes < 60) return `${minutes}m ${remainder}s`
-  const hours = Math.floor(minutes / 60)
-  return `${hours}h ${minutes % 60}m`
 }
 
 function outputText(state?: GraphNodeState): string {
@@ -308,7 +282,8 @@ export function GraphScreen({
   const [notice, setNotice] = React.useState('')
   const [busy, setBusy] = React.useState<string | null>(null)
   const mounted = React.useRef(true)
-  const loadSeq = React.useRef(0)
+  const listSeq = React.useRef(0)
+  const jobSeq = React.useRef(0)
   const draftSeq = React.useRef(0)
   const saveTimer = React.useRef<number | undefined>(undefined)
   const saveInFlight = React.useRef<Promise<void> | null>(null)
@@ -430,7 +405,8 @@ export function GraphScreen({
       mounted.current = false
       queueLatestAutosave(false)
       void drainAutosave().catch(() => undefined)
-      loadSeq.current += 1
+      listSeq.current += 1
+      jobSeq.current += 1
       draftSeq.current += 1
     }
   }, [drainAutosave, queueLatestAutosave])
@@ -452,29 +428,29 @@ export function GraphScreen({
   }, [job?.id, job?.status, plan, draftTitle, drainAutosave, queueLatestAutosave])
 
   const refreshList = React.useCallback(async () => {
-    const seq = ++loadSeq.current
+    const seq = ++listSeq.current
     try {
       const [jobResponse, templateResponse, scheduleRows] = await Promise.all([
         listGraphJobs(token, activeProject?.slug),
         listGraphTemplates(token, activeProject?.slug, true),
         listSchedules(token).catch(() => [] as Schedule[]),
       ])
-      if (mounted.current && seq === loadSeq.current) {
+      if (mounted.current && seq === listSeq.current) {
         setJobs(jobResponse.items)
         setTemplates(templateResponse.items)
         setSchedules(scheduleRows)
         setScheduleCronByWorkflow(cronLabelsByWorkflow(scheduleRows, cronHint))
       }
     } catch (cause) {
-      if (mounted.current && seq === loadSeq.current) setError(String(cause))
+      if (mounted.current && seq === listSeq.current) setError(String(cause))
     }
   }, [token, activeProject?.slug])
 
   const loadJob = React.useCallback(async (jobId: number) => {
-    const seq = ++loadSeq.current
+    const seq = ++jobSeq.current
     try {
       const next = await getGraphJob(token, jobId)
-      if (!mounted.current || seq !== loadSeq.current) return
+      if (!mounted.current || seq !== jobSeq.current) return
       const latest = latestDraft.current
       const titleHasLocalEdit = autosaveJobId.current === next.id
         && latest?.jobId === next.id
@@ -490,10 +466,18 @@ export function GraphScreen({
         }
       } else {
         await primeAutosave(next)
-        if (!mounted.current || seq !== loadSeq.current) return
+        if (!mounted.current || seq !== jobSeq.current) return
       }
       setJob(next)
       setPlan(next.graph)
+      setJobs(current => {
+        const idx = current.findIndex(item => item.id === next.id)
+        if (idx < 0) return [next, ...current]
+        if (current[idx] === next) return current
+        const copy = current.slice()
+        copy[idx] = next
+        return copy
+      })
       // Open on the graph, not on a node nobody asked about. Keeps the live poll
       // from clearing a selection, but drops one whose node is gone.
       setSelectedId(current => current && next.graph.nodes.some(node => node.id === current) ? current : null)
@@ -505,13 +489,13 @@ export function GraphScreen({
         // leave/reopen mid-generate does not look like a broken empty editor.
         if (next.session_id && next.status === 'queued') {
           void activeRuns(token).then(r => {
-            if (!mounted.current || seq !== loadSeq.current || chatJobRef.current !== next.id) return
+            if (!mounted.current || seq !== jobSeq.current || chatJobRef.current !== next.id) return
             if (r.session_ids.includes(next.session_id)) setChatOpen(true)
           }).catch(() => { /* optional signal */ })
         }
       }
     } catch (cause) {
-      if (mounted.current && seq === loadSeq.current) setError(String(cause))
+      if (mounted.current && seq === jobSeq.current) setError(String(cause))
     }
   }, [token])
 
@@ -569,7 +553,7 @@ export function GraphScreen({
 
   React.useEffect(() => {
     // Opening is idempotent (GET + set state). Do not once-claim at module scope:
-    // Strict Mode discards the first loadJob via loadSeq, so the re-run must open again.
+    // Strict Mode discards the first loadJob via jobSeq, so the re-run must open again.
     if (!pendingJobId) return
     openJob(pendingJobId)
     onPendingConsumed?.()
@@ -618,10 +602,27 @@ export function GraphScreen({
     })
   }, [pendingDraft, token, activeProject?.slug, profileId, onDraftConsumed])
 
+  // Every external Task mutation publishes one durable job.update event to
+  // this Task's session. Running/review polling remains a liveness fallback.
+  useEventStream(token, job?.session_id ?? null, event => {
+    if (
+      event.type === 'job.update'
+      && job
+      && Number(event.payload?.job_id ?? job.id) === job.id
+    ) {
+      void loadJob(job.id)
+      if (stage === 'home') void refreshList()
+    }
+  })
   usePolling(
     () => job ? loadJob(job.id) : undefined,
     1500,
-    { enabled: !!job && ['running', 'review'].includes(job.status), immediate: false },
+    { enabled: !!job && stage === 'editor' && ['running', 'review'].includes(job.status), immediate: false },
+  )
+  usePolling(
+    () => refreshList(),
+    2500,
+    { enabled: stage === 'home', immediate: false },
   )
 
   const definition = plan?.nodes.find(node => node.id === selectedId)
@@ -1172,7 +1173,7 @@ export function GraphScreen({
     const matches = (...values: Array<string | null | undefined>) =>
       !query || values.some(value => value?.toLowerCase().includes(query))
     const visibleDrafts = drafts.filter(item => matches(item.title))
-    const visibleRuns = runs.filter(item => matches(item.title, item.status))
+    const visibleRuns = runs.filter(item => matches(item.title, projectRun(item).status))
     const searchedTemplates = (showArchived ? archivedTemplates : activeTemplates)
       .filter(item => matches(item.name, item.description, item.category, ...(scheduleCronByWorkflow.get(item.id) || [])))
     const automaticTemplates = searchedTemplates.filter(item =>
@@ -1377,15 +1378,18 @@ export function GraphScreen({
                     <div role="columnheader">Duration</div>
                     <div className="workflow-home-actions-head" role="columnheader">Actions</div>
                   </div>
-                  {visibleRuns.map(item => <div className="workflow-home-row workflow-home-run-row" role="row" key={item.id}>
-                    <div className="workflow-home-name" role="cell" data-label="Workflow"><strong>{item.title}</strong></div>
-                    <div className="workflow-home-secondary" role="cell" data-label="When">{relativeTime(item.started_at || item.created_at || item.updated_at)}</div>
-                    <div role="cell" data-label="Status"><span className={`workflow-home-chip workflow-home-status st-${planStatusTone(item)}`}>{planStatusLabel(item)}</span></div>
-                    <div className="workflow-home-secondary" role="cell" data-label="Duration">{jobDuration(item)}</div>
-                    <div className="workflow-home-actions" role="cell" data-label="Actions">
-                      <button className="ghost-button" onClick={() => openJob(item.id)}>View</button>
+                  {visibleRuns.map(item => {
+                    const projection = projectRun(item)
+                    return <div className="workflow-home-row workflow-home-run-row" role="row" key={item.id}>
+                      <div className="workflow-home-name" role="cell" data-label="Workflow"><strong>{item.title}</strong></div>
+                      <div className="workflow-home-secondary" role="cell" data-label="When">{formatRunAge(projection, item.created_at || item.updated_at)}</div>
+                      <div role="cell" data-label="Status"><span className={`workflow-home-chip workflow-home-status st-${planStatusTone(item)}`}>{planStatusLabel(item)}</span></div>
+                      <div className="workflow-home-secondary" role="cell" data-label="Duration">{formatRunDuration(projection)}</div>
+                      <div className="workflow-home-actions" role="cell" data-label="Actions">
+                        <button className="ghost-button" onClick={() => openJob(item.id)}>View</button>
+                      </div>
                     </div>
-                  </div>)}
+                  })}
                 </div>
           )}
         </div>

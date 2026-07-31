@@ -84,3 +84,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0024](0024-preview-generations-use-durable-launch-phases.md) | Preview generations use durable launch phases | Accepted |
 | [0025](0025-preview-apps-use-launch-specific-cgroups.md) | Preview apps use launch-specific cgroups | Accepted |
 | [0026](0026-preview-supervision-upgrades-require-a-drained-legacy-generation.md) | Preview supervision upgrades require a drained legacy generation | Accepted |
+| [0027](0027-durable-task-reconciliation-protocol.md) | Durable Task reconciliation protocol | Accepted |

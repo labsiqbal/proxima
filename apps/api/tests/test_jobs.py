@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api.main import create_app
+from proxima_api.routes import work as work_routes
 
 
 def _app(tmp_path):
@@ -109,6 +111,57 @@ def test_jobs_list_filter_and_approve(tmp_path):
     assert approved["status"] == "done"
 
 
+def test_jobs_list_filters_by_effective_status(tmp_path):
+    app = _app(tmp_path)
+    client = _client(app)
+    job = client.post(
+        "/api/jobs",
+        json={"input": {"brief": "surface the failed step"}},
+    ).json()
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review', "
+        "steps_state = json_set(steps_state, '$[0].status', 'failed') "
+        "WHERE id = ?",
+        (job["id"],),
+    )
+
+    failed = client.get("/api/jobs?status=failed").json()
+    review = client.get("/api/jobs?status=review").json()
+
+    assert [item["id"] for item in failed["items"]] == [job["id"]]
+    assert failed["items"][0]["run_projection"]["status"] == "failed"
+    assert failed["total"] == 1
+    assert review["items"] == []
+    assert review["total"] == 0
+
+
+def test_final_approval_rolls_back_when_task_invalidation_cannot_commit(
+    tmp_path, monkeypatch
+):
+    app = _app(tmp_path)
+    client = _client(app)
+    job = client.post("/api/jobs", json={"input": {"brief": "x"}}).json()
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review', "
+        "steps_state = json_set(steps_state, '$[0].status', 'done') "
+        "WHERE id = ?",
+        (job["id"],),
+    )
+
+    def fail_invalidation(*_args, **_kwargs):
+        raise RuntimeError("invalidation unavailable")
+
+    monkeypatch.setattr(work_routes, "append_task_update", fail_invalidation)
+
+    with pytest.raises(RuntimeError, match="invalidation unavailable"):
+        client.post(f"/api/jobs/{job['id']}/approve")
+
+    row = app.state.db.execute(
+        "SELECT status, finished_at FROM jobs WHERE id = ?", (job["id"],)
+    ).fetchone()
+    assert dict(row) == {"status": "review", "finished_at": None}
+
+
 def test_new_job_defaults_to_linear_engine(tmp_path):
     # ADR-0001 coexistence: every classic job is engine='linear'; the graph
     # engine is opt-in and never the default.
@@ -167,6 +220,110 @@ def test_delete_started_job_cancels_run_before_session_cleanup(tmp_path):
     # A worker callback that arrives after the session has been deleted should no-op,
     # not raise a FK error that keeps the worker noisy/stuck.
     app.state.worker.add_event(run_id, session_id, None, "message.delta", {"text": "late"})
+
+
+def test_delete_job_preserves_recovery_source_identity(tmp_path):
+    app = _app(tmp_path)
+    c = _client(app)
+    job = c.post(
+        "/api/jobs",
+        json={"input": {"brief": "recoverable"}},
+    ).json()
+    job_id = int(job["id"])
+    task_session_id = int(job["session_id"])
+    owner_id = int(
+        app.state.db.execute(
+            "SELECT owner_user_id FROM sessions WHERE id = ?",
+            (task_session_id,),
+        ).fetchone()[0]
+    )
+    master_session_id = int(
+        app.state.db.execute(
+            "INSERT INTO sessions(title, owner_user_id, mode) "
+            "VALUES ('Master', ?, 'master')",
+            (owner_id,),
+        ).lastrowid
+    )
+    app.state.db.execute(
+        "UPDATE jobs SET origin_master_session_id = ? WHERE id = ?",
+        (master_session_id, job_id),
+    )
+    source_ids: list[tuple[int, int]] = []
+    for seq in (1, 2):
+        task_event_id = int(
+            app.state.db.execute(
+                "INSERT INTO events(session_id, seq, type, payload) "
+                "VALUES (?, ?, 'job.update', '{}')",
+                (task_session_id, seq),
+            ).lastrowid
+        )
+        outbox_id = int(
+            app.state.db.execute(
+                "INSERT INTO task_recovery_outbox("
+                "job_id, task_event_id, recovery_json, master_session_id"
+                ") VALUES (?, ?, ?, ?)",
+                (
+                    job_id,
+                    task_event_id,
+                    json.dumps({"checkpoint_id": seq}),
+                    master_session_id,
+                ),
+            ).lastrowid
+        )
+        source_ids.append((outbox_id, task_event_id))
+
+    assert c.delete(f"/api/jobs/{job_id}").status_code == 200
+    assert dict(
+        app.state.db.execute(
+            "SELECT job_id, task_session_id, master_session_id, "
+            "first_task_event_id, last_task_event_id, "
+            "first_recovery_outbox_id, last_recovery_outbox_id, "
+            "capture_source, deletion_source "
+            "FROM task_recovery_history_tombstones WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    ) == {
+        "job_id": job_id,
+        "task_session_id": task_session_id,
+        "master_session_id": master_session_id,
+        "first_task_event_id": min(pair[1] for pair in source_ids),
+        "last_task_event_id": max(pair[1] for pair in source_ids),
+        "first_recovery_outbox_id": min(pair[0] for pair in source_ids),
+        "last_recovery_outbox_id": max(pair[0] for pair in source_ids),
+        "capture_source": "session",
+        "deletion_source": "task_event",
+    }
+    assert [
+        tuple(row)
+        for row in app.state.db.execute(
+            "SELECT recovery_outbox_id, task_event_id, "
+            "task_session_id, master_session_id "
+            "FROM task_recovery_source_history "
+            "WHERE job_id = ? ORDER BY recovery_outbox_id",
+            (job_id,),
+        ).fetchall()
+    ] == [
+        (
+            outbox_id,
+            task_event_id,
+            task_session_id,
+            master_session_id,
+        )
+        for outbox_id, task_event_id in source_ids
+    ]
+    assert app.state.db.execute(
+        "SELECT 1 FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone() is None
+    assert app.state.db.execute(
+        "SELECT 1 FROM sessions WHERE id = ?",
+        (task_session_id,),
+    ).fetchone() is None
+    assert app.state.db.execute(
+        "SELECT 1 FROM sessions WHERE id = ?",
+        (master_session_id,),
+    ).fetchone() is not None
+    assert app.state.db.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def test_start_job_rollback_keeps_job_queued_when_run_enqueue_fails(tmp_path):

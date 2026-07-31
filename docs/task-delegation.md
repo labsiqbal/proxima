@@ -103,6 +103,70 @@ same committed Tasks and dependency edges. A preserved legacy queued worker run 
 claimed only after its full Master scope and dependency readiness are revalidated,
 and its Task is promoted to running in the same transaction as the run claim.
 
+## External mutation reconciliation
+
+`jobs` remains lifecycle truth, but owner actions can change it while no worker run
+is active. Review approval/rejection and checkpoint restore append a durable
+`job.update` to the Task session inside the same database transaction as the state
+change. Projectable review transitions also enqueue `task_projection_outbox` from
+that shared event boundary. The Task verdict and durable Master delivery intent
+therefore commit together, while projection message/event/ledger delivery and all
+stream notifications happen only after commit. A failed delivery remains replayable.
+Legacy Tasks without safe Focus attribution keep their Task verdict and retain an
+explicit failed-attribution outbox state instead of publishing an unattributed
+Master message. Mounted Task detail subscribes to the shared invalidation event;
+running polling is not the authority for externally mutable states.
+
+Projection idempotency uses a database-maintained monotonic Task generation that
+advances only when the canonical projected state changes. Ordinary linear-step,
+graph-node, timestamp, or same-status progress reuses the current generation, while
+Running to Review to Running receives three distinct generations. Duplicate
+delivery of one transition remains a no-op. Status and recovery outboxes are
+processed in Task-event order.
+
+Checkpoint restore also appends its audit record and, for a Master-origin Task, one
+bounded `task_recovery_outbox` intent in the restore transaction. Recovery marks
+only obsolete unpublished status projections as superseded, linked to the recovery
+Task event. Recovery audit intents are append-only and each publishes exactly once
+in Task-event order as `master.task.recovered` when it remains normally orderable.
+Legacy upgrade gaps are retained in an immutable causal ledger instead of replayed
+after a later publication or rewriting an already-projected reversal. Delivered
+legacy partial correction markers, messages, and events remain immutable and retain
+exact links to their covered gaps. At most one new bounded
+`master.task.recovery_history_corrected` aggregate per Task summarizes the remaining
+uncovered gaps after current-state projection. Each normal entry records actor,
+checkpoint, prior/new status, discarded progress, and conflicts through bounded
+server-owned summaries rather than arbitrary graph identifiers. A legacy Task with
+unavailable Focus still restores and exposes every failed-attribution repair intent,
+but publishes no unattributed Master history.
+Delivered v47 marker identity is staged before v48 aggregation and restored only
+from the exact original row, payload, links, timestamps, attempts, and coverage.
+Previously damaged upgrades retain an immutable bounded legacy-loss record instead
+of synthesizing a replacement marker. Task, Task-session, and job deletion captures
+the stable Task session, job, Task-event, and recovery-outbox identity at the
+job/session/event/outbox `BEFORE DELETE` boundary. The exact outbox-to-event map and
+recovery gap, marker, and coverage ids are archived behind a source tombstone before
+live foreign-key cascades, while Master messages and events remain linked. A later
+boundary may safely complete a partial legacy tombstone only from
+`jobs.session_id` or a consistent set of outbox-referenced Task events. Arbitrary
+graph-session membership is not Task-session provenance. Without authoritative
+provenance the identity remains `NULL` and an immutable bounded loss row records the
+reason.
+Git preflight completes before the immediate write transaction, then
+the restore rereads checkpoint, conflict, job, run, and node state under that lock.
+All validation and durable writes complete before a job worktree reset. A post-reset
+failure compensates to the original worktree commit and rolls back the database
+transaction, so Task, Fleet, history, and the worktree cannot commit contradictory
+states.
+
+`scripts/verify_task_reconciliation_browser.py` exercises mounted review approval,
+mounted checkpoint restore, and durable recovery history in Chromium. Its three
+after screenshots are mandatory and retained under
+`/tmp/no-mistakes-evidence/task-reconciliation` unless
+`PROXIMA_TASK_RECONCILIATION_SCREENSHOTS` points at another evidence directory.
+Database, workspace, runner profile, and browser profile state use a system
+temporary directory that is removed on interruption.
+
 ## Adding another caller
 
 1. Resolve user-facing slugs or selections to database ids without accepting paths.

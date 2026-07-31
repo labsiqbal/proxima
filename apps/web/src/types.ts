@@ -362,6 +362,8 @@ export type GraphNodeState = {
 	error?: string | null;
 	version: number;
 	run_id?: number | null;
+	started_at?: string | null;
+	finished_at?: string | null;
 	// Decision-hold (slice 12): a node that surfaced a genuine open decision
 	// parks in 'review' with the question; the owner's answer re-runs it.
 	question?: string | null;
@@ -417,6 +419,19 @@ export type JobWorktree = {
 	push_web_url?: string | null;
 };
 
+export type RunProjection = {
+	status: JobStatus;
+	started_at: string | null;
+	finished_at: string | null;
+	duration_seconds: number | null;
+};
+export type ProjectionRepair = {
+	kind: "status" | "recovery" | "recovery_history";
+	state: "pending" | "failed_attribution";
+	failure_code: string | null;
+	task_event_id: number;
+};
+
 export type GraphJob = {
 	id: number;
 	project_id?: number | null;
@@ -439,6 +454,8 @@ export type GraphJob = {
 	updated_at?: string;
 	started_at?: string | null;
 	finished_at?: string | null;
+	run_projection?: RunProjection;
+	projection_repair?: ProjectionRepair | null;
 };
 // A cron schedule that fires a workflow on a cadence. `cron` is a standard
 // 5-field expression (min hour day-of-month month day-of-week).
@@ -520,6 +537,8 @@ export type Job = {
 	started_at: string | null;
 	finished_at: string | null;
 	archived_at: string | null;
+	run_projection?: RunProjection;
+	projection_repair?: ProjectionRepair | null;
 };
 export type View =
 	| "home"

@@ -38,6 +38,7 @@ from ..schemas import (
     GraphTemplateSaveRequest,
 )
 from ..master_persistence import canonical_job_payload
+from ..task_state_events import append_task_update
 
 # The approval card renders the script body; cap what one response carries so a
 # runaway file cannot flood the UI. The sha256 always covers the WHOLE file.
@@ -148,6 +149,12 @@ def register(app, deps):
     _can_access = deps["_can_access"]
     _member_project_id = deps["_member_project_id"]
 
+    def _process_task_projection(task_event: dict[str, int]) -> None:
+        outbox_id = task_event.get("projection_outbox_id")
+        projection = getattr(app.state, "master_projection", None)
+        if outbox_id is not None and projection is not None:
+            projection.safe_process_task_outbox(outbox_id)
+
     def require_graph() -> None:
         features.require(cfg, features.WORKFLOW_GRAPH)
 
@@ -192,7 +199,7 @@ def register(app, deps):
                 "SELECT slug FROM projects WHERE id = ?", (payload["project_id"],)
             ).fetchone()
             payload["project_slug"] = project["slug"] if project else None
-        return canonical_job_payload(payload)
+        return canonical_job_payload(payload, connection=db())
 
     def graph_template_payload(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         payload = dict(row)
@@ -1123,24 +1130,49 @@ def register(app, deps):
                     repo_remote.push_after_merge(db(), merged)
                 except Exception:
                     logging.getLogger("proxima.graph").exception("push after merge failed unexpectedly (plan stays merged)")
-        approved = state.guarded_transition(
-            db(),
-            "jobs",
-            job_id,
-            "done",
-            ("review",),
-            set_extra="finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP",
-        )
-        if not approved:
-            raise HTTPException(status_code=409, detail="graph job changed concurrently")
-        # One status, two doors (T4): approving the plan auto-approves the
-        # deliverable records its nodes produced. Best-effort - the verdict
-        # stands even if the registry write fails.
-        try:
-            artifact_registry.approve_records_for_job(db(), job_id)
-        except Exception:
-            logging.getLogger("proxima.graph").exception("registry approve sync failed (non-fatal)")
+        conn = db()
+        notify_sessions: set[int] = set()
+        with app.state.db_lock:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                approved = state.guarded_transition(
+                    conn,
+                    "jobs",
+                    job_id,
+                    "done",
+                    ("review",),
+                    set_extra=(
+                        "finished_at=CURRENT_TIMESTAMP, "
+                        "updated_at=CURRENT_TIMESTAMP"
+                    ),
+                )
+                if not approved:
+                    conn.execute("ROLLBACK")
+                    raise HTTPException(
+                        status_code=409,
+                        detail="graph job changed concurrently",
+                    )
+                try:
+                    artifact_registry.approve_records_for_job(conn, job_id)
+                except Exception:
+                    logging.getLogger("proxima.graph").exception(
+                        "registry approve sync failed (non-fatal)"
+                    )
+                task_event = append_task_update(
+                    conn,
+                    job_id=job_id,
+                    mutation="review_approved",
+                )
+                notify_sessions.add(task_event["session_id"])
+                conn.execute("COMMIT")
+            except Exception:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        for session_id in notify_sessions:
+            app.state.hub.notify(session_id)
+        _process_task_projection(task_event)
         app.state.task_delegation.prerequisite_changed(
-            job_id, connection=db()
+            job_id, connection=conn
         )
         return graph_job_payload(graph_job_or_404(job_id, user))

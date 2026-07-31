@@ -80,6 +80,8 @@ provider firewall), `master_supervisor.py` (budgeted unattended
 queue starter), `graph_context.py` (scoped Graphify adapter),
 `code_graph_lifecycle.py` (Code rebuild queue/audit/debounce) +
 `graphify_area_mcp.py` (fixed-Area Task MCP proxy), `job_checkpoints.py`,
+`task_state_events.py` (transaction-coupled Task invalidation and recovery history),
+`run_projection.py` (timezone-aware API timestamps and effective run lifecycle),
 `turn_restore.py`,
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
 `apprunner.py` + `preview_proxy.py` + `preview_output.py` (project generations,
@@ -340,6 +342,13 @@ delegations, and Task ownership. Deprecated Alpha routes and legacy payload read
 project the same rows for one compatibility release. Stored payload normalization
 is ownership-scoped: unrelated Alpha-named business fields in ordinary jobs,
 attention, events, and audit records are never rewritten.
+Job API payloads also normalize stored `*_at` values to UTC-aware ISO and attach one
+`run_projection` containing effective status, start, finish, and duration. A failed
+child overrides a nonterminal review parent for presentation without rewriting the
+durable recovery state. Workflows, Tasks, Attention, Task detail, and expanded nodes
+therefore read one lifecycle contract. The canonical payload boundary hydrates
+linear steps or graph node state directly from the database, and Activity status
+filters use the same effective-state rule as the returned badges.
 Supervision (Phase-1 slice 12, T10) adds two tables: `satpam_watch` (the watchman's
 per-chain memory - last continuation turn evaluated, progress fingerprints,
 no-progress counters, a pending steer note) and `satpam_interventions` (the
@@ -631,15 +640,10 @@ steers, or restarts stuck runs.** Master never calls satpam restart machinery.
 Satpam rows into the same durable Master conversation. One
 `master_projections` row links one concise `messages` row and one named Master-session
 event to the authoritative source row. Unique owner-scoped projection keys make
-retry, reconnect, and restart reconciliation idempotent. Projection message, event,
-and ledger rows commit together. Startup validates their strict owner, source/type,
-foreign-key, index, complete-link, and bounded payload contract. Raw streaming deltas
-are never projected. Each named event carries the same captured Focus and subject
-attribution committed with its message, so the live projection cannot drift before
-canonical reconciliation. Server-owned summaries omit Task titles, runner errors,
-permission commands, Attention text, Satpam reasons, paths, and credentials. The
-existing session SSE cursor accepts both `after_id` and `Last-Event-ID`. See
-[master-supervision.md](../master-supervision.md).
+retry, reconnect, and restart reconciliation idempotent. Cross-surface Task mutation,
+outbox ordering, recovery history, and deletion identity live in
+[1d. Cross-surface Task reconciliation](#1d-cross-surface-task-reconciliation).
+See [master-supervision.md](../master-supervision.md).
 
 The authenticated application mounts exactly one `MasterStateProvider` above
 `AppShell`. It owns the canonical Master desk/session, ordered messages, active turn,
@@ -707,6 +711,58 @@ Stable source keys coalesce Task progress, terminal source keys prevent duplicat
 completion toasts, and raw delta events are ignored. Toasts use polite or assertive
 live regions without stealing focus and preserve the existing optional background
 desktop notification path.
+
+### 1d. Cross-surface Task reconciliation
+
+Externally mutable Task transitions share one authoritative projection path. A
+database-maintained Task generation advances only when the canonical projected state
+changes. Ordinary step, node, timestamp, and same-status progress reuse the current
+key, while transitions such as Running to Review to Running receive distinct keys.
+Review verdict transactions write the Task invalidation and `task_projection_outbox`
+intent together; projection delivery happens only after commit and remains replayable
+if it fails. Per-Task delivery follows durable Task-event order. Checkpoint restore
+records a bounded `task_recovery_outbox` intent and marks only obsolete unpublished
+status intents as causally superseded before emitting the authoritative Queued
+recovery event. Recovery audit intents remain append-only. New and still-orderable
+audits publish exactly once in Task-event order. Missing legacy Focus leaves each
+restore as a failed-attribution repair row without rolling back Task restoration or
+publishing unattributed history. Projection schema upgrades retain unpublished
+predecessors and already-projected publication reversals in an immutable per-Task
+ordering-gap ledger without replaying or rewriting original recovery rows. Delivered
+legacy partial correction markers, messages, and events remain immutable, and an exact
+coverage ledger links them to their causal gaps. One active per-Task aggregate intent
+summarizes only still-uncovered bounded gap counts and predecessor/successor
+Task-event ranges, and emits at most one new history marker after ordered outboxes
+and the canonical current Task projection are settled. Still-orderable predecessors
+remain on the normal recovery path.
+The v48 compatibility migration stages every delivered marker row and its exact
+coverage before aggregation. V49 restores only from that evidence and records
+bounded legacy identity loss for databases already damaged before staging existed.
+Source deletion enters one capture path from `BEFORE DELETE` triggers on the job,
+authoritative Task session, Task event, and recovery outbox. It preserves stable
+job, event, and outbox identities plus the exact outbox-to-event map, copies marker,
+gap, and coverage rows into immutable history tables keyed by their original ids,
+and writes or safely completes the Task-source tombstone. Task-session identity
+comes only from `jobs.session_id` or one consistent set of outbox-referenced Task
+events, never generic graph-session membership. If neither survives, it remains
+`NULL` and an immutable bounded loss row records why. Only then may the live
+cascades proceed; later boundaries cannot rewrite captured identity.
+Job API payloads also attach one `run_projection` and normalize timestamps so Tasks,
+Workflows, Attention, mounted Task detail, Fleet, and expanded nodes read the same
+effective lifecycle. Mounted Task detail consumes Task-session `job.update` for owner
+mutations outside a worker run.
+The rationale, alternatives, ordering rules, legacy containment, correction-marker
+trade-offs, and authoritative deletion identity are recorded in
+[ADR-0027](../adr/0027-durable-task-reconciliation-protocol.md).
+Projection message, event, and ledger rows then commit together. Startup validates
+their strict owner, source/type, foreign-key, index, complete-link, and bounded payload
+contract. Raw streaming deltas are never projected. Each named event carries the same
+captured Focus and subject attribution committed with its message, so the live
+projection cannot drift before canonical reconciliation. Server-owned summaries omit
+Task titles, runner errors, permission commands, Attention text, Satpam reasons, paths,
+and credentials. The existing session SSE cursor accepts both `after_id` and
+`Last-Event-ID`. See [master-supervision.md](../master-supervision.md) and
+[task-delegation.md](../task-delegation.md).
 
 ### 1. Chat turn (the core loop)
 
@@ -970,10 +1026,12 @@ evicts the oldest unpinned row; pinned
 rows are excluded. Restore has a separate impact-preview route, requires explicit
 confirmation, refuses while a job in the project is running or a later project job
 could depend on the current refs, and preflights a restorable worktree for dirt and a
-valid commit before changing database state. It removes only post-checkpoint runs and
-restores the one job/node set transactionally. Main-checkout SHAs are reference-only;
-only an existing job-owned worktree can be hard-reset, so unrelated project work is
-never rewound. It never VACUUMs SQLite and never archives a project tree.
+valid commit before changing database state. After preflight it acquires an immediate
+write transaction and rereads the checkpoint, conflicts, current job, runs, and node
+state before any mutation. It removes only post-checkpoint runs and restores the one
+job/node set transactionally. Main-checkout SHAs are reference-only; only an existing
+job-owned worktree can be hard-reset, so unrelated project work is never rewound. It
+never VACUUMs SQLite and never archives a project tree.
 
 ### 6b. Repo job: worktree → diff review → local merge (slices 2+4, live)
 

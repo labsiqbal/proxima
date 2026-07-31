@@ -38,6 +38,7 @@ describe('list row aria labels', () => {
   it('spaces plan status and optional worktree state', () => {
     expect(listPlanRowAriaLabel(
       { title: 'gnhf-e2e-farewell', status: 'failed', worktree: null },
+      'failed',
       '0/1',
       '2h ago',
     )).toBe('gnhf-e2e-farewell · Plan · failed · 0/1 · 2h ago')
@@ -57,6 +58,7 @@ describe('list row aria labels', () => {
           worktree_path: '/tmp/wt',
         },
       },
+      'done',
       '1/1',
       '2h ago',
     )).toBe('gnhf-e2e-farewell · Plan · done · merged · 1/1 · 2h ago')
@@ -64,7 +66,8 @@ describe('list row aria labels', () => {
 
   it('spaces classic task status and type', () => {
     expect(listTaskRowAriaLabel(
-      { title: 'Tidy docs', status: 'done', schedule_id: null, workflow_id: null },
+      { title: 'Tidy docs', schedule_id: null, workflow_id: null },
+      'done',
       '—',
       '3h ago',
     )).toBe('Tidy docs · Task · done · — · 3h ago')

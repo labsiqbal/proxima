@@ -261,7 +261,7 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
 
-    assert current_version(app.state.db) == 44
+    assert current_version(app.state.db) == 53
     profile = app.state.db.execute(
         "SELECT id, slug, name, system_kind FROM profiles WHERE system_kind = 'master'"
     ).fetchone()
@@ -765,6 +765,43 @@ def test_migration_preserves_unrelated_alpha_named_domain_data(tmp_path: Path):
             "input": {"alpha_session_id": "external-id"},
         }
     )["input"] == {"alpha_session_id": "external-id"}
+
+
+def test_canonical_job_payload_normalizes_timestamps_and_failed_review_projection():
+    payload = canonical_job_payload(
+        {
+            "id": 41,
+            "status": "review",
+            "created_at": "2026-07-31 05:00:00",
+            "started_at": "2026-07-31 05:00:00",
+            "finished_at": "2026-07-31 05:00:12",
+            "node_states": [
+                {
+                    "status": "failed",
+                    "started_at": "2026-07-31 05:00:00",
+                    "finished_at": "2026-07-31 05:00:12",
+                }
+            ],
+        }
+    )
+
+    assert payload["created_at"] == "2026-07-31T05:00:00Z"
+    assert payload["node_states"][0]["finished_at"] == "2026-07-31T05:00:12Z"
+    assert payload["run_projection"] == {
+        "status": "failed",
+        "started_at": "2026-07-31T05:00:00Z",
+        "finished_at": "2026-07-31T05:00:12Z",
+        "duration_seconds": 12,
+    }
+
+    linear_payload = canonical_job_payload(
+        {
+            "status": "review",
+            "node_states": [],
+            "steps_state": [{"status": "failed"}],
+        }
+    )
+    assert linear_payload["run_projection"]["status"] == "failed"
 
 
 def test_owned_malformed_payload_refuses_and_rolls_back_migration_31(

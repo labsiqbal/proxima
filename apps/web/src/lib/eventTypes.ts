@@ -12,6 +12,7 @@ export const SESSION_EVENT_TYPES = [
   'satpam.steered', 'satpam.restart.queued', 'satpam.restarted', 'satpam.escalated',
   'master.task.started', 'master.task.completed', 'master.task.failed',
   'master.task.cancelled', 'master.task.review_ready', 'master.task.blocked',
+  'master.task.recovered', 'master.task.recovery_history_corrected',
   'master.attention.required', 'master.supervisor.outcome',
   'master.satpam.steered', 'master.satpam.restart_queued',
   'master.satpam.restarted', 'master.satpam.recovery_failed',

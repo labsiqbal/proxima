@@ -44,11 +44,22 @@ dependency readiness before accepting a queued legacy run.
 ## Projection boundary
 
 `MasterProjectionService` is the only writer for asynchronous Task and supervision
-messages in the durable Master thread. It reads existing authoritative rows:
+messages in the durable Master thread. Review verdict routes write Task state,
+`job.update`, and `task_projection_outbox` through one open transaction. The service
+processes that durable delivery intent only after commit, so projection failure
+cannot roll back the Task verdict and Task or Master notifications cannot expose
+uncommitted state. A confirmed checkpoint restore uses the same mutation-coupled
+`task_state_events.py` boundary to append a bounded `task_recovery_outbox` intent
+inside the restore transaction. Delivery publishes the recovery message and event
+after commit. Both boundaries read existing authoritative rows:
 
 - `jobs`, `runs`, `node_states`, `job_checkpoints`
 - `attention_items`
 - `satpam_interventions`
+
+Task payload and projection status hydrate their linear steps or graph node state
+at this boundary. A failed child therefore projects Failed even when the durable
+parent remains parked in Review for recovery.
 
 It writes:
 
@@ -57,23 +68,53 @@ It writes:
 - one `master_projections` idempotency/link row
 
 `master_projections` is not lifecycle truth. Its unique owner and projection key
-links a message and event to a source table and row. Source table and event type
-must match, links are owner-scoped, and committed rows must have both their message
-and event. Message, event, and ledger creation is one transaction, so rollback
-cannot leave partial projection state. Message and event deletion is restricted;
-Task deletion clears the optional Task link while preserving the historical source
-identity.
+links a message and event to a source table and row. Task keys include the latest
+database-maintained transition generation. Only a change in canonical projected
+state advances that generation. Ordinary step and node progress reuses it, while a
+restored rerun and a Running to Review to Running cycle each receive the required
+distinct idempotency generations.
+Source table and event type must match, links are owner-scoped, and committed rows
+must have both their message and event. Message, event, and ledger creation is one
+transaction, so rollback cannot leave partial projection state. Message and event
+deletion is restricted; Task deletion clears the optional Task link while preserving
+the historical source identity.
 
-Startup validates the projection table schema, indexes, foreign keys, Master
-session ownership, source links, and bounded payload equality. Reconciliation after
-restart can safely retry because an existing key produces no second message or
-event. Each reconciliation candidate has its own failure boundary, so one invalid
-legacy source remains unprojected without starving later Task, Satpam, or Attention
-repair. A reused key with different ownership or source binding fails closed. Raw
-token, reasoning, and tool delta events are never projected, and payloads are
-limited to 16 KiB. Projection messages are also server-owned summaries: Task
-titles, runner errors, permission commands, Attention text, Satpam reasons, paths,
-and credentials are not copied into the Master conversation or event payload.
+Startup validates the projection and outbox table schemas, indexes, foreign keys,
+Master session ownership, source links, and bounded payload equality. Reconciliation
+after restart processes status and recovery rows in strict per-Task event order and
+safely retries missing current-state projections because an existing revision key
+produces no second message or event. Recovery causally supersedes only older
+unpublished status rows before emitting its authoritative current transition,
+preventing delayed Failed or Done delivery from overwriting restored Queued state.
+Recovery audit rows are never superseded. New and still-orderable restores remain
+durable and publish exactly once in Task-event order. Legacy upgrades retain
+unpublished predecessors and already-projected publication reversals as immutable
+causal gap rows without replaying or rewriting original recovery history. At most one
+new bounded `master.task.recovery_history_corrected` aggregate per Task summarizes
+still-uncovered gap counts and event ranges after the current Task projection
+settles. Previously delivered legacy partial markers and their messages and events
+remain immutable, and an exact coverage ledger links each marker to its causal gaps.
+The v48 upgrade stages each delivered row before aggregation so v49 restores its
+original primary key, payload, links, attempts, and timestamps. A database that
+predates that staging records bounded immutable legacy loss instead of inventing
+replacement metadata. Deleting the Task, Task session, or job captures stable Task
+session, job, Task-event, and recovery-outbox identity at the
+job/session/event/outbox `BEFORE DELETE` boundary. The exact outbox-to-event map,
+marker, gap, and coverage identity are archived behind a stable tombstone before the
+live source cascades; surviving Master message and event links remain coherent.
+Repeated boundaries may complete missing legacy tombstone fields only from
+`jobs.session_id` or a consistent set of outbox-referenced Task events. They never
+promote generic graph-session membership. Missing authoritative provenance remains
+`NULL` and is retained as an immutable bounded session-identity loss.
+Unavailable legacy Focus is recorded as failed attribution and can be replayed only
+after attribution becomes provable; the Task restore remains committed and no
+unattributed history is published. Each reconciliation candidate has its own
+failure boundary, so one invalid legacy source does not starve later Task, Satpam, or
+Attention repair. A reused key with different ownership or source binding fails
+closed. Raw token, reasoning, and tool delta events are never projected, and
+payloads are limited to 16 KiB. Projection messages are also server-owned summaries:
+Task titles, runner errors, permission commands, Attention text, Satpam reasons,
+paths, and credentials are not copied into the Master conversation or event payload.
 
 Review-ready payloads include the stable Task, Container, Area, and latest
 checkpoint ids. Attention and Satpam payloads include their source row ids and a
@@ -103,6 +144,8 @@ Task events:
 - `master.task.failed`
 - `master.task.cancelled`
 - `master.task.blocked`
+- `master.task.recovered`
+- `master.task.recovery_history_corrected`
 
 Supervision events:
 
@@ -131,6 +174,9 @@ history placement does not depend on the browser's current Focus.
 
 Events and projected chat messages report state only. They do not approve review,
 landing, restart, or Attention gates and are never accepted as control input.
+Task-session `job.update` is the separate mounted-detail invalidation event for
+owner mutations outside a worker run. It carries Task id, committed status, mutation
+kind, and checkpoint id when applicable.
 
 ## Frontend ownership
 

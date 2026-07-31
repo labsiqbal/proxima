@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AttentionInbox } from './AttentionInbox'
 import { actAttention, getAttention } from '../../api/master'
+import { FRESH_FAILED_REVIEW_ATTENTION } from '../../testFixtures/failedReviewRun'
 
 vi.mock('../../api/master', () => ({ getAttention: vi.fn(), actAttention: vi.fn() }))
 
@@ -16,8 +17,13 @@ const item = {
 describe('AttentionInbox', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-31T05:00:30Z'))
     vi.mocked(getAttention).mockResolvedValue({ items: [item], count: 1 })
     vi.mocked(actAttention).mockResolvedValue({ ok: true, id: 'job:4', action: 'approve' })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('hides the trigger when the inbox is empty so it does not look like an active alarm', async () => {
@@ -57,5 +63,19 @@ describe('AttentionInbox', () => {
 
     expect(actAttention).toHaveBeenCalledWith('token', 'job:4', 'approve')
     expect(getAttention).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses the same failed status and fresh run age as Workflows and Tasks', async () => {
+    vi.mocked(getAttention).mockResolvedValue({
+      items: [FRESH_FAILED_REVIEW_ATTENTION],
+      count: 1,
+    })
+    const user = userEvent.setup()
+    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
+
+    await user.click(await screen.findByRole('button', { name: '1 attention item' }))
+
+    expect(screen.getByText(/Failed · Just now/)).toBeInTheDocument()
+    expect(screen.queryByText(/Review ·/)).not.toBeInTheDocument()
   })
 })

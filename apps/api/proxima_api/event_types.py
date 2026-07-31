@@ -16,6 +16,13 @@ MASTER_TASK_EVENT_TYPES = frozenset(
     }
 )
 
+MASTER_TASK_RECOVERY_EVENT_TYPES = frozenset(
+    {
+        "master.task.recovered",
+        "master.task.recovery_history_corrected",
+    }
+)
+
 MASTER_SUPERVISION_EVENT_TYPES = frozenset(
     {
         "master.attention.required",

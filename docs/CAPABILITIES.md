@@ -554,7 +554,18 @@ state plus git SHA/worktree refs - no full SQLite backup and no project zip. Unp
 retention is FIFO 30, restore previews its impact, requires confirmation, and refuses
 running/later same-project conflicts or a dirty job-owned worktree. A main-checkout SHA
 is evidence only and is never reset; only an existing job worktree is restorable.
-Normal project Chat uses
+Restore commits the job, node/run rollback, Task-session `job.update`, audit metadata,
+and a durable Master recovery delivery intent together. Delivery appends one
+human-readable entry that identifies the owner, checkpoint, prior/restored state,
+discarded progress, and conflicting progress without copying worktree paths, Task
+titles, or arbitrary graph identifiers. Recovery events use the same 16 KiB
+durable-event encoder as Master projections. Missing legacy Focus leaves the Task
+restored with an explicit repair state and never publishes unattributed history. All
+fallible Git checks finish before the immediate write transaction; conflict, job, run,
+and node state are then reread under that lock before any restore write. All fallible
+database writes and worktree checks finish before reset; a failure after reset restores
+the original worktree commit before the database rollback is returned. Normal project
+Chat uses
 ACP tool events to trigger a bounded before/after path journal. Assistant replies with
 changed files show **Restore N changed paths**; preview lists each path and warns about
 active Master work before confirmation. The journal cascades when its session closes.
@@ -565,7 +576,8 @@ and Master decision/budget items. Every row deep-links to its owning Task/plan/M
 Settings surface. Only rows marked `inline_ok` render actions: simple non-repo final
 review, hash-visible script trust, pending satpam restart, and live permission choices.
 Diff and open-text Master items navigate only. Errors persist inside the inbox until
-retried/dismissed.
+retried/dismissed. Job-linked rows include the same canonical run projection used by
+Workflows and Tasks, so a review-parked failed graph node reads Failed everywhere.
 
 **Running work:** a sibling shell control next to Attention polls `GET /api/runs/active`
 and running jobs, badges a count when work is in flight, and deep-links each row to
@@ -603,10 +615,50 @@ permission commands, Attention text, Satpam reasons, paths, or credentials.
 Projection message, event, and ledger links commit atomically; strict startup
 validation rejects incomplete, cross-owner, malformed, or mismatched source/type
 state. Restart reconciliation safely retries missing projections without creating a
-second message or event and isolates failures per authoritative source row. SSE
+second message or event and isolates failures per authoritative source row. A
+database-maintained Task generation advances only when canonical projected state
+changes, so ordinary step, node, timestamp, and same-status progress cannot repeat a
+lifecycle event while Running to Review to Running remains distinct. Status and
+recovery intents process in Task-event order. Checkpoint recovery causally supersedes
+only obsolete unpublished status intents before its authoritative recovery event, so
+delayed Failed or Done delivery cannot overwrite Queued. Every recovery audit intent
+remains append-only. New and still-orderable recovery audits publish exactly once in
+that order. An upgrade from the older superseding recovery model records both
+unpublished predecessors and already-projected publication reversals in an immutable
+per-Task ordering-gap ledger without replaying or rewriting original recovery rows.
+Already-delivered legacy correction messages, events, and durable marker rows remain
+immutable partial history, with exact links to the gaps each marker covered. Any
+still-uncovered gaps are combined into at most one new bounded aggregate correction
+marker per Task after the current Task projection, while predecessors without a
+published successor return to normal ordered delivery. The v48 compatibility path
+stages every delivered marker's original id, links, payload, attempt metadata, and
+timestamps before aggregation; v49 restores only from that exact evidence. Older
+databases that already lost marker identity retain the bounded published event as an
+immutable legacy-loss record instead of receiving invented identity or timestamps.
+Deleting a Task, its Task session, or its job source captures the stable Task
+session, job, Task-event, and recovery-outbox identities at the job, session, event,
+or outbox `BEFORE DELETE` boundary. It records the exact outbox-to-event map, then
+tombstones and archives the correction, gap, and coverage rows before live cascades,
+preserving their stable ids and surviving Master message/event links. Repeated
+boundaries can complete missing legacy tombstone fields and expand captured ranges,
+but only `jobs.session_id` or one consistent set of outbox-referenced Task events
+can establish Task-session identity. Generic graph-session membership is never used.
+If neither source remains, the tombstone keeps `NULL` and an immutable bounded loss
+row records the unavailable identity. SSE
 reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).
+Owner mutations that happen outside a worker run append a transaction-coupled
+`job.update` to the Task session. Review completion/failure also enqueues a durable
+Master projection outbox row in that same transaction, while checkpoint restore
+enqueues its bounded recovery intent. Projection delivery and Task or Master stream
+notifications happen only after commit. Delivery failure leaves a replayable pending
+row; unavailable legacy Focus becomes explicit failed attribution without rolling
+the Task verdict or restore back or weakening attribution. The restore response
+and canonical Task/Fleet job payload expose that durable repair state. A mounted Task
+workspace consumes this one shared invalidation path for review verdicts and
+checkpoint restore instead of waiting for running-only polling. Fleet grouping and
+labels consume the same canonical effective status as its run projection.
 
 **Tours:** after setup, the first main-UI visit opens a keyboard-trapped core tour
 with five chapters when Master is enabled and four when it is disabled. Completion
@@ -711,6 +763,10 @@ fallback. Manual rows expose Run and ask for the trigger's intake fields. Schedu
 show cadence and pause/resume controls, with Run now and schedule maintenance available
 in the schedule dialog. Changing the trigger to Scheduled creates its cadence when the
 plan is promoted; it never carries manual intake values.
+The Runs table consumes the API's canonical `run_projection` for effective status,
+start, finish, and duration. API timestamp fields are timezone-aware UTC ISO strings,
+so a new run cannot inherit the browser's local offset or disagree with Tasks and
+Attention about a failed node parked in durable review.
 The library has separate active and archived views. Archiving stops schedules and
 removes the workflow from the active library without changing its owned project or
 past runs, and records the pre-archive status in `workflows.pre_archive_status`.
@@ -735,8 +791,11 @@ pipeline.
 **How:** classic `engine='linear'` jobs use a frozen step snapshot and run
 sequentially in one ACP session (context carries free). Graph jobs (**plans**) share
 the job lifecycle but keep per-node state in `node_states` and are listed via the
-graph API. Live-polls while running; auto-archive after 30 days. Old kanban tasks
-were migrated to 1-step jobs.
+graph API. The API adds one effective run projection and normalizes timestamp fields
+before responses. Tasks, Workflows, Attention, mounted Task detail, and expanded plan
+nodes consume that contract. Mounted Task detail also listens to durable `job.update`
+events for owner mutations; running polling remains only a progress fallback.
+Auto-archive happens after 30 days. Old kanban tasks were migrated to 1-step jobs.
 **Endpoints:** `POST /api/jobs`, `/jobs/{id}/start`, `/jobs/{id}/link-run`, `/approve`, `GET /api/jobs[...]`.
 
 ### Durable Task delegation and dependency readiness
