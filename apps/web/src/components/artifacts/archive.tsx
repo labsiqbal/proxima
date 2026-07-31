@@ -144,7 +144,7 @@ export function RecordPreview({ token, record, compact = false }: {
   }
   if (isImg) return <div className={`archive-preview-box media ${compact ? 'compact' : ''}`}>{media && <img src={media} alt={record.name} />}</div>
   if (isVideo) return <div className={`archive-preview-box media ${compact ? 'compact' : ''}`}>{media && <video src={media} controls={!compact} muted={compact} playsInline preload="metadata" />}</div>
-  if (isHtml) return <div className={`archive-preview-box frame ${compact ? 'compact' : ''}`}><iframe title={record.name} src={previewUrl(slug, path, record.target || undefined)} sandbox={record.target ? 'allow-scripts allow-same-origin' : 'allow-scripts'} /></div>
+  if (isHtml) return <div className={`archive-preview-box frame ${compact ? 'compact' : ''}`}><iframe title={record.name} src={previewUrl(slug, path, record.target || undefined)} /></div>
   if (isMd) return <div className={`archive-preview-box doc ${compact ? 'compact' : ''}`}><div className="md">{md != null ? <MessageContent content={md} token={token} slug={slug} sourcePath={record.target?.path || path} fileTarget={record.target || undefined} /> : <p className="muted">Loading…</p>}</div></div>
   if (isDesign) {
     if (designArt === undefined) {

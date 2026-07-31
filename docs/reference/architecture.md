@@ -272,29 +272,35 @@ Display names never select a physical root. Path-only callers remain a compatibi
 input, with historical virtual Ops names and physical `ops/...` support; legacy
 Ops-at-dot keeps `ops/...` as an Area-relative literal instead of stripping it.
 `/api/target-preview/{slug}/{kind}/{id}/{path}` is an authenticated entry route
-for targeted previews. It validates the locator and redirects through a short-lived,
-Area-bound capability to a dedicated origin whose router exposes only files from
-that authoritative Area. Named localhost installs use an Area-specific `.localhost`
-host, apps-domain installs use a provisioned one-label Area host, and IP-based or
-other remote installs use one relay port per Area and interface. The capability is
-exchanged for an HttpOnly host-scoped cookie and removed from the URL. Every
-same-origin resource and relative navigation remains on the Area-only origin and
-still crosses the canonical resolver and realpath jail, so
-arbitrary parent normalization cannot reach the legacy path-only route or any
-Proxima application route. Same-Area modules, workers, fonts, fetch, styles, images,
-media, and frames remain same-origin under the HTML sandbox and response policy.
-The legacy `/api/preview` route rejects canonical target parameters, and path-only
-HTML viewers retain an opaque script sandbox.
+for targeted previews. It validates the locator and redirects through a short-lived
+capability bound to the authoritative Area and authenticated Proxima frame origin.
+Named localhost and apps-domain installs use an Area-specific host whose router
+exposes no application routes. Plain HTTP IP installs use one relay per Area and
+interface. HTTPS entries without an apps domain stay on the existing TLS origin under
+the reserved `/_proxima/file-preview/` gateway. Gateway HTML is opaque and uses
+path-scoped CORS; dedicated Area-host HTML can retain same-origin identity because
+that origin exposes only its validated Area. Worker responses restrict connections,
+Service Worker requests are rejected, active XML formats download, and every file
+still crosses the canonical resolver and realpath jail. The legacy `/api/preview`
+route rejects target parameters and upgrades active content to this isolated boundary.
+Main-origin executable responses deny framing, so absolute document navigation cannot
+regain Proxima authority. Embedded requests from same-site, cross-site, or opaque
+preview origins are rejected before route dispatch. Capability query, gateway-path,
+and cookie values are redacted before access logging. Cloudflare tunnel ingress
+changes share one serialized mutation and refreshed-state check.
 Markdown resources resolve relative to both the source document directory and its
 target. A validated target context is reused throughout each tree, Archive, or
 message-list request while each path still crosses the realpath jail. Artifact links
 whose Area context or individual path cannot be validated are omitted rather than
-downgraded to a path-only identity. Design reply locator fields are treated as untrusted:
+downgraded to a path-only identity. Design canvas, thumbnail, and export images with a
+canonical target are hydrated from authenticated raw bytes into managed blob URLs,
+which are revoked with component lifetime. Design reply locator fields are treated as
+untrusted:
 an existing image or frame target survives only when both the layer id and source
 remain unchanged, and model-supplied targets are otherwise removed. See
 [ADR-0010](../adr/0010-canonical-file-targets.md),
 [ADR-0011](../adr/0011-area-scoped-artifact-media.md), and
-[ADR-0013](../adr/0013-area-bound-file-preview-origins.md).
+[ADR-0014](../adr/0014-capability-scoped-file-preview-gateways.md).
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).

@@ -1353,17 +1353,23 @@ canonical Ops root, while repo files continue to resolve from the Container root
 Path-only clients remain compatible, including explicit `ops/...` paths for physical
 layouts. For a legacy Ops Area at `.`, `ops/...` remains literal Area-relative input
 and is not stripped or reinterpreted. `/api/target-preview` validates a canonical
-target, then redirects through a short-lived Area-bound capability to a dedicated
-origin. That origin's router exposes only the validated Area and resolves every
-resource through the realpath jail. Parent traversal and scripted navigation
-therefore cannot reach legacy preview or application routes, while same-Area module
-scripts, workers, fonts, fetch, styles, images, media, and frames remain same-origin.
-Named localhost installs use an Area-specific `.localhost` host; IP-based installs
-use an Area-specific same-host relay origin so browser cookie-site rules remain intact.
-The capability is exchanged for an HttpOnly host-scoped cookie and removed from the
-visible URL. The legacy `/api/preview` route remains path-only and rejects target
-parameters; path-only HTML viewers retain an opaque script sandbox. Markdown siblings
-resolve from the source document's Area and directory.
+target, then redirects through a short-lived capability bound to the Area and the
+authenticated Proxima frame origin. Named localhost and apps-domain installs use an
+Area-specific host whose router exposes only that validated Area. Plain HTTP IP
+installs use an Area-specific relay. HTTPS installs without an apps domain use a
+reserved capability path on the existing TLS origin, with an opaque document sandbox
+and narrowly scoped CORS for same-Area modules, module workers, fonts, and fetch.
+Every resource still crosses the canonical resolver and realpath jail. Dedicated
+worker responses restrict outbound connections, Service Worker scripts are rejected,
+external ancestors cannot frame a preview, and embedded same-site or cross-site
+requests cannot leave the preview boundary for Proxima routes. Legacy `/api/preview` remains
+path-only and rejects target parameters, but active content is upgraded to the
+canonical boundary instead of executing on the Proxima origin. HTML renders under
+response sandbox policy; XHTML, SVG, and other active XML media download safely.
+Capability values are redacted from query, path, and cookie logs. Design Studio loads
+targeted canvas and export images from authenticated raw bytes through managed blob
+URLs rather than cross-origin preview URLs. Markdown siblings resolve from the source
+document's Area and directory.
 Artifact lists and chat messages omit links that cannot be assigned a validated
 canonical target instead of returning a path-only fallback.
 These APIs power the **Files tool** on the right rail (the project tree + inline

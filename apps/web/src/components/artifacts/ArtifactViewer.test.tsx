@@ -227,7 +227,7 @@ describe('ArtifactViewer v2 review flow', () => {
     expect(JSON.parse(markdown.getAttribute('data-file-target') || '{}')).toEqual(target)
   })
 
-  it('allows same-origin resources only inside the isolated HTML preview origin', () => {
+  it('delegates targeted HTML sandbox policy to the preview response', () => {
     const target = {
       project: 'master',
       area: { kind: 'ops', id: 42 },
@@ -242,10 +242,7 @@ describe('ArtifactViewer v2 review flow', () => {
       onClose={() => undefined}
     />)
 
-    expect(screen.getByTitle('index.html')).toHaveAttribute(
-      'sandbox',
-      'allow-scripts allow-same-origin',
-    )
+    expect(screen.getByTitle('index.html')).not.toHaveAttribute('sandbox')
     expect(previewUrl).toHaveBeenCalledWith(
       'master',
       'site/index.html',
@@ -253,7 +250,7 @@ describe('ArtifactViewer v2 review flow', () => {
     )
   })
 
-  it('keeps path-only HTML opaque on the Proxima origin', () => {
+  it('delegates legacy HTML isolation to the canonical preview redirect', () => {
     render(<ArtifactViewer
       token="token"
       slug="master"
@@ -266,10 +263,7 @@ describe('ArtifactViewer v2 review flow', () => {
     const frame = screen
       .getAllByTitle('legacy.html')
       .find(node => node.tagName === 'IFRAME')
-    expect(frame).toHaveAttribute(
-      'sandbox',
-      'allow-scripts',
-    )
+    expect(frame).not.toHaveAttribute('sandbox')
   })
 
   it('shows an actionable fallback instead of loading forever for a directory or unknown binary', () => {

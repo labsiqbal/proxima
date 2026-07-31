@@ -11,7 +11,7 @@ import { BackButton } from '../components/ui/BackButton'
 import { CompactTeachingEmpty } from '../components/ui/CompactTeachingEmpty'
 import { SURFACES, surfaceTemplates, sceneFromTemplate, type Surface, type Template } from '../components/design/templates'
 import { projectFs } from '../api/fsAdapter'
-import { fileUrl, uploadFile, genDesignImage, deletePath, generateBrandGuide, readFile } from '../api/files'
+import { fetchRawBlob, fetchRawFile, fileUrl, uploadFile, genDesignImage, deletePath, generateBrandGuide, readFile } from '../api/files'
 import { MessageContent } from '../components/chat/MessageContent'
 import { Composer } from '../components/chat/Composer'
 import { MentionTextarea, type MentionItem } from '../components/ui/MentionTextarea'
@@ -59,8 +59,52 @@ const artboardPresetValue = (w: number, h: number): ArtboardPresetId | 'custom' 
 
 function useImg(src: string): HTMLImageElement | undefined {
   const [img, setImg] = React.useState<HTMLImageElement>()
-  React.useEffect(() => { if (!src) return; const i = new window.Image(); i.crossOrigin = 'anonymous'; i.src = src; i.onload = () => setImg(i) }, [src])
+  React.useEffect(() => {
+    setImg(undefined)
+    if (!src) return
+    let active = true
+    const image = new window.Image()
+    image.crossOrigin = 'anonymous'
+    image.onload = () => { if (active) setImg(image) }
+    image.src = src
+    return () => { active = false; image.src = '' }
+  }, [src])
   return img
+}
+
+type TargetMediaReference = {
+  src: string
+  target: FileTarget
+}
+
+export const designTargetMediaKey = (src: string, target: FileTarget): string =>
+  JSON.stringify([src, target])
+
+export function collectDesignTargetMedia(
+  scene: Scene | null,
+  designs: { art?: Artboard }[],
+): TargetMediaReference[] {
+  const references = new Map<string, TargetMediaReference>()
+  const addArtboard = (artboard: Artboard) => {
+    for (const layer of artboard.layers) {
+      if (layer.type === 'image' && layer.target) {
+        references.set(
+          designTargetMediaKey(layer.src, layer.target),
+          { src: layer.src, target: layer.target },
+        )
+      } else if (isImageFrame(layer) && layer.imageSrc && layer.imageTarget) {
+        references.set(
+          designTargetMediaKey(layer.imageSrc, layer.imageTarget),
+          { src: layer.imageSrc, target: layer.imageTarget },
+        )
+      }
+    }
+  }
+  scene?.artboards.forEach(addArtboard)
+  designs.forEach(design => {
+    if (design.art) addArtboard(design.art)
+  })
+  return [...references.values()]
 }
 
 const BLOB_BASE = 320 // coordinate space blobPath() is generated in
@@ -732,6 +776,47 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const addRefImage = React.useCallback((path: string) => setRefImages(prev => prev.includes(path) ? prev : (imageMultiReady ? [...prev, path] : [path])), [imageMultiReady])
   const removeRefImage = React.useCallback((path: string) => setRefImages(prev => prev.filter(p => p !== path)), [])
   const [designs, setDesigns] = React.useState<{ id: string; title: string; type: string; w: number; h: number; artboards: number; sessionId?: number; art?: Artboard }[]>([])
+  const targetMedia = React.useMemo(
+    () => collectDesignTargetMedia(scene, designs),
+    [scene, designs],
+  )
+  const targetMediaSignature = JSON.stringify(targetMedia)
+  const [targetMediaUrls, setTargetMediaUrls] = React.useState<Record<string, string>>({})
+  React.useEffect(() => {
+    let active = true
+    const created: string[] = []
+    setTargetMediaUrls({})
+    if (!project || !targetMedia.length) {
+      return () => { active = false }
+    }
+    void Promise.all(targetMedia.map(async reference => {
+      try {
+        const url = await fetchRawBlob(
+          token,
+          project.slug,
+          reference.src,
+          reference.target,
+        )
+        if (!active) {
+          URL.revokeObjectURL(url)
+          return null
+        }
+        created.push(url)
+        return [designTargetMediaKey(reference.src, reference.target), url] as const
+      } catch {
+        return null
+      }
+    })).then(entries => {
+      if (!active) return
+      setTargetMediaUrls(Object.fromEntries(
+        entries.filter((entry): entry is readonly [string, string] => entry != null),
+      ))
+    })
+    return () => {
+      active = false
+      created.forEach(url => URL.revokeObjectURL(url))
+    }
+  }, [token, project?.slug, targetMediaSignature])
   const [projectComponents, setProjectComponents] = React.useState<ProjectComponent[]>([])
   const designFs = React.useMemo(() => project ? projectFs(token, project.slug, 'artifacts/design') : null, [token, project?.slug])
   const saveTimer = React.useRef<number | undefined>(undefined)
@@ -1435,7 +1520,12 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }
   const onTouchEnd = (e: Konva.KonvaEventObject<TouchEvent>) => { if (e.evt.touches.length < 2) { pinchRef.current = null; stageRef.current?.draggable(panMode) } }
 
-  const resolveSrc = (s: string, target?: FileTarget) => /^gen:/i.test(s) ? '' : (/^(https?:|data:|blob:)/.test(s) ? s : (project ? fileUrl(project.slug, s, target) : s))
+  const resolveSrc = (s: string, target?: FileTarget) => {
+    if (/^gen:/i.test(s)) return ''
+    if (/^(https?:|data:|blob:)/.test(s)) return s
+    if (target) return targetMediaUrls[designTargetMediaKey(s, target)] || ''
+    return project ? fileUrl(project.slug, s) : s
+  }
   const openDesign = async (id: string) => {
     if (!designFs) return
     studioFrom.current = stage === 'gallery' ? 'gallery' : 'start'
@@ -2247,8 +2337,21 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
       if (cache[cacheKey]) return cache[cacheKey]
       if (/^gen:/i.test(src)) return ''
       const resolved = resolveSrc(src, target)
-      if (!resolved) return ''
-      try { const r = await fetch(resolved); const blob = await r.blob(); const d = await new Promise<string>(res => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.readAsDataURL(blob) }); cache[cacheKey] = d; return d } catch { return resolved }
+      if (!resolved && !target) return ''
+      try {
+        const blob = target && project
+          ? await fetchRawFile(token, project.slug, src, target)
+          : await fetch(resolved).then(response => response.blob())
+        const data = await new Promise<string>(resolve => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result))
+          reader.readAsDataURL(blob)
+        })
+        cache[cacheKey] = data
+        return data
+      } catch {
+        return target ? '' : resolved
+      }
     }
     const boards: string[] = []
     const pageStyles: string[] = []

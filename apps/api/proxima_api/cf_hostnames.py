@@ -11,14 +11,17 @@ database binding disappears. All calls are no-ops if
 """
 from __future__ import annotations
 
+import asyncio
+import copy
 import logging
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
 _LOG = logging.getLogger("proxima.cf_hostnames")
 _API = "https://api.cloudflare.com/client/v4"
 _FALLBACK_SERVICE = "http://127.0.0.1:8766"
+_INGRESS_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
 
 
 def configured(cfg: dict[str, Any]) -> bool:
@@ -72,20 +75,49 @@ async def _put_tunnel_config(cfg, client, config: dict[str, Any]) -> None:
     r.raise_for_status()
 
 
+def _ingress_lock(cfg: dict[str, Any]) -> asyncio.Lock:
+    key = (str(cfg["cf_account_id"]), str(cfg["cf_tunnel_id"]))
+    return _INGRESS_LOCKS.setdefault(key, asyncio.Lock())
+
+
+async def _mutate_tunnel_ingress(
+    cfg: dict[str, Any],
+    client,
+    mutate: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
+    complete: Callable[[list[dict[str, Any]]], bool],
+) -> None:
+    async with _ingress_lock(cfg):
+        for _ in range(3):
+            config = await _tunnel_config(cfg, client)
+            ingress = config.get("ingress") or [{"service": "http_status:404"}]
+            if complete(ingress):
+                return
+            updated = mutate(copy.deepcopy(ingress))
+            next_config = {**config, "ingress": updated}
+            await _put_tunnel_config(cfg, client, next_config)
+            refreshed = await _tunnel_config(cfg, client)
+            if complete(refreshed.get("ingress") or []):
+                return
+        raise RuntimeError("Cloudflare tunnel ingress update did not converge")
+
+
 async def _ensure_hostname(cfg: dict[str, Any], host: str) -> None:
     if not configured(cfg):
         return
     async with httpx.AsyncClient(timeout=20, headers=_headers(cfg)) as client:
-        # 1. Tunnel ingress rule (insert before the catch-all).
-        config = await _tunnel_config(cfg, client)
-        ingress = config.get("ingress") or [{"service": "http_status:404"}]
-        if not any(r.get("hostname") == host for r in ingress):
+        def add_host(ingress: list[dict[str, Any]]) -> list[dict[str, Any]]:
             service = _existing_service(ingress)
             catchall = ingress[-1:] if ingress and not ingress[-1].get("hostname") else [{"service": "http_status:404"}]
             body = [r for r in ingress if r.get("hostname")]
             body.append({"hostname": host, "service": service})
-            config["ingress"] = body + catchall
-            await _put_tunnel_config(cfg, client, config)
+            return body + catchall
+
+        await _mutate_tunnel_ingress(
+            cfg,
+            client,
+            add_host,
+            lambda ingress: any(r.get("hostname") == host for r in ingress),
+        )
 
         # 2. Proxied DNS CNAME → the tunnel.
         got = await client.get(f"{_API}/zones/{cfg['cf_zone_id']}/dns_records", params={"name": host})
@@ -150,11 +182,16 @@ async def remove_preview_hostname(cfg: dict[str, Any], slug: str) -> None:
     host = hostname_for(cfg, slug)
     async with httpx.AsyncClient(timeout=20, headers=_headers(cfg)) as client:
         try:
-            config = await _tunnel_config(cfg, client)
-            ingress = config.get("ingress") or []
-            if any(r.get("hostname") == host for r in ingress):
-                config["ingress"] = [r for r in ingress if r.get("hostname") != host]
-                await _put_tunnel_config(cfg, client, config)
+            await _mutate_tunnel_ingress(
+                cfg,
+                client,
+                lambda ingress: [
+                    rule for rule in ingress if rule.get("hostname") != host
+                ],
+                lambda ingress: not any(
+                    rule.get("hostname") == host for rule in ingress
+                ),
+            )
         except Exception:
             _LOG.exception("remove tunnel ingress failed for %s", host)
         try:

@@ -96,6 +96,18 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         '{"source":"canonical"}',
         encoding="utf-8",
     )
+    (ops / "site" / "active.xhtml").write_text(
+        "<html xmlns='http://www.w3.org/1999/xhtml'><script>top.name='x'</script></html>",
+        encoding="utf-8",
+    )
+    (ops / "site" / "active.svg").write_text(
+        "<svg xmlns='http://www.w3.org/2000/svg'><script>top.name='svg'</script></svg>",
+        encoding="utf-8",
+    )
+    (root / "shadow.html").write_text(
+        "<script>parent.document.body.dataset.previewEscape='true'</script>",
+        encoding="utf-8",
+    )
 
     entries = _by_name(api, headers)
     ops_only = entries["ops-only.md"]["target"]
@@ -239,6 +251,7 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     capability_gate = api.get(capability_url, follow_redirects=False)
     assert capability_gate.status_code == 307
     assert capability_gate.headers["cache-control"] == "private, no-store"
+    assert "SameSite=strict" in capability_gate.headers["set-cookie"]
     isolated_url = urljoin(capability_url, capability_gate.headers["location"])
     clean_query = parse_qs(urlsplit(isolated_url).query)
     assert clean_query == {"cache": ["7"]}
@@ -264,7 +277,8 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert "font-src 'self' data:" in preview_policy
     assert "connect-src 'self'" in preview_policy
     assert "worker-src 'self' blob:" in preview_policy
-    assert "navigate-to 'self'" in preview_policy
+    assert "frame-ancestors http://testserver" in preview_policy
+    assert f"http://{capability_host}" in preview_policy
     assert page.headers["cross-origin-opener-policy"] == "same-origin"
     assert page.headers["referrer-policy"] == "no-referrer"
 
@@ -272,7 +286,10 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert nested_asset.status_code == 200, nested_asset.text
     assert nested_asset.text == "body { color: canonical-ops; }"
     module = api.get(urljoin(isolated_url, "module.js"))
-    worker = api.get(urljoin(isolated_url, "worker.js"))
+    worker = api.get(
+        urljoin(isolated_url, "worker.js"),
+        headers={"Sec-Fetch-Dest": "worker"},
+    )
     font = api.get(urljoin(isolated_url, "font.woff2"))
     fetched = api.get(urljoin(isolated_url, "data.json"))
     assert module.status_code == 200
@@ -280,8 +297,26 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         ("text/javascript", "application/javascript")
     )
     assert worker.status_code == 200
+    assert "connect-src 'self'" in worker.headers["content-security-policy"]
+    assert "worker-src 'none'" in worker.headers["content-security-policy"]
     assert font.status_code == 200
     assert fetched.json() == {"source": "canonical"}
+    service_worker = api.get(
+        urljoin(isolated_url, "worker.js"),
+        headers={"Service-Worker": "script"},
+    )
+    assert service_worker.status_code == 403
+    assert service_worker.text == "service workers are unavailable"
+
+    for active_name, media_type in (
+        ("active.xhtml", "application/xhtml+xml"),
+        ("active.svg", "image/svg+xml"),
+    ):
+        active = api.get(urljoin(isolated_url, active_name))
+        assert active.status_code == 200
+        assert active.headers["content-type"].startswith(media_type)
+        assert active.headers["content-disposition"].startswith("attachment;")
+        assert "sandbox" in active.headers["content-security-policy"]
 
     legacy_collision = root / "area" / "ops" / str(ops_area_id) / "site"
     legacy_collision.mkdir(parents=True)
@@ -314,6 +349,33 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         "/api/preview/identity/site/index.html?target=",
         headers=headers,
     ).status_code == 400
+    legacy_active = api.get(
+        "/api/preview/identity/shadow.html",
+        headers=headers,
+        follow_redirects=False,
+    )
+    assert legacy_active.status_code == 307
+    assert "/shadow.html?" in legacy_active.headers["location"]
+    assert "__proxima_cap=" in legacy_active.headers["location"]
+    blocked_absolute_navigation = api.get(
+        "/api/preview/identity/shadow.html",
+        headers={
+            **headers,
+            "Sec-Fetch-Site": "same-site",
+            "Sec-Fetch-Dest": "iframe",
+        },
+    )
+    assert blocked_absolute_navigation.status_code == 403
+    assert blocked_absolute_navigation.text == (
+        "preview navigation cannot access Proxima"
+    )
+
+    main_document = api.get("/docs")
+    assert main_document.status_code == 200
+    assert "frame-ancestors 'none'" in main_document.headers[
+        "content-security-policy"
+    ]
+    assert main_document.headers["x-frame-options"] == "DENY"
 
     escaped_navigation = urljoin(
         isolated_url,
@@ -340,6 +402,79 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert explicit.status_code == 200, explicit.text
     assert explicit.json()["content"] == "# Ops only"
     assert explicit.json()["target"] == ops_only
+
+
+def test_https_remote_preview_uses_opaque_capability_gateway(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers, root = _api(tmp_path)
+    ops = root / "ops"
+    (ops / "index.html").write_text(
+        '<script type="module" src="module.js"></script>',
+        encoding="utf-8",
+    )
+    (ops / "module.js").write_text(
+        "export const canonical = true",
+        encoding="utf-8",
+    )
+    area = api.app.state.db.execute(
+        "SELECT pa.id FROM project_areas pa "
+        "JOIN projects p ON p.id = pa.project_id "
+        "WHERE p.slug = 'identity' AND pa.kind = 'ops'"
+    ).fetchone()
+
+    async def relay_port(*_args):
+        raise AssertionError("HTTPS preview must not start a plaintext relay")
+
+    monkeypatch.setattr(api.app.state.target_previews, "_relay_port", relay_port)
+    remote = TestClient(api.app, base_url="https://100.64.0.2")
+    entry = remote.get(
+        f"/api/target-preview/identity/ops/{area['id']}/index.html",
+        headers=headers,
+        follow_redirects=False,
+    )
+
+    assert entry.status_code == 307
+    location = entry.headers["location"]
+    parsed = urlsplit(location)
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "100.64.0.2"
+    assert parsed.path.startswith("/_proxima/file-preview/")
+    assert "__proxima_cap" not in location
+
+    page = remote.get(location)
+    assert page.status_code == 200
+    policy = page.headers["content-security-policy"]
+    assert "sandbox allow-scripts;" in policy
+    assert "allow-same-origin" not in policy
+    assert "frame-ancestors https://100.64.0.2" in policy
+    assert page.headers["access-control-allow-origin"] == "null"
+
+    module = remote.get(
+        urljoin(location, "module.js"),
+        headers={"Origin": "null", "Sec-Fetch-Dest": "script"},
+    )
+    assert module.status_code == 200
+    assert module.headers["access-control-allow-origin"] == "null"
+
+    worker = remote.get(
+        urljoin(location, "module.js"),
+        headers={"Origin": "null", "Sec-Fetch-Dest": "worker"},
+    )
+    assert "connect-src https://100.64.0.2/_proxima/file-preview/" in (
+        worker.headers["content-security-policy"]
+    )
+    service_worker = remote.get(
+        urljoin(location, "module.js"),
+        headers={"Service-Worker": "script"},
+    )
+    assert service_worker.status_code == 403
+
+    parts = parsed.path.split("/")
+    parts[3] = f"{parts[3]}x"
+    tampered = parsed._replace(path="/".join(parts)).geturl()
+    assert remote.get(tampered).status_code == 403
 
 
 def test_loopback_preview_uses_a_same_host_relay_origin(

@@ -67,9 +67,11 @@ Every layer has a UNIQUE `id`, plus `x`, `y`, and optional `rotation` (deg) + `o
 - **ellipse / triangle / star** — `{ type:"ellipse", x,y, width, height, fill, stroke?, strokeWidth?, shadow? }` (star also takes `points?`)
 - **line** — `{ type:"line", x,y, x2,y2, stroke, strokeWidth }`
 - **path** — `{ type:"path", x,y, width, height, d:"<SVG path data>", fill }` — organic/blob shapes
-- **image** — `{ type:"image", x,y, width, height, src, cornerRadius? }`
+- **image** - `{ type:"image", x,y, width, height, src, target?, cornerRadius? }`.
+  `target` is the server-owned canonical file locator when `src` names a project file.
 - **image frame (clip mask)** — any `rect`/`ellipse`/`triangle`/`star` can hold a clipped
-  image (Canva-style) by adding `imageSrc` (a real path or `"gen:<prompt>"`) plus optional
+  image (Canva-style) by adding `imageSrc` (a real path or `"gen:<prompt>"`), optional
+  `imageTarget` for a server-owned canonical project file locator, plus optional
   `imageCropX`/`imageCropY` (0–100 reposition) and `imageCropZoom` (1–4). The image is
   masked to the shape's outline. On the canvas, **dragging an image layer onto a shape**
   absorbs it into the shape as a frame; the inspector's *Image frame* section repositions,
@@ -84,6 +86,10 @@ Fonts: Inter, Poppins, Nunito, Merriweather, Playfair Display, Roboto Slab, JetB
 For a photo/illustration, set an image layer's `src` to `"gen:<short prompt>"`
 (e.g. `"gen:green plastic bottle, studio shot, soft shadow, white background"`); the
 studio generates the real image via 9router when the design is opened. Don't invent file paths.
+Persisted canonical targets are trusted server metadata. Agent replies cannot create or
+replace them. An unchanged layer id and source retain the prior target; changing the
+source clears it. Canvas and export rendering fetch targeted images as authenticated raw
+bytes and revoke their temporary blob URLs when no longer needed.
 
 ## Agent: create / edit a design from chat
 

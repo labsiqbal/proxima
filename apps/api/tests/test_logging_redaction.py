@@ -35,6 +35,32 @@ def test_query_token_filter_redacts_websocket_error_log() -> None:
     assert "/api/ws/terminal?token=[REDACTED]&project=iqbal" in rendered
 
 
+def test_query_token_filter_redacts_every_file_preview_capability_form() -> None:
+    record = _record(
+        "uvicorn.access",
+        "%s %s %s",
+        (
+            "/site?__proxima_cap=query-secret&preview_capability=alias-secret",
+            "/_proxima/file-preview/path-secret/index.html",
+            "proxima_file_preview_1_ops_2=cookie-secret; theme=dark",
+        ),
+    )
+
+    assert QueryTokenRedactionFilter().filter(record)
+    rendered = record.getMessage()
+    for secret in (
+        "query-secret",
+        "alias-secret",
+        "path-secret",
+        "cookie-secret",
+    ):
+        assert secret not in rendered
+    assert "__proxima_cap=[REDACTED]" in rendered
+    assert "preview_capability=[REDACTED]" in rendered
+    assert "/_proxima/file-preview/[REDACTED]/index.html" in rendered
+    assert "proxima_file_preview_1_ops_2=[REDACTED]" in rendered
+
+
 def test_uvicorn_config_filters_access_and_error_handlers() -> None:
     config = uvicorn_log_config()
 
