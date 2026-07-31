@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { remoteRequestPolicy } from './accessibility-audit-policy.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -8,20 +9,34 @@ export class RemoteEntryInterceptor {
     cdp,
     pageTargetId,
     targetOrigin,
+    serviceWorkerDigest,
+    serviceWorkerTransportSafe = false,
+    serviceWorkerPreverified = false,
     quietMs = 500,
   }) {
     this.cdp = cdp
     this.pageTargetId = pageTargetId
     this.targetOrigin = targetOrigin
+    this.serviceWorkerDigest = serviceWorkerDigest
+    this.serviceWorkerTransportSafe = serviceWorkerTransportSafe
     this.quietMs = quietMs
     this.sessions = new Map()
     this.targetOwners = new Map()
+    this.targetSessions = new Map()
     this.targetReadiness = new Map()
     this.observedTargetTypes = new Set()
     this.configuredTargets = new Set()
     this.targetWaiters = new Map()
     this.seenNetworkRequests = new Set()
     this.webSockets = new Map()
+    this.pendingServiceWorkerResponses = new Map()
+    this.verifiedServiceWorkers = new Set()
+    this.serviceWorkerVerificationError = null
+    this.serviceWorkerVerificationWaiters = []
+    this.transportPolicies = new Map()
+    this.serviceWorkerProofGetCount = serviceWorkerPreverified ? 1 : 0
+    this.expectedClosures = new Set()
+    this.closing = false
     this.pending = new Set()
     this.errors = []
     this.forwarded = []
@@ -30,18 +45,18 @@ export class RemoteEntryInterceptor {
     this.lastActivity = Date.now()
     this.started = false
     this.stopped = false
+    if (serviceWorkerPreverified) {
+      assert(this.serviceWorkerDigest, 'Preverified service worker has no digest')
+      assert(
+        this.serviceWorkerTransportSafe,
+        'Preverified service worker is not duplex-safe',
+      )
+      this.verifiedServiceWorkers.add(this.serviceWorkerDigest)
+    }
     this.attachedListener = (event, parentSessionId) => {
       this._track(this._configureTarget(event, parentSessionId))
     }
-    this.detachedListener = event => {
-      const target = this.sessions.get(event.sessionId)
-      if (target?.owned && this.targetOwners.get(target.targetId) === event.sessionId) {
-        this.targetOwners.delete(target.targetId)
-        this.targetReadiness.delete(target.targetId)
-        this.configuredTargets.delete(target.targetId)
-      }
-      this.sessions.delete(event.sessionId)
-    }
+    this.detachedListener = event => this._handleDetach(event)
     this.requestListener = (event, sessionId) => {
       this._track(this._handleRequest(event, sessionId))
     }
@@ -71,6 +86,12 @@ export class RemoteEntryInterceptor {
         this._track(this._recordWebSocket(event, sessionId, 'loadingFailed'))
       }
     }
+    this.responseReceivedListener = (event, sessionId) => {
+      this._track(this._recordServiceWorkerResponse(event, sessionId))
+    }
+    this.loadingFinishedListener = (event, sessionId) => {
+      this._track(this._verifyFinishedServiceWorkerResponse(event, sessionId))
+    }
   }
 
   _track(task) {
@@ -96,20 +117,155 @@ export class RemoteEntryInterceptor {
     ]).finally(() => clearTimeout(timeout))
   }
 
-  async _waitForOwnerPolicy(targetId, timeoutMs = 5000) {
-    const ownerDeadline = Date.now() + timeoutMs
-    while (!this.targetReadiness.has(targetId) && Date.now() < ownerDeadline) {
-      await sleep(10)
+  _setOwner(targetId, sessionId) {
+    const previous = this.targetOwners.get(targetId)
+    if (previous && this.sessions.has(previous)) {
+      this.sessions.get(previous).owned = false
     }
-    const readiness = this.targetReadiness.get(targetId)
-    assert(readiness, `Target ${targetId} has no root owner policy`)
-    let timeout
-    const deadline = new Promise((_, reject) => {
-      timeout = setTimeout(() => {
-        reject(new Error(`Timed out securing target ${targetId}`))
-      }, Math.max(1, ownerDeadline - Date.now()))
+    this.targetOwners.set(targetId, sessionId)
+    const target = this.sessions.get(sessionId)
+    assert(target?.secured, `Target ${targetId} owner is not secured`)
+    target.owned = true
+    this.targetReadiness.set(targetId, Promise.resolve())
+    this.configuredTargets.add(targetId)
+    for (const resolve of this.targetWaiters.get(targetId) || []) resolve()
+    this.targetWaiters.delete(targetId)
+  }
+
+  _handleDetach(event) {
+    const target = this.sessions.get(event.sessionId)
+    if (!target) return
+    this.sessions.delete(event.sessionId)
+    const sessions = this.targetSessions.get(target.targetId)
+    sessions?.delete(event.sessionId)
+    if (sessions?.size === 0) this.targetSessions.delete(target.targetId)
+    if (this.targetOwners.get(target.targetId) !== event.sessionId) return
+    const successor = [...(sessions || [])].find(sessionId => (
+      this.sessions.get(sessionId)?.secured
+    ))
+    if (successor) {
+      this._setOwner(target.targetId, successor)
+      return
+    }
+    this.targetOwners.delete(target.targetId)
+    this.targetReadiness.delete(target.targetId)
+    this.configuredTargets.delete(target.targetId)
+    if (!this.expectedClosures.has(target.targetId)) {
+      this.errors.push(
+        new Error(`Secured target ${target.targetId} lost its traffic-policy owner`),
+      )
+      this._track(this._closeOwnerlessTarget(target.targetId))
+    }
+  }
+
+  async _closeOwnerlessTarget(targetId) {
+    const result = await this._send('Target.closeTarget', { targetId })
+    assert.notEqual(result.success, false, `Ownerless target ${targetId} could not be closed`)
+  }
+
+  async _installTransportPolicy(sessionId, targetType) {
+    try {
+      await this._send('Network.enable', {}, sessionId)
+      await this._send('Network.setBlockedURLs', {
+        urls: ['ws://*', 'wss://*'],
+      }, sessionId)
+      this.transportPolicies.set(sessionId, 'network')
+    } catch (error) {
+      assert.equal(
+        targetType,
+        'service_worker',
+        `${targetType} target could not install Network transport policy`,
+      )
+      assert(
+        this.serviceWorkerTransportSafe,
+        'Service worker lacks a verified duplex-safe transport policy',
+      )
+      this.transportPolicies.set(sessionId, 'verified-static-artifact')
+    }
+  }
+
+  _settleServiceWorkerVerification(error = null) {
+    if (error) this.serviceWorkerVerificationError = error
+    const waiters = this.serviceWorkerVerificationWaiters.splice(0)
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timeout)
+      if (error) waiter.reject(error)
+      else waiter.resolve()
+    }
+  }
+
+  _waitForServiceWorkerVerification(timeoutMs = 5000) {
+    if (this.serviceWorkerVerificationError) {
+      return Promise.reject(this.serviceWorkerVerificationError)
+    }
+    if (this.verifiedServiceWorkers.size > 0) return Promise.resolve()
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        resolve,
+        reject,
+        timeout: setTimeout(() => {
+          this.serviceWorkerVerificationWaiters = (
+            this.serviceWorkerVerificationWaiters.filter(candidate => candidate !== waiter)
+          )
+          reject(new Error('Timed out verifying the served service worker'))
+        }, timeoutMs),
+      }
+      this.serviceWorkerVerificationWaiters.push(waiter)
     })
-    return Promise.race([readiness, deadline]).finally(() => clearTimeout(timeout))
+  }
+
+  _verifyServiceWorkerBody(body, target, networkId) {
+    assert(this.serviceWorkerDigest, 'Service-worker digest was not configured')
+    const digest = createHash('sha256').update(body).digest('hex')
+    try {
+      assert.equal(
+        digest,
+        this.serviceWorkerDigest,
+        'Served service worker differs from the audited artifact',
+      )
+    } catch (error) {
+      this._settleServiceWorkerVerification(error)
+      throw error
+    }
+    const networkKey = `${target.targetId}:${networkId}`
+    if (!this.seenNetworkRequests.has(networkKey)) {
+      this.seenNetworkRequests.add(networkKey)
+      this.forwarded.push({
+        label: 'GET /sw.js',
+        targetType: target.targetType,
+      })
+    }
+    this.verifiedServiceWorkers.add(digest)
+    this._settleServiceWorkerVerification()
+  }
+
+  _recordServiceWorkerResponse(event, sessionId) {
+    if (!sessionId || !event.response?.url || !event.requestId) return
+    const url = new URL(event.response.url)
+    if (url.origin !== this.targetOrigin || url.pathname !== '/sw.js') return
+    const target = this.sessions.get(sessionId)
+    assert(target, `Service-worker response used unknown session ${sessionId}`)
+    this.pendingServiceWorkerResponses.set(
+      `${sessionId}:${event.requestId}`,
+      { sessionId, requestId: event.requestId, target },
+    )
+  }
+
+  async _verifyFinishedServiceWorkerResponse(event, sessionId) {
+    if (!sessionId || !event.requestId) return
+    const key = `${sessionId}:${event.requestId}`
+    const pending = this.pendingServiceWorkerResponses.get(key)
+    if (!pending) return
+    this.pendingServiceWorkerResponses.delete(key)
+    const response = await this._send(
+      'Network.getResponseBody',
+      { requestId: pending.requestId },
+      pending.sessionId,
+    )
+    const body = response.base64Encoded
+      ? Buffer.from(response.body, 'base64')
+      : Buffer.from(response.body)
+    this._verifyServiceWorkerBody(body, pending.target, pending.requestId)
   }
 
   async _configureTarget(event, parentSessionId = null) {
@@ -117,35 +273,18 @@ export class RemoteEntryInterceptor {
     assert(sessionId, 'Auto-attached target has no flattened session')
     this.lastActivity = Date.now()
     const existingOwner = this.targetOwners.get(targetInfo.targetId)
-    if (existingOwner && existingOwner !== sessionId) {
-      this.sessions.set(sessionId, {
-        targetId: targetInfo.targetId,
-        targetType: targetInfo.type || 'unknown',
-        owned: false,
-        parentSessionId,
-      })
-      await this._waitForOwnerPolicy(targetInfo.targetId)
-      if (waitingForDebugger) {
-        await this._send('Runtime.runIfWaitingForDebugger', {}, sessionId)
-      }
-      return
-    }
-    this.targetOwners.set(targetInfo.targetId, sessionId)
-    let resolveReady
-    let rejectReady
-    const ready = new Promise((resolve, reject) => {
-      resolveReady = resolve
-      rejectReady = reject
-    })
-    ready.catch(() => null)
-    this.targetReadiness.set(targetInfo.targetId, ready)
     this.sessions.set(sessionId, {
       targetId: targetInfo.targetId,
       targetType: targetInfo.type || 'unknown',
-      owned: true,
+      owned: false,
+      secured: false,
       parentSessionId,
     })
+    const sessions = this.targetSessions.get(targetInfo.targetId) || new Set()
+    sessions.add(sessionId)
+    this.targetSessions.set(targetInfo.targetId, sessions)
     this.observedTargetTypes.add(targetInfo.type || 'unknown')
+    if (this.closing) this.expectedClosures.add(targetInfo.targetId)
     try {
       const serviceWorker = targetInfo.type === 'service_worker'
       if (serviceWorker) {
@@ -153,32 +292,27 @@ export class RemoteEntryInterceptor {
         assert.equal(workerUrl.origin, this.targetOrigin)
         assert.equal(workerUrl.pathname, '/sw.js')
       }
-      if (!serviceWorker) {
-        await this._send('Network.enable', {}, sessionId)
-        await this._send('Network.setBlockedURLs', {
-          urlPatterns: [
-          { urlPattern: 'ws://*', block: true },
-          { urlPattern: 'wss://*', block: true },
-          ],
-        }, sessionId)
-      }
+      await this._installTransportPolicy(sessionId, targetInfo.type || 'unknown')
       await this._send('Fetch.enable', {
-        patterns: [{ urlPattern: '*', requestStage: 'Request' }],
+        patterns: [
+          { urlPattern: '*', requestStage: 'Request' },
+          { urlPattern: `${this.targetOrigin}/sw.js`, requestStage: 'Response' },
+        ],
       }, sessionId)
       await this._send('Target.setAutoAttach', {
         autoAttach: true,
         waitForDebuggerOnStart: true,
         flatten: true,
       }, sessionId)
-      this.configuredTargets.add(targetInfo.targetId)
-      for (const resolve of this.targetWaiters.get(targetInfo.targetId) || []) resolve()
-      this.targetWaiters.delete(targetInfo.targetId)
-      resolveReady()
+      this.sessions.get(sessionId).secured = true
+      if (serviceWorker) await this._waitForServiceWorkerVerification()
+      if (!existingOwner || !this.sessions.has(existingOwner)) {
+        this._setOwner(targetInfo.targetId, sessionId)
+      }
       if (waitingForDebugger) {
         await this._send('Runtime.runIfWaitingForDebugger', {}, sessionId)
       }
     } catch (error) {
-      rejectReady(error)
       throw new Error(
         `${targetInfo.type || 'unknown'} target ${targetInfo.targetId}`
         + `${parentSessionId ? ` via ${parentSessionId}` : ''}: ${error.message}`,
@@ -191,6 +325,29 @@ export class RemoteEntryInterceptor {
     const target = this.sessions.get(sessionId)
     assert(target, `Intercepted request used unknown session ${sessionId}`)
     this.lastActivity = Date.now()
+    if (event.responseStatusCode !== undefined) {
+      const url = new URL(event.request.url)
+      assert.equal(url.origin, this.targetOrigin)
+      assert.equal(url.pathname, '/sw.js')
+      assert(this.serviceWorkerDigest, 'Service-worker digest was not configured')
+      const response = await this._send(
+        'Fetch.getResponseBody',
+        { requestId: event.requestId },
+        sessionId,
+      )
+      const body = response.base64Encoded
+        ? Buffer.from(response.body, 'base64')
+        : Buffer.from(response.body)
+      this._verifyServiceWorkerBody(
+        body,
+        target,
+        event.networkId || event.requestId,
+      )
+      await this._send('Fetch.continueRequest', {
+        requestId: event.requestId,
+      }, sessionId)
+      return
+    }
     const decision = remoteRequestPolicy(event.request, this.targetOrigin)
     const entry = {
       label: decision.label,
@@ -302,6 +459,8 @@ export class RemoteEntryInterceptor {
     this.cdp.on('Network.webSocketFrameError', this.webSocketErrorListener)
     this.cdp.on('Network.webSocketClosed', this.webSocketClosedListener)
     this.cdp.on('Network.loadingFailed', this.loadingFailedListener)
+    this.cdp.on('Network.responseReceived', this.responseReceivedListener)
+    this.cdp.on('Network.loadingFinished', this.loadingFinishedListener)
     await this._send('Target.autoAttachRelated', {
       targetId: this.pageTargetId,
       waitForDebuggerOnStart: true,
@@ -348,6 +507,14 @@ export class RemoteEntryInterceptor {
       fulfilled: [...this.fulfilled],
       blocked: [...this.blocked],
       targetTypes: [...this.observedTargetTypes].sort(),
+      verifiedServiceWorkerCount: this.verifiedServiceWorkers.size,
+      serviceWorkerProofGetCount: this.serviceWorkerProofGetCount,
+      transportPolicies: Object.fromEntries(
+        [...this.transportPolicies.values()].map(policy => [
+          policy,
+          [...this.transportPolicies.values()].filter(value => value === policy).length,
+        ]),
+      ),
       webSocket: {
         attemptedCount: webSockets.length,
         targetTypeCounts,
@@ -367,7 +534,15 @@ export class RemoteEntryInterceptor {
   }
 
   inspectedTargetIds() {
-    return [...this.targetOwners.keys()]
+    return [...new Set([
+      ...this.targetOwners.keys(),
+      ...[...this.sessions.values()].map(target => target.targetId),
+    ])]
+  }
+
+  beginClosure(targetIds = this.inspectedTargetIds()) {
+    this.closing = true
+    for (const targetId of targetIds) this.expectedClosures.add(targetId)
   }
 
   async stop() {
@@ -380,11 +555,11 @@ export class RemoteEntryInterceptor {
       settleError = error
     }
     const ownerSessions = [...this.sessions.entries()]
-      .filter(([, target]) => target.owned)
+      .filter(([, target]) => target.secured)
       .map(([sessionId]) => sessionId)
     await Promise.allSettled(ownerSessions.flatMap(sessionId => [
       this._send('Fetch.disable', {}, sessionId),
-      this._send('Network.setBlockedURLs', { urlPatterns: [] }, sessionId),
+      this._send('Network.setBlockedURLs', { urls: [] }, sessionId),
       this._send('Network.disable', {}, sessionId),
       this._send('Target.setAutoAttach', {
         autoAttach: false,
@@ -414,6 +589,8 @@ export class RemoteEntryInterceptor {
     this.cdp.off('Network.webSocketFrameError', this.webSocketErrorListener)
     this.cdp.off('Network.webSocketClosed', this.webSocketClosedListener)
     this.cdp.off('Network.loadingFailed', this.loadingFailedListener)
+    this.cdp.off('Network.responseReceived', this.responseReceivedListener)
+    this.cdp.off('Network.loadingFinished', this.loadingFinishedListener)
     if (settleError) throw settleError
   }
 }

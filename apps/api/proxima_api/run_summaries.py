@@ -29,7 +29,8 @@ class RunSummaries:
             return None
         db = self.app.state.worker_db
         row = db.execute(
-            "SELECT id, path FROM projects WHERE id = ?", (run["project_id"],)
+            "SELECT id, path, path_identity FROM projects WHERE id = ?",
+            (run["project_id"],),
         ).fetchone()
         if row and row["path"]:
             return ops_root(db, row) / "wiki"

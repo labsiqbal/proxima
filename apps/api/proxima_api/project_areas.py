@@ -84,7 +84,8 @@ def ensure_ops_area(
         return
     if rel_path == OPS_RELPATH:
         project = conn.execute(
-            "SELECT name, slug, path FROM projects WHERE id = ?", (project_id,)
+            "SELECT name, slug, path, path_identity FROM projects WHERE id = ?",
+            (project_id,),
         ).fetchone()
         if project is None:
             raise ValueError("Container does not exist")

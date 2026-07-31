@@ -15,21 +15,24 @@ from typing import Any
 from fastapi import Depends, HTTPException
 
 from .. import container_registry, fsapi, repo_remote
+from ..directory_handles import directory_identity_for_path
 from ..project_browse import (
     AllowedRoots,
     CreatedDirectory,
     DirectoryBrowseUnavailable,
     DirectoryComponentInvalid,
+    DirectoryPublishConflict,
     PathOutsideRoots,
     PathResolutionUnavailable,
     browse_directory,
     create_directory_component,
+    directory_identity,
     split_directory_target,
 )
 from ..project_areas import areas_payload, ensure_ops_area, sync_code_areas
-from ..settings import validate_slug
 from ..provisioning import scaffold_project_dir
 from ..schemas import ProjectAreaAddRequest, ProjectAreaUpdateRequest, ProjectCreateRequest, ProjectLinkRequest, ProjectUpdateRequest
+from ..settings import validate_slug
 
 
 def register(app, deps):
@@ -112,11 +115,23 @@ def register(app, deps):
         return list(cfg.get("link_roots") or [os.path.expanduser("~")])
 
     @app.get("/api/fs/dirs")
-    def fs_dirs(path: str = "", user: dict[str, Any] = Depends(current_user)):
+    def fs_dirs(
+        path: str = "",
+        root_id: str = "",
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Browse directories under the configured link roots, to pick an existing
         folder to register as a project."""
+        if path and not root_id:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "configured folder root identity is required",
+                    "field": "path",
+                },
+            )
         try:
-            return browse_directory(path, _link_roots())
+            return browse_directory(path, _link_roots(), root_id or None)
         except DirectoryBrowseUnavailable as exc:
             raise HTTPException(
                 status_code=403,
@@ -142,6 +157,8 @@ def register(app, deps):
         on it. Pass mkdir=true to create a brand-new empty directory first
         (parent must already exist inside the link roots)."""
         created_dir: CreatedDirectory | None = None
+        pid: int | None = None
+        made_dir = False
         try:
             error_field = "parent" if payload.mkdir else "path"
             try:
@@ -155,7 +172,7 @@ def register(app, deps):
                     raise _link_error(400, "parent directory is not reachable", "parent") from exc
                 folder_name = _validate_new_folder_name(raw_name)
                 try:
-                    parent = allowed_roots.resolve(raw_parent)
+                    parent = allowed_roots.resolve(raw_parent, payload.root_id)
                 except PathOutsideRoots as exc:
                     raise _link_error(403, str(exc), "parent") from exc
                 except PathResolutionUnavailable as exc:
@@ -172,27 +189,32 @@ def register(app, deps):
                     raise _link_error(400, "parent directory does not exist", "parent") from exc
                 except NotADirectoryError as exc:
                     raise _link_error(400, "parent directory is not reachable", "parent") from exc
+                except (PathOutsideRoots, PathResolutionUnavailable) as exc:
+                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
                 except OSError as exc:
                     raise _link_error(400, f"could not create folder: {exc.strerror or exc}", "parent") from exc
                 try:
-                    target = created_dir.require_visible()
+                    target = created_dir.require_staged()
                 except (PathOutsideRoots, PathResolutionUnavailable) as exc:
                     raise _link_error(400, "created folder is not reachable", "parent") from exc
+                path_identity = created_dir.identity
             else:
                 try:
-                    target = allowed_roots.resolve(payload.path).path
+                    resolved_target = allowed_roots.resolve(
+                        payload.path,
+                        payload.root_id,
+                    )
                 except PathOutsideRoots as exc:
                     raise _link_error(403, str(exc), "path") from exc
                 except PathResolutionUnavailable as exc:
                     raise _link_error(400, "selected folder is not reachable", "path") from exc
                 try:
-                    target_is_dir = target.is_dir()
+                    path_identity = directory_identity(resolved_target)
                 except PermissionError as exc:
                     raise _link_error(403, "permission denied - selected folder is not accessible", "path") from exc
-                except OSError as exc:
+                except (OSError, PathResolutionUnavailable) as exc:
                     raise _link_error(400, "selected folder is not reachable", "path") from exc
-                if not target_is_dir:
-                    raise _link_error(400, "not a directory", "path")
+                target = resolved_target.path
             name = (payload.name or target.name).strip()
             # strip("-") AFTER the 63-char truncation too: [:63] can re-cut a collapsed
             # run mid-hyphen and leave a trailing '-', which validate_slug would reject.
@@ -209,25 +231,44 @@ def register(app, deps):
                 )
                 raise _link_error(409, message, "slug" if payload.slug else "name")
             cur = db().execute(
-                "INSERT INTO projects(slug, name, path, owner_user_id, visibility) VALUES (?, ?, ?, ?, 'private')",
-                (slug, name, str(target), user["id"]),
+                "INSERT INTO projects("
+                "slug, name, path, path_identity, owner_user_id, visibility"
+                ") VALUES (?, ?, ?, ?, ?, 'private')",
+                (slug, name, str(target), path_identity, user["id"]),
             )
             pid = cur.lastrowid
             made_dir = created_dir is not None
             if created_dir is not None:
                 try:
                     created_dir.commit()
+                except DirectoryPublishConflict as exc:
+                    raise _link_error(409, str(exc), "folder") from exc
+                except DirectoryComponentInvalid as exc:
+                    raise _link_error(400, str(exc), "folder") from exc
                 except (OSError, PathOutsideRoots, PathResolutionUnavailable) as exc:
-                    db().execute("DELETE FROM projects WHERE id = ?", (pid,))
                     raise _link_error(
                         400,
                         "created folder is not reachable",
                         "parent",
                     ) from exc
-                created_dir = None
+            registered = {
+                "id": pid,
+                "path": str(target),
+                "path_identity": path_identity,
+            }
+            try:
+                container_registry.container_root(registered)
+            except container_registry.ContainerBoundaryError as exc:
+                raise _link_error(
+                    400,
+                    "selected folder identity changed",
+                    "parent" if made_dir else "path",
+                ) from exc
             # Container areas (T1): register the ops area + auto-detect code areas.
             ensure_ops_area(db(), pid, rel_path=".")
+            container_registry.container_root(registered)
             container_registry.migrate_container_ops(db(), pid)
+            container_registry.container_root(registered)
             summary = sync_code_areas(db(), pid, target)
             audit_action = "project.link.mkdir" if made_dir else "project.link"
             db().execute(
@@ -245,7 +286,23 @@ def register(app, deps):
                 container_slug=slug,
             )
             row = dict(db().execute("SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p JOIN users u ON u.id = p.owner_user_id WHERE p.id = ?", (pid,)).fetchone())
+            container_registry.container_root(row)
+            if created_dir is not None:
+                created_dir.finish()
+                created_dir = None
             return project_payload(row)
+        except container_registry.ContainerBoundaryError as exc:
+            if pid is not None:
+                db().execute("DELETE FROM projects WHERE id = ?", (pid,))
+            raise _link_error(
+                400,
+                "selected folder identity changed",
+                "parent" if made_dir else "path",
+            ) from exc
+        except BaseException:
+            if pid is not None:
+                db().execute("DELETE FROM projects WHERE id = ?", (pid,))
+            raise
         finally:
             if created_dir is not None:
                 created_dir.rollback()
@@ -257,9 +314,12 @@ def register(app, deps):
         path = str(Path(cfg["workspace_root"]) / "projects" / payload.slug)
         run_projectctl("create-project", payload.slug, "--owner", user["os_user"])
         scaffold_project_dir(cfg, payload.slug, payload.name)
+        path_identity = directory_identity_for_path(Path(path))
         cur = db().execute(
-            "INSERT INTO projects(slug, name, path, owner_user_id, visibility) VALUES (?, ?, ?, ?, 'private')",
-            (payload.slug, payload.name, path, user["id"]),
+            "INSERT INTO projects("
+            "slug, name, path, path_identity, owner_user_id, visibility"
+            ") VALUES (?, ?, ?, ?, ?, 'private')",
+            (payload.slug, payload.name, path, path_identity, user["id"]),
         )
         project_id = cur.lastrowid
         ensure_ops_area(db(), project_id)

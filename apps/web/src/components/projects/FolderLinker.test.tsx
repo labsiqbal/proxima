@@ -30,6 +30,7 @@ const dirs = {
   parent: '/home/user',
   dirs: [{ name: 'existing', path: '/home/user/code/existing' }],
   roots: ['/home/user'],
+  root_id: 'root-owner',
 }
 
 describe('FolderLinker', () => {
@@ -64,7 +65,7 @@ describe('FolderLinker', () => {
     expect(selected).toHaveFocus()
     expect(selected).not.toHaveAttribute('aria-invalid')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(browseDirs).toHaveBeenLastCalledWith('tok', '')
+    expect(browseDirs).toHaveBeenLastCalledWith('tok', '', '')
   })
 
   it('links the current folder in link mode', async () => {
@@ -78,7 +79,11 @@ describe('FolderLinker', () => {
     await user.click(screen.getByRole('button', { name: /Link “code”/ }))
 
     await waitFor(() => {
-      expect(linkProject).toHaveBeenCalledWith('tok', { path: '/home/user/code', name: undefined })
+      expect(linkProject).toHaveBeenCalledWith('tok', {
+        path: '/home/user/code',
+        root_id: 'root-owner',
+        name: undefined,
+      })
     })
     expect(onLinked).toHaveBeenCalledWith(project)
   })
@@ -101,6 +106,7 @@ describe('FolderLinker', () => {
     await waitFor(() => {
       expect(linkProject).toHaveBeenCalledWith('tok', {
         path: '/home/user/code/fresh-app',
+        root_id: 'root-owner',
         name: 'Fresh App',
         mkdir: true,
       })
@@ -217,6 +223,7 @@ describe('FolderLinker', () => {
       parent: '/home/user/code',
       dirs: [],
       roots: ['/home/user'],
+      root_id: 'root-owner',
     }
     const missingPath = new ApiError(
       400,
@@ -255,7 +262,11 @@ describe('FolderLinker', () => {
     expect(recoveredFolder).toHaveFocus()
     expect(recoveredFolder).not.toHaveAttribute('aria-invalid')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(browseDirs).toHaveBeenLastCalledWith('tok', '/home/user/code/existing')
+    expect(browseDirs).toHaveBeenLastCalledWith(
+      'tok',
+      '/home/user/code/existing',
+      'root-owner',
+    )
   })
 
   it('returns a missing create parent to the selected-folder control', async () => {

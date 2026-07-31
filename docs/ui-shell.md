@@ -255,14 +255,23 @@ within the owning allowed root. Resolution and containment fail closed around se
 mutual symlink cycles. If initial browsing fails, a marked retry control is already
 mounted and receives focus before the single alert appears. Failed configured roots
 retain raw ownership even when expansion fails, valid sibling roots remain available,
-and later resolution failure cannot move a selection into a containing root.
+and later resolution failure cannot move a selection into a containing root. Browse
+responses carry an opaque configured-root ID through each later navigation and
+link/create request, preserving symlink-alias ownership after the API returns a canonical
+path. Every later request without that ID fails closed.
 New-folder validation uses the target filesystem's encoded component-byte limit. The API
-then traverses from the verified root one no-follow directory descriptor at a time and
-retains descriptor-relative creation and rollback through the created-directory commit.
-Component or encoding failures return to the folder-name field, while parent descriptor
-or location failures return to the selected-folder control. If no ancestor is readable,
-the current selection stays explicitly invalid until the owner retries or chooses
-another folder.
+then traverses from the verified root one POSIX no-follow descriptor or Windows
+no-reparse native handle at a time. It creates under an unguessable staging name, pins
+the directory's platform identity, atomically publishes without replacement, persists
+that identity with the Project, and verifies the final path through the configured root.
+Rollback removes only the pinned directory, including after a rename, and leaves any
+replacement untouched. Component or encoding failures return to the folder-name field,
+while parent traversal, identity, or location failures return to the selected-folder
+control. If no ancestor is readable, the current selection stays explicitly invalid
+until the owner retries or chooses another folder.
+Later Container filesystem access compares the stored identity and rejects a replacement
+at the same path. Readable legacy Project rows receive their current platform identity
+at startup; unreachable legacy paths receive a fail-closed unavailable marker.
 
 Removal copy must distinguish the two cases, because the API does: a folder outside the
 workspace root is only *unlinked* and its real files survive, while a project Proxima
@@ -303,4 +312,52 @@ Add destinations through the existing `View`, feature policy, App routing, Sideb
 
 ## Validation
 
-For shell changes, run `npm --prefix apps/web test`, `npm --prefix apps/web run build`, and `git diff --check`. Tests should cover navigation order and feature-off gating, tool-rail open/close with Terminal persistence, asynchronous task success/failure, declared schedule inputs, cron grammar, and keyboard resizing. `npm --prefix apps/web run test:accessibility` first runs the focused project-link API regressions for corrective ownership, filesystem component-byte limits, encoding failures, readable-ancestor selection, symlink-cycle handling, explicit no-ancestor failure, and configured-root jailing. It then runs the password and folder flows in a disposable real-browser fixture, records accessibility-tree, genuine Enter/Space activation, every supported theme, Lighthouse, and [screenshot evidence](evidence/auth-onboarding-accessibility/README.md) without touching live data. The harness uses an allowlisted child environment, redirects every writable Proxima path into the fixture, and disables workers, credential refresh, update checks, preview relays, and external graph egress. Its theme matrix checks title, subtitle, entered value, placeholder, error, button, input focus, and button focus styles against the rendered backgrounds for every canonical theme. It discovers the current root Tailscale Serve entry that proxies to loopback port 8765. Any `PROXIMA_A11Y_REMOTE_BASE` or `PROXIMA_A11Y_REMOTE_ADDRESS` override must match that current device and Serve mapping. The remote browser pass uses a fresh profile for each origin and auto-attaches one bounded policy owner to the page plus every related service, shared, and nested worker before they run. Stable target/network IDs deduplicate any extra session observations. Page, dedicated-worker, and shared-worker owners install Fetch, Network, and WebSocket policy before resuming; service workers are restricted to the same-origin `/sw.js`, source-checked for a static-only cache list with no data or duplex API, and Fetch-intercepted before resuming. Policy remains active through assertions, screenshots, and page/worker closure. A secure disposable production origin proves the exact service-worker cache matrix even when the current private entry is development-served. For a Vite entry, `/@vite/client` is fulfilled with an inert no-socket compatibility shim that preserves rendering and stylesheet loading. Each pass requires exactly one page navigation GET, accounts for every worker shell GET by target and path, forwards only allowlisted same-origin static assets, fulfills config, setup status, failed session resume, and the optional inert Vite client inside the browser fixture, and blocks or rejects every other API, auth, cross-origin, non-static, and duplex request. Attempted WebSocket connections and blocked failures are counted without retaining their private URLs; any outbound handshake or frame fails the audit. It never logs in and retains only a redacted origin label, pass state, exact request counts, Vite fixture state, and redacted current-device Serve provenance. Browser QA should also check authenticated desktop and narrow layouts, zoom, and reduced motion; if remote authentication prevents inspection, record that rather than using credentials.
+For shell changes, run `npm --prefix apps/web test`,
+`npm --prefix apps/web run build`, and `git diff --check`. Tests should cover
+navigation order and feature-off gating, tool-rail open/close with Terminal
+persistence, asynchronous task success/failure, declared schedule inputs, cron
+grammar, and keyboard resizing.
+
+`npm --prefix apps/web run test:accessibility` first runs focused project-link API
+regressions for corrective ownership, filesystem component-byte limits, encoding
+failures, readable-ancestor selection, symlink-cycle handling, explicit no-ancestor
+failure, and configured-root jailing. It then runs the password and folder flows in a
+disposable real-browser fixture, records accessibility trees, genuine Enter/Space
+activation, every supported theme, Lighthouse, and
+[screenshot evidence](evidence/auth-onboarding-accessibility/README.md) without
+touching live data. The allowlisted child environment redirects every writable Proxima
+path into the fixture and disables workers, credential refresh, update checks, preview
+relays, and external graph egress. Its theme matrix checks title, subtitle, entered
+value, placeholder, error, button, input focus, and button focus styles against the
+rendered backgrounds for every canonical theme.
+
+The harness discovers the current root Tailscale Serve entry that proxies to loopback
+port 8765. Any `PROXIMA_A11Y_REMOTE_BASE` or
+`PROXIMA_A11Y_REMOTE_ADDRESS` override must match that current device and Serve
+mapping. The remote browser pass uses a fresh profile for each origin and auto-attaches
+to the page plus every related service, shared, and nested worker before they run.
+Every session installs Fetch and a Network/WebSocket block before resume. A service
+worker without the CDP Network domain remains paused until its served bytes match the
+locally audited duplex-free artifact, with Fetch still intercepting every request. One
+explicit unauthenticated read-only `/sw.js` GET supplies that proof.
+One secured session owns each target's accounting; a secured duplicate is promoted on
+detach, while losing the last owner before audited closure closes the target and fails
+the pass. Stable target/network IDs deduplicate extra session observations.
+
+Service workers are restricted to same-origin `/sw.js`. Policy remains active through
+assertions, screenshots, and page/worker closure. A secure disposable production
+origin compares the complete resulting Cache Storage key set with `APP_SHELL` and
+accounts for the service-worker artifact-proof GET separately, even when the current
+private entry is development-served. For a Vite entry, `/@vite/client` is fulfilled
+with an inert no-socket compatibility shim that preserves rendering and stylesheet
+loading. Each pass requires exactly one page navigation GET, accounts for every worker
+shell GET by target and path, forwards only allowlisted same-origin static assets,
+fulfills config, setup status, failed session resume, and the optional inert Vite
+client inside the browser fixture, and blocks or rejects every other API, auth,
+cross-origin, non-static, and duplex request. Attempted WebSocket connections and
+blocked failures are counted without retaining their private URLs; any outbound
+handshake or frame fails the audit. It never logs in and retains only a redacted origin
+label, pass state, exact request counts, Vite fixture state, and redacted current-device
+Serve provenance. Browser QA should also check authenticated desktop and narrow
+layouts, zoom, and reduced motion; if remote authentication prevents inspection,
+record that rather than using credentials.

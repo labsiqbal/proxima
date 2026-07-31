@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import os
-import stat
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+
+from .directory_handles import (
+    DirectoryHandle,
+    DirectoryNameError,
+    directory_backend,
+)
+
+
+_backend = directory_backend()
 
 
 class DirectoryBrowseUnavailable(Exception):
@@ -25,6 +34,10 @@ class PathOutsideRoots(Exception):
 
 
 class DirectoryComponentInvalid(Exception):
+    pass
+
+
+class DirectoryPublishConflict(Exception):
     pass
 
 
@@ -65,14 +78,18 @@ def split_directory_target(value: str | Path) -> tuple[Path, str]:
 class ResolvedAllowedPath:
     path: Path
     root: Path
+    root_id: str
+    root_identity: str
 
 
 @dataclass(frozen=True)
 class AllowedRoot:
+    id: str
     raw: str
     raw_path: Path | None
     configured: Path | None
     resolved: Path | None
+    resolved_identity: str | None
 
     @property
     def label(self) -> str:
@@ -104,17 +121,29 @@ class AllowedRoots:
             if duplicate:
                 continue
             resolved = None
+            resolved_identity = None
             if identity is not None:
                 try:
                     resolved = _resolve(raw)
-                except PathResolutionUnavailable:
-                    pass
+                    handle = _open_absolute_directory(resolved)
+                    try:
+                        resolved_identity = handle.identity
+                    finally:
+                        _backend.close(handle)
+                except (OSError, PathResolutionUnavailable):
+                    resolved = None
             roots.append(
                 AllowedRoot(
+                    id=hashlib.sha256(
+                        raw.encode("utf-8", "surrogatepass")
+                        + b"\0"
+                        + (resolved_identity or "unavailable").encode("ascii")
+                    ).hexdigest()[:24],
                     raw=raw,
                     raw_path=raw_path,
                     configured=identity,
                     resolved=resolved,
+                    resolved_identity=resolved_identity,
                 )
             )
         if not roots:
@@ -127,7 +156,17 @@ class AllowedRoots:
 
     @property
     def available(self) -> tuple[AllowedRoot, ...]:
-        return tuple(root for root in self.roots if root.resolved is not None)
+        return tuple(
+            root
+            for root in self.roots
+            if root.resolved is not None and root.resolved_identity is not None
+        )
+
+    def by_id(self, root_id: str) -> AllowedRoot:
+        root = next((candidate for candidate in self.roots if candidate.id == root_id), None)
+        if root is None:
+            raise ConfiguredRootUnavailable("configured folder root identity is invalid")
+        return root
 
     def owner(self, value: str | Path) -> AllowedRoot | None:
         raw_path = _raw_path(value)
@@ -157,7 +196,11 @@ class AllowedRoots:
         return max(owners, key=lambda item: item[0])[1]
 
     def require_available(self, root: AllowedRoot) -> Path:
-        if root.configured is None or root.resolved is None:
+        if (
+            root.configured is None
+            or root.resolved is None
+            or root.resolved_identity is None
+        ):
             raise ConfiguredRootUnavailable("configured folder root is not reachable")
         try:
             current = _resolve(root.configured)
@@ -167,7 +210,59 @@ class AllowedRoots:
             ) from exc
         if current != root.resolved:
             raise ConfiguredRootUnavailable("configured folder root changed")
+        try:
+            handle = _open_absolute_directory(current)
+        except (OSError, PathResolutionUnavailable) as exc:
+            raise ConfiguredRootUnavailable(
+                "configured folder root is not reachable"
+            ) from exc
+        try:
+            if handle.identity != root.resolved_identity:
+                raise ConfiguredRootUnavailable("configured folder root changed")
+        finally:
+            _backend.close(handle)
         return root.resolved
+
+    def select_owner(self, value: str | Path) -> AllowedRoot | None:
+        lexical_owner = self.owner(value)
+        if lexical_owner is not None:
+            self.require_available(lexical_owner)
+        try:
+            lexical = _lexical(value)
+        except PathResolutionUnavailable:
+            return lexical_owner
+        if (
+            lexical_owner is not None
+            and lexical_owner.configured is not None
+            and lexical_owner.resolved is not None
+            and lexical_owner.configured != lexical_owner.resolved
+            and _inside(lexical, lexical_owner.configured)
+        ):
+            return lexical_owner
+        resolved_owners = [
+            candidate
+            for candidate in self.available
+            if candidate.resolved is not None
+            and _inside(lexical, candidate.resolved)
+        ]
+        if not resolved_owners:
+            return lexical_owner
+        deepest_depth = max(
+            len(candidate.resolved.parts)
+            for candidate in resolved_owners
+            if candidate.resolved is not None
+        )
+        deepest = [
+            candidate
+            for candidate in resolved_owners
+            if candidate.resolved is not None
+            and len(candidate.resolved.parts) == deepest_depth
+        ]
+        if len(deepest) == 1:
+            return deepest[0]
+        raise ConfiguredRootUnavailable(
+            "configured folder root identity is required"
+        )
 
     def resolve_for_owner(
         self,
@@ -178,127 +273,170 @@ class AllowedRoots:
         path = _resolve(value)
         if not _inside(path, root):
             raise PathOutsideRoots("path is outside the allowed roots")
-        return ResolvedAllowedPath(path=path, root=root)
+        assert owner.resolved_identity is not None
+        return ResolvedAllowedPath(
+            path=path,
+            root=root,
+            root_id=owner.id,
+            root_identity=owner.resolved_identity,
+        )
 
-    def resolve(self, value: str | Path) -> ResolvedAllowedPath:
-        owner = self.owner(value)
+    def resolve(
+        self,
+        value: str | Path,
+        root_id: str | None = None,
+    ) -> ResolvedAllowedPath:
+        if root_id:
+            return self.resolve_for_owner(value, self.by_id(root_id))
+        owner = self.select_owner(value)
         if owner is not None:
             return self.resolve_for_owner(value, owner)
-        path = _resolve(value)
-        resolved_owners = [
-            candidate
-            for candidate in self.available
-            if candidate.resolved is not None and _inside(path, candidate.resolved)
-        ]
-        resolved_owner = max(
-            resolved_owners,
-            key=lambda candidate: len(candidate.resolved.parts)
-            if candidate.resolved is not None
-            else -1,
-            default=None,
-        )
-        if resolved_owner is None:
-            raise PathOutsideRoots("path is outside the allowed roots")
-        root = self.require_available(resolved_owner)
-        return ResolvedAllowedPath(path=path, root=root)
+        raise PathOutsideRoots("path is outside the allowed roots")
 
 
 def _validate_encoded_component(name: str, limit: int) -> None:
     try:
-        encoded = os.fsencode(name)
+        size = _backend.component_size(name)
     except UnicodeError as exc:
         raise DirectoryComponentInvalid("folder name cannot be encoded for this filesystem") from exc
-    if limit >= 0 and len(encoded) > limit:
+    if limit >= 0 and size > limit:
         raise DirectoryComponentInvalid(
             f"folder name is too long for this location (maximum {limit} bytes)"
         )
 
 
-def _directory_flags() -> int:
-    flags = os.O_RDONLY
-    for flag_name in ("O_DIRECTORY", "O_CLOEXEC", "O_NOFOLLOW"):
-        flags |= getattr(os, flag_name, 0)
-    return flags
-
-
-def _open_absolute_directory(path: Path) -> int:
-    if not path.is_absolute():
-        raise PathResolutionUnavailable("path is not absolute")
-    flags = _directory_flags()
-    descriptor = os.open(path.anchor, flags)
+def _open_absolute_directory(path: Path) -> DirectoryHandle:
     try:
-        for component in path.parts[1:]:
-            next_descriptor = os.open(component, flags, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = next_descriptor
-    except BaseException:
-        os.close(descriptor)
+        return _backend.open_absolute(path)
+    except PermissionError:
         raise
-    return descriptor
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise PathResolutionUnavailable("path is not reachable") from exc
 
 
-def _open_directory_under_root(root: Path, path: Path) -> int:
+def _open_directory_under_root(
+    root: Path,
+    path: Path,
+    root_identity: str,
+) -> DirectoryHandle:
     if not _inside(path, root):
         raise PathOutsideRoots("path is outside the allowed roots")
-    descriptor = _open_absolute_directory(root)
+    handle = _open_absolute_directory(root)
+    if handle.identity != root_identity:
+        _backend.close(handle)
+        raise ConfiguredRootUnavailable("configured folder root changed")
     try:
         for component in path.relative_to(root).parts:
-            next_descriptor = os.open(
-                component,
-                _directory_flags(),
-                dir_fd=descriptor,
-            )
-            os.close(descriptor)
-            descriptor = next_descriptor
-    except BaseException:
-        os.close(descriptor)
+            next_handle = _backend.open_child(handle, component)
+            _backend.close(handle)
+            handle = next_handle
+    except (FileNotFoundError, PermissionError):
+        _backend.close(handle)
         raise
-    return descriptor
+    except (OSError, RuntimeError, ValueError) as exc:
+        _backend.close(handle)
+        raise PathResolutionUnavailable("path is not reachable") from exc
+    return handle
+
+
+def directory_identity(path: ResolvedAllowedPath) -> str:
+    handle = _open_directory_under_root(
+        path.root,
+        path.path,
+        path.root_identity,
+    )
+    try:
+        return handle.identity
+    finally:
+        _backend.close(handle)
 
 
 @dataclass
 class CreatedDirectory:
     path: Path
     root: Path
+    root_identity: str
     name: str
-    parent_fd: int
-    directory_fd: int
+    staging_name: str
+    parent_handle: DirectoryHandle
+    directory_handle: DirectoryHandle
+    published: bool = False
     closed: bool = False
 
     def _entry_is_owned(self) -> bool:
-        try:
-            entry = os.stat(self.name, dir_fd=self.parent_fd, follow_symlinks=False)
-            directory = os.fstat(self.directory_fd)
-        except OSError:
-            return False
-        return (entry.st_dev, entry.st_ino) == (directory.st_dev, directory.st_ino)
+        return _backend.entry_is_owned(
+            self.parent_handle,
+            self.name if self.published else self.staging_name,
+            self.directory_handle,
+        )
 
-    def require_visible(self) -> Path:
+    @property
+    def identity(self) -> str:
+        return self.directory_handle.identity
+
+    def require_staged(self) -> Path:
         if self.closed or not self._entry_is_owned():
             raise PathResolutionUnavailable("created folder is not reachable")
-        descriptor = _open_directory_under_root(self.root, self.path)
-        try:
-            visible = os.fstat(descriptor)
-            created = os.fstat(self.directory_fd)
-        finally:
-            os.close(descriptor)
-        if (visible.st_dev, visible.st_ino) != (created.st_dev, created.st_ino):
-            raise PathResolutionUnavailable("created folder changed")
         return self.path
 
     def commit(self) -> None:
-        self.require_visible()
+        if self.closed:
+            raise PathResolutionUnavailable("created folder is not reachable")
+        try:
+            _backend.publish(
+                self.parent_handle,
+                self.directory_handle,
+                self.staging_name,
+                self.name,
+            )
+        except FileExistsError as exc:
+            raise DirectoryPublishConflict(
+                "a folder with that name already exists"
+            ) from exc
+        except DirectoryNameError as exc:
+            raise DirectoryComponentInvalid(
+                "folder name is invalid for this location"
+            ) from exc
+        except (OSError, RuntimeError, ValueError) as exc:
+            if isinstance(exc, OSError) and exc.errno == errno.ENAMETOOLONG:
+                raise DirectoryComponentInvalid(
+                    "folder name is too long for this location"
+                ) from exc
+            raise PathResolutionUnavailable("created folder is not reachable") from exc
+        self.published = True
+        try:
+            visible = _open_directory_under_root(
+                self.root,
+                self.path,
+                self.root_identity,
+            )
+        except (OSError, PathOutsideRoots, PathResolutionUnavailable) as exc:
+            raise PathResolutionUnavailable(
+                "created folder is not reachable"
+            ) from exc
+        try:
+            if visible.identity != self.identity:
+                raise PathResolutionUnavailable(
+                    "created folder identity changed"
+                )
+        finally:
+            _backend.close(visible)
+
+    def finish(self) -> None:
         self._close()
 
     def rollback(self) -> None:
         if self.closed:
             return
         try:
-            if self._entry_is_owned():
-                try:
-                    os.rmdir(self.name, dir_fd=self.parent_fd)
-                except OSError:
-                    pass
+            try:
+                _backend.remove_owned(
+                    self.parent_handle,
+                    self.name if self.published else self.staging_name,
+                    self.directory_handle,
+                )
+            except OSError:
+                pass
         finally:
             self._close()
 
@@ -307,9 +445,9 @@ class CreatedDirectory:
             return
         self.closed = True
         try:
-            os.close(self.directory_fd)
+            _backend.close(self.directory_handle)
         finally:
-            os.close(self.parent_fd)
+            _backend.close(self.parent_handle)
 
 
 def create_directory_component(
@@ -317,15 +455,19 @@ def create_directory_component(
     name: str,
     mode: int = 0o755,
 ) -> CreatedDirectory:
-    parent_fd = _open_directory_under_root(parent.root, parent.path)
+    parent_handle = _open_directory_under_root(
+        parent.root,
+        parent.path,
+        parent.root_identity,
+    )
     try:
-        try:
-            limit = os.fpathconf(parent_fd, "PC_NAME_MAX")
-        except (AttributeError, OSError, ValueError):
-            limit = -1
+        limit = _backend.component_limit(parent_handle)
         _validate_encoded_component(name, limit)
         try:
-            os.mkdir(name, mode=mode, dir_fd=parent_fd)
+            staging_name, directory_handle = _backend.create_staging(
+                parent_handle,
+                mode,
+            )
         except UnicodeError as exc:
             raise DirectoryComponentInvalid(
                 "folder name cannot be encoded for this filesystem"
@@ -336,37 +478,31 @@ def create_directory_component(
                     "folder name is too long for this location"
                 ) from exc
             raise
-        try:
-            directory_fd = os.open(name, _directory_flags(), dir_fd=parent_fd)
-        except BaseException as exc:
-            try:
-                os.rmdir(name, dir_fd=parent_fd)
-            except OSError:
-                pass
-            if isinstance(exc, UnicodeError):
-                raise DirectoryComponentInvalid(
-                    "folder name cannot be encoded for this filesystem"
-                ) from exc
-            if isinstance(exc, OSError) and exc.errno == errno.ENAMETOOLONG:
-                raise DirectoryComponentInvalid(
-                    "folder name is too long for this location"
-                ) from exc
-            raise
     except BaseException:
-        os.close(parent_fd)
+        _backend.close(parent_handle)
         raise
     return CreatedDirectory(
         path=parent.path / name,
         root=parent.root,
+        root_identity=parent.root_identity,
         name=name,
-        parent_fd=parent_fd,
-        directory_fd=directory_fd,
+        staging_name=staging_name,
+        parent_handle=parent_handle,
+        directory_handle=directory_handle,
     )
 
 
-def _candidates(requested: str, roots: AllowedRoots) -> list[ResolvedAllowedPath]:
+def _candidates(
+    requested: str,
+    roots: AllowedRoots,
+    root_id: str | None,
+) -> list[ResolvedAllowedPath]:
     if requested:
-        owner = roots.owner(requested)
+        if not root_id:
+            raise ConfiguredRootUnavailable(
+                "configured folder root identity is required"
+            )
+        owner = roots.by_id(root_id)
         if owner is None:
             return _available_root_candidates(roots)
         root = roots.require_available(owner)
@@ -377,7 +513,8 @@ def _candidates(requested: str, roots: AllowedRoots) -> list[ResolvedAllowedPath
                 "configured folder root is not reachable"
             ) from exc
         assert owner.configured is not None
-        while _inside(current, owner.configured):
+        boundary = root if _inside(current, root) else owner.configured
+        while _inside(current, boundary):
             try:
                 selected = roots.resolve_for_owner(current, owner)
             except (PathResolutionUnavailable, PathOutsideRoots):
@@ -389,11 +526,30 @@ def _candidates(requested: str, roots: AllowedRoots) -> list[ResolvedAllowedPath
             candidates: list[ResolvedAllowedPath] = []
             path = selected.path
             while True:
-                candidates.append(ResolvedAllowedPath(path=path, root=root))
+                candidates.append(
+                    ResolvedAllowedPath(
+                        path=path,
+                        root=root,
+                        root_id=owner.id,
+                        root_identity=selected.root_identity,
+                    )
+                )
                 if path == root:
                     return candidates
                 path = path.parent
         return []
+    if root_id:
+        owner = roots.by_id(root_id)
+        root = roots.require_available(owner)
+        assert owner.resolved_identity is not None
+        return [
+            ResolvedAllowedPath(
+                path=root,
+                root=root,
+                root_id=owner.id,
+                root_identity=owner.resolved_identity,
+            )
+        ]
     return _available_root_candidates(roots)
 
 
@@ -404,11 +560,23 @@ def _available_root_candidates(roots: AllowedRoots) -> list[ResolvedAllowedPath]
             root = roots.require_available(allowed_root)
         except ConfiguredRootUnavailable:
             continue
-        candidates.append(ResolvedAllowedPath(path=root, root=root))
+        assert allowed_root.resolved_identity is not None
+        candidates.append(
+            ResolvedAllowedPath(
+                path=root,
+                root=root,
+                root_id=allowed_root.id,
+                root_identity=allowed_root.resolved_identity,
+            )
+        )
     return candidates
 
 
-def browse_directory(requested: str, configured_roots: Iterable[str | Path]) -> dict[str, object]:
+def browse_directory(
+    requested: str,
+    configured_roots: Iterable[str | Path],
+    root_id: str | None = None,
+) -> dict[str, object]:
     try:
         roots = AllowedRoots.from_configured(configured_roots)
     except PathResolutionUnavailable as exc:
@@ -417,7 +585,7 @@ def browse_directory(requested: str, configured_roots: Iterable[str | Path]) -> 
         ) from exc
 
     try:
-        candidates = _candidates(requested, roots)
+        candidates = _candidates(requested, roots, root_id)
     except ConfiguredRootUnavailable as exc:
         raise DirectoryBrowseUnavailable(
             "Selected folder root is not reachable"
@@ -426,13 +594,17 @@ def browse_directory(requested: str, configured_roots: Iterable[str | Path]) -> 
     for resolved_candidate in candidates:
         candidate = resolved_candidate.path
         root = resolved_candidate.root
-        descriptor = None
+        handle = None
         try:
-            descriptor = _open_directory_under_root(root, candidate)
-            entries = os.listdir(descriptor)
-        except OSError:
-            if descriptor is not None:
-                os.close(descriptor)
+            handle = _open_directory_under_root(
+                root,
+                candidate,
+                resolved_candidate.root_identity,
+            )
+            entries = _backend.list_names(handle)
+        except (OSError, PathResolutionUnavailable):
+            if handle is not None:
+                _backend.close(handle)
             continue
 
         dirs: list[dict[str, str]] = []
@@ -441,22 +613,20 @@ def browse_directory(requested: str, configured_roots: Iterable[str | Path]) -> 
                 if child_name.startswith("."):
                     continue
                 try:
-                    child_stat = os.stat(
-                        child_name,
-                        dir_fd=descriptor,
-                        follow_symlinks=False,
-                    )
+                    child = _backend.open_child(handle, child_name)
                 except OSError:
                     continue
-                if stat.S_ISDIR(child_stat.st_mode):
+                try:
                     dirs.append(
                         {
                             "name": child_name,
                             "path": str(candidate / child_name),
                         }
                     )
+                finally:
+                    _backend.close(child)
         finally:
-            os.close(descriptor)
+            _backend.close(handle)
 
         parent = (
             str(candidate.parent)
@@ -468,6 +638,7 @@ def browse_directory(requested: str, configured_roots: Iterable[str | Path]) -> 
             "parent": parent,
             "dirs": dirs,
             "roots": list(roots.configured_paths),
+            "root_id": resolved_candidate.root_id,
         }
 
     raise DirectoryBrowseUnavailable("No readable folder is available inside the allowed roots")

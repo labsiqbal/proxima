@@ -268,17 +268,31 @@ export function summarizeStaticShellRequests(requests) {
   }
 }
 
-export function assertServiceWorkerCacheMatrix(requestCounts, shellPaths) {
+export function assertServiceWorkerCacheMatrix(
+  cachePaths,
+  shellPaths,
+  workerProofCount,
+) {
+  assert.equal(
+    workerProofCount,
+    1,
+    'Service-worker artifact proof GET must occur exactly once',
+  )
   const expected = Object.fromEntries(
     shellPaths.map(pathname => [`GET ${pathname}`, 1]),
   )
-  const actual = Object.fromEntries(
-    Object.keys(expected).map(label => [label, requestCounts[label] || 0]),
-  )
+  const actual = {}
+  for (const pathname of cachePaths) {
+    const label = `GET ${pathname}`
+    actual[label] = (actual[label] || 0) + 1
+  }
   assert(
-    Object.values(requestCounts).every(count => count === 1),
-    'Service-worker requests must each be observed exactly once',
+    Object.values(actual).every(count => count === 1),
+    'Service-worker cache requests must each be observed exactly once',
   )
   assert.deepEqual(actual, expected, 'Service-worker cache requests do not match APP_SHELL')
-  return actual
+  return {
+    cacheRequests: actual,
+    workerArtifactProofGetCount: workerProofCount,
+  }
 }

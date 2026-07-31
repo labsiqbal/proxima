@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -50,16 +51,23 @@ const themes = canonicalThemes()
 function canonicalServiceWorkerShellPaths() {
   const source = fs.readFileSync(path.join(webRoot, 'public', 'sw.js'), 'utf8')
   assert.doesNotMatch(source, /\b(?:WebSocket|EventSource)\b/)
+  const cache = source.match(/const CACHE\s*=\s*['"]([^'"]+)['"]/)
   const catalog = source.match(/const APP_SHELL\s*=\s*\[([^\]]+)\]/)
-  assert(catalog, 'Could not read the production service-worker APP_SHELL')
+  assert(cache && catalog, 'Could not read the production service-worker cache contract')
   const paths = [...catalog[1].matchAll(/['"]([^'"]+)['"]/g)]
     .map(match => match[1])
   assert(paths.length > 0, 'Production service-worker APP_SHELL is empty')
   assert(paths.every(item => !/^\/(?:api|auth)\//.test(item)))
-  return paths
+  return {
+    cacheName: cache[1],
+    digest: createHash('sha256').update(source).digest('hex'),
+    paths,
+    transportSafe: true,
+  }
 }
 
-const serviceWorkerShellPaths = canonicalServiceWorkerShellPaths()
+const serviceWorkerArtifact = canonicalServiceWorkerShellPaths()
+const serviceWorkerShellPaths = serviceWorkerArtifact.paths
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -774,13 +782,31 @@ async function auditRemoteEntry({
   screenshotName = null,
   provenance = null,
   assertAccessibilityContract = true,
+  proveServiceWorkerArtifact = false,
 }) {
   const target = privateEntryUrl(url)
   const targetOrigin = new URL(target).origin
+  let serviceWorkerPreverified = false
+  if (proveServiceWorkerArtifact) {
+    const response = await fetch(new URL('/sw.js', target), {
+      headers: { 'Cache-Control': 'no-store' },
+    })
+    assert.equal(response.status, 200, `${origin} service-worker proof GET failed`)
+    const body = Buffer.from(await response.arrayBuffer())
+    assert.equal(
+      createHash('sha256').update(body).digest('hex'),
+      serviceWorkerArtifact.digest,
+      `${origin} service-worker proof differs from the audited artifact`,
+    )
+    serviceWorkerPreverified = true
+  }
   const interceptor = new RemoteEntryInterceptor({
     cdp: browserCdp,
     pageTargetId,
     targetOrigin,
+    serviceWorkerDigest: serviceWorkerArtifact.digest,
+    serviceWorkerTransportSafe: serviceWorkerArtifact.transportSafe,
+    serviceWorkerPreverified,
   })
   await pageCdp.send('Network.clearBrowserCookies')
   await pageCdp.send('Network.clearBrowserCache')
@@ -818,6 +844,32 @@ async function auditRemoteEntry({
     }
     if (screenshotName) await screenshot(pageCdp, screenshotName)
 
+    let serviceWorkerCache = null
+    if (serviceWorkerExpected) {
+      serviceWorkerCache = await evaluate(
+        pageCdp,
+        `(async () => {
+          await navigator.serviceWorker.ready
+          const cacheNames = await caches.keys()
+          const cache = await caches.open(${JSON.stringify(serviceWorkerArtifact.cacheName)})
+          const requests = await cache.keys()
+          return {
+            cacheNames,
+            paths: requests.map(request => {
+              const url = new URL(request.url)
+              return url.pathname + url.search
+            }),
+          }
+        })()`,
+      )
+      assert.deepEqual(
+        serviceWorkerCache.cacheNames,
+        [serviceWorkerArtifact.cacheName],
+        `${origin} service-worker cache names differ from the audited artifact`,
+      )
+    }
+
+    interceptor.beginClosure()
     await closeInspectedTargets(browserCdp, interceptor, pageTargetId)
     pageClosed = true
     await interceptor.waitForSettled()
@@ -837,11 +889,19 @@ async function auditRemoteEntry({
         interception.targetTypes.includes('service_worker'),
         `${origin} service worker was not attached and inspected`,
       )
+      assert(
+        interception.verifiedServiceWorkerCount > 0,
+        `${origin} service worker response was not verified`,
+      )
     }
     const shellRequests = summarizeStaticShellRequests(interception.forwarded)
+    let workerEvidence = null
     if (serviceWorkerExpected) {
-      const workerRequests = shellRequests.requestCountsByTargetType.service_worker || {}
-      assertServiceWorkerCacheMatrix(workerRequests, serviceWorkerShellPaths)
+      workerEvidence = assertServiceWorkerCacheMatrix(
+        serviceWorkerCache.paths,
+        serviceWorkerShellPaths,
+        interception.serviceWorkerProofGetCount,
+      )
     }
     const fulfilledSet = new Set(fulfilledLabels)
     const bootstrapLabels = [
@@ -878,6 +938,13 @@ async function auditRemoteEntry({
         rootGetsByTargetType: shellRequests.rootGetCountByTargetType,
         requestCountsByTargetType: shellRequests.requestCountsByTargetType,
         observedTargetTypes: interception.targetTypes,
+        serviceWorker: workerEvidence
+          ? {
+              artifact: 'verified against audited source',
+              ...workerEvidence,
+            }
+          : 'not requested',
+        transportPolicies: interception.transportPolicies,
         bootstrap: 'fulfilled in browser fixture',
         viteRuntime: fulfilledSet.has('GET /@vite/client')
           ? 'inert browser fixture'
@@ -911,6 +978,7 @@ async function auditRemoteEntry({
     )
   } finally {
     if (!pageClosed) {
+      interceptor.beginClosure()
       await closeInspectedTargets(
         browserCdp,
         interceptor,
@@ -1003,13 +1071,18 @@ This pass uses the production web bundle, a disposable owner database, and headl
 Chrome at 1440 x 1000. The local flow does not read or alter live Proxima data.
 The command also runs focused API regressions for error ownership, readable-ancestor
 selection, explicit no-ancestor failure, and the configured-root jail.
-The private-entry browser check runs in an isolated profile, attaches one policy owner
-to the page and every related worker target, accounts for every shell GET, and verifies
-the current device Serve mapping. Page, dedicated-worker, and shared-worker traffic stays
-intercepted through target closure. The production service worker is source-checked for
-an inert static-only cache list, attached before it runs, and verified against that exact
-request matrix. A development-served entry receives an inert no-socket Vite client
-fixture, and any remaining outbound WebSocket handshake or frame fails the audit.
+The private-entry browser check runs in an isolated profile, secures every page and
+worker session before resume, accounts for every shell GET, and verifies the current
+device Serve mapping. One session owns each target; a secured successor is promoted on
+detach, and losing the last owner before audited closure fails the pass. The served
+service worker must match the audited static-only source exactly. Its complete Cache
+Storage key set must equal APP_SHELL. One explicit unauthenticated read-only
+\`/sw.js\` GET proves the artifact before any worker resumes.
+A service-worker target without the CDP Network domain stays paused until that served
+digest matches the locally audited duplex-free artifact; Fetch interception remains
+active for every request.
+A development-served entry receives an inert no-socket Vite client fixture, and any
+remaining outbound WebSocket handshake or frame fails the audit.
 
 | Check | Result |
 | --- | --- |
@@ -1026,7 +1099,9 @@ fixture, and any remaining outbound WebSocket handshake or frame fails the audit
 | Unreadable selection recovers to its nearest readable ancestor | pass |
 | No readable ancestor retains explicit invalid state | pass |
 | Browse recovery handles symlink cycles and remains inside configured roots | pass |
+| Opaque root identity preserves symlink-alias ownership | pass |
 | Folder names respect the target filesystem component byte limit | pass |
+| Atomic folder publication and identity-safe rollback | pass |
 | Missing selected folder focuses its refresh/reselect control | pass |
 | Corrective targets and alerts have one semantic announcement owner | pass |
 | Pressed-button Tab and Space behavior | pass |
@@ -1035,7 +1110,7 @@ fixture, and any remaining outbound WebSocket handshake or frame fails the audit
 | Every gate text style in every supported theme meets WCAG AA contrast | pass |
 | Input and button focus are visible in every supported theme | pass |
 | Lighthouse accessibility | ${report.lighthouse.score} |
-| Production service-worker install and cache GET accounting | pass |
+| Served service-worker identity and complete cache-key accounting | pass |
 | Isolated Tailnet-host GET-only unauthenticated entry | pass |
 | Remote browser accounts for page and worker shell GETs | pass |
 | Remote browser blocks and accounts for WebSocket attempts | pass |
@@ -1336,11 +1411,14 @@ async function main() {
     assert.equal(await evaluate(cdp, `document.querySelector('input[name=folder-name]').getAttribute('aria-invalid')`), null)
 
     const reserved = await evaluate(cdp, `(async () => {
+      const browse = await fetch('/api/fs/dirs')
+      const selected = await browse.json()
       const response = await fetch('/api/projects/link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           path: ${JSON.stringify(path.join(fixtureHome, 'reserved-project'))},
+          root_id: selected.root_id,
           name: 'Shared Name',
           mkdir: true,
         }),
@@ -1464,21 +1542,21 @@ async function main() {
     await refreshSelectedFolder(cdp)
     await waitForPage(
       cdp,
-      `document.querySelector('[role=alert]')?.textContent.includes('No readable folder')`,
+      `document.querySelector('[role=alert]')?.textContent.includes('Selected folder root is not reachable')`,
       'No readable ancestor error',
     )
     const noReadableTrace = await announcementTrace(cdp)
     assertSingleAnnouncement(
       noReadableTrace,
       'selected-folder',
-      /No readable folder/,
+      /Selected folder root is not reachable/,
       noReadableFocusedBeforeError === 'selected-folder',
     )
     const noReadableAx = await accessibilitySummary(cdp)
     assertSingleSemanticOwner(
       noReadableAx,
       node => node.role === 'button' && node.name.includes('Selected folder:'),
-      /No readable folder/,
+      /Selected folder root is not reachable/,
     )
     assert.equal(
       await evaluate(cdp, `document.querySelector('button[name=selected-folder] code')?.textContent`),
@@ -1517,21 +1595,21 @@ async function main() {
     await clickButton(cdp, 'Link “vanishing-folder”')
     await waitForPage(
       cdp,
-      `document.querySelector('[role=alert]')?.textContent.includes('not a directory')`,
+      `document.querySelector('[role=alert]')?.textContent.includes('selected folder is not reachable')`,
       'Missing selected folder error',
     )
     const selectedPathTrace = await announcementTrace(cdp)
     assertSingleAnnouncement(
       selectedPathTrace,
       'selected-folder',
-      /not a directory/,
+      /selected folder is not reachable/,
       selectedPathFocusedBeforeError === 'selected-folder',
     )
     const selectedPathAx = await accessibilitySummary(cdp)
     assertSingleSemanticOwner(
       selectedPathAx,
       node => node.role === 'button' && node.name.includes('Selected folder:'),
-      /not a directory/,
+      /selected folder is not reachable/,
     )
     await screenshot(cdp, 'onboarding-path-error-after.png')
 
@@ -1595,6 +1673,7 @@ async function main() {
       baseUrl,
       {
         origin: 'isolated loopback production worker fixture',
+        proveServiceWorkerArtifact: true,
       },
       remoteBrowserOptions,
     )
@@ -1612,6 +1691,7 @@ async function main() {
         origin: 'private Tailscale origin (redacted)',
         provenance: privateTailscale.provenance,
         assertAccessibilityContract: false,
+        proveServiceWorkerArtifact: true,
       },
       remoteBrowserOptions,
     )

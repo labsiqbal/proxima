@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from proxima_api import main, workflows as wf
 from proxima_api.scheduler import _spawn_scheduled_job
 from proxima_api.main import create_app
+from project_test_utils import with_browse_root
 
 
 def _app(tmp_path):
@@ -425,7 +426,10 @@ def test_scheduled_repo_graph_binds_worktree_like_manual_start(tmp_path):
     c = _client(app)
     repo = tmp_path / "myrepo"
     _scratch_repo(repo)
-    linked = c.post("/api/projects/link", json={"path": str(repo), "slug": "myrepo"})
+    linked = c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(repo), "slug": "myrepo"}),
+    )
     assert linked.status_code == 201, linked.text
     db = app.state.worker_db
     project_id = db.execute("SELECT id FROM projects WHERE slug = 'myrepo'").fetchone()["id"]
@@ -487,7 +491,10 @@ def test_scheduled_repo_graph_fails_visibly_when_worktree_cut_refused(tmp_path):
     repo = tmp_path / "dirty"
     _scratch_repo(repo)
     (repo / "README.md").write_text("dirty\n", encoding="utf-8")
-    linked = c.post("/api/projects/link", json={"path": str(repo), "slug": "dirty"})
+    linked = c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(repo), "slug": "dirty"}),
+    )
     assert linked.status_code == 201, linked.text
     db = app.state.worker_db
     project_id = db.execute("SELECT id FROM projects WHERE slug = 'dirty'").fetchone()["id"]

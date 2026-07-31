@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from proxima_api import satpam as satpam_mod
 from proxima_api.graph import normalize_graph
 from proxima_api.main import create_app
+from project_test_utils import with_browse_root
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -63,7 +64,10 @@ def _client(app) -> TestClient:
 
 
 def _repo_job(c: TestClient, slug: str, folder: Path, brief: str = "change the code") -> dict:
-    p = c.post("/api/projects/link", json={"path": str(folder), "slug": slug})
+    p = c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(folder), "slug": slug}),
+    )
     assert p.status_code == 201, p.text
     area_id = p.json()["code_areas"][0]["id"]
     job = c.post("/api/jobs", json={"project_slug": slug, "input": {"brief": brief}, "target_area_id": area_id})

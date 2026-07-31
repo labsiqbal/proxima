@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from proxima_api.main import create_app
 from proxima_api.project_areas import detect_code_areas
+from project_test_utils import with_browse_root
 
 
 def _repo(path: Path, gitfile: bool = False) -> Path:
@@ -92,7 +93,15 @@ def auth_headers(api: TestClient) -> dict[str, str]:
 
 
 def _link(api: TestClient, h: dict[str, str], path: Path, slug: str) -> dict:
-    res = api.post("/api/projects/link", headers=h, json={"path": str(path), "slug": slug})
+    res = api.post(
+        "/api/projects/link",
+        headers=h,
+        json=with_browse_root(
+            api,
+            {"path": str(path), "slug": slug},
+            h,
+        ),
+    )
     assert res.status_code == 201, res.text
     return res.json()
 

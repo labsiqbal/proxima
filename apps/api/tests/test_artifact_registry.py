@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from proxima_api import artifact_registry
 from proxima_api.main import create_app
 from proxima_api.migrations import _add_artifact_registry
+from project_test_utils import with_browse_root
 
 
 def _app(tmp_path: Path):
@@ -32,7 +33,15 @@ def _client(app) -> tuple[TestClient, dict[str, str]]:
 
 def _project(api: TestClient, h: dict[str, str], root: Path, slug: str) -> dict:
     root.mkdir(parents=True, exist_ok=True)
-    res = api.post("/api/projects/link", headers=h, json={"path": str(root), "slug": slug})
+    res = api.post(
+        "/api/projects/link",
+        headers=h,
+        json=with_browse_root(
+            api,
+            {"path": str(root), "slug": slug},
+            h,
+        ),
+    )
     assert res.status_code == 201, res.text
     (root / "ops" / "reports").mkdir(parents=True, exist_ok=True)
     payload = res.json()

@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 40 tables. Applied migration version: **43**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 40 tables. Applied migration version: **44**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
@@ -461,6 +461,7 @@ SQLite (WAL mode). 40 tables. Applied migration version: **43**. This is the exa
 | `slug` | TEXT | NO |  |  |
 | `name` | TEXT | NO |  |  |
 | `path` | TEXT | NO |  |  |
+| `path_identity` | TEXT | yes |  |  |
 | `owner_user_id` | INTEGER | NO |  | → `users.id` |
 | `visibility` | TEXT | NO | `'private'` |  |
 | `archived_at` | TEXT | yes |  |  |
@@ -743,4 +744,4 @@ SQLite (WAL mode). 40 tables. Applied migration version: **43**. This is the exa
 
 
 ---
-_Generated 2026-07-29 19:17 UTC._
+_Generated 2026-07-31 04:30 UTC._

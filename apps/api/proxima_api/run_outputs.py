@@ -26,7 +26,8 @@ class RunOutputs:
         db = self.app.state.worker_db
         try:
             prow = db.execute(
-                "SELECT id, path, slug FROM projects WHERE id = ?", (project_id,)
+                "SELECT id, path, path_identity, slug FROM projects WHERE id = ?",
+                (project_id,),
             ).fetchone()
             if not prow:
                 return []

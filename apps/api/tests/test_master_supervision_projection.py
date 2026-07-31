@@ -19,6 +19,7 @@ from proxima_api.master_tool_broker import MasterToolBroker
 from proxima_api.migrations import MIGRATIONS
 from proxima_api.routes.chat import _sse_resume_cursor, _stream_session_events
 from proxima_api.task_delegation import TaskDelegationRequest
+from project_test_utils import with_browse_root
 
 
 def _app_and_client(
@@ -1735,7 +1736,10 @@ def test_retried_repo_recovery_failure_projects_one_attention_and_event(
     _git(repo, "commit", "-q", "-m", "initial")
     linked = client.post(
         "/api/projects/link",
-        json={"path": str(repo), "slug": "repo-projection"},
+        json=with_browse_root(
+            client,
+            {"path": str(repo), "slug": "repo-projection"},
+        ),
     )
     assert linked.status_code == 201, linked.text
     project = linked.json()

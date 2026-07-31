@@ -104,7 +104,8 @@ def register(app, deps):
             pid = int(it["project_id"])
             if pid not in roots:
                 prow = conn.execute(
-                    "SELECT id, path FROM projects WHERE id = ?", (pid,)
+                    "SELECT id, path, path_identity FROM projects WHERE id = ?",
+                    (pid,),
                 ).fetchone()
                 roots[pid] = (
                     container_registry.try_ops_root(conn, prow)

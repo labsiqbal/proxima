@@ -4,13 +4,18 @@ This pass uses the production web bundle, a disposable owner database, and headl
 Chrome at 1440 x 1000. The local flow does not read or alter live Proxima data.
 The command also runs focused API regressions for error ownership, readable-ancestor
 selection, explicit no-ancestor failure, and the configured-root jail.
-The private-entry browser check runs in an isolated profile, attaches one policy owner
-to the page and every related worker target, accounts for every shell GET, and verifies
-the current device Serve mapping. Page, dedicated-worker, and shared-worker traffic stays
-intercepted through target closure. The production service worker is source-checked for
-an inert static-only cache list, attached before it runs, and verified against that exact
-request matrix. A development-served entry receives an inert no-socket Vite client
-fixture, and any remaining outbound WebSocket handshake or frame fails the audit.
+The private-entry browser check runs in an isolated profile, secures every page and
+worker session before resume, accounts for every shell GET, and verifies the current
+device Serve mapping. One session owns each target; a secured successor is promoted on
+detach, and losing the last owner before audited closure fails the pass. The served
+service worker must match the audited static-only source exactly. Its complete Cache
+Storage key set must equal APP_SHELL. One explicit unauthenticated read-only
+`/sw.js` GET proves the artifact before any worker resumes.
+A service-worker target without the CDP Network domain stays paused until that served
+digest matches the locally audited duplex-free artifact; Fetch interception remains
+active for every request.
+A development-served entry receives an inert no-socket Vite client fixture, and any
+remaining outbound WebSocket handshake or frame fails the audit.
 
 | Check | Result |
 | --- | --- |
@@ -27,7 +32,9 @@ fixture, and any remaining outbound WebSocket handshake or frame fails the audit
 | Unreadable selection recovers to its nearest readable ancestor | pass |
 | No readable ancestor retains explicit invalid state | pass |
 | Browse recovery handles symlink cycles and remains inside configured roots | pass |
+| Opaque root identity preserves symlink-alias ownership | pass |
 | Folder names respect the target filesystem component byte limit | pass |
+| Atomic folder publication and identity-safe rollback | pass |
 | Missing selected folder focuses its refresh/reselect control | pass |
 | Corrective targets and alerts have one semantic announcement owner | pass |
 | Pressed-button Tab and Space behavior | pass |
@@ -36,7 +43,7 @@ fixture, and any remaining outbound WebSocket handshake or frame fails the audit
 | Every gate text style in every supported theme meets WCAG AA contrast | pass |
 | Input and button focus are visible in every supported theme | pass |
 | Lighthouse accessibility | 100 |
-| Production service-worker install and cache GET accounting | pass |
+| Served service-worker identity and complete cache-key accounting | pass |
 | Isolated Tailnet-host GET-only unauthenticated entry | pass |
 | Remote browser accounts for page and worker shell GETs | pass |
 | Remote browser blocks and accounts for WebSocket attempts | pass |

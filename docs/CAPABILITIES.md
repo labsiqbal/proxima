@@ -1092,16 +1092,26 @@ inside the configured root, skips self-referential or mutual symlink cycles, and
 uses an unresolved path for containment. Every configured root keeps its raw identity
 plus optional lexical and resolved identities, so one unexpandable root does not disable
 valid siblings and a retained selection stays bound to its original owning root. Later
-resolution failure cannot fall back to a containing root. If no allowed ancestor is
-readable, the chooser retains its selection and explicit invalid state instead of
+resolution failure cannot fall back to a containing root. Each browse response carries
+an opaque configured-root ID, and every later navigation plus link/create request
+returns that ID. Canonical paths from symlink-root aliases therefore retain their
+original owner; any later request without an ID fails closed. If no allowed ancestor
+is readable, the chooser retains its selection and explicit invalid state instead of
 reporting an empty success.
 New folder names are validated against the target filesystem's encoded component-byte
-limit. The API opens the verified allowed root and each parent component separately with
-no-follow directory descriptors, creates the child relative to the retained parent
-descriptor, and keeps the handle through its created-directory commit or
-descriptor-relative rollback. Component and encoding failures from validation or the
-child syscall therefore stay owned by the folder field, while parent descriptor and
-location failures remain owned by the selected-folder control.
+limit. The API opens the verified allowed root and each parent component separately,
+using no-follow directory descriptors on POSIX and native no-reparse directory handles
+on Windows. Creation starts under an unguessable staging name relative to the retained
+parent, pins the created directory's platform identity, and atomically publishes it
+without replacing an existing entry. The expected identity is stored with the Project
+and rechecked through the configured root before success. Rollback removes only that
+pinned directory, even if it was renamed, and never removes a replacement. Component
+and encoding failures stay owned by the folder field, while parent traversal, identity,
+and location failures remain owned by the selected-folder control. Later Container
+filesystem resolution also compares the stored identity and rejects path replacement.
+Startup backfills readable legacy Project rows with their current platform identity;
+an unreachable legacy path receives a fail-closed unavailable marker instead of silently
+opting out of later identity checks.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 

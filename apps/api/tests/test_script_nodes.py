@@ -22,6 +22,7 @@ from apps.safe_updater.write_fence import prepare_ingress_lock
 from proxima_api import features, scripts_library
 from proxima_api.graph_executor import SCRIPT_NODE_RUN_KIND
 from proxima_api.main import create_app
+from project_test_utils import with_browse_root
 
 
 def _app(tmp_path, **extra_config):
@@ -47,7 +48,10 @@ def _client(app) -> TestClient:
 def _project(client: TestClient, tmp_path: Path, slug: str = "proj") -> Path:
     folder = tmp_path / slug
     (folder / "scripts").mkdir(parents=True, exist_ok=True)
-    res = client.post("/api/projects/link", json={"path": str(folder), "slug": slug})
+    res = client.post(
+        "/api/projects/link",
+        json=with_browse_root(client, {"path": str(folder), "slug": slug}),
+    )
     assert res.status_code == 201, res.text
     return folder / "ops"
 

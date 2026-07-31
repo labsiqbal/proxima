@@ -1,6 +1,7 @@
 import React from 'react'
 import { ApiError } from '../../api/client'
 import { browseDirs, linkProject, linkProjectErrorField } from '../../api/projects'
+import type { DirectoryBrowse } from '../../api/projects'
 import type { Project } from '../../types'
 
 type Mode = 'link' | 'create'
@@ -15,7 +16,7 @@ const PROJECT_NAME_MAX_LENGTH = 120
 // first-run onboarding step.
 export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p: Project) => Promise<void> }) {
   const [mode, setMode] = React.useState<Mode>('link')
-  const [cur, setCur] = React.useState<{ path: string; parent: string | null; dirs: { name: string; path: string }[] } | null>(null)
+  const [cur, setCur] = React.useState<DirectoryBrowse | null>(null)
   const [name, setName] = React.useState('')
   const [folderName, setFolderName] = React.useState('')
   const [error, setError] = React.useState<FormError | null>(null)
@@ -44,11 +45,11 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       actionSeq.current += 1
     }
   }, [])
-  const load = React.useCallback((path = '') => {
+  const load = React.useCallback((path = '', rootId = '') => {
     const seq = ++loadSeq.current
     setError(null)
     setLoading(true)
-    browseDirs(token, path)
+    browseDirs(token, path, rootId)
       .then(next => {
         if (mountedRef.current && seq === loadSeq.current) {
           setCur(next)
@@ -106,11 +107,16 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
         const path = cur.path.endsWith('/') ? `${cur.path}${folder}` : `${cur.path}/${folder}`
         p = await linkProject(token, {
           path,
+          root_id: cur.root_id,
           name: name.trim() || folder,
           mkdir: true,
         })
       } else {
-        p = await linkProject(token, { path: cur.path, name: name.trim() || undefined })
+        p = await linkProject(token, {
+          path: cur.path,
+          root_id: cur.root_id,
+          name: name.trim() || undefined,
+        })
       }
       if (!mountedRef.current || seq !== actionSeq.current) return
       setName('')
@@ -188,7 +194,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       onClick={() => {
         if (!busy && !loading) {
           restorePathFocusRef.current = true
-          load(cur.path)
+          load(cur.path, cur.root_id)
         }
       }}
     >
@@ -197,8 +203,8 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       <span className="fl-path-refresh">Refresh</span>
     </button>
     <div className="fl-list">
-      {cur.parent && <button type="button" className="fl-row up" disabled={busy} onClick={() => load(cur.parent!)}>↑ ..</button>}
-      {cur.dirs.map(d => <button type="button" className="fl-row" disabled={busy} key={d.path} onClick={() => load(d.path)}>{d.name}</button>)}
+      {cur.parent && <button type="button" className="fl-row up" disabled={busy} onClick={() => load(cur.parent!, cur.root_id)}>↑ ..</button>}
+      {cur.dirs.map(d => <button type="button" className="fl-row" disabled={busy} key={d.path} onClick={() => load(d.path, cur.root_id)}>{d.name}</button>)}
       {!cur.dirs.length && <p className="muted fl-empty">No subfolders here.</p>}
     </div>
     {mode === 'create' ? (

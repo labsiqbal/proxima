@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import {
   assertServiceWorkerCacheMatrix,
@@ -199,34 +200,49 @@ test('counts page and worker shell requests without hiding cache fetches', () =>
 test('asserts the canonical service-worker cache matrix exactly once', () => {
   assert.deepEqual(
     assertServiceWorkerCacheMatrix(
-      {
-        'GET /': 1,
-        'GET /manifest.webmanifest': 1,
-        'GET /sw.js': 1,
-      },
       ['/', '/manifest.webmanifest'],
+      ['/', '/manifest.webmanifest'],
+      1,
     ),
     {
-      'GET /': 1,
-      'GET /manifest.webmanifest': 1,
+      cacheRequests: {
+        'GET /': 1,
+        'GET /manifest.webmanifest': 1,
+      },
+      workerArtifactProofGetCount: 1,
     },
   )
   assert.throws(
     () => assertServiceWorkerCacheMatrix(
-      {
-        'GET /': 2,
-        'GET /manifest.webmanifest': 1,
-      },
+      ['/', '/', '/manifest.webmanifest'],
       ['/', '/manifest.webmanifest'],
+      1,
     ),
     /must each be observed exactly once/,
   )
   assert.throws(
     () => assertServiceWorkerCacheMatrix(
-      { 'GET /': 1 },
+      ['/'],
       ['/', '/manifest.webmanifest'],
+      1,
     ),
     /do not match APP_SHELL/,
+  )
+  assert.throws(
+    () => assertServiceWorkerCacheMatrix(
+      ['/', '/manifest.webmanifest', '/unexpected.js'],
+      ['/', '/manifest.webmanifest'],
+      1,
+    ),
+    /do not match APP_SHELL/,
+  )
+  assert.throws(
+    () => assertServiceWorkerCacheMatrix(
+      ['/', '/manifest.webmanifest'],
+      ['/', '/manifest.webmanifest'],
+      2,
+    ),
+    /artifact proof GET must occur exactly once/,
   )
 })
 
@@ -235,6 +251,9 @@ class FakeCdp {
     this.pageTargetId = pageTargetId
     this.listeners = new Map()
     this.commands = []
+    this.liveTargetIds = new Set([pageTargetId])
+    this.responseBodies = new Map()
+    this.unsupportedNetworkSessions = new Set()
   }
 
   on(method, listener) {
@@ -256,6 +275,12 @@ class FakeCdp {
 
   async send(method, params = {}, sessionId = null) {
     this.commands.push({ method, params, sessionId })
+    if (
+      method === 'Network.enable'
+      && this.unsupportedNetworkSessions.has(sessionId)
+    ) {
+      throw new Error('Network domain unavailable')
+    }
     if (method === 'Target.autoAttachRelated') {
       queueMicrotask(() => {
         this.emit('Target.attachedToTarget', {
@@ -268,19 +293,50 @@ class FakeCdp {
         })
       })
     }
+    if (method === 'Target.getTargets') {
+      return {
+        targetInfos: [...this.liveTargetIds].map(targetId => ({ targetId })),
+      }
+    }
+    if (method === 'Target.closeTarget') {
+      this.liveTargetIds.delete(params.targetId)
+      return { success: true }
+    }
+    if (
+      method === 'Fetch.getResponseBody'
+      || method === 'Network.getResponseBody'
+    ) {
+      return {
+        body: this.responseBodies.get(params.requestId) || '',
+        base64Encoded: false,
+      }
+    }
     return {}
   }
 }
 
 test('recursively intercepts service workers, nested workers, and every request', async () => {
+  const source = "const APP_SHELL = ['/']; self.addEventListener('install', () => {})"
+  const digest = createHash('sha256').update(source).digest('hex')
   const cdp = new FakeCdp('page-target')
+  cdp.responseBodies.set('worker-source', source)
   const interceptor = new RemoteEntryInterceptor({
     cdp,
     pageTargetId: 'page-target',
     targetOrigin: 'https://device.example.ts.net',
+    serviceWorkerDigest: digest,
     quietMs: 0,
   })
   await interceptor.start()
+  cdp.emit('Fetch.requestPaused', {
+    requestId: 'worker-source',
+    responseStatusCode: 200,
+    request: {
+      method: 'GET',
+      url: 'https://device.example.ts.net/sw.js',
+    },
+  }, 'page-session')
+  await interceptor.waitForSettled()
 
   cdp.emit('Target.attachedToTarget', {
     sessionId: 'duplicate-page-session',
@@ -308,6 +364,7 @@ test('recursively intercepts service workers, nested workers, and every request'
     },
     waitingForDebugger: true,
   }, 'page-session')
+  cdp.liveTargetIds.add('service-target')
   cdp.emit('Target.attachedToTarget', {
     sessionId: 'nested-session',
     targetInfo: {
@@ -316,6 +373,7 @@ test('recursively intercepts service workers, nested workers, and every request'
     },
     waitingForDebugger: true,
   }, 'service-session')
+  cdp.liveTargetIds.add('nested-target')
   await interceptor.waitForSettled()
 
   cdp.emit('Fetch.requestPaused', {
@@ -393,9 +451,9 @@ test('recursively intercepts service workers, nested workers, and every request'
     {
       rootGetCount: 2,
       pageRootGetCount: 1,
-      staticGetCount: 3,
+      staticGetCount: 4,
       targetTypeCounts: {
-        page: 1,
+        page: 2,
         service_worker: 2,
       },
       rootGetCountByTargetType: {
@@ -405,6 +463,7 @@ test('recursively intercepts service workers, nested workers, and every request'
       requestCountsByTargetType: {
         page: {
           'GET /': 1,
+          'GET /sw.js': 1,
         },
         service_worker: {
           'GET /': 1,
@@ -436,7 +495,13 @@ test('recursively intercepts service workers, nested workers, and every request'
     errorCount: 0,
     closedCount: 0,
   })
-  for (const sessionId of ['page-session', 'nested-session']) {
+  for (const sessionId of [
+    'page-session',
+    'duplicate-page-session',
+    'service-session',
+    'duplicate-service-session',
+    'nested-session',
+  ]) {
     assert(cdp.commands.some(command => (
       command.method === 'Target.setAutoAttach'
       && command.params.autoAttach === true
@@ -452,24 +517,10 @@ test('recursively intercepts service workers, nested workers, and every request'
     )))
     assert(cdp.commands.some(command => (
       command.method === 'Network.setBlockedURLs'
-      && command.params.urlPatterns.length === 2
+      && command.params.urls.length === 2
       && command.sessionId === sessionId
     )))
   }
-  for (const sessionId of ['duplicate-page-session', 'duplicate-service-session']) {
-    assert(!cdp.commands.some(command => (
-      command.method === 'Fetch.enable'
-      && command.sessionId === sessionId
-    )))
-  }
-  assert(cdp.commands.some(command => (
-    command.method === 'Fetch.enable'
-    && command.sessionId === 'service-session'
-  )))
-  assert(!cdp.commands.some(command => (
-    ['Network.enable', 'Network.setBlockedURLs'].includes(command.method)
-    && command.sessionId === 'service-session'
-  )))
   assert(cdp.commands.some(command => (
     command.method === 'Runtime.runIfWaitingForDebugger'
     && command.sessionId === 'duplicate-service-session'
@@ -482,6 +533,13 @@ test('recursively intercepts service workers, nested workers, and every request'
     < serviceCommands.findIndex(
       command => command.method === 'Runtime.runIfWaitingForDebugger',
     ),
+  )
+  assert(
+    cdp.commands.findIndex(command => command.method === 'Fetch.getResponseBody')
+    < cdp.commands.findIndex(command => (
+      command.method === 'Runtime.runIfWaitingForDebugger'
+      && command.sessionId === 'service-session'
+    )),
   )
   assert.deepEqual(
     cdp.commands
@@ -499,6 +557,7 @@ test('recursively intercepts service workers, nested workers, and every request'
       'page-root',
       'worker-manifest',
       'worker-root',
+      'worker-source',
     ],
   )
   await interceptor.stop()
@@ -534,6 +593,218 @@ test('keeps delayed requests blocked after the first quiet window', async () => 
     label: 'GET /api/projects',
     targetType: 'page',
   }])
+  await interceptor.stop()
+})
+
+test('verifies the served service worker before trusting its cache requests', async () => {
+  const source = "const APP_SHELL = ['/']; self.addEventListener('install', () => {})"
+  const digest = createHash('sha256').update(source).digest('hex')
+  const cdp = new FakeCdp('page-target')
+  cdp.responseBodies.set('worker-response', source)
+  const interceptor = new RemoteEntryInterceptor({
+    cdp,
+    pageTargetId: 'page-target',
+    targetOrigin: 'https://device.example.ts.net',
+    serviceWorkerDigest: digest,
+    quietMs: 0,
+  })
+  await interceptor.start()
+  cdp.emit('Network.responseReceived', {
+    requestId: 'worker-response',
+    response: {
+      url: 'https://device.example.ts.net/sw.js',
+    },
+  }, 'page-session')
+  cdp.emit('Network.loadingFinished', {
+    requestId: 'worker-response',
+  }, 'page-session')
+  await interceptor.waitForSettled()
+  const verified = interceptor.snapshot()
+  assert.equal(verified.verifiedServiceWorkerCount, 1)
+  assert.deepEqual(verified.forwarded, [{
+    label: 'GET /sw.js',
+    targetType: 'page',
+  }])
+  await interceptor.stop()
+
+  const driftedCdp = new FakeCdp('page-target')
+  driftedCdp.responseBodies.set('worker-response', `${source}\nWebSocket`)
+  const drifted = new RemoteEntryInterceptor({
+    cdp: driftedCdp,
+    pageTargetId: 'page-target',
+    targetOrigin: 'https://device.example.ts.net',
+    serviceWorkerDigest: digest,
+    quietMs: 0,
+  })
+  await drifted.start()
+  driftedCdp.emit('Fetch.requestPaused', {
+    requestId: 'worker-response',
+    responseStatusCode: 200,
+    request: {
+      method: 'GET',
+      url: 'https://device.example.ts.net/sw.js',
+    },
+  }, 'page-session')
+  await assert.rejects(
+    drifted.waitForSettled(),
+    /differs from the audited artifact/,
+  )
+  await drifted.stop().catch(() => null)
+})
+
+test('uses a verified duplex-safe artifact when worker Network is unavailable', async () => {
+  const source = "const APP_SHELL = ['/']; self.addEventListener('install', () => {})"
+  const digest = createHash('sha256').update(source).digest('hex')
+  const cdp = new FakeCdp('page-target')
+  const interceptor = new RemoteEntryInterceptor({
+    cdp,
+    pageTargetId: 'page-target',
+    targetOrigin: 'https://device.example.ts.net',
+    serviceWorkerDigest: digest,
+    serviceWorkerTransportSafe: true,
+    serviceWorkerPreverified: true,
+    quietMs: 0,
+  })
+  await interceptor.start()
+  cdp.unsupportedNetworkSessions.add('service-session')
+  cdp.emit('Target.attachedToTarget', {
+    sessionId: 'service-session',
+    targetInfo: {
+      targetId: 'service-target',
+      type: 'service_worker',
+      url: 'https://device.example.ts.net/sw.js',
+    },
+    waitingForDebugger: true,
+  })
+  await interceptor.waitForSettled()
+
+  assert.equal(
+    interceptor.snapshot().transportPolicies['verified-static-artifact'],
+    1,
+  )
+  assert.equal(interceptor.snapshot().serviceWorkerProofGetCount, 1)
+  assert(cdp.commands.some(command => (
+    command.method === 'Fetch.enable'
+    && command.sessionId === 'service-session'
+  )))
+  assert(cdp.commands.some(command => (
+    command.method === 'Runtime.runIfWaitingForDebugger'
+    && command.sessionId === 'service-session'
+  )))
+  assert(!cdp.commands.some(command => (
+    command.method === 'Runtime.evaluate'
+    && command.sessionId === 'service-session'
+  )))
+  await interceptor.stop()
+
+  const unsafeCdp = new FakeCdp('page-target')
+  unsafeCdp.responseBodies.set('worker-response', source)
+  const unsafe = new RemoteEntryInterceptor({
+    cdp: unsafeCdp,
+    pageTargetId: 'page-target',
+    targetOrigin: 'https://device.example.ts.net',
+    serviceWorkerDigest: digest,
+    quietMs: 0,
+  })
+  await unsafe.start()
+  unsafeCdp.emit('Network.responseReceived', {
+    requestId: 'worker-response',
+    response: {
+      url: 'https://device.example.ts.net/sw.js',
+    },
+  }, 'page-session')
+  unsafeCdp.emit('Network.loadingFinished', {
+    requestId: 'worker-response',
+  }, 'page-session')
+  await unsafe.waitForSettled()
+  unsafeCdp.unsupportedNetworkSessions.add('service-session')
+  unsafeCdp.emit('Target.attachedToTarget', {
+    sessionId: 'service-session',
+    targetInfo: {
+      targetId: 'service-target',
+      type: 'service_worker',
+      url: 'https://device.example.ts.net/sw.js',
+    },
+    waitingForDebugger: true,
+  })
+  await assert.rejects(
+    unsafe.waitForSettled(),
+    /verified duplex-safe transport policy/,
+  )
+  assert(!unsafeCdp.commands.some(command => (
+    command.method === 'Runtime.runIfWaitingForDebugger'
+    && command.sessionId === 'service-session'
+  )))
+  await unsafe.stop().catch(() => null)
+})
+
+test('promotes a secured duplicate when the target owner detaches', async () => {
+  const cdp = new FakeCdp('page-target')
+  const interceptor = new RemoteEntryInterceptor({
+    cdp,
+    pageTargetId: 'page-target',
+    targetOrigin: 'https://device.example.ts.net',
+    quietMs: 0,
+  })
+  await interceptor.start()
+  cdp.emit('Target.attachedToTarget', {
+    sessionId: 'successor-session',
+    targetInfo: {
+      targetId: 'page-target',
+      type: 'page',
+    },
+    waitingForDebugger: true,
+  })
+  await interceptor.waitForSettled()
+
+  cdp.emit('Target.detachedFromTarget', {
+    sessionId: 'page-session',
+    targetId: 'page-target',
+  })
+  cdp.emit('Fetch.requestPaused', {
+    requestId: 'successor-api',
+    networkId: 'successor-api-network',
+    request: {
+      method: 'GET',
+      url: 'https://device.example.ts.net/api/projects',
+    },
+  }, 'successor-session')
+  await interceptor.waitForSettled()
+  assert.deepEqual(interceptor.snapshot().blocked, [{
+    label: 'GET /api/projects',
+    targetType: 'page',
+  }])
+
+  cdp.emit('Target.detachedFromTarget', {
+    sessionId: 'successor-session',
+    targetId: 'page-target',
+  })
+  await assert.rejects(
+    interceptor.waitForSettled(),
+    /lost its traffic-policy owner/,
+  )
+  assert(cdp.commands.some(command => (
+    command.method === 'Target.closeTarget'
+    && command.params.targetId === 'page-target'
+  )))
+  await interceptor.stop().catch(() => null)
+})
+
+test('allows secured target detach only during audited closure', async () => {
+  const cdp = new FakeCdp('page-target')
+  const interceptor = new RemoteEntryInterceptor({
+    cdp,
+    pageTargetId: 'page-target',
+    targetOrigin: 'https://device.example.ts.net',
+    quietMs: 0,
+  })
+  await interceptor.start()
+  interceptor.beginClosure()
+  cdp.emit('Target.detachedFromTarget', {
+    sessionId: 'page-session',
+    targetId: 'page-target',
+  })
+  await interceptor.waitForSettled()
   await interceptor.stop()
 })
 

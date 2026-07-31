@@ -400,7 +400,8 @@ def repo_area_for_job(conn: sqlite3.Connection, job: sqlite3.Row | dict[str, Any
     if not area or area["kind"] != "code" or area["source"] == "excluded":
         return None
     project = conn.execute(
-        "SELECT id, path FROM projects WHERE id = ?", (job["project_id"],)
+        "SELECT id, path, path_identity FROM projects WHERE id = ?",
+        (job["project_id"],),
     ).fetchone()
     if not project:
         return None

@@ -1406,24 +1406,39 @@ cycles, climbs only to the nearest readable ancestor within the owning configure
 and returns a structured path error while retaining the current invalid selection when
 no allowed ancestor is readable. Configured roots retain raw identity even when lexical
 expansion or resolution fails, continue valid siblings, and bind recovery to the
-original owning root. Create-on-disk opens the verified root and traverses each parent
-component with no-follow directory descriptors. Child creation and rollback remain
-relative to the retained parent descriptor through the created-directory commit,
-preserving
-component versus parent error ownership even when the filesystem changes concurrently.
+original owning root. Every browse response carries an opaque configured-root ID through
+later browse and link/create requests, so a canonical path returned for a symlink alias
+cannot switch to a containing root. Every later request with no ID fails
+closed. Create-on-disk opens the verified root and traverses each parent component with
+POSIX no-follow directory descriptors or Windows no-reparse native handles. It creates
+an unguessable staging entry relative to the retained parent, pins its platform identity,
+and publishes it atomically without clobbering a destination. The Project stores that
+expected identity, and success requires the published path to resolve back to the same
+identity through the configured root. Rollback follows the retained identity if another
+process renames it and never deletes a replacement, preserving component versus parent
+error ownership when the filesystem changes concurrently. `container_registry.py`
+compares the persisted identity on later Container filesystem resolution and rejects a
+replacement at the same path. Startup captures the current identity for readable legacy
+Project roots and writes a fail-closed unavailable marker for legacy paths that cannot be
+opened, so an old row cannot bypass the identity boundary.
 
 The retained browser audit runs the production bundle with allowlisted child
 environments, disposable runtime/profile roots, and background/live-service features
 disabled. Its real Tailscale entry check correlates the origin to the current device root
 Serve handler and uses a fresh browser profile for each origin. Browser-level CDP
 auto-attachment pauses the page plus every related service, shared, and nested worker
-until one bounded policy owner is ready. Duplicate sessions wait on that owner, and
-stable target/network IDs cannot duplicate request evidence. Page, dedicated-worker, and
-shared-worker owners install Fetch, Network, and WebSocket policy before resuming. The
-production service worker is source-checked for a static-only cache list with no data or
-duplex API, must be the same-origin `/sw.js`, and installs Fetch interception before
-resuming. A secure disposable production fixture then proves the exact service-worker
-cache matrix before the same boundary checks the current private entry. If that entry is
+until a bounded traffic policy is ready. Every duplicate session is secured before
+resume; one session owns target accounting, and a surviving secured session is promoted
+if the owner detaches. Losing the last owner before audited closure closes the target
+and fails the pass. Page and worker sessions install Fetch plus Network/WebSocket
+blocking. If a service-worker target does not expose the CDP Network domain, it remains
+paused until its served bytes match the locally audited duplex-free source; Fetch
+interception remains active for every request. The production service worker must be
+same-origin `/sw.js`. One explicit unauthenticated read-only GET proves those bytes,
+and artifact drift fails closed before execution is trusted.
+A secure disposable production fixture compares the complete resulting Cache Storage
+key set with `APP_SHELL` and accounts for the worker artifact-proof GET separately before
+the same boundary checks the current private entry. If that entry is
 development-served, the audit fulfills `/@vite/client` with an inert compatibility shim
 that preserves module and style loading without opening HMR duplex traffic. Interception
 remains active through DOM checks, screenshots, and page/worker shutdown. The audit
