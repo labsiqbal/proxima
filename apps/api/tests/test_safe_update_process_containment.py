@@ -466,11 +466,20 @@ def test_terminate_and_verify_continues_after_successful_post_kill_wait():
 
 
 class _UnprovenTree:
+    launcher_pid = 4242
+    launcher_start = "unproven-start"
+
     def seed_live_members(self) -> None:
         return None
 
     def exited(self) -> bool | None:
         return None
+
+    def has_binding(self) -> bool:
+        return True
+
+    def monitor_roots(self) -> list[tuple[int, str]]:
+        return [(self.launcher_pid, self.launcher_start)]
 
 
 class _StartFailsUnprovenProcess:
@@ -898,3 +907,233 @@ def test_acp_initialize_failure_retains_activity_and_blocks_quiescence(
     ):
         time_mod.sleep(0.05)
     assert getattr(activity, "_released", False) is True
+
+
+def test_acp_stop_retains_activity_when_reader_await_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Reader cleanup exceptions must not skip activity-lease retain."""
+    from proxima_api.acp import AcpProcess
+    from proxima_api import process_containment as pc_module
+
+    class ActivityLease:
+        def __init__(self) -> None:
+            self._retained_for_writer_tree = False
+            self.released = False
+            self.retain_calls = 0
+
+        def release(self) -> None:
+            self.released = True
+
+    activity = ActivityLease()
+    retained: dict[str, object] = {}
+
+    def fake_retain(lease, **kwargs):
+        lease._retained_for_writer_tree = True
+        lease.retain_calls += 1
+        retained["tree"] = kwargs.get("tree")
+
+    monkeypatch.setattr(acp_module, "retain_activity_lease", fake_retain)
+
+    async def boom_terminate(proc, **_kwargs):
+        raise RuntimeError("ACP runner process tree did not exit after kill")
+
+    monkeypatch.setattr(pc_module, "terminate_and_verify", boom_terminate)
+    monkeypatch.setattr(acp_module, "terminate_and_verify", boom_terminate)
+
+    spec = SimpleNamespace(id="fake", protocol="acp")
+    proc = AcpProcess(
+        spec,
+        str(tmp_path / "home"),
+        str(tmp_path),
+        activity_lease=activity,
+    )
+    proc.proc = SimpleNamespace(returncode=None, pid=9001)
+    proc.writer_tree = _UnprovenTree()
+    proc._started = True
+
+    async def run_case() -> None:
+        async def _reader_boom():
+            raise RuntimeError("reader cleanup failed")
+
+        proc._reader = asyncio.create_task(_reader_boom())
+        # Let the reader finish with a non-cancel exception before stop()
+        # cancels tasks; awaiting a failed task must not skip retain.
+        await asyncio.sleep(0)
+        with pytest.raises(
+            RuntimeError,
+            match="did not exit|reader cleanup",
+        ):
+            await proc.stop()
+
+    asyncio.run(run_case())
+    assert activity.retain_calls >= 1
+    assert activity._retained_for_writer_tree is True
+    assert activity.released is False
+    assert retained["tree"] is proc.writer_tree
+
+
+def test_acp_recycle_attaches_exact_writer_tree_on_failure(
+    tmp_path: Path,
+):
+    """recycle must attach this key's tree on failure, not a shared slot."""
+
+    class StickyUnprovenProcess:
+        def __init__(self, tree) -> None:
+            self.writer_tree = tree
+            self.proc = SimpleNamespace(returncode=0, pid=1)
+            self._started = True
+            self.config_sig = ()
+
+        async def stop(self) -> None:
+            raise RuntimeError("tree still live")
+
+    manager = AcpManager(contained=True, maintenance=_Boundary())
+    tree_a = _UnprovenTree()
+    tree_b = _UnprovenTree()
+    key_a = ("fake", str(tmp_path / "home"), str(tmp_path / "a"), False, "run-a")
+    key_b = ("fake", str(tmp_path / "home"), str(tmp_path / "b"), False, "run-b")
+    manager._procs[key_a] = StickyUnprovenProcess(tree_a)
+    manager._procs[key_b] = StickyUnprovenProcess(tree_b)
+    spec = SimpleNamespace(id="fake", protocol="acp")
+
+    async def run_case() -> None:
+        with pytest.raises(RuntimeError) as first_exc:
+            await manager.recycle(
+                spec,
+                str(tmp_path / "home"),
+                str(tmp_path / "a"),
+                cache_scope="run-a",
+            )
+        assert getattr(first_exc.value, "writer_tree", None) is tree_a
+
+        with pytest.raises(RuntimeError) as second_exc:
+            await manager.recycle(
+                spec,
+                str(tmp_path / "home"),
+                str(tmp_path / "b"),
+                cache_scope="run-b",
+            )
+        assert getattr(second_exc.value, "writer_tree", None) is tree_b
+        assert getattr(first_exc.value, "writer_tree", None) is tree_a
+
+    asyncio.run(run_case())
+    assert manager._procs == {}
+
+
+def test_worker_recycle_cancellation_retains_exact_tree_and_reraise():
+    """Cancelled recycle must retain the exact run tree before re-raising."""
+
+    class FakeLease:
+        def __init__(self) -> None:
+            self.released = False
+            self._released = False
+            self._retained_for_writer_tree = False
+
+        def release(self) -> None:
+            self.released = True
+            self._released = True
+
+    retained: dict[str, object] = {}
+
+    def fake_retain(lease, **kwargs):
+        lease._retained_for_writer_tree = True
+        retained["lease"] = lease
+        retained["tree"] = kwargs.get("tree")
+
+    class FakeManager:
+        def __init__(self, tree) -> None:
+            self._tree = tree
+
+        async def recycle(self, *_args, **_kwargs):
+            exc = asyncio.CancelledError()
+            try:
+                setattr(exc, "writer_tree", self._tree)
+            except Exception:
+                pass
+            raise exc
+
+    project_activity_lease = FakeLease()
+    exact_tree = object()
+    wrong_tree = object()
+    recycle_verified = True
+    recycle_tree = wrong_tree
+    recycle_error: BaseException | None = None
+
+    async def run_finally_pattern() -> None:
+        nonlocal recycle_verified, recycle_tree, recycle_error
+        try:
+            recycle_tree = await FakeManager(exact_tree).recycle()
+        except BaseException as exc:
+            recycle_verified = False
+            recycle_error = exc
+            recycle_tree = getattr(exc, "writer_tree", None)
+        if project_activity_lease is not None:
+            if (
+                recycle_verified
+                and not getattr(
+                    project_activity_lease,
+                    "_retained_for_writer_tree",
+                    False,
+                )
+            ):
+                project_activity_lease.release()
+            elif not recycle_verified:
+                fake_retain(project_activity_lease, tree=recycle_tree)
+        if recycle_error is not None and not isinstance(recycle_error, Exception):
+            raise recycle_error
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(run_finally_pattern())
+
+    assert project_activity_lease.released is False
+    assert retained["lease"] is project_activity_lease
+    assert retained["tree"] is exact_tree
+    assert retained["tree"] is not wrong_tree
+
+
+def test_concurrent_recycle_preserves_per_run_writer_tree(
+    tmp_path: Path,
+):
+    """Concurrent recycle failures must retain each run's own tree."""
+
+    class SlowUnprovenProcess:
+        def __init__(self, tree, delay: float) -> None:
+            self.writer_tree = tree
+            self.proc = SimpleNamespace(returncode=0, pid=1)
+            self._delay = delay
+
+        async def stop(self) -> None:
+            await asyncio.sleep(self._delay)
+            raise RuntimeError("tree still live")
+
+    manager = AcpManager(contained=True, maintenance=_Boundary())
+    tree_a = _UnprovenTree()
+    tree_b = _UnprovenTree()
+    key_a = ("fake", str(tmp_path / "home"), str(tmp_path / "a"), False, "run-a")
+    key_b = ("fake", str(tmp_path / "home"), str(tmp_path / "b"), False, "run-b")
+    manager._procs[key_a] = SlowUnprovenProcess(tree_a, 0.05)
+    manager._procs[key_b] = SlowUnprovenProcess(tree_b, 0.01)
+    spec = SimpleNamespace(id="fake", protocol="acp")
+
+    async def recycle_one(cwd: str, scope: str):
+        try:
+            return await manager.recycle(
+                spec,
+                str(tmp_path / "home"),
+                cwd,
+                cache_scope=scope,
+            )
+        except BaseException as exc:
+            return getattr(exc, "writer_tree", None)
+
+    async def run_case():
+        got_a, got_b = await asyncio.gather(
+            recycle_one(str(tmp_path / "a"), "run-a"),
+            recycle_one(str(tmp_path / "b"), "run-b"),
+        )
+        assert got_a is tree_a
+        assert got_b is tree_b
+
+    asyncio.run(run_case())

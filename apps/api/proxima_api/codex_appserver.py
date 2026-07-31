@@ -802,42 +802,52 @@ class CodexAppServerProcess:
             if task:
                 task.cancel()
         failure: BaseException | None = None
+        tree_clear = False
         try:
-            await terminate_and_verify(
-                self.proc,
-                label="Codex runner",
-                tree=self.writer_tree,
-            )
-        except BaseException as exc:
-            failure = exc
-        for task in (self._reader, self._stderr_reader):
-            if task:
-                with suppress(asyncio.CancelledError):
-                    await task
-        if self._master_proxy is not None:
             try:
-                await self._master_proxy.stop()
+                await terminate_and_verify(
+                    self.proc,
+                    label="Codex runner",
+                    tree=self.writer_tree,
+                )
             except BaseException as exc:
-                if failure is None:
-                    failure = exc
-            else:
-                self._master_proxy = None
-        self._started = bool(
-            self.proc is not None and self.proc.returncode is None
-        )
-        tree_clear = True
-        if self.writer_tree is not None:
-            try:
-                self.writer_tree.seed_live_members()
-                tree_clear = self.writer_tree.exited() is True
-            except Exception:
-                tree_clear = False
-        if failure is not None or not tree_clear:
+                failure = exc
+            for task in (self._reader, self._stderr_reader):
+                if not task:
+                    continue
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except BaseException as exc:
+                    if failure is None:
+                        failure = exc
+            if self._master_proxy is not None:
+                try:
+                    await self._master_proxy.stop()
+                except BaseException as exc:
+                    if failure is None:
+                        failure = exc
+                else:
+                    self._master_proxy = None
+            self._started = bool(
+                self.proc is not None and self.proc.returncode is None
+            )
+            tree_clear = True
+            if self.writer_tree is not None:
+                try:
+                    self.writer_tree.seed_live_members()
+                    tree_clear = self.writer_tree.exited() is True
+                except Exception:
+                    tree_clear = False
+            if failure is not None:
+                raise failure
+            if not tree_clear:
+                raise RuntimeError(
+                    "Codex runner process tree exit was not verified"
+                )
+        finally:
             self._retain_activity_for_unproven_tree()
-        if failure is not None:
-            raise failure
-        if not tree_clear:
-            raise RuntimeError("Codex runner process tree exit was not verified")
 
 
 def _tool_title(item: dict[str, Any]) -> str:

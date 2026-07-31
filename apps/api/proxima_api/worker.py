@@ -2055,6 +2055,7 @@ class RunWorker:
         finally:
             recycle_verified = True
             recycle_tree = None
+            recycle_error: BaseException | None = None
             if guarded_runner_key is not None:
                 (
                     guarded_spec,
@@ -2064,32 +2065,35 @@ class RunWorker:
                     guarded_scope,
                 ) = guarded_runner_key
                 try:
-                    await self.app.state.acp_manager.recycle(
+                    recycle_tree = await self.app.state.acp_manager.recycle(
                         guarded_spec,
                         guarded_home,
                         guarded_cwd,
                         master_chat_only=guarded_master,
                         cache_scope=guarded_scope,
                     )
-                except Exception:
+                except BaseException as exc:
                     recycle_verified = False
-                    logging.getLogger("proxima.worker").exception(
-                        "failed to recycle activity-guarded runner for %s",
-                        guarded_cwd,
-                    )
-                    try:
-                        recycle_tree = getattr(
-                            self.app.state.acp_manager,
-                            "_last_recycle_tree",
-                            None,
-                        )
-                        if recycle_tree is None:
+                    recycle_error = exc
+                    recycle_tree = getattr(exc, "writer_tree", None)
+                    if recycle_tree is None:
+                        try:
                             from .container_activity import GuardedWriterTree
                             recycle_tree = GuardedWriterTree.bind(
                                 project_activity_lease,
                             )
-                    except Exception:
-                        recycle_tree = None
+                        except Exception:
+                            recycle_tree = None
+                    if isinstance(exc, Exception):
+                        logging.getLogger("proxima.worker").exception(
+                            "failed to recycle activity-guarded runner for %s",
+                            guarded_cwd,
+                        )
+                    else:
+                        logging.getLogger("proxima.worker").warning(
+                            "recycle interrupted for activity-guarded runner %s",
+                            guarded_cwd,
+                        )
             if project_activity_lease is not None:
                 if (
                     recycle_verified
@@ -2128,6 +2132,10 @@ class RunWorker:
                             self.app.state.hub.notify(session_id)
             except Exception:
                 logging.getLogger("proxima.worker").exception("pending Master Focus apply failed")
+            if recycle_error is not None and not isinstance(
+                recycle_error, Exception
+            ):
+                raise recycle_error
 
     def cancel(self, run_id: int) -> None:
         entry = self.active_runs.get(run_id)

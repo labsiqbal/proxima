@@ -218,7 +218,6 @@ class AcpProcess:
         self._stderr_reader: asyncio.Task | None = None
         self._stderr_lines: deque[str] = deque(maxlen=60)
         self._lock = asyncio.Lock()
-        self._last_recycle_tree = None
         self._started = False
         self.config_sig: tuple = ()
 
@@ -540,34 +539,44 @@ class AcpProcess:
         if self._stderr_reader:
             self._stderr_reader.cancel()
         failure: BaseException | None = None
+        tree_clear = False
         try:
-            await terminate_and_verify(
-                self.proc,
-                label="ACP runner",
-                tree=self.writer_tree,
-            )
-        except BaseException as exc:
-            failure = exc
-        for task in (self._reader, self._stderr_reader):
-            if task:
-                with suppress(asyncio.CancelledError):
-                    await task
-        self._started = bool(
-            self.proc is not None and self.proc.returncode is None
-        )
-        tree_clear = True
-        if self.writer_tree is not None:
             try:
-                self.writer_tree.seed_live_members()
-                tree_clear = self.writer_tree.exited() is True
-            except Exception:
-                tree_clear = False
-        if failure is not None or not tree_clear:
+                await terminate_and_verify(
+                    self.proc,
+                    label="ACP runner",
+                    tree=self.writer_tree,
+                )
+            except BaseException as exc:
+                failure = exc
+            for task in (self._reader, self._stderr_reader):
+                if not task:
+                    continue
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except BaseException as exc:
+                    if failure is None:
+                        failure = exc
+            self._started = bool(
+                self.proc is not None and self.proc.returncode is None
+            )
+            tree_clear = True
+            if self.writer_tree is not None:
+                try:
+                    self.writer_tree.seed_live_members()
+                    tree_clear = self.writer_tree.exited() is True
+                except Exception:
+                    tree_clear = False
+            if failure is not None:
+                raise failure
+            if not tree_clear:
+                raise RuntimeError(
+                    "ACP runner process tree exit was not verified"
+                )
+        finally:
             self._retain_activity_for_unproven_tree()
-        if failure is not None:
-            raise failure
-        if not tree_clear:
-            raise RuntimeError("ACP runner process tree exit was not verified")
 
 
 def _process_class(spec):
@@ -627,14 +636,21 @@ class AcpManager:
         self,
         proc: Any,
         lease: IngressLease | None,
-    ) -> None:
+    ) -> Any:
         tree = getattr(proc, "writer_tree", None)
-        self._last_recycle_tree = tree
+
+        def _attach_tree(exc: BaseException) -> BaseException:
+            try:
+                setattr(exc, "writer_tree", tree)
+            except Exception:
+                pass
+            return exc
+
         try:
             await proc.stop()
-        except BaseException:
+        except BaseException as exc:
             self._finish_effect_lease(lease, verified=False)
-            raise
+            raise _attach_tree(exc)
         process = getattr(proc, "proc", None)
         tree_clear = True
         if tree is not None:
@@ -645,11 +661,16 @@ class AcpManager:
                 tree_clear = False
         if process is not None and process.returncode is None:
             self._finish_effect_lease(lease, verified=False)
-            raise RuntimeError("runner process exit was not verified")
+            raise _attach_tree(
+                RuntimeError("runner process exit was not verified")
+            )
         if not tree_clear:
             self._finish_effect_lease(lease, verified=False)
-            raise RuntimeError("runner process tree exit was not verified")
+            raise _attach_tree(
+                RuntimeError("runner process tree exit was not verified")
+            )
         self._finish_effect_lease(lease, verified=True)
+        return tree
 
     async def get(
         self,
@@ -786,8 +807,12 @@ class AcpManager:
         *,
         master_chat_only: bool = False,
         cache_scope: str | None = None,
-    ) -> None:
+    ) -> Any:
         """Kill and evict one cached process scope.
+
+        Returns the identity-bound writer_tree for this cache key, or None when
+        no process was cached. Unproven stop raises with ``writer_tree`` set on
+        the exception for exact-run activity retention.
 
         Used when a run times out: `session/cancel` is fire-and-forget and a
         runner turn wedged inside a blocking tool call can't process it, so the
@@ -805,9 +830,10 @@ class AcpManager:
         async with self._lock:
             proc = self._procs.pop(key, None)
             lease = self._effect_leases.pop(key, None)
-        if proc:
-            logger.info("acp: recycling process for %s (cwd=%s)", home, cwd)
-            await self._stop_detached(proc, lease)
+        if not proc:
+            return None
+        logger.info("acp: recycling process for %s (cwd=%s)", home, cwd)
+        return await self._stop_detached(proc, lease)
 
     async def shutdown(self) -> None:
         async with self._lock:
