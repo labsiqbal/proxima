@@ -9,6 +9,17 @@ type FormError = { id: number; message: string; field: ErrorField }
 
 const PROJECT_NAME_MAX_LENGTH = 120
 
+function formErrorField(
+  error: unknown,
+  fallback: ErrorField,
+): ErrorField {
+  const apiField = linkProjectErrorField(error)
+  if (apiField === 'name') return 'display'
+  if (apiField === 'folder') return 'folder'
+  if (apiField === 'path') return 'path'
+  return fallback
+}
+
 // Browse the folders under the configured link roots (default: home) and either
 // register an EXISTING folder as a Proxima project, or create a brand-new empty
 // folder on disk and register that. Shared by the Projects screen and the
@@ -57,7 +68,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       })
       .catch(e => {
         if (mountedRef.current && seq === loadSeq.current) {
-          reportError(apiErrorDetail(e), linkProjectErrorField(e) ?? 'path')
+          reportError(apiErrorDetail(e), formErrorField(e, 'path'))
           setLoading(false)
         }
       })
@@ -123,15 +134,10 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       await onLinked(p)
     } catch (e) {
       if (mountedRef.current && seq === actionSeq.current) {
-        const apiField = linkProjectErrorField(e)
-        const field = apiField === 'name'
-          ? 'display'
-          : apiField === 'folder'
-            ? 'folder'
-            : apiField === 'path'
-              ? 'path'
-              : mode === 'create' ? 'folder' : 'path'
-        reportError(apiErrorDetail(e), field)
+        reportError(
+          apiErrorDetail(e),
+          formErrorField(e, mode === 'create' ? 'folder' : 'path'),
+        )
       }
     } finally {
       if (mountedRef.current && seq === actionSeq.current) setBusy(false)

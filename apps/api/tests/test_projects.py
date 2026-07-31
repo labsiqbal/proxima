@@ -10,7 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api import container_registry, project_browse
-from proxima_api.directory_handles import directory_identity_for_path
+from proxima_api.directory_handles import (
+    DirectoryHandle,
+    WindowsDirectoryBackend,
+    directory_identity_for_path,
+)
 from proxima_api.main import create_app
 
 
@@ -1257,6 +1261,87 @@ def test_rollback_removes_owned_staging_without_deleting_replacement(
     assert replacement is not None and replacement.is_dir()
     assert not moved.exists()
     assert not target.exists()
+
+
+def test_windows_remove_owned_clears_via_retained_handle_after_rename() -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class Probe:
+        def entry_is_owned(self, *args: object) -> bool:
+            raise AssertionError("name binding must not gate handle cleanup")
+
+        def _clear_directory(self, handle: DirectoryHandle) -> None:
+            calls.append(("clear", handle.identity))
+
+        def _delete_handle(self, handle: DirectoryHandle, name: str) -> None:
+            calls.append(("delete", handle.identity, name))
+
+    parent = DirectoryHandle(raw=1, identity="windows:0:1")
+    child = DirectoryHandle(raw=2, identity="windows:0:99")
+    WindowsDirectoryBackend.remove_owned(
+        Probe(),  # type: ignore[arg-type]
+        parent,
+        "published-name",
+        child,
+    )
+    assert calls == [
+        ("clear", "windows:0:99"),
+        ("delete", "windows:0:99", "published-name"),
+    ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows native handle regression")
+def test_windows_remove_owned_deletes_renamed_nonempty_tree(tmp_path: Path) -> None:
+    backend = WindowsDirectoryBackend()
+    parent_path = tmp_path / "parent"
+    parent_path.mkdir()
+    owned = parent_path / "owned"
+    owned.mkdir()
+    (owned / "child.txt").write_text("data", encoding="utf-8")
+    nested = owned / "subdir"
+    nested.mkdir()
+    (nested / "nested.txt").write_text("nested", encoding="utf-8")
+
+    parent = backend.open_absolute(parent_path)
+    child = backend.open_child(parent, "owned")
+    moved = parent_path / "moved-owned"
+    try:
+        owned.rename(moved)
+        backend.remove_owned(parent, "owned", child)
+        assert not moved.exists()
+        assert not (parent_path / "owned").exists()
+    finally:
+        backend.close(child)
+        backend.close(parent)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows native handle regression")
+def test_windows_remove_owned_skips_same_name_replacement(tmp_path: Path) -> None:
+    backend = WindowsDirectoryBackend()
+    parent_path = tmp_path / "parent"
+    parent_path.mkdir()
+    owned = parent_path / "owned"
+    owned.mkdir()
+    (owned / "ops").mkdir()
+    (owned / "ops" / "container.md").write_text("ops", encoding="utf-8")
+
+    parent = backend.open_absolute(parent_path)
+    child = backend.open_child(parent, "owned")
+    moved = parent_path / "moved-owned"
+    replacement = parent_path / "owned"
+    try:
+        owned.rename(moved)
+        replacement.mkdir()
+        (replacement / "keep.txt").write_text("replacement-keep", encoding="utf-8")
+        backend.remove_owned(parent, "owned", child)
+        assert not moved.exists()
+        assert replacement.is_dir()
+        assert (replacement / "keep.txt").read_text(encoding="utf-8") == (
+            "replacement-keep"
+        )
+    finally:
+        backend.close(child)
+        backend.close(parent)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows native handle regression")

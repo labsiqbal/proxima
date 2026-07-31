@@ -660,8 +660,7 @@ class WindowsDirectoryBackend:
         name: str,
         child: DirectoryHandle,
     ) -> None:
-        if not self.entry_is_owned(parent, name, child):
-            return
+        _ = parent
         self._clear_directory(child)
         self._delete_handle(child, name)
 

@@ -11,6 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  assertCorrectiveAlertText,
   assertServiceWorkerCacheMatrix,
   GATE_TEXT_STYLES,
   privateEntryUrl,
@@ -519,18 +520,18 @@ function assertSingleAnnouncement(trace, fieldName, messagePattern, alreadyFocus
   assert.equal(relevant.filter(event => event.type === 'alert').length, 1)
   if (relevant[0]?.type === 'alert') {
     assert(alreadyFocused, `${fieldName} was not focused before its alert`)
-    assert.match(relevant[0]?.name || '', messagePattern)
+    assertCorrectiveAlertText(relevant[0]?.name || '', messagePattern)
     return
   }
   assert.equal(relevant[0]?.type, 'focus')
   assert.equal(relevant[0]?.name, fieldName)
   assert.equal(relevant[1]?.type, 'alert')
-  assert.match(relevant[1]?.name || '', messagePattern)
+  assertCorrectiveAlertText(relevant[1]?.name || '', messagePattern)
 }
 
 function assertSingleSemanticOwner(summary, targetPredicate, messagePattern) {
   assert.equal(summary.alerts.length, 1)
-  assert.match(summary.alerts[0].text, messagePattern)
+  assertCorrectiveAlertText(summary.alerts[0].text, messagePattern)
   const target = summary.focused.find(targetPredicate)
   assert(target, 'Corrective target was not focused in the accessibility tree')
   assert(target.invalid, 'Corrective target was not marked invalid')
@@ -1298,14 +1299,14 @@ async function main() {
     assertSingleAnnouncement(
       initialBrowseTrace,
       'selected-folder',
-      /No readable folder/,
+      /^No readable folder is available inside the allowed roots$/,
       initialBrowseFocusedBeforeError === 'selected-folder',
     )
     const initialBrowseAx = await accessibilitySummary(cdp)
     assertSingleSemanticOwner(
       initialBrowseAx,
       node => node.role === 'button' && node.name === 'Folder browser. Retry folders',
-      /No readable folder/,
+      /^No readable folder is available inside the allowed roots$/,
     )
     assert.equal(
       await evaluate(cdp, `document.activeElement?.getAttribute('name')`),
@@ -1549,14 +1550,14 @@ async function main() {
     assertSingleAnnouncement(
       noReadableTrace,
       'selected-folder',
-      /Selected folder root is not reachable/,
+      /^Selected folder root is not reachable$/,
       noReadableFocusedBeforeError === 'selected-folder',
     )
     const noReadableAx = await accessibilitySummary(cdp)
     assertSingleSemanticOwner(
       noReadableAx,
       node => node.role === 'button' && node.name.includes('Selected folder:'),
-      /Selected folder root is not reachable/,
+      /^Selected folder root is not reachable$/,
     )
     assert.equal(
       await evaluate(cdp, `document.querySelector('button[name=selected-folder] code')?.textContent`),

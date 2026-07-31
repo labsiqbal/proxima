@@ -16,6 +16,19 @@ export const REDACTED_TAILSCALE_PROVENANCE = Object.freeze({
   origin: 'private Tailscale origin (redacted)',
 })
 
+const ALERT_REQUEST_NOISE = /(?:\b(?:GET|POST|PUT|PATCH|DELETE)\s+\/|\bfailed\s*\(\d{3}\)|\b\/api\/)/i
+
+export function assertCorrectiveAlertText(text, messagePattern) {
+  const alertText = String(text || '')
+  assert.match(alertText, messagePattern)
+  assert.doesNotMatch(
+    alertText,
+    ALERT_REQUEST_NOISE,
+    `alert leaked request or status noise: ${alertText}`,
+  )
+  return alertText
+}
+
 const staticPaths = new Set([
   '/',
   '/@react-refresh',

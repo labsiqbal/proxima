@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
 import {
+  assertCorrectiveAlertText,
   assertServiceWorkerCacheMatrix,
   GATE_TEXT_STYLES,
   REDACTED_TAILSCALE_PROVENANCE,
@@ -907,4 +908,45 @@ test('owns the complete password-gate text style matrix', () => {
     'error',
     'button',
   ])
+})
+
+test('accepts exact corrective browse alerts without request noise', () => {
+  assert.equal(
+    assertCorrectiveAlertText(
+      'No readable folder is available inside the allowed roots',
+      /^No readable folder is available inside the allowed roots$/,
+    ),
+    'No readable folder is available inside the allowed roots',
+  )
+  assert.equal(
+    assertCorrectiveAlertText(
+      'Selected folder root is not reachable',
+      /^Selected folder root is not reachable$/,
+    ),
+    'Selected folder root is not reachable',
+  )
+})
+
+test('rejects browse alerts that leak method, URL, or status prefixes', () => {
+  assert.throws(
+    () => assertCorrectiveAlertText(
+      'GET /api/fs/dirs?path= failed (403): No readable folder is available inside the allowed roots',
+      /No readable folder/,
+    ),
+    /request or status noise/,
+  )
+  assert.throws(
+    () => assertCorrectiveAlertText(
+      'GET /api/fs/dirs?path=%2Ftmp%2Fno-readable-parent&root_id=abc failed (403): Selected folder root is not reachable',
+      /Selected folder root is not reachable/,
+    ),
+    /request or status noise/,
+  )
+  assert.throws(
+    () => assertCorrectiveAlertText(
+      'failed (403): Selected folder root is not reachable',
+      /Selected folder root is not reachable/,
+    ),
+    /request or status noise/,
+  )
 })

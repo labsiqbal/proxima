@@ -100,7 +100,7 @@
     "noReadableAncestor": [
       {
         "type": "alert",
-        "name": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-wxtyiR%2Fhome%2Fno-readable-parent&root_id=085770af2a5d6d2cc2338672 failed (403): Selected folder root is not reachable"
+        "name": "Selected folder root is not reachable"
       }
     ],
     "selectedPath": [
@@ -116,7 +116,7 @@
       },
       {
         "type": "alert",
-        "name": "GET /api/fs/dirs?path= failed (403): No readable folder is available inside the allowed roots"
+        "name": "No readable folder is available inside the allowed roots"
       }
     ],
     "returningLogin": [
@@ -260,7 +260,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wxtyiR/home. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-hBTHEN/home. Refresh folders",
           "description": "",
           "focused": false,
           "invalid": "false"
@@ -365,7 +365,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wxtyiR/home. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-hBTHEN/home. Refresh folders",
           "description": "",
           "focused": false,
           "invalid": "false"
@@ -461,7 +461,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wxtyiR/home/disappearing-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-hBTHEN/home/disappearing-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -470,7 +470,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wxtyiR/home/disappearing-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-hBTHEN/home/disappearing-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -545,7 +545,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wxtyiR/home/permission-denied-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-hBTHEN/home/permission-denied-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -554,7 +554,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wxtyiR/home/permission-denied-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-hBTHEN/home/permission-denied-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -616,7 +616,7 @@
           "description": "",
           "focused": false,
           "invalid": false,
-          "text": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-wxtyiR%2Fhome%2Fno-readable-parent&root_id=085770af2a5d6d2cc2338672 failed (403): Selected folder root is not reachable GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-wxtyiR%2Fhome%2Fno- readable-parent&root_id=085770af2a5d6d2cc2338672 failed (403): Selected folder root is not reachable"
+          "text": "Selected folder root is not reachable"
         }
       ],
       "focused": [
@@ -629,7 +629,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wxtyiR/home/no-readable-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-hBTHEN/home/no-readable-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -638,7 +638,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wxtyiR/home/no-readable-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-hBTHEN/home/no-readable-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -713,7 +713,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wxtyiR/home/vanishing-folder. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-hBTHEN/home/vanishing-folder. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -722,7 +722,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wxtyiR/home/vanishing-folder. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-hBTHEN/home/vanishing-folder. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -784,7 +784,7 @@
           "description": "",
           "focused": false,
           "invalid": false,
-          "text": "GET /api/fs/dirs?path= failed (403): No readable folder is available inside the allowed roots GET /api/fs/dirs?path= failed (403): No readable folder is available inside the allowed roots"
+          "text": "No readable folder is available inside the allowed roots"
         }
       ],
       "focused": [
@@ -1046,14 +1046,14 @@
       "requestCountsByTargetType": {
         "page": {
           "GET /": 1,
-          "GET /assets/index-CiZUXG8S.js": 1,
+          "GET /manifest.webmanifest": 1,
+          "GET /assets/index-Ce7hqAiJ.js": 1,
           "GET /assets/rolldown-runtime-aKtaBQYM.js": 1,
           "GET /assets/jsx-runtime-2Zwg-L3c.js": 1,
           "GET /assets/lib-iMw8T7-H.js": 1,
           "GET /assets/client-CPHncNCm.js": 1,
           "GET /assets/files--pJaZrKJ.js": 1,
           "GET /assets/runs-DUuH3qDf.js": 1,
-          "GET /manifest.webmanifest": 1,
           "GET /assets/eventTypes-DzrJzNGq.js": 1,
           "GET /assets/icons-Dgww-zVO.js": 1,
           "GET /assets/useEventStream-DldYYYpd.js": 1,
@@ -1119,7 +1119,7 @@
         "page": {
           "GET /": 1,
           "GET /manifest.webmanifest": 1,
-          "GET /assets/index-CiZUXG8S.js": 1,
+          "GET /assets/index-Ce7hqAiJ.js": 1,
           "GET /assets/rolldown-runtime-aKtaBQYM.js": 1,
           "GET /assets/jsx-runtime-2Zwg-L3c.js": 1,
           "GET /assets/lib-iMw8T7-H.js": 1,
@@ -1226,17 +1226,6 @@
           "GET /src/components/master/MasterPopup.tsx": 1,
           "GET /src/components/master/MasterToastRegion.tsx": 1,
           "GET /src/components/shell/ShellModeSwitch.tsx": 1,
-          "GET /src/api/master.ts": 1,
-          "GET /src/api/containers.ts": 1,
-          "GET /src/lib/eventTypes.ts": 1,
-          "GET /src/lib/notify.ts": 1,
-          "GET /src/master/masterProjection.ts": 1,
-          "GET /src/master/masterHistory.ts": 1,
-          "GET /src/api/dashboard.ts": 1,
-          "GET /src/components/tasks/TaskComposer.tsx": 1,
-          "GET /src/api/updates.ts": 1,
-          "GET /node_modules/.vite/deps/react-markdown.js": 1,
-          "GET /node_modules/.vite/deps/remark-gfm.js": 1,
           "GET /src/lib/goal.ts": 1,
           "GET /src/api/wiki.ts": 1,
           "GET /src/hooks/useRunStream.ts": 1,
@@ -1246,29 +1235,40 @@
           "GET /src/components/chat/Composer.tsx": 1,
           "GET /src/components/ui/Dropdown.tsx": 1,
           "GET /src/components/shell/runnerReadiness.ts": 1,
+          "GET /src/lib/notify.ts": 1,
+          "GET /src/api/updates.ts": 1,
+          "GET /src/api/master.ts": 1,
+          "GET /src/api/containers.ts": 1,
+          "GET /src/lib/eventTypes.ts": 1,
+          "GET /src/master/masterProjection.ts": 1,
+          "GET /src/master/masterHistory.ts": 1,
+          "GET /src/api/dashboard.ts": 1,
+          "GET /src/components/tasks/TaskComposer.tsx": 1,
+          "GET /node_modules/.vite/deps/react-markdown.js": 1,
+          "GET /node_modules/.vite/deps/remark-gfm.js": 1,
           "GET /src/components/shell/ProjectSwitcher.tsx": 1,
+          "GET /src/api/fsAdapter.ts": 1,
+          "GET /src/components/files/WorkspaceTree.tsx": 1,
           "GET /src/api/search.ts": 1,
+          "GET /src/components/master/MasterComposer.tsx": 1,
+          "GET /src/components/master/MasterConversation.tsx": 1,
+          "GET /src/components/master/MasterTargetPicker.tsx": 1,
+          "GET /src/api/commands.ts": 1,
+          "GET /src/components/ui/MentionTextarea.tsx": 1,
+          "GET /src/api/files.ts": 1,
+          "GET /src/hooks/useProjectMentionItems.ts": 1,
           "GET /src/hooks/useEventStream.ts": 1,
+          "GET /node_modules/.vite/deps/lib-9qH3G_6W.js": 1,
           "GET /src/components/chat/MessageContent.tsx": 1,
           "GET /src/components/chat/QuestionForm.tsx": 1,
           "GET /src/components/chat/questionForm.ts": 1,
-          "GET /src/api/files.ts": 1,
           "GET /src/components/chat/MessageReviewSidecar.tsx": 1,
           "GET /src/components/chat/runError.ts": 1,
           "GET /src/components/chat/ChatEmpty.tsx": 1,
           "GET /src/components/chat/threadScroll.ts": 1,
-          "GET /src/api/commands.ts": 1,
-          "GET /src/components/ui/MentionTextarea.tsx": 1,
-          "GET /src/hooks/useProjectMentionItems.ts": 1,
-          "GET /node_modules/.vite/deps/lib-9qH3G_6W.js": 1,
-          "GET /src/api/fsAdapter.ts": 1,
-          "GET /src/components/files/WorkspaceTree.tsx": 1,
-          "GET /src/components/master/MasterComposer.tsx": 1,
-          "GET /src/components/master/MasterConversation.tsx": 1,
-          "GET /src/components/master/MasterTargetPicker.tsx": 1,
-          "GET /src/api/messageReviews.ts": 1,
-          "GET /src/components/ui/CompactTeachingEmpty.tsx": 1,
           "GET /node_modules/.vite/deps/react_jsx-runtime.js": 1,
+          "GET /src/components/ui/CompactTeachingEmpty.tsx": 1,
+          "GET /src/api/messageReviews.ts": 1,
           "GET /icons/icon-512.svg": 1,
           "GET /icons/icon-192.png": 1
         }
@@ -1301,6 +1301,6 @@
   "lighthouse": {
     "score": 100,
     "version": "12.8.2",
-    "url": "http://127.0.0.1:35549/"
+    "url": "http://127.0.0.1:46765/"
   }
 }
