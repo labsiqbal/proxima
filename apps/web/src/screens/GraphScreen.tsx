@@ -282,7 +282,8 @@ export function GraphScreen({
   const [notice, setNotice] = React.useState('')
   const [busy, setBusy] = React.useState<string | null>(null)
   const mounted = React.useRef(true)
-  const loadSeq = React.useRef(0)
+  const listSeq = React.useRef(0)
+  const jobSeq = React.useRef(0)
   const draftSeq = React.useRef(0)
   const saveTimer = React.useRef<number | undefined>(undefined)
   const saveInFlight = React.useRef<Promise<void> | null>(null)
@@ -404,7 +405,8 @@ export function GraphScreen({
       mounted.current = false
       queueLatestAutosave(false)
       void drainAutosave().catch(() => undefined)
-      loadSeq.current += 1
+      listSeq.current += 1
+      jobSeq.current += 1
       draftSeq.current += 1
     }
   }, [drainAutosave, queueLatestAutosave])
@@ -426,29 +428,29 @@ export function GraphScreen({
   }, [job?.id, job?.status, plan, draftTitle, drainAutosave, queueLatestAutosave])
 
   const refreshList = React.useCallback(async () => {
-    const seq = ++loadSeq.current
+    const seq = ++listSeq.current
     try {
       const [jobResponse, templateResponse, scheduleRows] = await Promise.all([
         listGraphJobs(token, activeProject?.slug),
         listGraphTemplates(token, activeProject?.slug, true),
         listSchedules(token).catch(() => [] as Schedule[]),
       ])
-      if (mounted.current && seq === loadSeq.current) {
+      if (mounted.current && seq === listSeq.current) {
         setJobs(jobResponse.items)
         setTemplates(templateResponse.items)
         setSchedules(scheduleRows)
         setScheduleCronByWorkflow(cronLabelsByWorkflow(scheduleRows, cronHint))
       }
     } catch (cause) {
-      if (mounted.current && seq === loadSeq.current) setError(String(cause))
+      if (mounted.current && seq === listSeq.current) setError(String(cause))
     }
   }, [token, activeProject?.slug])
 
   const loadJob = React.useCallback(async (jobId: number) => {
-    const seq = ++loadSeq.current
+    const seq = ++jobSeq.current
     try {
       const next = await getGraphJob(token, jobId)
-      if (!mounted.current || seq !== loadSeq.current) return
+      if (!mounted.current || seq !== jobSeq.current) return
       const latest = latestDraft.current
       const titleHasLocalEdit = autosaveJobId.current === next.id
         && latest?.jobId === next.id
@@ -464,10 +466,18 @@ export function GraphScreen({
         }
       } else {
         await primeAutosave(next)
-        if (!mounted.current || seq !== loadSeq.current) return
+        if (!mounted.current || seq !== jobSeq.current) return
       }
       setJob(next)
       setPlan(next.graph)
+      setJobs(current => {
+        const idx = current.findIndex(item => item.id === next.id)
+        if (idx < 0) return [next, ...current]
+        if (current[idx] === next) return current
+        const copy = current.slice()
+        copy[idx] = next
+        return copy
+      })
       // Open on the graph, not on a node nobody asked about. Keeps the live poll
       // from clearing a selection, but drops one whose node is gone.
       setSelectedId(current => current && next.graph.nodes.some(node => node.id === current) ? current : null)
@@ -479,13 +489,13 @@ export function GraphScreen({
         // leave/reopen mid-generate does not look like a broken empty editor.
         if (next.session_id && next.status === 'queued') {
           void activeRuns(token).then(r => {
-            if (!mounted.current || seq !== loadSeq.current || chatJobRef.current !== next.id) return
+            if (!mounted.current || seq !== jobSeq.current || chatJobRef.current !== next.id) return
             if (r.session_ids.includes(next.session_id)) setChatOpen(true)
           }).catch(() => { /* optional signal */ })
         }
       }
     } catch (cause) {
-      if (mounted.current && seq === loadSeq.current) setError(String(cause))
+      if (mounted.current && seq === jobSeq.current) setError(String(cause))
     }
   }, [token])
 
@@ -543,7 +553,7 @@ export function GraphScreen({
 
   React.useEffect(() => {
     // Opening is idempotent (GET + set state). Do not once-claim at module scope:
-    // Strict Mode discards the first loadJob via loadSeq, so the re-run must open again.
+    // Strict Mode discards the first loadJob via jobSeq, so the re-run must open again.
     if (!pendingJobId) return
     openJob(pendingJobId)
     onPendingConsumed?.()
@@ -601,12 +611,18 @@ export function GraphScreen({
       && Number(event.payload?.job_id ?? job.id) === job.id
     ) {
       void loadJob(job.id)
+      if (stage === 'home') void refreshList()
     }
   })
   usePolling(
     () => job ? loadJob(job.id) : undefined,
     1500,
-    { enabled: !!job && ['running', 'review'].includes(job.status), immediate: false },
+    { enabled: !!job && stage === 'editor' && ['running', 'review'].includes(job.status), immediate: false },
+  )
+  usePolling(
+    () => refreshList(),
+    2500,
+    { enabled: stage === 'home', immediate: false },
   )
 
   const definition = plan?.nodes.find(node => node.id === selectedId)
