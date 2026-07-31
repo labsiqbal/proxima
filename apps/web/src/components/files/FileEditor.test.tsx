@@ -55,7 +55,7 @@ describe('FileEditor fs adapter swaps', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByText('Read-only inspection')).toBeVisible()
+      expect(screen.getByRole('status')).toHaveTextContent('Unsaved · read-only during inspection')
     })
     expect(screen.getByDisplayValue('unsaved owner edits')).toBeVisible()
     expect(screen.getByTitle('notes/todo.md')).toHaveTextContent('•')
@@ -126,6 +126,31 @@ describe('FileEditor fs adapter swaps', () => {
 
     await screen.findByDisplayValue('inspection bytes')
     expect(inspectionRead).toHaveBeenCalledWith('notes/todo.md')
-    expect(screen.getByText('Read-only inspection')).toBeVisible()
+    expect(screen.getByRole('status')).toHaveTextContent('Read-only inspection')
+  })
+
+  it('keeps a dirty buffer when inspection browses a different path without write', async () => {
+    const user = userEvent.setup()
+    const projectRead = vi.fn(async () => ({ content: 'project bytes' }))
+    const inspectionRead = vi.fn(async () => ({ content: 'other inspection file' }))
+    const write = vi.fn(async () => ({}))
+
+    const view = render(
+      <FileEditor fs={mockFs('project bytes', projectRead)} write={write} path="notes/todo.md" onClose={() => {}} />,
+    )
+    await screen.findByDisplayValue('project bytes')
+    await user.clear(screen.getByTestId('codemirror-stub'))
+    await user.type(screen.getByTestId('codemirror-stub'), 'sticky unsaved')
+
+    view.rerender(
+      <FileEditor fs={mockFs('other inspection file', inspectionRead)} path="ops/other.md" onClose={() => {}} />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('Unsaved · read-only during inspection')
+    })
+    expect(screen.getByDisplayValue('sticky unsaved')).toBeVisible()
+    expect(screen.getByTitle('notes/todo.md')).toHaveTextContent('•')
+    expect(inspectionRead).not.toHaveBeenCalled()
   })
 })

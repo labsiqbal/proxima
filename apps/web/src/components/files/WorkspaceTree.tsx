@@ -147,7 +147,8 @@ function writableAdapter(fs: ReadOnlyFsAdapter | FsAdapter): FsAdapter | null {
 
 export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSignal = 0, onOpenFile, onChange, activePath, activePathKind = 'file', fileFilter, defaultExt }: { fs: ReadOnlyFsAdapter | FsAdapter; title: string; className?: string; refreshSignal?: number; onOpenFile?: (path: string, target?: FileTarget) => void; onChange?: () => void; activePath?: string | null; activePathKind?: 'root' | 'directory' | 'file'; fileFilter?: (name: string) => boolean; defaultExt?: string }) {
   const [refreshKey, setRefreshKey] = React.useState(0)
-  const [editing, setEditing] = React.useState<{ path: string; target?: FileTarget } | null>(null)
+const [editing, setEditing] = React.useState<{ path: string; target?: FileTarget } | null>(null)
+  const [browsePath, setBrowsePath] = React.useState<string | null>(null)
   const [treeError, setTreeError] = React.useState<string | null>(null)
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
   const [creating, setCreating] = React.useState<{ dir: string; target?: FileTarget; type: 'file' | 'dir' } | null>(null)
@@ -162,6 +163,7 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
   const refresh = () => setRefreshKey(k => k + 1)
   const clearEditing = React.useCallback(() => {
     editingDirtyRef.current = false
+    setBrowsePath(null)
     setEditing(null)
   }, [])
   const onEditorDirtyChange = React.useCallback((dirty: boolean) => {
@@ -184,6 +186,7 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
     setCreating(null)
     setRenaming(null)
     setMenu(null)
+    setBrowsePath(null)
     setExpanded(new Set())
     setRefreshKey(k => k + 1)
     if (!editingDirtyRef.current) clearEditing()
@@ -204,6 +207,7 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
   // a same-path reveal after a project switch would otherwise stay collapsed.
   React.useEffect(() => {
     if (!activePath) return
+    setBrowsePath(null)
     if (!editingDirtyRef.current) clearEditing()
     const parts = activePath.split('/').filter(Boolean)
     const limit = activePathKind === 'directory' ? parts.length : parts.length - 1
@@ -261,7 +265,7 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
     }
   }
 
-  const childRef = (parent: FileTarget | undefined, displayPath: string, name: string): FileRef => {
+const childRef = (parent: FileTarget | undefined, displayPath: string, name: string): FileRef => {
     if (!parent) return displayPath
     const targetPath = parent.path ? `${parent.path}/${name}` : name
     return retargetFile(parent, targetPath)
@@ -271,8 +275,16 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
     if (onOpenFile) {
       if (target) onOpenFile(path, target)
       else onOpenFile(path)
+      return
     }
-    else setEditing({ path, target })
+    // During recovery inspection a dirty ordinary Files buffer stays mounted and
+    // read-only. Browse selection is shown in the tree only; never replace bytes.
+    if (editingDirtyRef.current && !writableFs) {
+      setBrowsePath(path)
+      return
+    }
+    setBrowsePath(null)
+    setEditing({ path, target })
   }
 
   function startCreate(dir: string, type: 'file' | 'dir', target?: FileTarget) {
@@ -322,11 +334,15 @@ if (
     ) clearEditing()
   }
 
+  const treeActivePath = browsePath ?? (activePath !== undefined ? activePath : editing?.path || null)
+  const treeActivePathKind = browsePath != null
+    ? 'file'
+    : (activePath !== undefined ? activePathKind : 'file')
   const t: Ctl = {
     fs, writableFs, refreshKey, fileFilter, busy, expanded,
     toggle: p => { if (!busy) setExpanded(s => { const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n }) },
-    creating, renaming, activePath: activePath !== undefined ? activePath : editing?.path || null,
-    activePathKind: activePath !== undefined ? activePathKind : 'file',
+    creating, renaming, activePath: treeActivePath,
+    activePathKind: treeActivePathKind,
     openFile,
     openMenu: (e, path, isDir, target) => {
       if (!writableFs) return

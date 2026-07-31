@@ -68,13 +68,16 @@ const ref = target || path
 
   React.useEffect(() => {
     const pathChanged = pathRef.current !== path
-    pathRef.current = path
 
-    if (!pathChanged && dirtyRef.current) {
+    // Keep unsaved project bytes across inspection fs/write swaps and across
+    // inspection path browses while write is unavailable. Reload only when the
+    // path changes under a writable editor, or when the buffer is clean.
+    if (dirtyRef.current && (!pathChanged || !write)) {
       setStatus(write ? 'ready' : 'readonly')
       return
     }
 
+    pathRef.current = path
     const seq = ++requestSeq.current
     setStatus('loading'); setDirty(false)
     fs.read(ref)
@@ -106,15 +109,27 @@ const ref = target || path
 
   const saveKey = React.useMemo(() => keymap.of([{ key: 'Mod-s', preventDefault: true, run: () => { saveRef.current(); return true } }]), [])
 
-  const name = path.split('/').pop()
+  const displayPath = pathRef.current || path
+  const name = displayPath.split('/').pop()
+  const statusText = status === 'saved'
+    ? 'Saved'
+    : status === 'saving'
+      ? 'Saving…'
+      : status === 'ready'
+        ? (dirty ? 'Unsaved · ⌘/Ctrl+S' : 'Up to date')
+        : status === 'readonly'
+          ? (dirty ? 'Unsaved · read-only during inspection' : 'Read-only inspection')
+          : status === 'loading'
+            ? 'Loading…'
+            : status
   return <div className="file-editor">
     <div className="file-editor-head">
-      <strong title={path}>{name}{dirty ? ' •' : ''}</strong>
+      <strong title={displayPath}>{name}{dirty ? ' •' : ''}</strong>
       <div>{write && <button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button>}<button className="ghost-button" onClick={onClose} disabled={status === 'saving'}>Close</button></div>
     </div>
     {status === 'loading'
       ? <p className="muted" style={{ padding: '10px' }}>Loading…</p>
-      : <div className="cm-wrap"><CodeMirror value={content} height="100%" theme={isDark ? oneDark : 'light'} editable={!!write} extensions={[...(write ? [saveKey] : []), ...langFor(path)]} onChange={write ? v => { editVersion.current += 1; setContent(v); setDirty(true); setStatus('ready') } : undefined} basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: true }} /></div>}
-    <div className="file-editor-status muted">{status === 'saved' ? 'Saved' : status === 'saving' ? 'Saving…' : status === 'ready' ? (dirty ? 'Unsaved · ⌘/Ctrl+S' : 'Up to date') : status === 'readonly' ? 'Read-only inspection' : status === 'loading' ? 'Loading…' : status}</div>
+      : <div className="cm-wrap"><CodeMirror value={content} height="100%" theme={isDark ? oneDark : 'light'} editable={!!write} extensions={[...(write ? [saveKey] : []), ...langFor(displayPath)]} onChange={write ? v => { editVersion.current += 1; setContent(v); setDirty(true); setStatus('ready') } : undefined} basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: true }} /></div>}
+    <div className="file-editor-status muted" role="status" aria-live="polite">{statusText}</div>
   </div>
 }
