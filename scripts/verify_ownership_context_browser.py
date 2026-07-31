@@ -376,6 +376,10 @@ class Browser:
 
 
 def _seed(base_url: str, token: str, fixture: Path) -> dict[str, Any]:
+    roots = _request(f"{base_url}/api/fs/dirs", token=token)
+    root_id = str(roots.get("root_id") or "")
+    if not root_id:
+        raise RuntimeError(f"link root_id missing from /api/fs/dirs: {roots!r}")
     projects: dict[str, dict[str, Any]] = {}
     for slug, name in (
         ("atlas", "Atlas private ops"),
@@ -386,7 +390,12 @@ def _seed(base_url: str, token: str, fixture: Path) -> dict[str, Any]:
         project = _request(
             f"{base_url}/api/projects/link",
             method="POST",
-            body={"path": str(path), "slug": slug, "name": name},
+            body={
+                "path": str(path),
+                "slug": slug,
+                "name": name,
+                "root_id": root_id,
+            },
             token=token,
         )
         projects[slug] = project

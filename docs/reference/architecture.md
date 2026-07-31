@@ -1034,11 +1034,13 @@ way). Jobs live-poll while running and auto-archive after 30 days. A dependency-
 Task remains queued but carries its durable reason in list/detail payloads and renders
 that reason in `TaskWorkspace`.
 Every Task detail renders the owning Project as the primary identity, with identity
-label and Area as secondary context. Attention deep-links preserve the selected Work
-Project and keep the deep surface locked. A full-page `#task/<id>` reload instead
-resolves the Task and Project list before mounting `AppShell`, selects the owner in
-one state transition, and only then exposes the Project-bound tool dock. Any mismatch
-keeps Terminal, Files, and Preview unavailable.
+label and Area as secondary context. In-app Task opens (Attention and other preserve-work
+hash stamps) keep the selected Work Project and lock the deep surface. A full-page
+`#task/<id>` reload instead resolves the Task and Project list before mounting
+`AppShell`, selects the owner in one state transition, and only then exposes the
+Project-bound tool dock. Any mismatch keeps Terminal, Files, and Preview unavailable.
+Task-linked Design resolves through the Task owning Project without rewriting Work
+selection, and the return path restamps preserve-work so ownership stays coherent.
 
 Before a Master worker run is enqueued, `job_checkpoints.create_checkpoint` records
 only that job's restorable columns, node states, existing run ids, and target repository

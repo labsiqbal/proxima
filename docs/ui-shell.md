@@ -126,10 +126,10 @@ Tasks is the durable execution/review index for queued, running, review, done, f
 
 Delegate's global List, Board, and Review modes show **Project: name** on every Task
 and plan and include it in each row or card's accessible name. Work's scoped Tasks
-view does not repeat the active Project. Opening a cross-Project Task from Attention
+view does not repeat the active Project. Opening a cross-Project Task from Attention or another in-app deep link
 keeps the current Work selection, shows and locks the Task Project and Area in a
 prominent banner, states which Project Work remains on, and gives desktop chrome a
-visible **Back to Tasks** origin label.
+visible **Back to Tasks** (or matching origin) label.
 
 Reloading a `#task/<id>` permalink first resolves the Task and its owning Project
 behind a dedicated loading state, then atomically selects and locks that Project.
@@ -176,7 +176,7 @@ Every schedule row offers **Run now**, which fires it immediately and opens the 
 
 ## Right tool rail — Terminal, Files, Preview
 
-Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, in any context, scoped to the active project:
+Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, scoped to the active project when Project context is available:
 
 During Task permalink resolution and any cross-Project Task mismatch, the entire rail
 and panel are suppressed. They return only after the Task owning Project and active
@@ -244,7 +244,7 @@ Attention stays a separate `!` control and remains hidden when empty.
 
 Agents and Settings live in the Work profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The Work top bar owns the brand mark, mode switch, sidebar collapse toggle, search, Running + Attention, and account menu; its sidebar owns the active-project switcher. On mobile that switcher stays in the Work drawer and the mode control remains in the compact header. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 
-Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Archive, Design) keep that contract. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Archive records and Designs remain owned by their Project. Delegate has no project selector or project filter: its Tasks and Archive indices are global, while Master Focus and explicit target controls remain its own bounded context.
+Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Archive, and ordinary Design entry) keep that contract. Opening Design from a Task binds the studio to that Task's owning Project without adopting it as the Work selection, and returning to the Task restamps the in-app preserve-work policy. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Archive records and Designs remain owned by their Project. Delegate has no project selector or project filter: its Tasks and Archive indices are global, while Master Focus and explicit target controls remain its own bounded context.
 
 The Work selection persists per owner across a full browser refresh. Boot validates
 the saved Project before applying it. A missing saved Project falls back to an

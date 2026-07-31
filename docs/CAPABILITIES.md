@@ -840,6 +840,9 @@ Every Task workspace leads with its immutable owning Project and Area, including
 opened from global Attention. A cross-Project open preserves the Work Project instead
 of changing it, locks the switcher for the deep surface, states that Work remains on
 the prior Project, and exposes a labeled return to the origin surface.
+Opening Design from that Task binds the studio filesystem to the Task owning Project
+without adopting it as Work; returning to the Task restamps the in-app preserve-work
+hash policy so a later cold reload still takes the permalink path.
 A reloaded `#task/<id>` permalink resolves Task metadata and its owning Project before
 mounting the shell. It then selects and locks that Project in one transition. Until
 the Project and Task agree, Project-bound Files, Preview, and Terminal tools remain
@@ -859,9 +862,10 @@ carry **Open plan** (the canvas, where review acts live) and **Save as Workflow*
 (promotes the plan's graph to a reusable template via the existing save mechanics).
 **Board** columns are Queued → Running → Review → Done → **Failed** so a failed plan
 stays visible without switching to List → Failed; list/board cards use spaced
-`aria-label`s (`title · Plan · status · progress · age`) so assistive tech does not
-smash the plan pill into the title. With the graph feature off, the screen shows
-classic tasks only, exactly as before.
+`aria-label`s (`title · Plan · status · progress · age`, and `Project: name` on
+Delegate's global projection) so assistive tech does not smash the plan pill into the
+title. With the graph feature off, the screen shows classic tasks only, exactly as
+before.
 Delegate's global List, Board, and Review projections add the owning Project to every
 classic Task and plan, both visibly and in the accessible name. Work's Project-scoped
 Tasks projection omits that repeated label because the shell context already states
@@ -1702,7 +1706,7 @@ owner with one password/session gate; legacy invite/member tables have been drop
 + **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off; dynamically conforming Codex 0.145.0 or newer is supported, and every other or unavailable adapter fails closed.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
-+ **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
++ **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped when Project context is synchronized; the rail and panels stay suppressed during Task permalink resolution or any Task/Work Project mismatch. The rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 
 Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it. Each invalid attempt focuses the corrective field and mounts one fresh assertive alert, even when the same values are submitted again. The gate keeps one main landmark, password-manager-compatible hidden owner metadata, and token-based text and focus contrast across every canonical theme.

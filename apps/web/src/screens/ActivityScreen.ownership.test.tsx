@@ -12,6 +12,18 @@ vi.mock('../api/graph', () => ({
   saveGraphTemplate: vi.fn(),
 }))
 
+function recentUtcTimestamp(): string {
+  // ActivityScreen parses naive timestamps as UTC; keep fixtures a few seconds old
+  // so accessible names stay on the "now" branch without freezing Date.now().
+  const stamp = new Date(Date.now() - 5_000)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return [
+    stamp.getUTCFullYear(),
+    pad(stamp.getUTCMonth() + 1),
+    pad(stamp.getUTCDate()),
+  ].join('-') + ` ${pad(stamp.getUTCHours())}:${pad(stamp.getUTCMinutes())}:${pad(stamp.getUTCSeconds())}`
+}
+
 const job = {
   id: 7,
   project_id: 22,
@@ -26,8 +38,8 @@ const job = {
   steps_state: [],
   schedule_id: null,
   created_by: 1,
-  created_at: '2026-07-31 00:00:00',
-  updated_at: '2026-07-31 00:00:00',
+  created_at: recentUtcTimestamp(),
+  updated_at: recentUtcTimestamp(),
   started_at: null,
   finished_at: null,
   archived_at: null,
@@ -82,7 +94,11 @@ describe('ActivityScreen Project attribution', () => {
     renderTasks({ slug: 'beacon', name: 'Beacon release' })
     await waitFor(() => expect(screen.getByText('Approve release checklist')).toBeInTheDocument())
     expect(screen.queryByText('Beacon release')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Approve release checklist · Task · review · — · now' }))
-      .toBeInTheDocument()
+    expect(document.querySelector('.task-project-tag')).toBeNull()
+    const scopedRow = screen.getByRole('button', {
+      name: /^Approve release checklist · Task · review · — · /,
+    })
+    expect(scopedRow).toBeInTheDocument()
+    expect(scopedRow.getAttribute('aria-label') || '').not.toMatch(/Project:/)
   })
 })
