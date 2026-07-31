@@ -9,6 +9,7 @@ import struct
 import subprocess
 import termios
 import time
+from typing import Any
 
 from .process_containment import pid_namespace_argv
 
@@ -89,10 +90,12 @@ class TerminalSession:
         shell: str = "bash",
         *,
         contained: bool = False,
+        activity_lease: Any = None,
     ) -> None:
         self.cwd = cwd
         self.shell = shell
         self.contained = contained
+        self.activity_lease = activity_lease
         self.pid: int | None = None
         self.sid: int | None = None
         self.fd: int | None = None
@@ -108,6 +111,8 @@ class TerminalSession:
 
     def start(self) -> None:
         argv = self._argv()
+        if self.activity_lease is not None:
+            argv, _ = self.activity_lease.guard_process(argv)
         pid, fd = pty.fork()
         if pid == 0:
             # ── child ──
@@ -123,6 +128,8 @@ class TerminalSession:
         # ── parent ──
         self.pid = pid
         self.fd = fd
+        if self.activity_lease is not None:
+            self.activity_lease.mark_process_started()
         for _ in range(50):
             try:
                 if os.getsid(pid) == pid:

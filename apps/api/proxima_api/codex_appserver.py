@@ -125,6 +125,7 @@ class CodexAppServerProcess:
         *,
         master_chat_only: bool = False,
         contained: bool = False,
+        activity_lease: Any = None,
     ):
         self.spec = spec
         self.home = home
@@ -132,6 +133,7 @@ class CodexAppServerProcess:
         self.cwd = cwd
         self.master_chat_only = master_chat_only
         self.contained = contained
+        self.activity_lease = activity_lease
         self.proc: asyncio.subprocess.Process | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
@@ -278,6 +280,9 @@ class CodexAppServerProcess:
                 cwd=self.cwd,
                 label="runner",
             )
+        guard_options: dict[str, Any] = {}
+        if self.activity_lease is not None:
+            argv, guard_options = self.activity_lease.guard_process(argv)
         try:
             self.proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -287,7 +292,10 @@ class CodexAppServerProcess:
                 env=env,
                 cwd=self.cwd,
                 limit=READ_LIMIT,
+                **guard_options,
             )
+            if self.activity_lease is not None:
+                self.activity_lease.mark_process_started()
             self._reader = asyncio.create_task(self._read_loop())
             self._stderr_reader = asyncio.create_task(self._read_stderr())
             # app-server handshake: initialize, then the required `initialized`

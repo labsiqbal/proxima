@@ -131,7 +131,12 @@ class ScriptRunner:
         # Outside db_lock: fail_run takes the lock itself.
         self.worker.graph_advancers.fail_run(run, error, self.worker.add_event)
 
-    async def execute(self, run: dict[str, Any]) -> None:
+    async def execute(
+        self,
+        run: dict[str, Any],
+        *,
+        activity_lease: Any = None,
+    ) -> None:
         db = self.app.state.worker_db
         cfg = self.app.state.config
         run_id = _as_int(run["id"])
@@ -254,6 +259,9 @@ class ScriptRunner:
                 effect_lease = (
                     self.app.state.maintenance.background_lease()
                 )
+            guard_options: dict[str, Any] = {}
+            if activity_lease is not None:
+                command, guard_options = activity_lease.guard_process(command)
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *command,
@@ -262,7 +270,10 @@ class ScriptRunner:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
+                    **guard_options,
                 )
+                if activity_lease is not None:
+                    activity_lease.mark_process_started()
             except FileNotFoundError as exc:
                 self._fail(run, f"script interpreter not found: {exc}")
                 return

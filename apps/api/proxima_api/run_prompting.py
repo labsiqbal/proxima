@@ -300,6 +300,7 @@ class RunPrompting:
         active_runs: dict[int, tuple[Any, str]],
         *,
         master_dynamic_tools: list[dict[str, Any]] | None = None,
+        activity_lease: Any = None,
     ) -> tuple[Any, str, bool]:
         """Get an ACP process and a per-home ACP session for this Proxima session."""
         db = self.app.state.worker_db
@@ -317,17 +318,23 @@ class RunPrompting:
             await self.app.state.acp_manager.recycle(
                 spec, hermes_home, cwd, master_chat_only=True
             )
-        proc = (
-            await self.app.state.acp_manager.get(
-                spec,
-                hermes_home,
-                cwd,
-                master_chat_only=True,
+        manager_options: dict[str, Any] = {}
+        if restricted:
+            manager_options["master_chat_only"] = True
+        if (
+            activity_lease is not None
+            and getattr(
+                self.app.state.acp_manager,
+                "supports_activity_guardian",
+                False,
             )
-            if restricted
-            else await self.app.state.acp_manager.get(
-                spec, hermes_home, cwd
-            )
+        ):
+            manager_options["activity_lease"] = activity_lease
+        proc = await self.app.state.acp_manager.get(
+            spec,
+            hermes_home,
+            cwd,
+            **manager_options,
         )
         if restricted:
             with self.app.state.db_lock:
@@ -614,6 +621,7 @@ class RunPrompting:
         reason: str,
         *,
         master_dynamic_tools: list[dict[str, Any]] | None = None,
+        activity_lease: Any = None,
     ) -> tuple[Any, str]:
         db = self.app.state.worker_db
         logging.getLogger("proxima.worker").warning("resetting ACP session %s for chat %s: %s", acp_sid, session_id, reason[-240:])
@@ -633,17 +641,23 @@ class RunPrompting:
                 )
         except Exception:
             logging.getLogger("proxima.worker").exception("failed to recycle agent process after ACP history error")
-        proc2 = (
-            await self.app.state.acp_manager.get(
-                spec,
-                hermes_home,
-                cwd,
-                master_chat_only=True,
+        manager_options: dict[str, Any] = {}
+        if master_dynamic_tools is not None:
+            manager_options["master_chat_only"] = True
+        if (
+            activity_lease is not None
+            and getattr(
+                self.app.state.acp_manager,
+                "supports_activity_guardian",
+                False,
             )
-            if master_dynamic_tools is not None
-            else await self.app.state.acp_manager.get(
-                spec, hermes_home, cwd
-            )
+        ):
+            manager_options["activity_lease"] = activity_lease
+        proc2 = await self.app.state.acp_manager.get(
+            spec,
+            hermes_home,
+            cwd,
+            **manager_options,
         )
         sid2 = (
             await proc2.new_master_session(cwd, master_dynamic_tools)

@@ -194,12 +194,14 @@ class AcpProcess:
         cwd: str,
         *,
         contained: bool = False,
+        activity_lease: Any = None,
     ):
         self.spec = spec
         self.home = home
         self.hermes_home = home  # alias kept for any external references
         self.cwd = cwd
         self.contained = contained
+        self.activity_lease = activity_lease
         self.proc: asyncio.subprocess.Process | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
@@ -246,11 +248,17 @@ class AcpProcess:
                 cwd=self.cwd,
                 label="runner",
             )
+        guard_options: dict[str, Any] = {}
+        if self.activity_lease is not None:
+            argv, guard_options = self.activity_lease.guard_process(argv)
         self.proc = await asyncio.create_subprocess_exec(
             *argv,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, env=env, cwd=self.cwd, limit=READ_LIMIT,
+            **guard_options,
         )
+        if self.activity_lease is not None:
+            self.activity_lease.mark_process_started()
         self._reader = asyncio.create_task(self._read_loop())
         self._stderr_reader = asyncio.create_task(self._read_stderr())
         try:
@@ -514,6 +522,8 @@ class AcpManager:
     working directory — so each project needs its own process rooted there.
     """
 
+    supports_activity_guardian = True
+
     def __init__(
         self,
         *,
@@ -567,6 +577,7 @@ class AcpManager:
         cwd: str,
         *,
         master_chat_only: bool = False,
+        activity_lease: Any = None,
     ) -> Any:
         key = (spec.id, home, cwd, master_chat_only)
         async with self._lock:
@@ -586,23 +597,31 @@ class AcpManager:
                 await self._stop_detached(proc, lease)
             process_class = _process_class(spec)
             if getattr(spec, "protocol", "acp") == "codex-app-server":
+                process_options: dict[str, Any] = {
+                    "master_chat_only": master_chat_only,
+                    "contained": self.contained,
+                }
+                if activity_lease is not None:
+                    process_options["activity_lease"] = activity_lease
                 proc = process_class(
                     spec,
                     home,
                     cwd,
-                    master_chat_only=master_chat_only,
-                    contained=self.contained,
+                    **process_options,
                 )
             else:
                 if master_chat_only:
                     raise AcpError(
                         "runner does not implement a restricted Master process"
                     )
+                process_options = {"contained": self.contained}
+                if activity_lease is not None:
+                    process_options["activity_lease"] = activity_lease
                 proc = process_class(
                     spec,
                     home,
                     cwd,
-                    contained=self.contained,
+                    **process_options,
                 )
             lease = (
                 self.maintenance.background_lease()

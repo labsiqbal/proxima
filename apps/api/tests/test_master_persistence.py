@@ -281,7 +281,7 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
 
-    assert current_version(app.state.db) == 55
+    assert current_version(app.state.db) >= 55
     assert app.state.db.execute(
         "SELECT 1 FROM sqlite_master "
         "WHERE type = 'table' AND name = 'master_decisions'"

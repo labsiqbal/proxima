@@ -684,7 +684,20 @@ def register(app, deps):
                 int(row["project_id"]),
             ):
                 result = turn_restore.restore(
-                    db(), message_id, root=Path(row["project_path"]),
+                    db(),
+                    message_id,
+                    resolve_root=lambda semantics, rel: (
+                        container_registry.ops_root(
+                            db(),
+                            int(row["project_id"]),
+                        )
+                        if semantics == turn_restore.ROOT_OPS_V1
+                        else container_registry.root_for_virtual_path(
+                            db(),
+                            int(row["project_id"]),
+                            rel,
+                        )
+                    ),
                     confirmed=payload.get("confirm") is True,
                     accept_active_master=payload.get("accept_active_master") is True,
                     accept_active_alpha=(

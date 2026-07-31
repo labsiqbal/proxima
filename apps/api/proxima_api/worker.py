@@ -1225,7 +1225,13 @@ class RunWorker:
                                 script_project,
                             )
                 try:
-                    await self.script_runner.execute(run)
+                    if script_activity_lease is None:
+                        await self.script_runner.execute(run)
+                    else:
+                        await self.script_runner.execute(
+                            run,
+                            activity_lease=script_activity_lease,
+                        )
                 finally:
                     if script_activity_lease is not None:
                         script_activity_lease.release()
@@ -1658,6 +1664,7 @@ class RunWorker:
                 cwd,
                 self.active_runs,
                 master_dynamic_tools=master_tool_specs,
+                activity_lease=project_activity_lease,
             )
             hb_task = asyncio.create_task(self._heartbeat(run_id, float(cfg.get("run_heartbeat_seconds") or 10)))
             # Per-turn quota: the in-app setting wins (DB-backed, so it applies on
@@ -1748,6 +1755,7 @@ class RunWorker:
                     self.active_runs,
                     str(exc),
                     master_dynamic_tools=master_tool_specs,
+                    activity_lease=project_activity_lease,
                 )
                 fresh_session = True
                 prompt_text = self.prompting.build_prompt_text(
@@ -1848,6 +1856,7 @@ class RunWorker:
                             session_id=session_id,
                             root=turn_root,
                             before=turn_before,
+                            root_semantics=turn_restore.ROOT_CONTAINER_VIRTUAL_V2,
                         )
                 except Exception:
                     logging.getLogger("proxima.worker").exception("turn restore journal failed (non-fatal)")

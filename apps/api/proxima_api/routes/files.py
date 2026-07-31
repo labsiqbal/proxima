@@ -62,6 +62,22 @@ class _LeaseGroup:
         for lease in reversed(self._leases):
             lease.release()
 
+    def guard_process(
+        self,
+        command: list[str],
+    ) -> tuple[list[str], dict[str, Any]]:
+        for lease in self._leases:
+            guard = getattr(lease, "guard_process", None)
+            if guard is not None:
+                return guard(command)
+        return command, {}
+
+    def mark_process_started(self) -> None:
+        for lease in self._leases:
+            mark = getattr(lease, "mark_process_started", None)
+            if mark is not None:
+                mark()
+
 
 def register(app, deps):
     db = deps["db"]

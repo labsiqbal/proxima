@@ -30,7 +30,7 @@ _directory_backend = directory_backend()
 
 OPS_RELPATH = "ops"
 CONTAINER_DOC = "container.md"
-OPS_MIGRATION_VERSION = 4
+OPS_MIGRATION_VERSION = 5
 KNOWN_OPS_DIRS = (
     "wiki",
     "artifacts",
@@ -143,6 +143,47 @@ class ContainerActivityLease:
         self._shared = shared
         self._fd = fd
         self._released = False
+        self._transferred = False
+
+    def guard_process(
+        self,
+        command: list[str],
+    ) -> tuple[list[str], dict[str, Any]]:
+        if self._fd is None:
+            return command, {}
+        inherited = str(self._fd)
+        if os.name == "nt":
+            import msvcrt
+
+            handle = msvcrt.get_osfhandle(self._fd)
+            os.set_handle_inheritable(handle, True)
+            inherited = f"handle:{handle}"
+        else:
+            os.set_inheritable(self._fd, True)
+        guarded = [
+            sys.executable,
+            "-m",
+            "proxima_api.activity_guardian",
+            inherited,
+            "--",
+            *command,
+        ]
+        if os.name == "nt":
+            return guarded, {"close_fds": False}
+        return guarded, {"pass_fds": (self._fd,)}
+
+    def mark_process_started(self) -> None:
+        if self._fd is not None:
+            if os.name == "nt":
+                import msvcrt
+
+                os.set_handle_inheritable(
+                    msvcrt.get_osfhandle(self._fd),
+                    False,
+                )
+            else:
+                os.set_inheritable(self._fd, False)
+            self._transferred = True
 
     def release(self) -> None:
         if self._released:
@@ -150,7 +191,10 @@ class ContainerActivityLease:
         self._released = True
         try:
             if self._fd is not None:
-                _release_file_lock(self._fd)
+                if self._transferred:
+                    os.close(self._fd)
+                else:
+                    _release_file_lock(self._fd)
         finally:
             self._state.release(shared=self._shared)
 
@@ -576,6 +620,7 @@ def _planned_recovery_temp(
         "sha256": expected_hash,
         "phase": "planned",
         "identity": None,
+        "ownership_token": secrets.token_hex(32),
     }
 
 
@@ -630,6 +675,52 @@ def _identity_matches(value: Any, current: os.stat_result) -> bool:
     )
 
 
+def _windows_directory_identity(
+    handle: int,
+    display: str,
+) -> tuple[int, int]:
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time_low", wintypes.DWORD),
+            ("creation_time_high", wintypes.DWORD),
+            ("access_time_low", wintypes.DWORD),
+            ("access_time_high", wintypes.DWORD),
+            ("write_time_low", wintypes.DWORD),
+            ("write_time_high", wintypes.DWORD),
+            ("volume_serial", wintypes.DWORD),
+            ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD),
+            ("links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    information = ByHandleFileInformation()
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    if not get_information(ctypes.c_void_p(handle), ctypes.byref(information)):
+        raise OSError(
+            ctypes.get_last_error(),
+            f"cannot inspect directory: {display}",
+        )
+    if not information.attributes & 0x00000010 or information.attributes & 0x00000400:
+        raise ContainerBoundaryError(
+            f"directory is missing or is a reparse point: {display}"
+        )
+    return (
+        int(information.volume_serial),
+        (int(information.file_index_high) << 32) | int(information.file_index_low),
+    )
+
+
 def _windows_open_directory(path: Path) -> tuple[int, tuple[int, int]]:
     from ctypes import wintypes
 
@@ -657,45 +748,85 @@ def _windows_open_directory(path: Path) -> tuple[int, tuple[int, int]]:
     invalid = ctypes.c_void_p(-1).value
     if handle == invalid:
         raise OSError(ctypes.get_last_error(), f"cannot open directory: {path}")
+    try:
+        identity = _windows_directory_identity(int(handle), str(path))
+    except Exception:
+        kernel32.CloseHandle(handle)
+        raise
+    return int(handle), identity
 
-    class ByHandleFileInformation(ctypes.Structure):
+
+def _windows_create_directory_at(
+    parent_handle: int,
+    name: str,
+) -> tuple[int, tuple[int, int]]:
+    from ctypes import wintypes
+
+    class UnicodeString(ctypes.Structure):
         _fields_ = [
-            ("attributes", wintypes.DWORD),
-            ("creation_time_low", wintypes.DWORD),
-            ("creation_time_high", wintypes.DWORD),
-            ("access_time_low", wintypes.DWORD),
-            ("access_time_high", wintypes.DWORD),
-            ("write_time_low", wintypes.DWORD),
-            ("write_time_high", wintypes.DWORD),
-            ("volume_serial", wintypes.DWORD),
-            ("size_high", wintypes.DWORD),
-            ("size_low", wintypes.DWORD),
-            ("links", wintypes.DWORD),
-            ("file_index_high", wintypes.DWORD),
-            ("file_index_low", wintypes.DWORD),
+            ("length", wintypes.USHORT),
+            ("maximum_length", wintypes.USHORT),
+            ("buffer", wintypes.LPWSTR),
         ]
 
-    information = ByHandleFileInformation()
-    get_information = kernel32.GetFileInformationByHandle
-    get_information.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(ByHandleFileInformation),
-    ]
-    get_information.restype = wintypes.BOOL
-    if not get_information(handle, ctypes.byref(information)):
-        error = ctypes.get_last_error()
-        kernel32.CloseHandle(handle)
-        raise OSError(error, f"cannot inspect directory: {path}")
-    if not information.attributes & 0x00000010 or information.attributes & 0x00000400:
-        kernel32.CloseHandle(handle)
-        raise ContainerBoundaryError(
-            f"directory is missing or is a reparse point: {path}"
-        )
-    identity = (
-        int(information.volume_serial),
-        (int(information.file_index_high) << 32) | int(information.file_index_low),
+    class ObjectAttributes(ctypes.Structure):
+        _fields_ = [
+            ("length", wintypes.ULONG),
+            ("root_directory", wintypes.HANDLE),
+            ("object_name", ctypes.POINTER(UnicodeString)),
+            ("attributes", wintypes.ULONG),
+            ("security_descriptor", wintypes.LPVOID),
+            ("security_qos", wintypes.LPVOID),
+        ]
+
+    class IoStatusBlock(ctypes.Structure):
+        _fields_ = [
+            ("status", wintypes.LPVOID),
+            ("information", ctypes.c_size_t),
+        ]
+
+    buffer = ctypes.create_unicode_buffer(name)
+    encoded = name.encode("utf-16-le")
+    unicode_name = UnicodeString(
+        len(encoded),
+        len(encoded) + 2,
+        ctypes.cast(buffer, wintypes.LPWSTR),
     )
-    return int(handle), identity
+    attributes = ObjectAttributes(
+        ctypes.sizeof(ObjectAttributes),
+        ctypes.c_void_p(parent_handle),
+        ctypes.pointer(unicode_name),
+        0x00000040,
+        None,
+        None,
+    )
+    status_block = IoStatusBlock()
+    handle = wintypes.HANDLE()
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    create_file = ntdll.NtCreateFile
+    create_file.restype = ctypes.c_long
+    status = create_file(
+        ctypes.byref(handle),
+        0x00100000 | 0x00000001 | 0x00000002 | 0x00000004 | 0x00000080,
+        ctypes.byref(attributes),
+        ctypes.byref(status_block),
+        None,
+        0x00000010,
+        0x00000001 | 0x00000002 | 0x00000004,
+        3,
+        0x00000001 | 0x00000020 | 0x00200000,
+        None,
+        0,
+    )
+    if status < 0:
+        raise OSError(int(status), f"cannot create directory: {name}")
+    value = int(handle.value)
+    try:
+        identity = _windows_directory_identity(value, name)
+    except Exception:
+        _windows_close_handle(value)
+        raise
+    return value, identity
 
 
 def _windows_close_handle(handle: int) -> None:
@@ -785,10 +916,23 @@ def _create_physical_ops_root_windows(
         physical_handle, physical_identity = _windows_open_directory(physical)
         for dirname in starter_dirs:
             rel = _safe_rel_path(dirname)
-            target = physical.joinpath(*rel.parts)
-            target.mkdir(parents=True, exist_ok=True)
-            child_handle, _ = _windows_open_directory(target)
-            _windows_close_handle(child_handle)
+            if not rel.parts:
+                raise ContainerBoundaryError(
+                    f"Ops starter path is unsafe: {dirname!r}"
+                )
+            parent_handle = physical_handle
+            opened: list[int] = []
+            try:
+                for part in rel.parts:
+                    child_handle, _ = _windows_create_directory_at(
+                        parent_handle,
+                        part,
+                    )
+                    opened.append(child_handle)
+                    parent_handle = child_handle
+            finally:
+                for child_handle in reversed(opened):
+                    _windows_close_handle(child_handle)
             check_handle, check_identity = _windows_open_directory(physical)
             _windows_close_handle(check_handle)
             if check_identity != physical_identity:
@@ -951,6 +1095,57 @@ def _exact_regular_hash_at(
     )
 
 
+def _recovery_token_matches(fd: int, recovery: Mapping[str, Any]) -> bool:
+    token = recovery.get("ownership_token")
+    if not isinstance(token, str) or len(token) != 64:
+        return False
+    try:
+        current = os.getxattr(fd, "user.proxima.ops_migration")
+    except (AttributeError, OSError):
+        return False
+    return current == token.encode("ascii")
+
+
+def _creating_recovery_matches_at(
+    parent_fd: int,
+    name: str,
+    recovery: Mapping[str, Any],
+) -> bool:
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(name, flags, dir_fd=parent_fd)
+    except OSError:
+        return False
+    try:
+        opened = os.fstat(fd)
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        return (
+            stat.S_ISREG(opened.st_mode)
+            and opened.st_size == 0
+            and opened.st_nlink == 1
+            and _same_identity(opened, named)
+            and _recovery_token_matches(fd, recovery)
+        )
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def _creating_recovery_matches(
+    path: Path,
+    recovery: Mapping[str, Any],
+) -> bool:
+    try:
+        parent_fd = os.open(path.parent, _directory_open_flags())
+    except OSError:
+        return False
+    try:
+        return _creating_recovery_matches_at(parent_fd, path.name, recovery)
+    finally:
+        os.close(parent_fd)
+
+
 def _unlink_exact_file_at(
     parent_fd: int,
     name: str,
@@ -1001,9 +1196,12 @@ def _atomic_write_if_missing(
         raise OpsMigrationCollision("planned container.md recovery file is invalid")
     recovery_name = recovery["path"]
 
-    def advance(phase: str, identity: Mapping[str, Any]) -> None:
+    def advance(
+        phase: str,
+        identity: Mapping[str, Any] | None,
+    ) -> None:
         recovery["phase"] = phase
-        recovery["identity"] = dict(identity)
+        recovery["identity"] = dict(identity) if identity is not None else None
         if persist_recovery is not None:
             persist_recovery()
 
@@ -1067,11 +1265,51 @@ def _atomic_write_if_missing(
                 dir_fd=parent_fd,
                 follow_symlinks=False,
             )
-            if not _identity_matches(recovery["identity"], recovery_stat):
+            if recovery["phase"] == "creating":
+                flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+                recovery_fd = os.open(
+                    recovery_name,
+                    flags,
+                    dir_fd=parent_fd,
+                )
+                try:
+                    opened = os.fstat(recovery_fd)
+                    if (
+                        not _creating_recovery_matches_at(
+                            parent_fd,
+                            recovery_name,
+                            recovery,
+                        )
+                        or not _same_identity(opened, recovery_stat)
+                    ):
+                        raise OpsMigrationCollision(
+                            "container.md recovery file has ambiguous ownership"
+                        )
+                    advance("created", _stat_identity(opened))
+                finally:
+                    os.close(recovery_fd)
+            elif not _identity_matches(recovery["identity"], recovery_stat):
                 raise OpsMigrationCollision(
                     "container.md recovery file has ambiguous ownership"
                 )
+            if recovery["phase"] == "prepared":
+                if not _exact_regular_hash_at(
+                    parent_fd,
+                    recovery_name,
+                    expected_hash,
+                ):
+                    raise OpsMigrationCollision(
+                        "container.md recovery file has ambiguous ownership"
+                    )
+                os.fsync(parent_fd)
+                advance("ready", recovery["identity"])
         else:
+            if recovery["phase"] in {"prepared", "creating"}:
+                advance("planned", None)
+            elif recovery["phase"] != "planned":
+                raise OpsMigrationCollision(
+                    "container.md recovery file has ambiguous ownership"
+                )
             anonymous_fd: int | None = None
             if hasattr(os, "O_TMPFILE"):
                 try:
@@ -1084,22 +1322,18 @@ def _atomic_write_if_missing(
                         dir_fd=parent_fd,
                     )
                     _write_all(anonymous_fd, content)
-                    _publish_anonymous_file(anonymous_fd, parent_fd, path.name)
-                    os.fsync(parent_fd)
-                    target_stat = os.stat(
-                        path.name,
-                        dir_fd=parent_fd,
-                        follow_symlinks=False,
+                    anonymous_identity = _stat_identity(os.fstat(anonymous_fd))
+                    advance("prepared", anonymous_identity)
+                    _publish_anonymous_file(
+                        anonymous_fd,
+                        parent_fd,
+                        recovery_name,
                     )
-                    advance("complete", _stat_identity(target_stat))
-                    return
+                    os.fsync(parent_fd)
+                    advance("ready", anonymous_identity)
                 except FileExistsError:
-                    if _exact_regular_hash_at(
-                        parent_fd, path.name, expected_hash
-                    ):
-                        return
                     raise OpsMigrationCollision(
-                        f"{path.name} appeared with unexpected content"
+                        "container.md recovery file has ambiguous ownership"
                     )
                 except OSError as exc:
                     if exc.errno not in {
@@ -1111,28 +1345,57 @@ def _atomic_write_if_missing(
                         errno.EPERM,
                     }:
                         raise
+                    if (
+                        recovery["phase"] == "prepared"
+                        and _path_state_at(parent_fd, recovery_name)
+                        == "missing"
+                    ):
+                        advance("planned", None)
                 finally:
                     if anonymous_fd is not None:
                         os.close(anonymous_fd)
-            flags = (
-                os.O_CREAT
-                | os.O_EXCL
-                | os.O_WRONLY
-                | os.O_NOFOLLOW
-                | getattr(os, "O_CLOEXEC", 0)
-            )
-            recovery_fd = os.open(
-                recovery_name,
-                flags,
-                0o600,
-                dir_fd=parent_fd,
-            )
-            try:
-                recovery_identity = _stat_identity(os.fstat(recovery_fd))
-                os.fsync(parent_fd)
-                advance("created", recovery_identity)
-            finally:
-                os.close(recovery_fd)
+            if recovery["phase"] == "planned":
+                advance("creating", None)
+                flags = (
+                    os.O_CREAT
+                    | os.O_EXCL
+                    | os.O_WRONLY
+                    | os.O_NOFOLLOW
+                    | getattr(os, "O_CLOEXEC", 0)
+                )
+                recovery_fd = os.open(
+                    recovery_name,
+                    flags,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+                try:
+                    try:
+                        os.setxattr(
+                            recovery_fd,
+                            "user.proxima.ops_migration",
+                            recovery["ownership_token"].encode("ascii"),
+                        )
+                    except (AttributeError, OSError) as exc:
+                        current = os.stat(
+                            recovery_name,
+                            dir_fd=parent_fd,
+                            follow_symlinks=False,
+                        )
+                        opened = os.fstat(recovery_fd)
+                        if _same_identity(current, opened):
+                            os.unlink(recovery_name, dir_fd=parent_fd)
+                            os.fsync(parent_fd)
+                            advance("planned", None)
+                        raise OpsMigrationCollision(
+                            "this filesystem cannot prove recovery-file ownership"
+                        ) from exc
+                    recovery_identity = _stat_identity(os.fstat(recovery_fd))
+                    os.fsync(recovery_fd)
+                    os.fsync(parent_fd)
+                    advance("created", recovery_identity)
+                finally:
+                    os.close(recovery_fd)
         if recovery["phase"] == "created":
             flags = os.O_WRONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
             recovery_fd = os.open(
@@ -2535,7 +2798,7 @@ def _upgrade_manifest(
     version = manifest.get("version")
     if version == OPS_MIGRATION_VERSION:
         return dict(manifest)
-    if version not in {1, 2, 3}:
+    if version not in {1, 2, 3, 4}:
         raise OpsMigrationCollision(
             "stored Ops migration manifest has an unsupported version"
         )
@@ -2545,6 +2808,63 @@ def _upgrade_manifest(
     entries = upgraded.get("entries")
     if not isinstance(entries, list):
         raise OpsMigrationCollision("stored Ops migration manifest has invalid entries")
+
+    if version == 4:
+        planned = upgraded.get("container_doc")
+        if not isinstance(planned, dict):
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest has no planned container.md"
+            )
+        if planned.get("strategy") == "generate":
+            expected_hash = planned.get("sha256")
+            recovery = planned.get("recovery_temp")
+            if (
+                not isinstance(expected_hash, str)
+                or not isinstance(recovery, dict)
+                or not _valid_legacy_recovery_temp(recovery, expected_hash)
+            ):
+                raise OpsMigrationCollision(
+                    "stored Ops migration manifest has an invalid recovery file"
+                )
+            recovery_path = physical / str(recovery["path"])
+            target_path = physical / CONTAINER_DOC
+            recovery_state = _path_state(recovery_path)
+            target_state = _path_state(target_path)
+            if recovery["phase"] == "planned":
+                if recovery_state != "missing" or target_state != "missing":
+                    raise OpsMigrationCollision(
+                        "legacy recovery artifact has ambiguous ownership"
+                    )
+                planned["recovery_temp"] = _planned_recovery_temp(expected_hash)
+            else:
+                bound_path = (
+                    recovery_path
+                    if recovery_state == "file"
+                    else target_path
+                    if target_state == "file"
+                    else None
+                )
+                if (
+                    bound_path is None
+                    or not _identity_matches(
+                        recovery["identity"],
+                        bound_path.lstat(),
+                    )
+                    or (
+                        recovery["phase"] != "created"
+                        and _hash_file(bound_path) != expected_hash
+                    )
+                ):
+                    raise OpsMigrationCollision(
+                        "legacy recovery artifact has ambiguous ownership"
+                    )
+                recovery["ownership_token"] = secrets.token_hex(32)
+        elif planned.get("strategy") != "move":
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest has an invalid planned container.md"
+            )
+        upgraded["version"] = OPS_MIGRATION_VERSION
+        return upgraded
 
     if version in {2, 3}:
         planned = upgraded.get("container_doc")
@@ -2818,6 +3138,46 @@ def _valid_recovery_temp(
         and "/" not in path
         and "\\" not in path
         and recovery.get("sha256") == expected_hash
+        and isinstance(recovery.get("ownership_token"), str)
+        and len(recovery["ownership_token"]) == 64
+        and all(
+            character in "0123456789abcdef"
+            for character in recovery["ownership_token"]
+        )
+        and phase
+        in {
+            "planned",
+            "creating",
+            "prepared",
+            "created",
+            "ready",
+            "published",
+            "complete",
+        }
+        and (
+            (phase in {"planned", "creating"} and identity is None)
+            or (
+                phase not in {"planned", "creating"}
+                and _valid_identity(identity)
+            )
+        )
+    )
+
+
+def _valid_legacy_recovery_temp(
+    recovery: Mapping[str, Any],
+    expected_hash: str,
+) -> bool:
+    path = recovery.get("path")
+    phase = recovery.get("phase")
+    identity = recovery.get("identity")
+    return (
+        isinstance(path, str)
+        and path.startswith(RECOVERY_TEMP_PREFIX)
+        and path.endswith(".tmp")
+        and "/" not in path
+        and "\\" not in path
+        and recovery.get("sha256") == expected_hash
         and phase in {"planned", "created", "ready", "published", "complete"}
         and (
             (phase == "planned" and identity is None)
@@ -2945,12 +3305,23 @@ def _validated_retry_manifest(
             recovery_path = physical / recovery_temp["path"]
             recovery_state = _path_state(recovery_path)
             if recovery_state != "missing":
-                if recovery_state != "file" or recovery_temp["phase"] == "planned":
+                phase = recovery_temp["phase"]
+                if recovery_state != "file" or phase == "planned":
                     raise OpsMigrationCollision(
                         "container.md recovery file has ambiguous ownership"
                     )
-                recovery_stat = recovery_path.lstat()
-                if not _identity_matches(
+                if phase == "creating":
+                    if not _creating_recovery_matches(
+                        recovery_path,
+                        recovery_temp,
+                    ):
+                        raise OpsMigrationCollision(
+                            "container.md recovery file has ambiguous ownership"
+                        )
+                    recovery_stat = None
+                else:
+                    recovery_stat = recovery_path.lstat()
+                if recovery_stat is not None and not _identity_matches(
                     recovery_temp["identity"],
                     recovery_stat,
                 ):
@@ -2958,7 +3329,7 @@ def _validated_retry_manifest(
                         "container.md recovery file has ambiguous ownership"
                     )
                 if (
-                    recovery_temp["phase"] != "created"
+                    phase not in {"creating", "created"}
                     and _hash_file(recovery_path) != recovery_temp["sha256"]
                 ):
                     raise OpsMigrationCollision(
@@ -3002,6 +3373,15 @@ def _validated_retry_manifest(
                 raise OpsMigrationCollision(
                     "existing generated container.md has ambiguous ownership"
                 )
+    if (
+        container_doc_state == "missing"
+        and recovery_temp is not None
+        and _path_state(physical / recovery_temp["path"]) == "missing"
+        and recovery_temp["phase"] not in {"planned", "creating", "prepared"}
+    ):
+        raise OpsMigrationCollision(
+            "container.md recovery file has ambiguous ownership"
+        )
     if (
         container_doc_strategy == "generate"
         and _path_state(root / CONTAINER_DOC) != "missing"
@@ -3136,16 +3516,30 @@ def inspect_ops_migration(
         if recovery_temp is not None:
             recovery_path = physical / recovery_temp["path"]
             try:
+                phase = recovery_temp["phase"]
+                state = _path_state(recovery_path)
                 exact_recovery = (
-                    _path_state(recovery_path) == "file"
-                    and recovery_temp["phase"] != "planned"
-                    and _identity_matches(
-                        recovery_temp["identity"],
-                        recovery_path.lstat(),
-                    )
+                    state == "file"
                     and (
-                        recovery_temp["phase"] == "created"
-                        or _hash_file(recovery_path) == recovery_temp["sha256"]
+                        (
+                            phase == "creating"
+                            and _creating_recovery_matches(
+                                recovery_path,
+                                recovery_temp,
+                            )
+                        )
+                        or (
+                            phase not in {"planned", "creating"}
+                            and _identity_matches(
+                                recovery_temp["identity"],
+                                recovery_path.lstat(),
+                            )
+                            and (
+                                phase == "created"
+                                or _hash_file(recovery_path)
+                                == recovery_temp["sha256"]
+                            )
+                        )
                     )
                 )
             except OSError:

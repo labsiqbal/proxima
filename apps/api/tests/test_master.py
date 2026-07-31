@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 import subprocess
@@ -1203,6 +1204,48 @@ def test_turn_restore_previews_paths_and_restores_pre_turn_content(tmp_path: Pat
     assert restored.status_code == 200
     assert target.read_text() == "before"
     assert client.get(f"/api/chat/messages/{message_id}/restore-turn").status_code == 404
+
+
+def test_pre_migration_turn_journal_restores_through_active_ops_root(
+    tmp_path: Path,
+):
+    app, client = _client(tmp_path)
+    project = client.get("/api/projects").json()["projects"][0]
+    root = Path(project["path"])
+    target = root / "ops" / "wiki" / "migrated.md"
+    target.write_text("after", encoding="utf-8")
+    session = client.post(
+        "/api/sessions",
+        json={"title": "Legacy journal", "project_slug": project["slug"]},
+    ).json()
+    message_id = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) "
+        "VALUES (?, 'assistant', 'Changed it')",
+        (session["id"],),
+    ).lastrowid
+    entries = [
+        {
+            "path": "wiki/migrated.md",
+            "before_hash": None,
+            "before_content_b64": base64.b64encode(b"before").decode("ascii"),
+            "after_hash": "unused",
+        }
+    ]
+    app.state.db.execute(
+        "INSERT INTO turn_file_journals("
+        "message_id, session_id, entries_json"
+        ") VALUES (?, ?, ?)",
+        (message_id, session["id"], json.dumps(entries)),
+    )
+
+    restored = client.post(
+        f"/api/chat/messages/{message_id}/restore-turn",
+        json={"confirm": True},
+    )
+
+    assert restored.status_code == 200, restored.text
+    assert target.read_text(encoding="utf-8") == "before"
+    assert not (root / "wiki").exists()
 
 
 def test_unattended_supervisor_enforces_turn_budget_and_surfaces_clean_stop(tmp_path: Path):

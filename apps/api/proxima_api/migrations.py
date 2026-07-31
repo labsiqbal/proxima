@@ -6194,6 +6194,22 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
             ),
         )
 
+
+def _add_turn_journal_root_semantics(conn: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in conn.execute(
+            "PRAGMA table_info(turn_file_journals)"
+        ).fetchall()
+    }
+    if "root_semantics" not in columns:
+        conn.execute(
+            "ALTER TABLE turn_file_journals ADD COLUMN "
+            "root_semantics TEXT NOT NULL DEFAULT 'container-v1'"
+        )
+
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -6349,6 +6365,11 @@ MIGRATIONS: list[Migration] = [
         "add durable Master decisions and final-approval intents",
         _add_master_decisions,
         {"no_auto_tx": True},
+    ),
+    (
+        56,
+        "version turn-journal filesystem root semantics",
+        _add_turn_journal_root_semantics,
     ),
 ]
 

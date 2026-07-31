@@ -1287,13 +1287,17 @@ hash-bound and moved byte-for-byte; a generated document is planned only when th
 legacy document is absent. Atomic no-clobber creation and same-filesystem renames
 through stable no-follow directory handles move only manifest-bound inodes for known
 Ops-owned paths. Generated documents prefer anonymous same-filesystem temporary
-storage. The fallback uses an unpredictable manifest-bound name plus durable
-creation, write, publish, and cleanup phases with device and inode identity. Only a
-proven Proxima recovery artifact can be hidden from inspection, resumed, or cleaned
-up. One cross-process per-Container mutation lock serializes the filesystem and
+storage and persists the anonymous inode identity and expected hash before linking
+it into the recovery namespace. The named fallback persists an unpredictable
+ownership token before creation and binds it as filesystem metadata before writing.
+Creation, preparation, publication, and cleanup are separate fsynced phases. Only
+an exact proven Proxima recovery artifact can be hidden from inspection, resumed,
+or cleaned up. One cross-process per-Container mutation lock serializes the filesystem and
 durable marker boundary with supported Area, Files, Design, Moodboard, chat-media,
 and turn restore mutations. A separate shared activity lease spans agent runs,
-project terminals, and preview apps; migration and complete Project deletion require
+project terminals, and preview apps. A guardian process inherits that lease before
+the writer starts and retains it until the complete process tree exits, including
+after API shutdown or cancellation; migration and complete Project deletion require
 an exclusive quiescent lease. Async uploads finish staging before they acquire the
 synchronous publication boundary. The durable marker resumes safely after
 interruption. Older markers upgrade only when
@@ -1308,7 +1312,8 @@ can never be replaced. A repaired physical layout with an open Attention item ca
 the same explicit retry boundary to recheck the layout and resolve the item without
 moving content. Root-repository exclusion is updated through the same opened
 no-follow Container descriptor. Fresh Windows Containers use no-reparse directory
-handles and relative no-clobber document creation instead of POSIX descriptor APIs.
+handles, create every starter component relative to the opened physical Ops handle,
+and use relative no-clobber document creation instead of POSIX descriptor APIs.
 The Attention item links to a durable Project settings detail route. That surface
 shows the affected Project, exact stored owner-safe reason, migration phase, legacy
 and physical path states, exact physical-root entries, conflicts, and which Ops paths

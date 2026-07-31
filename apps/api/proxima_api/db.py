@@ -1391,6 +1391,7 @@ CREATE TABLE IF NOT EXISTS turn_file_journals (
   message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
   session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   entries_json TEXT NOT NULL,
+  root_semantics TEXT NOT NULL DEFAULT 'container-v1',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_turn_file_journals_session ON turn_file_journals(session_id, id);
@@ -1789,6 +1790,12 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
                 "WHERE marker_kind = 'aggregate' "
                 "AND state IN ('pending', 'failed_attribution')"
             )
+    _add_column(
+        conn,
+        "turn_file_journals",
+        "root_semantics",
+        "root_semantics TEXT NOT NULL DEFAULT 'container-v1'",
+    )
     # Pinned push target (audit F3) - pre-existing opt-ins have no pin, so the
     # push refuses until the owner re-enables the toggle (which pins the URL).
     _add_column(conn, "project_areas", "push_remote_url", "push_remote_url TEXT")

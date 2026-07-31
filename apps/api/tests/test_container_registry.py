@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+import errno
+import os
 import shutil
 import subprocess
 import sys
@@ -1115,6 +1117,68 @@ def test_container_activity_lease_excludes_quiescence_in_another_process(
     assert acquired.read_text(encoding="utf-8") == "acquired"
 
 
+def test_activity_guardian_survives_parent_exit_and_detached_writer(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "guardian-parent-exit"
+    container_id = _legacy_container(conn, root, "guardian-parent-exit")
+    database = tmp_path / "proxima.db"
+    ready = tmp_path / "guardian-ready"
+    acquired = tmp_path / "guardian-acquired"
+    api_root = Path(__file__).resolve().parents[1]
+    descendant = "import time; time.sleep(0.8)"
+    writer = "\n".join(
+        (
+            "import subprocess, sys",
+            f"subprocess.Popen([sys.executable, '-c', {descendant!r}], start_new_session=True)",
+        )
+    )
+    launcher = "\n".join(
+        (
+            "import os, subprocess, sys",
+            "from pathlib import Path",
+            "from proxima_api.container_registry import acquire_container_activity_lease",
+            "from proxima_api.db import connect",
+            "db_path, container_id, ready, writer = sys.argv[1:]",
+            "lease = acquire_container_activity_lease(connect(db_path), int(container_id))",
+            "command, options = lease.guard_process([sys.executable, '-c', writer])",
+            "subprocess.Popen(command, cwd=os.getcwd(), **options)",
+            "lease.mark_process_started()",
+            "Path(ready).write_text('ready', encoding='utf-8')",
+            "os._exit(0)",
+        )
+    )
+    parent = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            launcher,
+            str(database),
+            str(container_id),
+            str(ready),
+            writer,
+        ],
+        cwd=api_root,
+    )
+    assert parent.wait(timeout=5) == 0
+    assert ready.is_file()
+    finished = threading.Event()
+
+    def acquire_quiescence() -> None:
+        with container_registry.container_quiescence_lock(conn, container_id):
+            acquired.write_text("acquired", encoding="utf-8")
+        finished.set()
+
+    thread = threading.Thread(target=acquire_quiescence)
+    thread.start()
+    assert finished.wait(timeout=0.25) is False
+    thread.join(timeout=5)
+
+    assert finished.is_set()
+    assert acquired.read_text(encoding="utf-8") == "acquired"
+
+
 def test_generated_container_doc_creation_never_clobbers_late_content(
     tmp_path: Path,
     monkeypatch,
@@ -1217,6 +1281,97 @@ def test_generated_document_recovers_each_owned_write_stage(
     assert not (root / "ops" / recovery["path"]).exists()
 
 
+@pytest.mark.parametrize("phase", ("prepared", "ready"))
+def test_anonymous_document_publication_resumes_each_link_boundary(
+    tmp_path: Path,
+    phase: str,
+):
+    parent = tmp_path / "anonymous-publication"
+    parent.mkdir()
+    target = parent / "container.md"
+    content = "durable generated document"
+    expected_hash = hashlib.sha256(content.encode()).hexdigest()
+    recovery = container_registry._planned_recovery_temp(expected_hash)
+
+    class SimulatedCrash(BaseException):
+        pass
+
+    def persist() -> None:
+        if recovery["phase"] == phase:
+            raise SimulatedCrash
+
+    with pytest.raises(SimulatedCrash):
+        container_registry._atomic_write_if_missing(
+            target,
+            content,
+            expected_hash=expected_hash,
+            recovery_temp=recovery,
+            persist_recovery=persist,
+        )
+
+    container_registry._atomic_write_if_missing(
+        target,
+        content,
+        expected_hash=expected_hash,
+        recovery_temp=recovery,
+        persist_recovery=lambda: None,
+    )
+
+    assert target.read_text(encoding="utf-8") == content
+    assert recovery["phase"] == "complete"
+    assert not (parent / recovery["path"]).exists()
+
+
+def test_named_recovery_reconciles_only_owned_hidden_artifact(
+    tmp_path: Path,
+    monkeypatch,
+):
+    parent = tmp_path / "named-publication"
+    parent.mkdir()
+    target = parent / "container.md"
+    content = "durable generated document"
+    expected_hash = hashlib.sha256(content.encode()).hexdigest()
+    recovery = container_registry._planned_recovery_temp(expected_hash)
+    real_open = os.open
+    real_fsync = os.fsync
+    crashed = False
+
+    def no_anonymous(path, flags, *args, **kwargs):
+        if hasattr(os, "O_TMPFILE") and flags & os.O_TMPFILE == os.O_TMPFILE:
+            raise OSError(errno.ENOTSUP, "anonymous files unavailable")
+        return real_open(path, flags, *args, **kwargs)
+
+    def crash_after_hidden_identity(fd: int):
+        nonlocal crashed
+        if recovery["phase"] == "creating" and not crashed:
+            crashed = True
+            raise OSError("simulated process exit")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(container_registry.os, "open", no_anonymous)
+    monkeypatch.setattr(container_registry.os, "fsync", crash_after_hidden_identity)
+    with pytest.raises(OSError, match="simulated process exit"):
+        container_registry._atomic_write_if_missing(
+            target,
+            content,
+            expected_hash=expected_hash,
+            recovery_temp=recovery,
+            persist_recovery=lambda: None,
+        )
+
+    monkeypatch.setattr(container_registry.os, "fsync", real_fsync)
+    container_registry._atomic_write_if_missing(
+        target,
+        content,
+        expected_hash=expected_hash,
+        recovery_temp=recovery,
+        persist_recovery=lambda: None,
+    )
+
+    assert target.read_text(encoding="utf-8") == content
+    assert recovery["phase"] == "complete"
+
+
 def test_v2_generated_document_manifest_upgrades_with_owned_recovery(
     tmp_path: Path,
 ):
@@ -1245,6 +1400,35 @@ def test_v2_generated_document_manifest_upgrades_with_owned_recovery(
     assert recovery["path"].startswith(container_registry.RECOVERY_TEMP_PREFIX)
     assert recovery["phase"] == "complete"
     assert recovery["identity"]
+
+
+def test_v4_planned_document_upgrades_to_owned_recovery_protocol(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "v4-generated-document"
+    container_id = _legacy_container(conn, root, "v4-generated-document")
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    manifest["version"] = 4
+    manifest["container_doc"]["recovery_temp"].pop("ownership_token")
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is True
+    marker = conn.execute(
+        "SELECT migration_version, manifest_json "
+        "FROM container_ops_migrations WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    upgraded = json.loads(marker["manifest_json"])
+    recovery = upgraded["container_doc"]["recovery_temp"]
+    assert marker["migration_version"] == container_registry.OPS_MIGRATION_VERSION
+    assert upgraded["version"] == container_registry.OPS_MIGRATION_VERSION
+    assert len(recovery["ownership_token"]) == 64
+    assert recovery["phase"] == "complete"
 
 
 def test_recovery_temp_cleanup_requires_exact_manifest_ownership(tmp_path: Path):
@@ -1933,6 +2117,74 @@ def test_fresh_container_uses_windows_no_reparse_boundary(
             container_registry.DEFAULT_STARTER_DIRS,
         )
     ]
+
+
+def test_windows_starter_directories_are_created_relative_to_stable_handles(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root = tmp_path / "windows-relative"
+    root.mkdir()
+    handles: dict[int, Path] = {}
+    next_handle = 10
+    created: list[tuple[Path, str]] = []
+
+    def open_directory(path: Path):
+        nonlocal next_handle
+        handle = next_handle
+        next_handle += 1
+        handles[handle] = path
+        return handle, (1, hash(path))
+
+    def create_directory(parent_handle: int, name: str):
+        nonlocal next_handle
+        parent = handles[parent_handle]
+        target = parent / name
+        target.mkdir(exist_ok=True)
+        created.append((parent, name))
+        handle = next_handle
+        next_handle += 1
+        handles[handle] = target
+        return handle, (1, hash(target))
+
+    def create_file(parent_handle: int, name: str, content: bytes):
+        (handles[parent_handle] / name).write_bytes(content)
+
+    monkeypatch.setattr(
+        container_registry,
+        "_windows_open_directory",
+        open_directory,
+    )
+    monkeypatch.setattr(
+        container_registry,
+        "_windows_create_directory_at",
+        create_directory,
+    )
+    monkeypatch.setattr(
+        container_registry,
+        "_windows_create_file_at",
+        create_file,
+    )
+    monkeypatch.setattr(
+        container_registry,
+        "_windows_close_handle",
+        lambda _handle: None,
+    )
+
+    physical = container_registry._create_physical_ops_root_windows(
+        root,
+        "Windows relative",
+        ("wiki/deep", "artifacts"),
+    )
+
+    assert physical == root / "ops"
+    assert created == [
+        (physical, "wiki"),
+        (physical / "wiki", "deep"),
+        (physical, "artifacts"),
+    ]
+    assert (physical / "wiki" / "deep").is_dir()
+    assert (physical / "container.md").is_file()
 
 
 def test_project_list_survives_ops_descendant_symlink(tmp_path: Path):

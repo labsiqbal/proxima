@@ -5,9 +5,16 @@ import base64
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+ROOT_CONTAINER_V1 = "container-v1"
+ROOT_CONTAINER_VIRTUAL_V2 = "container-virtual-v2"
+ROOT_OPS_V1 = "ops-v1"
+ROOT_SEMANTICS = frozenset(
+    {ROOT_CONTAINER_V1, ROOT_CONTAINER_VIRTUAL_V2, ROOT_OPS_V1}
+)
 MAX_FILES = 400
 MAX_TOTAL_BYTES = 8 * 1024 * 1024
 MAX_FILE_BYTES = 1024 * 1024
@@ -112,7 +119,10 @@ def record_journal(
     session_id: int,
     root: Path,
     before: dict[str, dict[str, Any]],
+    root_semantics: str = ROOT_CONTAINER_VIRTUAL_V2,
 ) -> dict[str, Any] | None:
+    if root_semantics not in ROOT_SEMANTICS:
+        raise TurnRestoreError("turn journal root semantics are invalid")
     after = _current_files(root.resolve())
     entries: list[dict[str, Any]] = []
     for rel in sorted(set(before) | set(after)):
@@ -132,8 +142,10 @@ def record_journal(
     if not entries:
         return None
     conn.execute(
-        "INSERT INTO turn_file_journals(message_id, session_id, entries_json) VALUES (?, ?, ?)",
-        (message_id, session_id, json.dumps(entries)),
+        "INSERT INTO turn_file_journals("
+        "message_id, session_id, entries_json, root_semantics"
+        ") VALUES (?, ?, ?, ?)",
+        (message_id, session_id, json.dumps(entries), root_semantics),
     )
     return {"paths": [entry["path"] for entry in entries], "count": len(entries)}
 
@@ -177,7 +189,8 @@ def restore(
     conn,
     message_id: int,
     *,
-    root: Path,
+    root: Path | None = None,
+    resolve_root: Callable[[str, str], Path] | None = None,
     confirmed: bool,
     accept_active_master: bool = False,
     accept_active_alpha: bool | None = None,
@@ -191,13 +204,24 @@ def restore(
         raise TurnRestoreError("restore confirmation is required")
     if impact["active_master_tasks"] and not accept_active_master:
         raise TurnRestoreError("active Master work must be acknowledged before restore")
-    _row, entries = _journal_for_message(conn, message_id)
-    root = root.resolve()
+    row, entries = _journal_for_message(conn, message_id)
+    root_semantics = str(row["root_semantics"] or ROOT_CONTAINER_V1)
+    if root_semantics not in ROOT_SEMANTICS:
+        raise TurnRestoreError("turn journal root semantics are invalid")
+    if root is None and resolve_root is None:
+        raise TurnRestoreError("turn journal root is unavailable")
     restored: list[str] = []
     for entry in entries:
         rel = str(entry.get("path") or "")
-        target = (root / rel).resolve()
-        if target != root and root not in target.parents:
+        current_root = (
+            resolve_root(root_semantics, rel)
+            if resolve_root is not None
+            else root
+        )
+        assert current_root is not None
+        current_root = current_root.resolve()
+        target = (current_root / rel).resolve()
+        if target != current_root and current_root not in target.parents:
             raise TurnRestoreError(f"journal path leaves the project: {rel}")
         encoded = entry.get("before_content_b64")
         if encoded is None:

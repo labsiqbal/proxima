@@ -1177,7 +1177,16 @@ def register(app, deps):
                 profile_id=payload.profile_id,
                 model=payload.model,
             ), user)
-            artifact = design_scenes.persist_draft(root, design_id, scene, slug, run_pending_id=design_run["run_id"])
+            project = visible_project(slug, user)
+            with container_registry.container_mutation_lock(db(), project):
+                current_root = _ops_root(slug, user)
+                artifact = design_scenes.persist_draft(
+                    current_root,
+                    design_id,
+                    scene,
+                    slug,
+                    run_pending_id=design_run["run_id"],
+                )
             text = f"Created Design Studio draft: `{artifact['path']}`. The design agent is composing it from your brief — open it in Design Studio to watch it land or edit."
             return _complete_media_run(session, payload, user, "image-studio", artifact, text)
         return None
@@ -1440,6 +1449,7 @@ def register(app, deps):
             term = TerminalSession(
                 cwd,
                 contained=maintenance.process_containment_required,
+                activity_lease=activity_lease,
             )
             term.start()
         except Exception:

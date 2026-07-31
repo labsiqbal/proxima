@@ -376,13 +376,20 @@ physical Ops root and an exact match for any existing manifest-bound
 filesystem mutations share a cross-process per-Container mutation lock. Design,
 Moodboard, chat-media publication, uploads, and turn restore use that same
 root-resolution boundary. Agent runs, project terminals, and preview apps retain a
-shared activity lease for their complete mutation-capable lifetime; migration and
-complete Project purge require exclusive quiescence. Upload request bodies are
-staged before synchronous publication. Virtual roots are resolved only after
-acquiring the appropriate boundary, and late destinations fail without replacement.
+shared activity lease for their complete mutation-capable lifetime. Each writer
+starts beneath a guardian that inherits the lease before publication and holds it
+until the complete process tree exits, including after API exit, cancellation,
+runner recycling, or detached descendants. Migration and complete Project purge
+require exclusive quiescence. Upload request bodies are staged before synchronous
+publication. Virtual roots are resolved only after acquiring the appropriate
+boundary, and late destinations fail without replacement. Generated Container
+documents persist an anonymous inode identity and expected hash before the first
+recovery link; the named fallback binds a manifest ownership token in filesystem
+metadata before content is written.
 Root-repository exclusion traverses `.git/info/exclude` relative to the already-open
 Container descriptor. Fresh Windows Container creation uses stable no-reparse
-handles and a relative no-clobber file create, while unsafe legacy migration remains
+handles, creates starter path components relative to the physical handle, and uses
+a relative no-clobber file create, while unsafe legacy migration remains
 fail-closed when an equivalent move primitive is unavailable. A repaired
 already-physical layout with open migration Attention
 becomes explicitly retryable; the same boundary revalidates it and resolves Attention
@@ -442,8 +449,9 @@ public payloads; `knowledge_rebuild_intents` is the per-Container outbox written
 by the database in the same transaction that completes an Ops Task;
 `job_checkpoints` stores job-row/node/run
 state plus git/worktree refs (never a DB backup or filesystem zip);
-`turn_file_journals` stores bounded before-content for paths changed by a Chat turn
-and cascades with the session; `attention_items` stores durable Master, budget, and
+`turn_file_journals` stores bounded before-content plus versioned filesystem-root
+semantics for paths changed by a Chat turn and cascades with the session;
+`attention_items` stores durable Master, budget, and
 permission needs-you items while review/satpam items are projected into the same API;
 `master_decisions` stores each non-approval owner question, bounded response contract,
 pending/deferred/resolved state, response attribution, and exact links to its
@@ -970,7 +978,10 @@ Normal project Chat snapshots bounded eligible files at the turn boundary and us
 tool events as the journal trigger. Only changed paths and their pre-turn bytes are
 persisted; dependency/build/cache/git/media paths and oversized files are skipped.
 The journal lives for the session, previews every impacted path, and warns before an
-owner restores while Master work is active in the same project.
+owner restores while Master work is active in the same project. Pre-migration rows
+default to legacy Container-relative semantics. Restore resolves those virtual paths
+through the current Ops Area while holding the Container mutation lock, so an old
+`wiki/...` entry cannot recreate a hidden root-level tree after migration.
 
 Runs are per-session serialized and bounded-concurrent globally; a heartbeat +
 reaper fail hung runs, and a per-turn quota cancels stragglers. The quota

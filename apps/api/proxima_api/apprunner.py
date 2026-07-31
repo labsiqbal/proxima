@@ -358,6 +358,13 @@ _PORT_RE2 = re.compile(
 class EffectLease(Protocol):
     def release(self) -> None: ...
 
+    def guard_process(
+        self,
+        command: list[str],
+    ) -> tuple[list[str], dict[str, Any]]: ...
+
+    def mark_process_started(self) -> None: ...
+
 
 @dataclass
 class LaunchReservation:
@@ -636,6 +643,11 @@ class AppManager:
                 "Preview supervisor authority could not be persisted"
             ) from exc
         shell_argv = ["cmd", "/c", command] if IS_WINDOWS else ["bash", "-lc", command]
+        guard = getattr(effect_lease, "guard_process", None)
+        if guard is not None:
+            # Preview broker owns the actual Popen flags; wrap argv so the child
+            # still runs under the activity guardian process tree.
+            shell_argv, _guard_options = guard(shell_argv)
         spawn_task = asyncio.create_task(
             broker.spawn(
                 shell_argv,
@@ -673,6 +685,9 @@ class AppManager:
             )
             reservation.cleanup_task = cleanup
             raise
+        mark = getattr(effect_lease, "mark_process_started", None)
+        if mark is not None:
+            mark()
         try:
             self._register_app(
                 slug=slug,

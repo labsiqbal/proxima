@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from proxima_api import image_providers
+from proxima_api import container_registry, design_scenes, image_providers
 from proxima_api.run_prompting import extract_vision_images
 from proxima_api.main import create_app
 from proxima_api.routes import chat as chat_routes
@@ -1083,6 +1083,76 @@ def test_image_studio_command_creates_design_draft(tmp_path):
     assert drow and drow["mode"] == "design"
     assert rrow and rrow["status"] == "queued"
     assert "carousel promo snacktray lawson" in rrow["prompt"] and "Current scene" in rrow["prompt"]
+
+
+def test_image_studio_re_resolves_ops_root_after_concurrent_migration(
+    tmp_path,
+    monkeypatch,
+):
+    app = _media_app(tmp_path)
+    client = TestClient(app)
+    headers = {
+        "Authorization": f"Bearer {client.post('/auth/auto').json()['token']}"
+    }
+    project = client.post(
+        "/api/projects",
+        headers=headers,
+        json={"slug": "migrating-design", "name": "Migrating design"},
+    ).json()
+    root = Path(project["path"])
+    project_id = int(
+        app.state.db.execute(
+            "SELECT id FROM projects WHERE slug = 'migrating-design'"
+        ).fetchone()["id"]
+    )
+    physical = root / "ops"
+    for child in tuple(physical.iterdir()):
+        child.rename(root / child.name)
+    physical.rmdir()
+    app.state.db.execute(
+        "UPDATE project_areas SET rel_path = '.' WHERE project_id = ? "
+        "AND kind = 'ops'",
+        (project_id,),
+    )
+    app.state.db.execute(
+        "DELETE FROM container_ops_migrations WHERE container_id = ?",
+        (project_id,),
+    )
+    session = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={
+            "title": "Migrating design",
+            "project_slug": "migrating-design",
+        },
+    ).json()
+    real_message = design_scenes.design_run_message
+    migrated = False
+
+    def migrate_before_publish(scene, prompt):
+        nonlocal migrated
+        migrated = container_registry.migrate_container_ops(
+            app.state.db,
+            project_id,
+        )
+        return real_message(scene, prompt)
+
+    monkeypatch.setattr(
+        design_scenes,
+        "design_run_message",
+        migrate_before_publish,
+    )
+    response = client.post(
+        f"/api/sessions/{session['id']}/runs",
+        headers=headers,
+        json={"message": "/image-studio launch campaign hero"},
+    )
+
+    assert response.status_code == 202, response.text
+    artifact = response.json()["artifact"]
+    assert migrated is True
+    assert (root / "ops" / artifact["path"] / "scene.json").is_file()
+    assert not (root / artifact["path"]).exists()
 
 
 def test_image_mention_in_design_command_becomes_jailed_vision_input(tmp_path):
