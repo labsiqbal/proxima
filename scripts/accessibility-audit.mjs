@@ -12,10 +12,10 @@ import { fileURLToPath } from 'node:url'
 import {
   GATE_TEXT_STYLES,
   privateEntryUrl,
-  remoteRequestPolicy,
   resolvePrivateTailscaleEntry,
   summarizeStaticShellRequests,
 } from './accessibility-audit-policy.mjs'
+import { RemoteEntryInterceptor } from './remote-entry-interceptor.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const webRoot = path.join(repoRoot, 'apps', 'web')
@@ -173,16 +173,21 @@ class CdpClient {
         return
       }
       for (const listener of this.listeners.get(message.method) || []) {
-        listener(message.params)
+        listener(message.params, message.sessionId)
       }
     }
   }
 
-  send(method, params = {}) {
+  send(method, params = {}, sessionId = null) {
     return new Promise((resolve, reject) => {
       const id = ++this.nextId
       this.pending.set(id, { resolve, reject })
-      this.socket.send(JSON.stringify({ id, method, params }))
+      this.socket.send(JSON.stringify({
+        id,
+        method,
+        params,
+        ...(sessionId ? { sessionId } : {}),
+      }))
     })
   }
 
@@ -196,6 +201,19 @@ class CdpClient {
     const listeners = this.listeners.get(method) || []
     this.listeners.set(method, listeners.filter(candidate => candidate !== listener))
   }
+
+  close() {
+    this.socket.close()
+  }
+}
+
+async function connectSocket(webSocketDebuggerUrl) {
+  const socket = new WebSocket(webSocketDebuggerUrl)
+  await new Promise((resolve, reject) => {
+    socket.onopen = resolve
+    socket.onerror = reject
+  })
+  return new CdpClient(socket)
 }
 
 async function connectCdp(port, expectedUrl) {
@@ -207,12 +225,59 @@ async function connectCdp(port, expectedUrl) {
   const page = pages.find(candidate => candidate.url === expectedUrl)
     || pages.find(candidate => candidate.type === 'page')
   assert(page?.webSocketDebuggerUrl, 'Chrome page target has no debugger URL')
-  const socket = new WebSocket(page.webSocketDebuggerUrl)
-  await new Promise((resolve, reject) => {
-    socket.onopen = resolve
-    socket.onerror = reject
+  const cdp = await connectSocket(page.webSocketDebuggerUrl)
+  cdp.targetId = page.id
+  return cdp
+}
+
+async function connectBrowserCdp(port) {
+  const browser = await waitForJson(
+    `http://127.0.0.1:${port}/json/version`,
+    value => Boolean(value?.webSocketDebuggerUrl),
+    'Chrome browser target',
+  )
+  return connectSocket(browser.webSocketDebuggerUrl)
+}
+
+function launchChrome({
+  profile,
+  port,
+  initialUrl,
+  hostResolverRules,
+  environment,
+  onStderr,
+}) {
+  const chrome = spawn(chromePath, [
+    '--headless=new',
+    '--disable-gpu',
+    '--no-sandbox',
+    '--disable-dev-shm-usage',
+    '--no-proxy-server',
+    '--disable-background-networking',
+    `--host-resolver-rules=${hostResolverRules.join(',')}`,
+    `--user-data-dir=${profile}`,
+    `--remote-debugging-port=${port}`,
+    '--window-size=1440,1000',
+    initialUrl,
+  ], {
+    env: environment,
+    stdio: ['ignore', 'ignore', 'pipe'],
   })
-  return new CdpClient(socket)
+  chrome.stderr.on('data', onStderr)
+  return chrome
+}
+
+async function initializePageCdp(cdp) {
+  await cdp.send('Runtime.enable')
+  await cdp.send('Page.enable')
+  await cdp.send('Network.enable')
+  await cdp.send('Accessibility.enable')
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: 1440,
+    height: 1000,
+    deviceScaleFactor: 1,
+    mobile: false,
+  })
 }
 
 async function evaluate(cdp, expression) {
@@ -586,7 +651,11 @@ function discoverPrivateTailscaleEntry(environment) {
   })
 }
 
-async function auditRemoteEntry(cdp, url, {
+async function auditRemoteEntry({
+  pageCdp,
+  browserCdp,
+  pageTargetId,
+}, url, {
   origin,
   screenshotName = null,
   provenance = null,
@@ -594,63 +663,48 @@ async function auditRemoteEntry(cdp, url, {
 }) {
   const target = privateEntryUrl(url)
   const targetOrigin = new URL(target).origin
-
-  const forwarded = []
-  const fulfilled = []
-  const blocked = []
-  const errors = []
-  const pending = new Set()
-  const listener = event => {
-    const task = (async () => {
-      const request = event.request
-      const decision = remoteRequestPolicy(request, targetOrigin)
-      if (decision.action === 'fulfill') {
-        fulfilled.push(decision.label)
-        await cdp.send('Fetch.fulfillRequest', {
-          requestId: event.requestId,
-          responseCode: decision.response.status,
-          responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
-          body: Buffer.from(JSON.stringify(decision.response.body)).toString('base64'),
-        })
-        return
-      }
-      if (decision.action === 'block') {
-        blocked.push(decision.label)
-        await cdp.send('Fetch.failRequest', {
-          requestId: event.requestId,
-          errorReason: 'BlockedByClient',
-        })
-        return
-      }
-      forwarded.push(decision.label)
-      await cdp.send('Fetch.continueRequest', { requestId: event.requestId })
-    })().catch(error => {
-      errors.push(error instanceof Error ? error : new Error(String(error)))
-    })
-    pending.add(task)
-    void task.finally(() => pending.delete(task))
-  }
-
-  cdp.on('Fetch.requestPaused', listener)
-  await cdp.send('Network.clearBrowserCookies')
-  await cdp.send('Network.clearBrowserCache')
-  await cdp.send('Fetch.enable', {
-    patterns: [{ urlPattern: '*', requestStage: 'Request' }],
+  const interceptor = new RemoteEntryInterceptor({
+    cdp: browserCdp,
+    pageTargetId,
+    targetOrigin,
   })
+  await pageCdp.send('Network.clearBrowserCookies')
+  await pageCdp.send('Network.clearBrowserCache')
+  await interceptor.start()
   let navigationError = null
+  let serviceWorkerExpected = false
   try {
     try {
-      await navigate(cdp, target, 'Welcome back')
+      await navigate(pageCdp, target, 'Welcome back')
+      serviceWorkerExpected = await evaluate(
+        pageCdp,
+        `window.isSecureContext
+          && 'serviceWorker' in navigator
+          && ![...document.scripts].some(script =>
+            script.src.includes('/@vite/client') || script.src.includes('/src/')
+          )`,
+      )
+      if (serviceWorkerExpected) {
+        await waitForPage(pageCdp, `(async () => {
+          const registrations = await navigator.serviceWorker.getRegistrations()
+          if (registrations.length === 0) return false
+          await navigator.serviceWorker.ready
+          return true
+        })()`, `${origin} service worker`)
+      }
     } catch (error) {
       navigationError = error
     }
-    await Promise.all([...pending])
+    await interceptor.waitForSettled()
   } finally {
-    await cdp.send('Fetch.disable')
-    cdp.off('Fetch.requestPaused', listener)
+    await interceptor.stop()
   }
+  const interception = interceptor.snapshot()
+  const forwardedLabels = interception.forwarded.map(request => request.label)
+  const fulfilledLabels = interception.fulfilled.map(request => request.label)
+  const blockedLabels = interception.blocked.map(request => request.label)
   if (navigationError) {
-    const state = await evaluate(cdp, `(() => ({
+    const state = await evaluate(pageCdp, `(() => ({
       title: document.title,
       heading: document.querySelector('h1')?.textContent || '',
       text: document.body?.innerText?.slice(0, 240) || '',
@@ -660,23 +714,29 @@ async function auditRemoteEntry(cdp, url, {
       `${origin} static shell did not render the login gate: `
       + `${JSON.stringify({
         state,
-        forwarded: [...new Set(forwarded)].sort(),
-        fulfilled: [...new Set(fulfilled)].sort(),
-        blocked: [...new Set(blocked)].sort(),
+        forwarded: [...new Set(forwardedLabels)].sort(),
+        fulfilled: [...new Set(fulfilledLabels)].sort(),
+        blocked: [...new Set(blockedLabels)].sort(),
+        targetTypes: interception.targetTypes,
       })}; ${navigationError}`,
     )
   }
-  assert.deepEqual(errors, [])
-  assert(forwarded.length > 0, `${origin} did not receive static shell GET requests`)
-  assert(forwarded.every(
+  assert(interception.forwarded.length > 0, `${origin} did not receive static shell GET requests`)
+  assert(forwardedLabels.every(
     request => !request.startsWith('GET /api/') && !request.startsWith('GET /auth/'),
   ))
-  const shellRequests = summarizeStaticShellRequests(forwarded)
+  if (serviceWorkerExpected) {
+    assert(
+      interception.targetTypes.includes('service_worker'),
+      `${origin} service worker was not attached and inspected`,
+    )
+  }
+  const shellRequests = summarizeStaticShellRequests(interception.forwarded)
   assert.deepEqual(
-    [...new Set(fulfilled)].sort(),
+    [...new Set(fulfilledLabels)].sort(),
     ['GET /api/config', 'GET /api/setup/status', 'POST /auth/resume'],
   )
-  const state = await evaluate(cdp, `(() => ({
+  const state = await evaluate(pageCdp, `(() => ({
     title: document.title,
     mainCount: document.querySelectorAll('main').length,
     passwordInputCount: document.querySelectorAll('input[type=password]').length,
@@ -692,19 +752,62 @@ async function auditRemoteEntry(cdp, url, {
     assert.equal(state.passwordCount, 1)
     assert.equal(state.owner, 'owner')
   }
-  if (screenshotName) await screenshot(cdp, screenshotName)
+  if (screenshotName) await screenshot(pageCdp, screenshotName)
   return {
     origin,
     status: 'pass',
     ...(provenance ? { provenance } : {}),
     network: {
-      forwarded: 'same-origin static shell GETs only',
+      forwarded: 'same-origin static shell GETs from attached page and worker targets only',
       shellRootGetCount: shellRequests.rootGetCount,
+      pageRootGetCount: shellRequests.pageRootGetCount,
       forwardedStaticGetCount: shellRequests.staticGetCount,
+      forwardedByTargetType: shellRequests.targetTypeCounts,
+      rootGetsByTargetType: shellRequests.rootGetCountByTargetType,
+      observedTargetTypes: interception.targetTypes,
       bootstrap: 'fulfilled in browser fixture',
       liveDataRequests: 'blocked',
-      blockedRequestCount: blocked.length,
+      blockedRequestCount: interception.blocked.length,
     },
+  }
+}
+
+let remoteBrowserSequence = 0
+
+async function auditRemoteEntryInIsolatedBrowser(url, options, {
+  fixtureRoot,
+  browserEnvironment,
+  hostResolverRules,
+  onChromeLog,
+}) {
+  remoteBrowserSequence += 1
+  const profile = path.join(fixtureRoot, `remote-chrome-${remoteBrowserSequence}`)
+  fs.mkdirSync(profile, { recursive: true })
+  const port = await freePort()
+  const chrome = launchChrome({
+    profile,
+    port,
+    initialUrl: 'about:blank',
+    hostResolverRules,
+    environment: browserEnvironment,
+    onStderr: onChromeLog,
+  })
+  let pageCdp = null
+  let browserCdp = null
+  try {
+    pageCdp = await connectCdp(port, 'about:blank')
+    browserCdp = await connectBrowserCdp(port)
+    await initializePageCdp(pageCdp)
+    return await auditRemoteEntry({
+      pageCdp,
+      browserCdp,
+      pageTargetId: pageCdp.targetId,
+    }, url, options)
+  } finally {
+    pageCdp?.close()
+    browserCdp?.close()
+    chrome.kill('SIGTERM')
+    await sleep(300)
   }
 }
 
@@ -748,9 +851,9 @@ This pass uses the production web bundle, a disposable owner database, and headl
 Chrome at 1440 x 1000. The local flow does not read or alter live Proxima data.
 The command also runs focused API regressions for error ownership, readable-ancestor
 selection, explicit no-ancestor failure, and the configured-root jail.
-The private-entry browser check asserts exactly one unauthenticated root navigation GET,
-forwards its allowlisted static asset GETs, verifies the current device Serve mapping,
-and blocks every live API or data request.
+The private-entry browser check runs in an isolated profile, attaches to the page and
+every related worker target, accounts for every shell GET, verifies the current device
+Serve mapping, and blocks every live API or data request.
 
 | Check | Result |
 | --- | --- |
@@ -775,8 +878,9 @@ and blocks every live API or data request.
 | Every gate text style in every supported theme meets WCAG AA contrast | pass |
 | Input and button focus are visible in every supported theme | pass |
 | Lighthouse accessibility | ${report.lighthouse.score} |
+| Production service-worker install and cache GET accounting | pass |
 | Isolated Tailnet-host GET-only unauthenticated entry | pass |
-| Remote browser sends exactly one shell root GET | pass |
+| Remote browser accounts for page and worker shell GETs | pass |
 | Private Tailscale unauthenticated entry | ${remote} |
 
 ## Before and after
@@ -866,23 +970,17 @@ async function main() {
   })
   api.stderr.on('data', chunk => { serverLog = `${serverLog}${chunk}`.slice(-12000) })
 
-  const chrome = spawn(chromePath, [
-    '--headless=new',
-    '--disable-gpu',
-    '--no-sandbox',
-    '--disable-dev-shm-usage',
-    '--no-proxy-server',
-    '--disable-background-networking',
-    `--host-resolver-rules=${hostResolverRules.join(',')}`,
-    `--user-data-dir=${chromeProfile}`,
-    `--remote-debugging-port=${cdpPort}`,
-    '--window-size=1440,1000',
-    baseUrl,
-  ], {
-    env: browserEnvironment,
-    stdio: ['ignore', 'ignore', 'pipe'],
+  const recordChromeLog = chunk => {
+    chromeLog = `${chromeLog}${chunk}`.slice(-12000)
+  }
+  const chrome = launchChrome({
+    profile: chromeProfile,
+    port: cdpPort,
+    initialUrl: baseUrl,
+    hostResolverRules,
+    environment: browserEnvironment,
+    onStderr: recordChromeLog,
   })
-  chrome.stderr.on('data', chunk => { chromeLog = `${chromeLog}${chunk}`.slice(-12000) })
 
   try {
     await waitForJson(
@@ -891,16 +989,7 @@ async function main() {
       'Disposable Proxima API',
     )
     const cdp = await connectCdp(cdpPort, baseUrl)
-    await cdp.send('Runtime.enable')
-    await cdp.send('Page.enable')
-    await cdp.send('Network.enable')
-    await cdp.send('Accessibility.enable')
-    await cdp.send('Emulation.setDeviceMetricsOverride', {
-      width: 1440,
-      height: 1000,
-      deviceScaleFactor: 1,
-      mobile: false,
-    })
+    await initializePageCdp(cdp)
 
     await navigate(cdp, baseUrl, 'Set a password')
     await evaluate(cdp, `localStorage.setItem('proxima.theme', 'light'); location.reload(); true`)
@@ -1297,22 +1386,35 @@ async function main() {
     await clickButton(cdp, 'Log in')
     await waitForPage(cdp, `Boolean(document.querySelector('.app-shell'))`, 'Returning login success')
 
-    const tailnetFixture = await auditRemoteEntry(
-      cdp,
+    const remoteBrowserOptions = {
+      fixtureRoot,
+      browserEnvironment,
+      hostResolverRules,
+      onChromeLog: recordChromeLog,
+    }
+    const workerFixture = await auditRemoteEntryInIsolatedBrowser(
+      baseUrl,
+      {
+        origin: 'isolated loopback production worker fixture',
+      },
+      remoteBrowserOptions,
+    )
+    const tailnetFixture = await auditRemoteEntryInIsolatedBrowser(
       tailnetFixtureUrl,
       {
         origin: 'isolated Tailnet-host fixture',
         screenshotName: 'tailnet-unauthenticated-entry.png',
       },
+      remoteBrowserOptions,
     )
-    const tailscaleEntry = await auditRemoteEntry(
-      cdp,
+    const tailscaleEntry = await auditRemoteEntryInIsolatedBrowser(
       privateTailscale.url,
       {
         origin: 'private Tailscale origin (redacted)',
         provenance: privateTailscale.provenance,
         assertAccessibilityContract: false,
       },
+      remoteBrowserOptions,
     )
     const lighthouseResult = runLighthouse(baseUrl, browserEnvironment)
     const report = {
@@ -1322,7 +1424,8 @@ async function main() {
       isolation: {
         environment: 'allowlisted',
         writableRoots: 'disposable fixture only',
-        backgroundWorker: 'disabled',
+        apiBackgroundWorker: 'disabled',
+        remoteBrowserProfiles: 'isolated per origin',
         liveServiceWrites: 'disabled',
       },
       announcements: {
@@ -1351,6 +1454,7 @@ async function main() {
         returningLogin: loginAx,
       },
       themes: themeResults,
+      workerFixture,
       tailnetFixture,
       tailscaleEntry,
       lighthouse: lighthouseResult,

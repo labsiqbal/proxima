@@ -1086,11 +1086,16 @@ and display `name`/`slug` targets. Parent and link-path failures focus a selecte
 refresh control, child-name failures focus the folder field, and name/slug failures
 focus the display-name field. Browsing selects the nearest actually readable ancestor
 inside the configured root, skips self-referential or mutual symlink cycles, and never
-uses an unresolved path for containment. If no allowed ancestor is readable, the chooser
-retains its selection and explicit invalid state instead of reporting an empty success.
+uses an unresolved path for containment. Every configured root keeps a stable lexical
+identity even when resolution fails, so a retained selection owned by that root fails
+closed instead of falling back to an unrelated root. If no allowed ancestor is readable,
+the chooser retains its selection and explicit invalid state instead of reporting an
+empty success.
 New folder names are validated against the target filesystem's encoded component-byte
-limit, so component and encoding failures stay owned by the folder field while full
-parent-path failures remain owned by the selected-folder control.
+limit and created relative to an open descriptor for the validated parent. Component and
+encoding failures from validation or the child syscall therefore stay owned by the folder
+field, while parent descriptor and location failures remain owned by the selected-folder
+control.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 

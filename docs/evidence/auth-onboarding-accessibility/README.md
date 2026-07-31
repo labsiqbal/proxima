@@ -4,9 +4,9 @@ This pass uses the production web bundle, a disposable owner database, and headl
 Chrome at 1440 x 1000. The local flow does not read or alter live Proxima data.
 The command also runs focused API regressions for error ownership, readable-ancestor
 selection, explicit no-ancestor failure, and the configured-root jail.
-The private-entry browser check asserts exactly one unauthenticated root navigation GET,
-forwards its allowlisted static asset GETs, verifies the current device Serve mapping,
-and blocks every live API or data request.
+The private-entry browser check runs in an isolated profile, attaches to the page and
+every related worker target, accounts for every shell GET, verifies the current device
+Serve mapping, and blocks every live API or data request.
 
 | Check | Result |
 | --- | --- |
@@ -31,8 +31,9 @@ and blocks every live API or data request.
 | Every gate text style in every supported theme meets WCAG AA contrast | pass |
 | Input and button focus are visible in every supported theme | pass |
 | Lighthouse accessibility | 100 |
+| Production service-worker install and cache GET accounting | pass |
 | Isolated Tailnet-host GET-only unauthenticated entry | pass |
-| Remote browser sends exactly one shell root GET | pass |
+| Remote browser accounts for page and worker shell GETs | pass |
 | Private Tailscale unauthenticated entry | pass - private Tailscale origin (redacted); current device Serve mapping verified (redacted) |
 
 ## Before and after

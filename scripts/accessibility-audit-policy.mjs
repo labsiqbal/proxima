@@ -184,10 +184,35 @@ export function remoteRequestPolicy(request, targetOrigin) {
 }
 
 export function summarizeStaticShellRequests(requests) {
-  const rootGetCount = requests.filter(request => request === 'GET /').length
-  assert.equal(rootGetCount, 1, 'Remote entry must send exactly one unauthenticated root GET')
+  const normalized = requests.map(request => (
+    typeof request === 'string'
+      ? { label: request, targetType: 'page' }
+      : request
+  ))
+  const rootGetCount = normalized.filter(request => request.label === 'GET /').length
+  const pageRootGetCount = normalized.filter(
+    request => request.label === 'GET /' && request.targetType === 'page',
+  ).length
+  assert.equal(
+    pageRootGetCount,
+    1,
+    'Remote entry must send exactly one unauthenticated page root navigation GET',
+  )
+  const targetTypeCounts = {}
+  const rootGetCountByTargetType = {}
+  for (const request of normalized) {
+    targetTypeCounts[request.targetType] = (targetTypeCounts[request.targetType] || 0) + 1
+    if (request.label === 'GET /') {
+      rootGetCountByTargetType[request.targetType] = (
+        rootGetCountByTargetType[request.targetType] || 0
+      ) + 1
+    }
+  }
   return {
     rootGetCount,
-    staticGetCount: requests.length,
+    pageRootGetCount,
+    staticGetCount: normalized.length,
+    targetTypeCounts,
+    rootGetCountByTargetType,
   }
 }

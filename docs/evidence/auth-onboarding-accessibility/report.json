@@ -10,7 +10,8 @@
   "isolation": {
     "environment": "allowlisted",
     "writableRoots": "disposable fixture only",
-    "backgroundWorker": "disabled",
+    "apiBackgroundWorker": "disabled",
+    "remoteBrowserProfiles": "isolated per origin",
     "liveServiceWrites": "disabled"
   },
   "announcements": {
@@ -99,7 +100,7 @@
     "noReadableAncestor": [
       {
         "type": "alert",
-        "name": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-ILMVPp%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots"
+        "name": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-Rw2U7F%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots"
       }
     ],
     "selectedPath": [
@@ -249,7 +250,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-ILMVPp/home. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home. Refresh folders",
           "description": "",
           "focused": false,
           "invalid": "false"
@@ -354,7 +355,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-ILMVPp/home. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home. Refresh folders",
           "description": "",
           "focused": false,
           "invalid": "false"
@@ -450,7 +451,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-ILMVPp/home/disappearing-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/disappearing-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -459,7 +460,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-ILMVPp/home/disappearing-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/disappearing-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -534,7 +535,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-ILMVPp/home/permission-denied-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/permission-denied-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -543,7 +544,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-ILMVPp/home/permission-denied-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/permission-denied-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -605,7 +606,7 @@
           "description": "",
           "focused": false,
           "invalid": false,
-          "text": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-ILMVPp%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y- ILMVPp%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots"
+          "text": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-Rw2U7F%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y- Rw2U7F%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots"
         }
       ],
       "focused": [
@@ -618,7 +619,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-ILMVPp/home/no-readable-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/no-readable-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -627,7 +628,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-ILMVPp/home/no-readable-parent. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/no-readable-parent. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -702,7 +703,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-ILMVPp/home/vanishing-folder. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/vanishing-folder. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -711,7 +712,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-ILMVPp/home/vanishing-folder. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-Rw2U7F/home/vanishing-folder. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -962,16 +963,51 @@
       }
     }
   ],
+  "workerFixture": {
+    "origin": "isolated loopback production worker fixture",
+    "status": "pass",
+    "network": {
+      "forwarded": "same-origin static shell GETs from attached page and worker targets only",
+      "shellRootGetCount": 3,
+      "pageRootGetCount": 1,
+      "forwardedStaticGetCount": 21,
+      "forwardedByTargetType": {
+        "page": 15,
+        "service_worker": 6
+      },
+      "rootGetsByTargetType": {
+        "page": 1,
+        "service_worker": 2
+      },
+      "observedTargetTypes": [
+        "page",
+        "service_worker"
+      ],
+      "bootstrap": "fulfilled in browser fixture",
+      "liveDataRequests": "blocked",
+      "blockedRequestCount": 1
+    }
+  },
   "tailnetFixture": {
     "origin": "isolated Tailnet-host fixture",
     "status": "pass",
     "network": {
-      "forwarded": "same-origin static shell GETs only",
+      "forwarded": "same-origin static shell GETs from attached page and worker targets only",
       "shellRootGetCount": 1,
+      "pageRootGetCount": 1,
       "forwardedStaticGetCount": 14,
+      "forwardedByTargetType": {
+        "page": 14
+      },
+      "rootGetsByTargetType": {
+        "page": 1
+      },
+      "observedTargetTypes": [
+        "page"
+      ],
       "bootstrap": "fulfilled in browser fixture",
       "liveDataRequests": "blocked",
-      "blockedRequestCount": 2
+      "blockedRequestCount": 1
     }
   },
   "tailscaleEntry": {
@@ -983,9 +1019,19 @@
       "origin": "private Tailscale origin (redacted)"
     },
     "network": {
-      "forwarded": "same-origin static shell GETs only",
+      "forwarded": "same-origin static shell GETs from attached page and worker targets only",
       "shellRootGetCount": 1,
+      "pageRootGetCount": 1,
       "forwardedStaticGetCount": 94,
+      "forwardedByTargetType": {
+        "page": 94
+      },
+      "rootGetsByTargetType": {
+        "page": 1
+      },
+      "observedTargetTypes": [
+        "page"
+      ],
       "bootstrap": "fulfilled in browser fixture",
       "liveDataRequests": "blocked",
       "blockedRequestCount": 1
@@ -994,6 +1040,6 @@
   "lighthouse": {
     "score": 100,
     "version": "12.8.2",
-    "url": "http://127.0.0.1:34717/"
+    "url": "http://127.0.0.1:33679/"
   }
 }

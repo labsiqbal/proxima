@@ -200,14 +200,16 @@ def test_link_mkdir_routes_parent_permission_failure_to_parent(
     parent.mkdir()
     target = parent / "blocked"
     c, h = _link_client(tmp_path)
-    original_mkdir = Path.mkdir
+    original_mkdir = os.mkdir
 
-    def deny_target(path: Path, *args, **kwargs):
-        if path == target:
+    def deny_target(path, mode=0o777, *, dir_fd=None):
+        if dir_fd is not None and path == target.name:
             raise PermissionError("denied")
-        return original_mkdir(path, *args, **kwargs)
+        if dir_fd is None:
+            return original_mkdir(path, mode)
+        return original_mkdir(path, mode, dir_fd=dir_fd)
 
-    monkeypatch.setattr(Path, "mkdir", deny_target)
+    monkeypatch.setattr(os, "mkdir", deny_target)
     response = c.post(
         "/api/projects/link",
         headers=h,
@@ -311,7 +313,7 @@ def test_link_mkdir_routes_component_encoding_failure_to_folder(
     assert not target.exists()
 
 
-def test_link_mkdir_keeps_full_path_name_too_long_on_parent(
+def test_link_mkdir_routes_post_syscall_component_too_long_to_folder(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -319,14 +321,43 @@ def test_link_mkdir_keeps_full_path_name_too_long_on_parent(
     parent.mkdir()
     target = parent / "short-name"
     c, h = _link_client(tmp_path)
-    original_mkdir = Path.mkdir
+    original_mkdir = os.mkdir
 
-    def reject_full_path(path: Path, *args, **kwargs):
-        if path == target:
+    def reject_component(path, mode=0o777, *, dir_fd=None):
+        if dir_fd is not None and path == target.name:
             raise OSError(errno.ENAMETOOLONG, "File name too long")
-        return original_mkdir(path, *args, **kwargs)
+        if dir_fd is None:
+            return original_mkdir(path, mode)
+        return original_mkdir(path, mode, dir_fd=dir_fd)
 
-    monkeypatch.setattr(Path, "mkdir", reject_full_path)
+    monkeypatch.setattr(os, "mkdir", reject_component)
+    response = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(target), "mkdir": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["field"] == "folder"
+    assert not target.exists()
+
+
+def test_link_mkdir_keeps_long_parent_failure_on_parent(
+    tmp_path: Path,
+    monkeypatch,
+):
+    parent = tmp_path / "code"
+    parent.mkdir()
+    target = parent / "short-name"
+    c, h = _link_client(tmp_path)
+    original_open = os.open
+
+    def reject_parent(path, *args, **kwargs):
+        if Path(path) == parent:
+            raise OSError(errno.ENAMETOOLONG, "File name too long")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", reject_parent)
     response = c.post(
         "/api/projects/link",
         headers=h,
@@ -508,6 +539,32 @@ def test_unresolvable_configured_root_returns_structured_path_error(tmp_path: Pa
         "message": "No readable folder is available inside the allowed roots",
         "field": "path",
     }
+
+
+def test_failed_configured_root_selection_never_falls_back_to_another_root(
+    tmp_path: Path,
+):
+    valid = tmp_path / "valid"
+    valid.mkdir()
+    failed = tmp_path / "failed"
+    failed.symlink_to("failed")
+    c, h = _link_client(tmp_path, roots=[valid, failed])
+
+    response = c.get(
+        "/api/fs/dirs",
+        headers=h,
+        params={"path": str(failed / "retained-selection")},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "message": "Selected folder root is not reachable",
+        "field": "path",
+    }
+
+    valid_response = c.get("/api/fs/dirs", headers=h, params={"path": str(valid)})
+    assert valid_response.status_code == 200
+    assert valid_response.json()["roots"] == [str(valid), str(failed)]
 
 
 def test_link_mkdir_routes_derived_slug_collisions_to_name(tmp_path: Path):

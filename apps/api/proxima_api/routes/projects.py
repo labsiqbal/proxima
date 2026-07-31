@@ -22,8 +22,8 @@ from ..project_browse import (
     PathOutsideRoots,
     PathResolutionUnavailable,
     browse_directory,
+    create_directory_component,
     split_directory_target,
-    validate_directory_component,
 )
 from ..project_areas import areas_payload, ensure_ops_area, sync_code_areas
 from ..settings import validate_slug
@@ -177,18 +177,9 @@ def register(app, deps):
                 if not parent_is_dir:
                     raise _link_error(400, "parent directory does not exist", "parent")
                 try:
-                    validate_directory_component(parent, folder_name)
+                    target = create_directory_component(parent, folder_name)
                 except DirectoryComponentInvalid as exc:
                     raise _link_error(400, str(exc), "folder") from exc
-                except PermissionError as exc:
-                    raise _link_error(403, "permission denied - parent directory is not accessible", "parent") from exc
-                except OSError as exc:
-                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
-                target = parent / folder_name
-                try:
-                    target.mkdir(mode=0o755)  # single level only; never parents=True
-                except UnicodeError as exc:
-                    raise _link_error(400, "folder name cannot be encoded for this filesystem", "folder") from exc
                 except PermissionError as exc:
                     raise _link_error(403, "permission denied - cannot create folder here", "parent") from exc
                 except FileExistsError as exc:
