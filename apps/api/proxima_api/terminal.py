@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import fcntl
 import logging
 import os
@@ -9,11 +10,33 @@ import struct
 import subprocess
 import termios
 import time
+from dataclasses import dataclass
 from typing import Any
 
+from .container_activity import process_start_identity
 from .process_containment import pid_namespace_argv
 
 logger = logging.getLogger("proxima.terminal")
+
+
+@dataclass(frozen=True)
+class CloseResult:
+    """Outcome of shutting down a PTY session.
+
+    ``session_stopped`` is True only when the full session membership could be
+    verified empty. ``child_reaped`` is True once the direct child is proven
+    reaped (or was never started). Callers may release writer-activity leases
+    only when ``child_reaped`` is True; otherwise they must retain the lease
+    behind an identity-bound lifecycle monitor.
+    """
+
+    session_stopped: bool
+    child_reaped: bool
+    pid: int | None = None
+    start_identity: str | None = None
+
+    def __bool__(self) -> bool:
+        return self.session_stopped
 
 
 def _reap(pid: int, attempts: int = 10, delay: float = 0.005) -> bool:
@@ -99,6 +122,7 @@ class TerminalSession:
         self.pid: int | None = None
         self.sid: int | None = None
         self.fd: int | None = None
+        self.start_identity: str | None = None
 
     def _argv(self) -> list[str]:
         if not self.contained:
@@ -128,6 +152,7 @@ class TerminalSession:
         # ── parent ──
         self.pid = pid
         self.fd = fd
+        self.start_identity = process_start_identity(pid)
         if self.activity_lease is not None:
             self.activity_lease.mark_process_started()
         for _ in range(50):
@@ -162,11 +187,13 @@ class TerminalSession:
         except OSError:
             return b""
 
-    def close(self) -> bool:
+    def close(self) -> CloseResult:
         fd, pid, sid = self.fd, self.pid, self.sid
+        start_identity = self.start_identity
         self.fd = None
         self.pid = None
         self.sid = None
+        self.start_identity = None
         # Close the PTY master first so the shell sees EOF on its controlling tty.
         if fd is not None:
             try:
@@ -174,7 +201,8 @@ class TerminalSession:
             except OSError:
                 pass
         if not pid:
-            return True
+            return CloseResult(session_stopped=True, child_reaped=True)
+        stopped = False
         if sid is None:
             _signal_process(pid, signal.SIGHUP)
         else:
@@ -182,11 +210,18 @@ class TerminalSession:
             if not stopped:
                 _signal_process(pid, signal.SIGKILL)
         reaped = _reap(pid, attempts=20, delay=0.005)
-        if sid is None and not reaped:
+        if not reaped:
             _signal_process(pid, signal.SIGKILL)
+            reaped = _reap(pid, attempts=20, delay=0.005)
         if not reaped:
             try:
                 os.waitpid(pid, 0)
-            except OSError:
-                pass
-        return sid is not None and stopped
+                reaped = True
+            except OSError as exc:
+                reaped = exc.errno == errno.ECHILD
+        return CloseResult(
+            session_stopped=sid is not None and stopped,
+            child_reaped=reaped,
+            pid=pid,
+            start_identity=start_identity,
+        )

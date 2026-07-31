@@ -51,29 +51,79 @@ logger = logging.getLogger("proxima.api")
 
 
 class _LeaseGroup:
-    def __init__(self, *leases: Any) -> None:
-        self._leases = list(leases)
+    """Ingress admission plus optional writer-activity lease for one effect."""
+
+    def __init__(self, *ingress_leases: Any, activity: Any | None = None) -> None:
+        self._ingress = list(ingress_leases)
+        self._activity = activity
         self._released = False
 
     def release(self) -> None:
         if self._released:
             return
         self._released = True
-        for lease in reversed(self._leases):
+        activity = self._activity
+        self._activity = None
+        ingress = list(self._ingress)
+        self._ingress.clear()
+        if activity is not None:
+            activity.release()
+        for lease in reversed(ingress):
             lease.release()
+
+    def finish(
+        self,
+        *,
+        process_exited: bool,
+        pid: int | None = None,
+        start_identity: str | None = None,
+        retain_ingress: Any | None = None,
+    ) -> None:
+        if self._released:
+            return
+        self._released = True
+        activity = self._activity
+        self._activity = None
+        ingress = list(self._ingress)
+        self._ingress.clear()
+        if process_exited:
+            if activity is not None:
+                activity.release()
+            for lease in reversed(ingress):
+                lease.release()
+            return
+        if activity is not None:
+            container_registry.retain_activity_lease(
+                activity,
+                pid=pid,
+                start_identity=start_identity,
+            )
+        for lease in ingress:
+            if retain_ingress is not None:
+                retain_ingress(lease)
+            else:
+                lease.release()
 
     def guard_process(
         self,
         command: list[str],
     ) -> tuple[list[str], dict[str, Any]]:
-        for lease in self._leases:
+        if self._activity is not None:
+            guard = getattr(self._activity, "guard_process", None)
+            if guard is not None:
+                return guard(command)
+        for lease in self._ingress:
             guard = getattr(lease, "guard_process", None)
             if guard is not None:
                 return guard(command)
         return command, {}
 
     def mark_process_started(self) -> None:
-        for lease in self._leases:
+        if self._activity is not None:
+            mark = getattr(self._activity, "mark_process_started", None)
+            if mark is not None:
+                mark()
+        for lease in self._ingress:
             mark = getattr(lease, "mark_process_started", None)
             if mark is not None:
                 mark()
@@ -1035,7 +1085,7 @@ def register(app, deps):
             raise
         effect_lease = _LeaseGroup(
             maintenance_lease,
-            activity_lease,
+            activity=activity_lease,
         )
         try:
             await app.state.app_manager.start(

@@ -398,6 +398,7 @@ class AppManager:
         self._unadopted: set[str] = set()
         self._state_root = Path(state_root) if state_root else None
         self._profile = profile
+        self._retained_ingress: list[Any] = []
 
     def _retain_effect(
         self,
@@ -412,6 +413,9 @@ class AppManager:
         for lease in self._retained_effects.pop(slug, []):
             lease.release()
 
+    def _retain_ingress(self, lease: Any) -> None:
+        self._retained_ingress.append(lease)
+
     def _finish_effect(
         self,
         slug: str,
@@ -422,10 +426,27 @@ class AppManager:
         lease = app.pop("effect_lease", None)
         if lease is None:
             return
+        pid = app.get("proc_pid")
+        start_identity = app.get("proc_start_identity")
+        finish = getattr(lease, "finish", None)
+        if finish is not None:
+            finish(
+                process_exited=terminated,
+                pid=pid,
+                start_identity=start_identity,
+                retain_ingress=self._retain_ingress,
+            )
+            return
         if terminated:
             lease.release()
-        else:
-            self._retain_effect(slug, lease)
+            return
+        from .container_activity import retain_activity_lease
+
+        retain_activity_lease(
+            lease,
+            pid=pid,
+            start_identity=start_identity,
+        )
 
     def _track_cleanup(
         self,
@@ -1109,7 +1130,12 @@ class AppManager:
             "output_broker": broker,
             "stop_lock": asyncio.Lock(),
             "stopped": False,
+            "proc_pid": int(proc.pid) if getattr(proc, "pid", None) is not None else None,
+            "proc_start_identity": None,
         }
+        if app["proc_pid"] is not None:
+            from .container_activity import process_start_identity
+            app["proc_start_identity"] = process_start_identity(app["proc_pid"])
         self._persist_app(slug, app)
         self._apps[slug] = app
         if self.contained and containment_pid_namespace is None:

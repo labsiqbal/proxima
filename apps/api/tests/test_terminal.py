@@ -18,7 +18,8 @@ def test_close_reaps_child_no_zombie(tmp_path):
     t.start()
     pid = t.pid
     assert pid
-    t.close()
+    result = t.close()
+    assert result.child_reaped is True
     try:
         os.waitpid(pid, os.WNOHANG)
         assert False, "child still reapable -> close() left a zombie"
@@ -37,7 +38,9 @@ def test_close_terminates_background_processes(tmp_path):
     assert child_path.is_file()
     child_pid = int(child_path.read_text(encoding="utf-8").strip())
 
-    assert terminal.close() is True
+    result = terminal.close()
+    assert result.session_stopped is True
+    assert result.child_reaped is True
     try:
         os.kill(child_pid, 0)
     except ProcessLookupError:
@@ -58,7 +61,33 @@ def test_close_fails_closed_when_session_cannot_be_verified(
         lambda _sid: None,
     )
 
-    assert terminal.close() is False
+    result = terminal.close()
+    assert result.session_stopped is False
+    assert result.child_reaped is True
+
+
+def test_close_failure_still_reports_reaped_child(tmp_path, monkeypatch):
+    terminal = TerminalSession(str(tmp_path))
+    terminal.start()
+    pid = terminal.pid
+    assert pid is not None
+    start_identity = terminal.start_identity
+    monkeypatch.setattr(
+        terminal_module,
+        "_stop_session",
+        lambda _sid, _leader: False,
+    )
+
+    result = terminal.close()
+    assert result.session_stopped is False
+    assert result.child_reaped is True
+    assert result.pid == pid
+    assert result.start_identity == start_identity
+    try:
+        os.waitpid(pid, os.WNOHANG)
+        assert False, "child still reapable after close failure path"
+    except OSError as exc:
+        assert exc.errno == errno.ECHILD
 
 
 @pytest.mark.skipif(
@@ -80,6 +109,8 @@ def test_contained_terminal_terminates_detached_descendant(tmp_path):
         time.sleep(0.01)
     assert child_path.is_file()
 
-    assert terminal.close() is True
+    result = terminal.close()
+    assert result.session_stopped is True
+    assert result.child_reaped is True
     time.sleep(0.6)
     assert not escaped_path.exists()

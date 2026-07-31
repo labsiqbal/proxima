@@ -238,8 +238,64 @@ describe('OpsMigrationDetail', () => {
     expect(retry).toBeEnabled()
     await user.click(retry)
     await waitFor(() => expect(retryOpsMigration).toHaveBeenCalledWith('token', project.slug))
-    expect(confirmDialog).toHaveBeenCalled()
+    expect(confirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('move only the planned Ops-owned paths'),
+    }))
     expect(await screen.findByText('Ops migration completed. The Attention item is resolved.')).toBeInTheDocument()
     expect(changed).toHaveBeenCalled()
+  })
+
+  it('uses revalidate-only confirmation copy for repaired physical layouts', async () => {
+    const repaired: Detail = {
+      ...complete,
+      retry_safe: true,
+      attention: { ...complete.attention, status: 'open', resolved_at: null },
+      validation_reason: null,
+    }
+    vi.mocked(getOpsMigration).mockResolvedValue(repaired)
+    const user = userEvent.setup()
+    render(<OpsMigrationDetail token="token" project={project} onBack={vi.fn()} onChanged={vi.fn()} />)
+
+    await user.click(await screen.findByRole('button', { name: 'Retry migration' }))
+    expect(confirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('revalidate ownership and layout and resolve Attention without moving content'),
+    }))
+    const message = vi.mocked(confirmDialog).mock.calls[0]?.[0]?.message || ''
+    expect(message).not.toContain('move only the planned Ops-owned paths')
+  })
+
+  it('ignores stale reload responses after a newer request starts', async () => {
+    let resolveStale: ((value: Detail) => void) | undefined
+    const stale = new Promise<Detail>((resolve) => { resolveStale = resolve })
+    const nextProject = { ...project, slug: 'repaired-layout', name: 'Repaired layout' }
+    const repaired: Detail = {
+      ...complete,
+      project: { id: 12, slug: nextProject.slug, name: nextProject.name },
+      retry_safe: true,
+      attention: { ...complete.attention, status: 'open', resolved_at: null },
+      validation_reason: null,
+    }
+    vi.mocked(getOpsMigration).mockImplementation((_token, slug) => {
+      if (slug === project.slug) return stale
+      return Promise.resolve(repaired)
+    })
+    const view = render(
+      <OpsMigrationDetail token="token" project={project} onBack={vi.fn()} onChanged={vi.fn()} />,
+    )
+    expect(await screen.findByRole('heading', { name: 'Ops migration' })).toBeInTheDocument()
+
+    view.rerender(
+      <OpsMigrationDetail token="token" project={nextProject} onBack={vi.fn()} onChanged={vi.fn()} />,
+    )
+    expect(await screen.findByText('Repaired layout')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry migration' })).toBeEnabled()
+
+    resolveStale?.(collision)
+    await waitFor(() => {
+      expect(screen.queryByText('Both wiki and ops/wiki exist.')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('Repaired layout')).toBeInTheDocument()
+    expect(screen.getByText('Physical ops/ is active and Ops features remain usable.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry migration' })).toBeEnabled()
   })
 })

@@ -2159,6 +2159,108 @@ def test_app_runner_holds_effect_lease_until_process_stops(tmp_path):
     asyncio.run(run_case())
 
 
+def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
+    tmp_path,
+    monkeypatch,
+):
+    class IngressLease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    class ActivityLease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+        def guard_process(self, command):
+            return command, {}
+
+        def mark_process_started(self) -> None:
+            return None
+
+    class SplitLease:
+        def __init__(self) -> None:
+            self.ingress = IngressLease()
+            self.activity = ActivityLease()
+            self.finished = None
+
+        def release(self) -> None:
+            self.activity.release()
+            self.ingress.release()
+
+        def guard_process(self, command):
+            return self.activity.guard_process(command)
+
+        def mark_process_started(self) -> None:
+            self.activity.mark_process_started()
+
+        def finish(self, **kwargs):
+            self.finished = kwargs
+            if kwargs.get("process_exited"):
+                self.release()
+                return
+            retain = kwargs.get("retain_ingress")
+            if retain is not None:
+                retain(self.ingress)
+            from proxima_api.container_activity import retain_activity_lease
+
+            retain_activity_lease(
+                self.activity,
+                pid=kwargs.get("pid"),
+                start_identity=kwargs.get("start_identity"),
+            )
+
+    manager = AppManager()
+    lease = SplitLease()
+
+    async def run_case():
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "sleep 30",
+            5180,
+            effect_lease=lease,
+        )
+        app = manager._apps["demo"]
+        proc = app["proc"]
+        pid = app["proc_pid"]
+        identity = app["proc_start_identity"]
+        assert pid is not None
+        assert identity
+
+        async def hang_wait(*_args, **_kwargs):
+            raise asyncio.TimeoutError
+
+        monkeypatch.setattr(proc, "wait", hang_wait)
+        monkeypatch.setattr(
+            os,
+            "killpg",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(proc, "terminate", lambda: None)
+        await manager.stop("demo")
+
+        assert lease.finished is not None
+        assert lease.finished["process_exited"] is False
+        assert lease.finished["pid"] == pid
+        assert lease.finished["start_identity"] == identity
+        assert lease.ingress.released is False
+        assert lease.activity.released is False
+        assert lease.ingress in manager._retained_effects
+
+        os.kill(pid, 9)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not lease.activity.released:
+            await asyncio.sleep(0.02)
+        assert lease.activity.released is True
+        assert lease.ingress.released is False
+
+    asyncio.run(run_case())
+
+
 @pytest.mark.skipif(
     os.name != "posix" or shutil.which("bwrap") is None,
     reason="Bubblewrap is required for process containment",

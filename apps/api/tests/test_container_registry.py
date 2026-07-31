@@ -1192,6 +1192,85 @@ def test_retry_waits_for_active_container_process_lease(tmp_path: Path):
     assert (root / "ops" / "wiki" / "keep.md").is_file()
 
 
+def test_retain_activity_lease_releases_after_identity_exits(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "retained-activity-exit"
+    container_id = _legacy_container(conn, root, "retained-activity-exit")
+    (root / "wiki").mkdir()
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        start_new_session=True,
+    )
+    identity = container_registry.process_start_identity(child.pid)
+    assert identity
+    container_registry.retain_activity_lease(
+        lease,
+        pid=child.pid,
+        start_identity=identity,
+    )
+
+    blocked = threading.Event()
+    finished = threading.Event()
+    result: list[bool] = []
+
+    def migrate():
+        blocked.set()
+        try:
+            result.append(migrate_container_ops(conn, container_id))
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=migrate)
+    thread.start()
+    assert blocked.wait(timeout=1)
+    assert finished.wait(timeout=0.2) is False
+
+    child.kill()
+    child.wait(timeout=5)
+    thread.join(timeout=5)
+    assert finished.is_set()
+    assert result == [True]
+    assert lease._released is True
+
+
+def test_retain_activity_lease_without_identity_keeps_quiescence_blocked(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "retained-activity-unbound"
+    container_id = _legacy_container(conn, root, "retained-activity-unbound")
+    (root / "wiki").mkdir()
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    container_registry.retain_activity_lease(lease, pid=None, start_identity=None)
+
+    finished = threading.Event()
+    result: list[bool] = []
+
+    def migrate():
+        try:
+            result.append(migrate_container_ops(conn, container_id))
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=migrate)
+    thread.start()
+    try:
+        assert finished.wait(timeout=0.25) is False
+        assert lease._released is False
+    finally:
+        lease.release()
+    thread.join(timeout=5)
+    assert finished.is_set()
+    assert result == [True]
+
+
 def test_retry_returns_when_active_process_cannot_be_recovered(
     tmp_path: Path,
     monkeypatch,

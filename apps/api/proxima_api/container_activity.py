@@ -23,6 +23,8 @@ _LOCKS_GUARD = threading.Lock()
 _MUTATION_LOCKS: dict[str, Any] = {}
 _MUTATION_LOCK_DEPTH = threading.local()
 _ACTIVITY_STATES: dict[str, "_ContainerActivityState"] = {}
+_RETAINED_ACTIVITY_GUARD = threading.Lock()
+_RETAINED_ACTIVITY_LEASES: list["ContainerActivityLease"] = []
 
 
 class ContainerBoundaryError(ValueError):
@@ -284,6 +286,10 @@ class _ContainerActivityState:
             else:
                 self.writer = False
             self.condition.notify_all()
+
+
+def process_start_identity(pid: int) -> str | None:
+    return _process_start_identity(pid)
 
 
 def _process_start_identity(pid: int) -> str | None:
@@ -617,6 +623,55 @@ class ContainerActivityLease:
                     _release_file_lock(self._fd)
         finally:
             self._state.release(shared=self._shared)
+
+
+def retain_activity_lease(
+    lease: ContainerActivityLease,
+    *,
+    pid: int | None = None,
+    start_identity: str | None = None,
+) -> None:
+    """Retain a writer-activity lease until the exact process identity exits.
+
+    Ingress/maintenance leases are not handled here. When the process identity
+    cannot be bound, the lease stays retained fail-closed so exclusive
+    quiescence remains blocked instead of leaking without a holder or falsely
+    reporting an idle Container.
+    """
+    if lease is None or getattr(lease, "_released", False):
+        return
+
+    with _RETAINED_ACTIVITY_GUARD:
+        if lease not in _RETAINED_ACTIVITY_LEASES:
+            _RETAINED_ACTIVITY_LEASES.append(lease)
+
+    bound_pid = int(pid) if pid is not None else 0
+    expected = str(start_identity or "")
+    if bound_pid <= 1 or not expected:
+        return
+
+    def monitor() -> None:
+        try:
+            while True:
+                alive = _process_has_identity(bound_pid, expected)
+                if alive is False:
+                    break
+                time.sleep(0.05)
+        finally:
+            try:
+                lease.release()
+            finally:
+                with _RETAINED_ACTIVITY_GUARD:
+                    try:
+                        _RETAINED_ACTIVITY_LEASES.remove(lease)
+                    except ValueError:
+                        pass
+
+    threading.Thread(
+        target=monitor,
+        name=f"container-activity-lease-{bound_pid}",
+        daemon=True,
+    ).start()
 
 
 def acquire_container_activity_lease(

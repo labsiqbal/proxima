@@ -1511,9 +1511,9 @@ def register(app, deps):
         except WebSocketDisconnect:
             pass
         finally:
-            terminated = False
+            close_result = None
             try:
-                terminated = term.close()
+                close_result = term.close()
             except Exception:
                 logging.getLogger("proxima.api").exception(
                     "terminal process group shutdown failed"
@@ -1521,14 +1521,29 @@ def register(app, deps):
             out_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await out_task
-            if terminated:
+            session_stopped = bool(
+                getattr(close_result, "session_stopped", close_result)
+            ) if close_result is not None else False
+            child_reaped = bool(
+                getattr(close_result, "child_reaped", close_result)
+            ) if close_result is not None else False
+            if session_stopped:
                 session_lease.release()
-                if activity_lease is not None:
-                    activity_lease.release()
             else:
                 maintenance.retain(session_lease)
-                if activity_lease is not None:
-                    maintenance.retain(activity_lease)
+            if activity_lease is not None:
+                if child_reaped:
+                    activity_lease.release()
+                else:
+                    container_registry.retain_activity_lease(
+                        activity_lease,
+                        pid=getattr(close_result, "pid", None),
+                        start_identity=getattr(
+                            close_result,
+                            "start_identity",
+                            None,
+                        ),
+                    )
 
     @app.websocket("/api/ws/sessions/{session_id}")
     async def ws_events(websocket: WebSocket, session_id: int, token: str = "", after_id: int = 0):

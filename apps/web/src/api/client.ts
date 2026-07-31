@@ -41,9 +41,28 @@ export async function api<T>(path: string, token?: string, options: RequestInit 
           field = [...location].reverse().find(value => typeof value === 'string' && value !== 'body') as string | undefined
         }
       } else if (detail && typeof detail === 'object') {
-        const structured = detail as { message?: unknown; field?: unknown }
-        message = typeof structured.message === 'string' ? structured.message : JSON.stringify(detail)
-        field = typeof structured.field === 'string' ? structured.field : undefined
+        const body = detail as {
+          message?: unknown
+          field?: unknown
+          active_processes?: unknown
+          unresolved_processes?: unknown
+        }
+        if (typeof body.message === 'string' && body.message.trim()) {
+          const parts = [body.message.trim()]
+          if (typeof body.active_processes === 'number' && body.active_processes > 0) {
+            parts.push(`Active processes: ${body.active_processes}.`)
+          }
+          if (
+            typeof body.unresolved_processes === 'number'
+            && body.unresolved_processes > 0
+          ) {
+            parts.push(`Unverified processes: ${body.unresolved_processes}.`)
+          }
+          message = parts.join(' ')
+        } else {
+          message = JSON.stringify(detail)
+        }
+        field = typeof body.field === 'string' ? body.field : undefined
       } else if (typeof parsed?.message === 'string') {
         message = parsed.message
       }

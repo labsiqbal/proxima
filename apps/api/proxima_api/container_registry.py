@@ -29,7 +29,9 @@ from .container_activity import (
     acquire_container_activity_lease,
     container_mutation_lock,
     container_quiescence_lock,
+    process_start_identity,
     recover_container_activity_guardians,
+    retain_activity_lease,
 )
 from .ops_filesystem import (
     OpsMigrationCollision,
@@ -57,7 +59,9 @@ __all__ = (
     "acquire_container_activity_lease",
     "container_mutation_lock",
     "container_quiescence_lock",
+    "process_start_identity",
     "recover_container_activity_guardians",
+    "retain_activity_lease",
 )
 
 OPS_RELPATH = "ops"
