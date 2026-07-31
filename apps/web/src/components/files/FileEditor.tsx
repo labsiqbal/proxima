@@ -47,7 +47,10 @@ export function FileEditor({
   const requestSeq = React.useRef(0)
   const editVersion = React.useRef(0)
   const mountedRef = React.useRef(true)
-  const ref = target || path
+const ref = target || path
+  const dirtyRef = React.useRef(false)
+  const pathRef = React.useRef(path)
+  dirtyRef.current = dirty
 
   React.useEffect(() => {
     mountedRef.current = true
@@ -58,6 +61,14 @@ export function FileEditor({
   }, [])
 
   React.useEffect(() => {
+    const pathChanged = pathRef.current !== path
+    pathRef.current = path
+
+    if (!pathChanged && dirtyRef.current) {
+      setStatus(write ? 'ready' : 'readonly')
+      return
+    }
+
     const seq = ++requestSeq.current
     setStatus('loading'); setDirty(false)
     fs.read(ref)
