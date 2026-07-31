@@ -289,6 +289,13 @@ export function settingsSectionOrder(): SettingsSectionKey[] {
   return SETTINGS_GROUPS.flatMap(g => g.keys)
 }
 
+export function shouldCloseOpsMigrationForSection(
+  section: SettingsSectionKey,
+  opsMigrationSlug: string | null | undefined,
+): boolean {
+  return section !== 'projects' && !!opsMigrationSlug
+}
+
 /** Spaced accessible name so title+hint do not smash (AccountAccount…). */
 export function settingsMenuItemAriaLabel(label: string, hint: string): string {
   const l = (label || '').trim()
@@ -732,7 +739,7 @@ function HelpToursPanel({ token, features }: { token: string; features: AppFeatu
   </div>
 }
 
-export function SettingsScreen({ token, user, profiles, projects, activeProject, onActiveProject, runners, runnerReadiness, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate, initialSection = 'account' }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; onActiveProject: (project: Project) => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void; initialSection?: SettingsSectionKey }) {
+export function SettingsScreen({ token, user, profiles, projects, activeProject, opsMigrationSlug, onActiveProject, onOpenOpsMigration, onCloseOpsMigration, runners, runnerReadiness, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate, initialSection = 'account' }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; opsMigrationSlug?: string | null; onActiveProject: (project: Project) => void; onOpenOpsMigration?: (project: Project) => void; onCloseOpsMigration?: () => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void; initialSection?: SettingsSectionKey }) {
   const [activeSection, setActiveSection] = React.useState<SettingsSectionKey>(initialSection)
   React.useEffect(() => { setActiveSection(initialSection) }, [initialSection])
   const [theme, setTheme] = React.useState<ThemeKey>(getTheme())
@@ -789,6 +796,12 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
     ? activeSection
     : 'account'
   const activeMeta = settingsSections.find(s => s.key === effectiveSection) ?? settingsSections[0]
+  const selectSection = (section: SettingsSectionKey) => {
+    if (shouldCloseOpsMigrationForSection(section, opsMigrationSlug)) {
+      onCloseOpsMigration?.()
+    }
+    setActiveSection(section)
+  }
 
   const accountPanel = <div className="panel"><div className="panel-head"><h3>Account</h3></div><div className="settings-account"><strong>{user.username}</strong><span className="muted">{profiles.length} profile{profiles.length !== 1 ? 's' : ''} · {projects.length} project{projects.length !== 1 ? 's' : ''}</span></div></div>
   const sourceLink = <a className="ghost-button" href="https://github.com/labsiqbal/proxima" target="_blank" rel="noopener noreferrer">Source code · AGPL-3.0</a>
@@ -823,7 +836,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
   const content = effectiveSection === 'account'
     ? <>{accountPanel}<ChangePasswordPanel token={token} onTokenChange={onTokenChange} />{appearancePanel}{notificationsPanel}</>
     : effectiveSection === 'projects'
-      ? <div className="settings-projects"><ProjectsScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} onRefresh={onRefresh} /></div>
+      ? <div className="settings-projects"><ProjectsScreen token={token} projects={projects} activeProject={activeProject} opsMigrationSlug={opsMigrationSlug} onActiveProject={onActiveProject} onOpenOpsMigration={onOpenOpsMigration} onCloseOpsMigration={onCloseOpsMigration} onRefresh={onRefresh} /></div>
     : effectiveSection === 'master'
       ? <MasterSettingsPanel token={token} />
     : effectiveSection === 'agents'
@@ -852,7 +865,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
               key={section.key}
               type="button"
               className={`settings-menu-item ${effectiveSection === section.key ? 'active' : ''}`}
-              onClick={() => setActiveSection(section.key)}
+              onClick={() => selectSection(section.key)}
               aria-current={effectiveSection === section.key ? 'page' : undefined}
               aria-label={settingsMenuItemAriaLabel(section.label, section.hint)}
               title={section.hint}

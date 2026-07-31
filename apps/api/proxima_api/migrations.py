@@ -17,6 +17,7 @@ To add a migration: append a ``(version, description, apply_fn)`` tuple to
 ``MIGRATIONS`` with the next integer version. Never edit or renumber an existing
 entry. Prefer additive changes (``ADD COLUMN``, ``CREATE TABLE``).
 """
+
 from __future__ import annotations
 
 import json
@@ -55,7 +56,9 @@ def _add_messages_author(conn: sqlite3.Connection) -> None:
 def _add_profiles_runner_id(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(profiles)").fetchall()}
     if "runner_id" not in cols:
-        conn.execute(f"ALTER TABLE profiles ADD COLUMN runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}'")
+        conn.execute(
+            f"ALTER TABLE profiles ADD COLUMN runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}'"
+        )
 
 
 def _add_messages_run_id(conn: sqlite3.Connection) -> None:
@@ -75,7 +78,9 @@ def _rename_private_projects_to_personal(conn: sqlite3.Connection) -> None:
     # read like a sharing setting. Relabel it "<user> (personal)" so it clearly
     # reads as the user's own space. Visibility (the actual access control) is a
     # separate column and is untouched.
-    if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'").fetchone():
+    if not conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='projects'"
+    ).fetchone():
         return
     conn.execute(
         "UPDATE projects SET name = REPLACE(name, ' (private)', ' (personal)') WHERE name LIKE '% (private)'"
@@ -98,15 +103,21 @@ def _add_sessions_goal(conn: sqlite3.Connection) -> None:
     if "goal_status" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN goal_status TEXT")
     if "goal_iteration" not in cols:
-        conn.execute("ALTER TABLE sessions ADD COLUMN goal_iteration INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN goal_iteration INTEGER NOT NULL DEFAULT 0"
+        )
     if "goal_max" not in cols:
-        conn.execute("ALTER TABLE sessions ADD COLUMN goal_max INTEGER NOT NULL DEFAULT 20")
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN goal_max INTEGER NOT NULL DEFAULT 20"
+        )
 
 
 def _add_sessions_manual_title(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
     if "manual_title" not in cols:
-        conn.execute("ALTER TABLE sessions ADD COLUMN manual_title INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN manual_title INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 def _drop_invites_table(conn: sqlite3.Connection) -> None:
@@ -151,9 +162,15 @@ def _add_message_reviews_table(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_message_reviews_source ON message_reviews(source_message_id, id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_message_reviews_session ON message_reviews(session_id, id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_message_reviews_run ON message_reviews(run_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_message_reviews_source ON message_reviews(source_message_id, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_message_reviews_session ON message_reviews(session_id, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_message_reviews_run ON message_reviews(run_id)"
+    )
 
 
 def _add_message_review_apply_fields(conn: sqlite3.Connection) -> None:
@@ -161,7 +178,9 @@ def _add_message_review_apply_fields(conn: sqlite3.Connection) -> None:
     if "merge_transcript" not in cols:
         conn.execute("ALTER TABLE message_reviews ADD COLUMN merge_transcript TEXT")
     if "source_original_content" not in cols:
-        conn.execute("ALTER TABLE message_reviews ADD COLUMN source_original_content TEXT")
+        conn.execute(
+            "ALTER TABLE message_reviews ADD COLUMN source_original_content TEXT"
+        )
     if "applied_at" not in cols:
         conn.execute("ALTER TABLE message_reviews ADD COLUMN applied_at TEXT")
 
@@ -194,9 +213,15 @@ def _add_prompt_collaborations(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_session ON prompt_collaborations(session_id, id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_parent ON prompt_collaborations(parent_run_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_synthesis ON prompt_collaborations(synthesis_run_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_session ON prompt_collaborations(session_id, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_parent ON prompt_collaborations(parent_run_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_synthesis ON prompt_collaborations(synthesis_run_id)"
+    )
 
 
 def _drop_sessions_acp_session_id(conn: sqlite3.Connection) -> None:
@@ -216,10 +241,22 @@ def _add_messages_run_id_fk(conn: sqlite3.Connection) -> None:
     order with foreign_keys OFF (outside a txn — this migration is no_auto_tx), which
     preserves the inbound FKs from message_reviews / prompt_collaborations and never
     fires a cascade. Idempotent: skips if run_id already has an FK."""
-    if any(r[3] == "run_id" for r in conn.execute("PRAGMA foreign_key_list(messages)").fetchall()):
+    if any(
+        r[3] == "run_id"
+        for r in conn.execute("PRAGMA foreign_key_list(messages)").fetchall()
+    ):
         return
     cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
-    if not {"id", "session_id", "role", "content", "author", "run_id", "output_links", "created_at"}.issubset(cols):
+    if not {
+        "id",
+        "session_id",
+        "role",
+        "content",
+        "author",
+        "run_id",
+        "output_links",
+        "created_at",
+    }.issubset(cols):
         return  # not the full production shape yet (e.g. a minimal test fixture)
     conn.execute("PRAGMA foreign_keys=OFF")
     conn.execute("BEGIN")
@@ -246,7 +283,9 @@ def _add_messages_run_id_fk(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE _messages_new RENAME TO messages")
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
-            raise RuntimeError(f"messages FK rebuild introduced violations: {[tuple(v) for v in violations]}")
+            raise RuntimeError(
+                f"messages FK rebuild introduced violations: {[tuple(v) for v in violations]}"
+            )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
@@ -261,13 +300,32 @@ def _add_sessions_pointer_fks(conn: sqlite3.Connection) -> None:
     Dangling values that already exist are nulled first (that's the whole point —
     they could dangle before), then the FK is enforced. Same safe rebuild order as
     migration 15. Idempotent + guarded against minimal fixtures."""
-    if any(r[3] == "task_id" for r in conn.execute("PRAGMA foreign_key_list(sessions)").fetchall()):
+    if any(
+        r[3] == "task_id"
+        for r in conn.execute("PRAGMA foreign_key_list(sessions)").fetchall()
+    ):
         return
     cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
     full = {
-        "id", "title", "project_id", "owner_user_id", "profile_id", "runner_id", "visibility",
-        "mode", "task_id", "job_id", "workflow_id", "manual_title", "created_at", "updated_at",
-        "produced_artifacts", "goal_text", "goal_status", "goal_iteration", "goal_max",
+        "id",
+        "title",
+        "project_id",
+        "owner_user_id",
+        "profile_id",
+        "runner_id",
+        "visibility",
+        "mode",
+        "task_id",
+        "job_id",
+        "workflow_id",
+        "manual_title",
+        "created_at",
+        "updated_at",
+        "produced_artifacts",
+        "goal_text",
+        "goal_status",
+        "goal_iteration",
+        "goal_max",
     }
     if not full.issubset(cols):
         return
@@ -275,9 +333,15 @@ def _add_sessions_pointer_fks(conn: sqlite3.Connection) -> None:
     conn.execute("BEGIN")
     try:
         # Null pre-existing dangling pointers so the new FK doesn't reject real data.
-        conn.execute("UPDATE sessions SET task_id = NULL WHERE task_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id = sessions.task_id)")
-        conn.execute("UPDATE sessions SET job_id = NULL WHERE job_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = sessions.job_id)")
-        conn.execute("UPDATE sessions SET workflow_id = NULL WHERE workflow_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM workflows WHERE workflows.id = sessions.workflow_id)")
+        conn.execute(
+            "UPDATE sessions SET task_id = NULL WHERE task_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id = sessions.task_id)"
+        )
+        conn.execute(
+            "UPDATE sessions SET job_id = NULL WHERE job_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = sessions.job_id)"
+        )
+        conn.execute(
+            "UPDATE sessions SET workflow_id = NULL WHERE workflow_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM workflows WHERE workflows.id = sessions.workflow_id)"
+        )
         conn.execute(
             f"""
             CREATE TABLE _sessions_new (
@@ -303,17 +367,27 @@ def _add_sessions_pointer_fks(conn: sqlite3.Connection) -> None:
             )
             """
         )
-        _scols = ("id, title, project_id, owner_user_id, profile_id, runner_id, visibility, mode, "
-                  "task_id, job_id, workflow_id, manual_title, created_at, updated_at, produced_artifacts, "
-                  "goal_text, goal_status, goal_iteration, goal_max")
-        conn.execute(f"INSERT INTO _sessions_new({_scols}) SELECT {_scols} FROM sessions")
+        _scols = (
+            "id, title, project_id, owner_user_id, profile_id, runner_id, visibility, mode, "
+            "task_id, job_id, workflow_id, manual_title, created_at, updated_at, produced_artifacts, "
+            "goal_text, goal_status, goal_iteration, goal_max"
+        )
+        conn.execute(
+            f"INSERT INTO _sessions_new({_scols}) SELECT {_scols} FROM sessions"
+        )
         conn.execute("DROP TABLE sessions")
         conn.execute("ALTER TABLE _sessions_new RENAME TO sessions")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, updated_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, updated_at)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, updated_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, updated_at)"
+        )
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
-            raise RuntimeError(f"sessions FK rebuild introduced violations: {[tuple(v) for v in violations]}")
+            raise RuntimeError(
+                f"sessions FK rebuild introduced violations: {[tuple(v) for v in violations]}"
+            )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
@@ -332,9 +406,24 @@ def _drop_tasks_feature(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE IF EXISTS tasks")
         return
     keep = {
-        "id", "title", "project_id", "owner_user_id", "profile_id", "runner_id", "visibility",
-        "mode", "job_id", "workflow_id", "manual_title", "created_at", "updated_at",
-        "produced_artifacts", "goal_text", "goal_status", "goal_iteration", "goal_max",
+        "id",
+        "title",
+        "project_id",
+        "owner_user_id",
+        "profile_id",
+        "runner_id",
+        "visibility",
+        "mode",
+        "job_id",
+        "workflow_id",
+        "manual_title",
+        "created_at",
+        "updated_at",
+        "produced_artifacts",
+        "goal_text",
+        "goal_status",
+        "goal_iteration",
+        "goal_max",
     }
     if not keep.issubset(cols):
         return
@@ -365,18 +454,26 @@ def _drop_tasks_feature(conn: sqlite3.Connection) -> None:
             )
             """
         )
-        _c = ("id, title, project_id, owner_user_id, profile_id, runner_id, visibility, mode, "
-              "job_id, workflow_id, manual_title, created_at, updated_at, produced_artifacts, "
-              "goal_text, goal_status, goal_iteration, goal_max")
+        _c = (
+            "id, title, project_id, owner_user_id, profile_id, runner_id, visibility, mode, "
+            "job_id, workflow_id, manual_title, created_at, updated_at, produced_artifacts, "
+            "goal_text, goal_status, goal_iteration, goal_max"
+        )
         conn.execute(f"INSERT INTO _sessions_new({_c}) SELECT {_c} FROM sessions")
         conn.execute("DROP TABLE sessions")
         conn.execute("ALTER TABLE _sessions_new RENAME TO sessions")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, updated_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, updated_at)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, updated_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, updated_at)"
+        )
         conn.execute("DROP TABLE IF EXISTS tasks")
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
-            raise RuntimeError(f"drop-tasks rebuild introduced violations: {[tuple(v) for v in violations]}")
+            raise RuntimeError(
+                f"drop-tasks rebuild introduced violations: {[tuple(v) for v in violations]}"
+            )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
@@ -421,9 +518,15 @@ def _add_project_areas(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_areas_project ON project_areas(project_id, kind)")
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_project_areas_one_ops ON project_areas(project_id) WHERE kind = 'ops'")
-    if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'").fetchone():
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_project_areas_project ON project_areas(project_id, kind)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_project_areas_one_ops ON project_areas(project_id) WHERE kind = 'ops'"
+    )
+    if not conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='projects'"
+    ).fetchone():
         return
     cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if not {"id", "path"}.issubset(cols):
@@ -455,7 +558,9 @@ def _add_repo_job_worktrees(conn: sqlite3.Connection) -> None:
       delete path, keyed by job id, so crash leftovers are removable even
       without the row).
     """
-    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
+    if conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'"
+    ).fetchone():
         cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
         if "target_area_id" not in cols:
             conn.execute(
@@ -480,7 +585,9 @@ def _add_repo_job_worktrees(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_job_worktrees_status ON job_worktrees(status)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_worktrees_status ON job_worktrees(status)"
+    )
 
 
 def _add_jobs_rejected_reason(conn: sqlite3.Connection) -> None:
@@ -488,7 +595,9 @@ def _add_jobs_rejected_reason(conn: sqlite3.Connection) -> None:
     job at review marks it failed and must leave a durable why. A job column
     (not an event) because it is the job's terminal review verdict - the
     Tasks screen and slice 12's satpam read it straight off the job row."""
-    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'").fetchone():
+    if conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'"
+    ).fetchone():
         cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
         if "rejected_reason" not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN rejected_reason TEXT")
@@ -513,7 +622,9 @@ def _add_runs_continuation(conn: sqlite3.Connection) -> None:
             "ALTER TABLE runs ADD COLUMN continued_from_run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL"
         )
     if "continuation_count" not in cols:
-        conn.execute("ALTER TABLE runs ADD COLUMN continuation_count INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "ALTER TABLE runs ADD COLUMN continuation_count INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 def _add_script_trust(conn: sqlite3.Connection) -> None:
@@ -591,8 +702,12 @@ def _add_artifact_registry(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_artifact_records_identity ON artifact_records(project_id, path)"
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_records_job ON artifact_records(job_id)")
-    if not conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'").fetchone():
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_artifact_records_job ON artifact_records(job_id)"
+    )
+    if not conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='projects'"
+    ).fetchone():
         return
     cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if not {"id", "path"}.issubset(cols):
@@ -629,12 +744,22 @@ def _add_repo_remote_push(conn: sqlite3.Connection) -> None:
       job-level blocker card; a failed push never un-merges (the job row is
       untouched - done stays done).
     """
-    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='project_areas'").fetchone():
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(project_areas)").fetchall()}
+    if conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='project_areas'"
+    ).fetchone():
+        cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(project_areas)").fetchall()
+        }
         if "push_on_merge" not in cols:
-            conn.execute("ALTER TABLE project_areas ADD COLUMN push_on_merge INTEGER NOT NULL DEFAULT 0")
-    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='job_worktrees'").fetchone():
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(job_worktrees)").fetchall()}
+            conn.execute(
+                "ALTER TABLE project_areas ADD COLUMN push_on_merge INTEGER NOT NULL DEFAULT 0"
+            )
+    if conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='job_worktrees'"
+    ).fetchone():
+        cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(job_worktrees)").fetchall()
+        }
         for col in ("push_status", "push_error", "push_remote", "push_remote_url"):
             if col not in cols:
                 conn.execute(f"ALTER TABLE job_worktrees ADD COLUMN {col} TEXT")
@@ -695,24 +820,33 @@ def _add_satpam_supervision(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_satpam_interventions_job ON satpam_interventions(job_id, id)"
     )
-    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='node_states'").fetchone():
+    if conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='node_states'"
+    ).fetchone():
         cols = {r[1] for r in conn.execute("PRAGMA table_info(node_states)").fetchall()}
         if "question" not in cols:
             conn.execute("ALTER TABLE node_states ADD COLUMN question TEXT")
         if "answer" not in cols:
             conn.execute("ALTER TABLE node_states ADD COLUMN answer TEXT")
         if "contract_failures" not in cols:
-            conn.execute("ALTER TABLE node_states ADD COLUMN contract_failures INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                "ALTER TABLE node_states ADD COLUMN contract_failures INTEGER NOT NULL DEFAULT 0"
+            )
 
 
 def _add_alpha_foundation(conn: sqlite3.Connection) -> None:
     """Alpha system identity, job ownership, scoped checkpoints, turn journals,
     and durable attention items. All additions are nullable/new-table changes."""
     table_names = {
-        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
     }
     if "profiles" in table_names:
-        profile_cols = {r[1] for r in conn.execute("PRAGMA table_info(profiles)").fetchall()}
+        profile_cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(profiles)").fetchall()
+        }
         if "system_kind" not in profile_cols:
             conn.execute("ALTER TABLE profiles ADD COLUMN system_kind TEXT")
     if "jobs" in table_names:
@@ -726,7 +860,9 @@ def _add_alpha_foundation(conn: sqlite3.Connection) -> None:
             )
             job_cols.add("alpha_session_id")
         if {"alpha_session_id", "status", "created_at"}.issubset(job_cols):
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_alpha ON jobs(alpha_session_id, status, created_at)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_alpha ON jobs(alpha_session_id, status, created_at)"
+            )
         conn.execute(
             "CREATE TABLE IF NOT EXISTS job_checkpoints ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -734,7 +870,9 @@ def _add_alpha_foundation(conn: sqlite3.Connection) -> None:
             "payload_json TEXT NOT NULL, git_refs_json TEXT NOT NULL DEFAULT '[]', "
             "pinned INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_job_checkpoints_job ON job_checkpoints(job_id, created_at DESC)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_job_checkpoints_job ON job_checkpoints(job_id, created_at DESC)"
+        )
     if {"messages", "sessions"}.issubset(table_names):
         conn.execute(
             "CREATE TABLE IF NOT EXISTS turn_file_journals ("
@@ -743,7 +881,9 @@ def _add_alpha_foundation(conn: sqlite3.Connection) -> None:
             "session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, "
             "entries_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_turn_file_journals_session ON turn_file_journals(session_id, id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_turn_file_journals_session ON turn_file_journals(session_id, id)"
+        )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS attention_items ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, title TEXT NOT NULL, "
@@ -751,7 +891,9 @@ def _add_alpha_foundation(conn: sqlite3.Connection) -> None:
         "actions_json TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'open', "
         "source_key TEXT UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, resolved_at TEXT)"
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status, created_at DESC)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status, created_at DESC)"
+    )
 
 
 def _move_workflow_inputs_to_trigger(conn: sqlite3.Connection) -> None:
@@ -902,9 +1044,7 @@ def _add_task_delegation_contracts(conn: sqlite3.Connection) -> None:
     }
     if not required_tables.issubset(tables):
         return
-    job_columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
-    }
+    job_columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
     if "blocked_reason" not in job_columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN blocked_reason TEXT")
     conn.execute(
@@ -1068,9 +1208,7 @@ def _protect_task_prerequisites_from_deletion(
             "created_at, updated_at FROM task_dependencies"
         )
         conn.execute("DROP TABLE task_dependencies")
-        conn.execute(
-            "ALTER TABLE _task_dependencies_new RENAME TO task_dependencies"
-        )
+        conn.execute("ALTER TABLE _task_dependencies_new RENAME TO task_dependencies")
         conn.execute(
             "CREATE INDEX idx_task_dependencies_prerequisite "
             "ON task_dependencies(depends_on_task_id, task_id)"
@@ -1172,16 +1310,12 @@ def _add_master_tool_call_ledger(conn: sqlite3.Connection) -> None:
     }
     actual_columns = {
         str(row[1])
-        for row in conn.execute(
-            "PRAGMA table_info(master_tool_calls)"
-        ).fetchall()
+        for row in conn.execute("PRAGMA table_info(master_tool_calls)").fetchall()
     }
     if actual_columns != expected_columns:
         from .master_persistence import MasterPersistenceError
 
-        raise MasterPersistenceError(
-            "Master tool-call ledger schema is incomplete"
-        )
+        raise MasterPersistenceError("Master tool-call ledger schema is incomplete")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_master_tool_calls_session "
         "ON master_tool_calls(master_session_id, turn_root_run_id, id)"
@@ -1302,9 +1436,7 @@ def _add_master_projection_ledger(conn: sqlite3.Connection) -> None:
     }
     actual_columns = {
         str(row[1])
-        for row in conn.execute(
-            "PRAGMA table_info(master_projections)"
-        ).fetchall()
+        for row in conn.execute("PRAGMA table_info(master_projections)").fetchall()
     }
     if actual_columns != expected_columns:
         raise RuntimeError("Master projection ledger schema is incomplete")
@@ -1445,9 +1577,7 @@ def _harden_master_focus_contracts(conn: sqlite3.Connection) -> None:
         conn.execute("BEGIN IMMEDIATE")
         state_columns = {
             str(row[1])
-            for row in conn.execute(
-                "PRAGMA table_info(master_focus_state)"
-            ).fetchall()
+            for row in conn.execute("PRAGMA table_info(master_focus_state)").fetchall()
         }
         if "pending_focus" not in state_columns:
             conn.execute(
@@ -1503,8 +1633,7 @@ def _harden_master_focus_contracts(conn: sqlite3.Connection) -> None:
             )
             conn.execute("DROP TABLE master_focus_epochs")
             conn.execute(
-                "ALTER TABLE master_focus_epochs_new "
-                "RENAME TO master_focus_epochs"
+                "ALTER TABLE master_focus_epochs_new RENAME TO master_focus_epochs"
             )
 
         conn.execute(
@@ -1520,8 +1649,7 @@ def _harden_master_focus_contracts(conn: sqlite3.Connection) -> None:
             for row in conn.execute("PRAGMA table_info(messages)").fetchall()
         }
         run_columns = {
-            str(row[1])
-            for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+            str(row[1]) for row in conn.execute("PRAGMA table_info(runs)").fetchall()
         }
         session_columns = {
             str(row[1])
@@ -1618,8 +1746,7 @@ def _add_master_focus_persistence_boundaries(
     }
     if run_focus_tables.issubset(tables):
         run_columns = {
-            str(row[1])
-            for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+            str(row[1]) for row in conn.execute("PRAGMA table_info(runs)").fetchall()
         }
         session_columns = {
             str(row[1])
@@ -1627,19 +1754,14 @@ def _add_master_focus_persistence_boundaries(
         }
         epoch_columns = {
             str(row[1])
-            for row in conn.execute(
-                "PRAGMA table_info(master_focus_epochs)"
-            ).fetchall()
+            for row in conn.execute("PRAGMA table_info(master_focus_epochs)").fetchall()
         }
         state_columns = {
             str(row[1])
-            for row in conn.execute(
-                "PRAGMA table_info(master_focus_state)"
-            ).fetchall()
+            for row in conn.execute("PRAGMA table_info(master_focus_state)").fetchall()
         }
         has_run_focus_shape = (
-            {"session_id", "kind", "project_id", "focus_epoch_id"}
-            <= run_columns
+            {"session_id", "kind", "project_id", "focus_epoch_id"} <= run_columns
             and {"id", "mode"} <= session_columns
             and {"id", "master_session_id"} <= epoch_columns
             and {"master_session_id", "current_epoch_id"} <= state_columns
@@ -1690,9 +1812,7 @@ def _add_master_focus_persistence_boundaries(
         return
     columns = {
         str(row[1])
-        for row in conn.execute(
-            "PRAGMA table_info(task_delegations)"
-        ).fetchall()
+        for row in conn.execute("PRAGMA table_info(task_delegations)").fetchall()
     }
     if "origin_focus_epoch_id" not in columns:
         conn.execute(
@@ -1706,9 +1826,7 @@ def _add_master_focus_persistence_boundaries(
             "origin_focus_captured INTEGER NOT NULL DEFAULT 0 "
             "CHECK(origin_focus_captured IN (0, 1))"
         )
-    conn.execute(
-        "DROP TRIGGER IF EXISTS task_delegations_focus_immutable"
-    )
+    conn.execute("DROP TRIGGER IF EXISTS task_delegations_focus_immutable")
     conn.execute(
         "UPDATE task_delegations SET "
         "origin_focus_epoch_id = ("
@@ -1799,9 +1917,7 @@ def _freeze_master_focus_attribution(conn: sqlite3.Connection) -> None:
     if "message_focus" in tables:
         message_columns = {
             str(row[1])
-            for row in conn.execute(
-                "PRAGMA table_info(message_focus)"
-            ).fetchall()
+            for row in conn.execute("PRAGMA table_info(message_focus)").fetchall()
         }
         if "focus_epoch_id" in message_columns:
             conn.execute(
@@ -1819,8 +1935,7 @@ def _freeze_master_focus_attribution(conn: sqlite3.Connection) -> None:
             )
     if "runs" in tables:
         run_columns = {
-            str(row[1])
-            for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+            str(row[1]) for row in conn.execute("PRAGMA table_info(runs)").fetchall()
         }
         if "focus_epoch_id" in run_columns:
             conn.execute(
@@ -1863,7 +1978,9 @@ def _add_self_update_runs(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_self_update_runs_status ON self_update_runs(status, created_at DESC)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_self_update_runs_status ON self_update_runs(status, created_at DESC)"
+    )
 
 
 def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
@@ -1875,18 +1992,24 @@ def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
     }
     has_focus = {"message_focus", "messages"}.issubset(tables)
     has_context = {"master_message_context", "messages"}.issubset(tables)
-    focus_foreign_tables = {
-        str(row[2])
-        for row in conn.execute(
-            "PRAGMA foreign_key_list(message_focus)"
-        ).fetchall()
-    } if has_focus else set()
-    context_foreign_tables = {
-        str(row[2])
-        for row in conn.execute(
-            "PRAGMA foreign_key_list(master_message_context)"
-        ).fetchall()
-    } if has_context else set()
+    focus_foreign_tables = (
+        {
+            str(row[2])
+            for row in conn.execute("PRAGMA foreign_key_list(message_focus)").fetchall()
+        }
+        if has_focus
+        else set()
+    )
+    context_foreign_tables = (
+        {
+            str(row[2])
+            for row in conn.execute(
+                "PRAGMA foreign_key_list(master_message_context)"
+            ).fetchall()
+        }
+        if has_context
+        else set()
+    )
     rebuild_focus = has_focus and "projects" in focus_foreign_tables
     rebuild_context = has_context and bool(
         {"projects", "project_areas"} & context_foreign_tables
@@ -1899,9 +2022,7 @@ def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
         conn.execute("BEGIN IMMEDIATE")
         if rebuild_focus:
             conn.execute("DROP TRIGGER IF EXISTS messages_master_focus_insert")
-            conn.execute(
-                "DROP TRIGGER IF EXISTS messages_master_focus_run_update"
-            )
+            conn.execute("DROP TRIGGER IF EXISTS messages_master_focus_run_update")
             focus_container = "focus.focus_container_id"
             if "master_focus_epochs" in tables:
                 focus_container = (
@@ -1950,9 +2071,7 @@ def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
                 f"{epoch_join}{projection_join}"
             )
             conn.execute("DROP TABLE message_focus")
-            conn.execute(
-                "ALTER TABLE message_focus_new RENAME TO message_focus"
-            )
+            conn.execute("ALTER TABLE message_focus_new RENAME TO message_focus")
             conn.execute(
                 "CREATE INDEX idx_message_focus_epoch "
                 "ON message_focus(focus_epoch_id, message_id)"
@@ -1970,8 +2089,7 @@ def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
                 else ""
             )
             focus_container = (
-                "COALESCE(context.focus_container_id, "
-                "focus.focus_container_id)"
+                "COALESCE(context.focus_container_id, focus.focus_container_id)"
                 if has_focus
                 else "context.focus_container_id"
             )
@@ -2038,9 +2156,7 @@ def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
                 "target_container_id, target_area_id, message_id)"
             )
         if has_focus:
-            conn.execute(
-                "DROP TRIGGER IF EXISTS message_focus_epoch_immutable"
-            )
+            conn.execute("DROP TRIGGER IF EXISTS message_focus_epoch_immutable")
             conn.execute(
                 """
                 CREATE TRIGGER message_focus_epoch_immutable
@@ -2059,9 +2175,7 @@ def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
                 """
             )
         if has_context:
-            conn.execute(
-                "DROP TRIGGER IF EXISTS master_message_context_immutable"
-            )
+            conn.execute("DROP TRIGGER IF EXISTS master_message_context_immutable")
             conn.execute(
                 """
                 CREATE TRIGGER master_message_context_immutable
@@ -2415,9 +2529,7 @@ def _order_task_projection_delivery(conn: sqlite3.Connection) -> None:
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         ).fetchall()
     }
-    if not {"jobs", "events", "messages", "task_projection_outbox"}.issubset(
-        tables
-    ):
+    if not {"jobs", "events", "messages", "task_projection_outbox"}.issubset(tables):
         return
     job_columns = {
         str(row[1]) for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
@@ -2429,16 +2541,11 @@ def _order_task_projection_delivery(conn: sqlite3.Connection) -> None:
         )
     outbox_columns = {
         str(row[1])
-        for row in conn.execute(
-            "PRAGMA table_info(task_projection_outbox)"
-        ).fetchall()
+        for row in conn.execute("PRAGMA table_info(task_projection_outbox)").fetchall()
     }
-    if not {"projection_revision", "superseded_by_event_id"}.issubset(
-        outbox_columns
-    ):
+    if not {"projection_revision", "superseded_by_event_id"}.issubset(outbox_columns):
         conn.execute(
-            "ALTER TABLE task_projection_outbox "
-            "RENAME TO task_projection_outbox_v44"
+            "ALTER TABLE task_projection_outbox RENAME TO task_projection_outbox_v44"
         )
         conn.execute(
             """
@@ -2738,9 +2845,7 @@ def _separate_task_projection_generations(conn: sqlite3.Connection) -> None:
             authoritative=str(row["state"]) != "superseded",
         )
 
-    conn.execute(
-        "UPDATE jobs SET projection_revision = 0, projection_state = 'none'"
-    )
+    conn.execute("UPDATE jobs SET projection_revision = 0, projection_state = 'none'")
     for job_id, revision in revisions.items():
         state_record = states.get(job_id)
         state = (
@@ -2762,17 +2867,14 @@ def _separate_task_projection_generations(conn: sqlite3.Connection) -> None:
 
     recovery_columns = {
         str(row[1])
-        for row in conn.execute(
-            "PRAGMA table_info(task_recovery_outbox)"
-        ).fetchall()
+        for row in conn.execute("PRAGMA table_info(task_recovery_outbox)").fetchall()
     }
     if {
         "projection_revision",
         "superseded_by_event_id",
     } & recovery_columns:
         conn.execute(
-            "ALTER TABLE task_recovery_outbox "
-            "RENAME TO task_recovery_outbox_v45"
+            "ALTER TABLE task_recovery_outbox RENAME TO task_recovery_outbox_v45"
         )
         conn.execute(
             """
@@ -2869,22 +2971,17 @@ def _preserve_legacy_recovery_ordering_gaps(
         return
     recovery_columns = {
         str(row[1])
-        for row in conn.execute(
-            "PRAGMA table_info(task_recovery_outbox)"
-        ).fetchall()
+        for row in conn.execute("PRAGMA table_info(task_recovery_outbox)").fetchall()
     }
     if "ordering_successor_id" not in recovery_columns:
         if "task_recovery_corrections" in tables:
             if conn.execute(
                 "SELECT 1 FROM task_recovery_corrections LIMIT 1"
             ).fetchone():
-                raise RuntimeError(
-                    "Task recovery corrections predate their schema"
-                )
+                raise RuntimeError("Task recovery corrections predate their schema")
             conn.execute("DROP TABLE task_recovery_corrections")
         conn.execute(
-            "ALTER TABLE task_recovery_outbox "
-            "RENAME TO task_recovery_outbox_v46"
+            "ALTER TABLE task_recovery_outbox RENAME TO task_recovery_outbox_v46"
         )
         conn.execute(
             """
@@ -3171,9 +3268,7 @@ def _stage_delivered_recovery_corrections(
             ).fetchall()
         ]
         if len(gap_ids) != int(row["gap_count"]):
-            raise RuntimeError(
-                "Delivered recovery correction staging is incomplete"
-            )
+            raise RuntimeError("Delivered recovery correction staging is incomplete")
         values = (
             int(row["id"]),
             int(row["job_id"]),
@@ -3213,9 +3308,7 @@ def _stage_delivered_recovery_corrections(
             ).fetchone()
         )
         if staged != values:
-            raise RuntimeError(
-                "Delivered recovery correction staging changed identity"
-            )
+            raise RuntimeError("Delivered recovery correction staging changed identity")
         conn.executemany(
             "INSERT OR IGNORE INTO "
             "task_recovery_delivered_marker_staging_gaps("
@@ -3233,9 +3326,7 @@ def _stage_delivered_recovery_corrections(
             ).fetchall()
         ]
         if staged_gap_ids != gap_ids:
-            raise RuntimeError(
-                "Delivered recovery correction staging changed coverage"
-            )
+            raise RuntimeError("Delivered recovery correction staging changed coverage")
 
 
 def _aggregate_legacy_recovery_ordering_gaps(
@@ -3261,8 +3352,7 @@ def _aggregate_legacy_recovery_ordering_gaps(
             ).fetchall()
         }
         if any(
-            gap_foreign_key_targets.get(column)
-            != "task_recovery_outbox"
+            gap_foreign_key_targets.get(column) != "task_recovery_outbox"
             for column in (
                 "predecessor_outbox_id",
                 "successor_outbox_id",
@@ -3271,13 +3361,8 @@ def _aggregate_legacy_recovery_ordering_gaps(
             if conn.execute(
                 "SELECT 1 FROM task_recovery_ordering_gaps LIMIT 1"
             ).fetchone():
-                raise RuntimeError(
-                    "Task recovery gap ledger predates its outbox"
-                )
-            conn.execute(
-                "DROP TRIGGER IF EXISTS "
-                "task_recovery_ordering_gaps_immutable"
-            )
+                raise RuntimeError("Task recovery gap ledger predates its outbox")
+            conn.execute("DROP TRIGGER IF EXISTS task_recovery_ordering_gaps_immutable")
             conn.execute("DROP TABLE task_recovery_ordering_gaps")
     conn.execute(
         """
@@ -3386,10 +3471,13 @@ def _aggregate_legacy_recovery_ordering_gaps(
         """
     )
 
-    correction_exists = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-        "AND name = 'task_recovery_corrections'"
-    ).fetchone() is not None
+    correction_exists = (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'task_recovery_corrections'"
+        ).fetchone()
+        is not None
+    )
     correction_columns = (
         {
             str(row[1])
@@ -3401,9 +3489,7 @@ def _aggregate_legacy_recovery_ordering_gaps(
         else set()
     )
     correction_indexes = (
-        conn.execute(
-            "PRAGMA index_list(task_recovery_corrections)"
-        ).fetchall()
+        conn.execute("PRAGMA index_list(task_recovery_corrections)").fetchall()
         if correction_exists
         else []
     )
@@ -3425,9 +3511,7 @@ def _aggregate_legacy_recovery_ordering_gaps(
         bool(row[2])
         and [
             str(column[2])
-            for column in conn.execute(
-                f"PRAGMA index_info({str(row[1])})"
-            ).fetchall()
+            for column in conn.execute(f"PRAGMA index_info({str(row[1])})").fetchall()
         ]
         == ["job_id"]
         for row in correction_indexes
@@ -3457,9 +3541,7 @@ def _aggregate_legacy_recovery_ordering_gaps(
     if correction_exists and not final_corrections:
         _stage_delivered_recovery_corrections(conn)
     if correction_exists and not final_corrections:
-        conn.execute(
-            "DROP INDEX IF EXISTS idx_task_recovery_corrections_state"
-        )
+        conn.execute("DROP INDEX IF EXISTS idx_task_recovery_corrections_state")
         conn.execute(
             "ALTER TABLE task_recovery_corrections "
             "RENAME TO task_recovery_corrections_v47"
@@ -3543,27 +3625,18 @@ def _aggregate_legacy_recovery_ordering_gaps(
         old_by_job.setdefault(int(row["job_id"]), []).append(row)
     for job_id, gaps in gap_groups.items():
         anchor = gaps[-1]
-        predecessor_events = [
-            int(row["predecessor_task_event_id"]) for row in gaps
-        ]
-        successor_events = [
-            int(row["successor_task_event_id"]) for row in gaps
-        ]
+        predecessor_events = [int(row["predecessor_task_event_id"]) for row in gaps]
+        successor_events = [int(row["successor_task_event_id"]) for row in gaps]
         selected: dict[str, object] | None = None
         candidates = old_by_job.get(job_id, [])
-        projected = [
-            row for row in candidates if str(row["state"]) == "projected"
-        ]
+        projected = [row for row in candidates if str(row["state"]) == "projected"]
         if projected:
             selected = projected[0]
         elif candidates:
             selected = candidates[0]
         anchor_ids = {int(row["successor_outbox_id"]) for row in gaps}
         successor_outbox_id = int(anchor["successor_outbox_id"])
-        if (
-            selected is not None
-            and int(selected["successor_outbox_id"]) in anchor_ids
-        ):
+        if selected is not None and int(selected["successor_outbox_id"]) in anchor_ids:
             successor_outbox_id = int(selected["successor_outbox_id"])
         values = {
             "id": int(selected["id"]) if selected is not None else None,
@@ -3574,22 +3647,14 @@ def _aggregate_legacy_recovery_ordering_gaps(
             "last_task_event_id": max(predecessor_events),
             "first_successor_task_event_id": min(successor_events),
             "last_successor_task_event_id": max(successor_events),
-            "state": (
-                str(selected["state"])
-                if selected is not None
-                else "pending"
-            ),
+            "state": (str(selected["state"]) if selected is not None else "pending"),
             "master_session_id": (
                 selected["master_session_id"]
                 if selected is not None
                 else anchor["master_session_id"]
             ),
-            "message_id": (
-                selected["message_id"] if selected is not None else None
-            ),
-            "event_id": (
-                selected["event_id"] if selected is not None else None
-            ),
+            "message_id": (selected["message_id"] if selected is not None else None),
+            "event_id": (selected["event_id"] if selected is not None else None),
             "failure_code": (
                 selected["failure_code"] if selected is not None else None
             ),
@@ -3800,8 +3865,7 @@ def _record_recovery_legacy_loss(
         if cursor.rowcount
         else int(
             conn.execute(
-                "SELECT id FROM task_recovery_legacy_losses "
-                "WHERE event_id = ?",
+                "SELECT id FROM task_recovery_legacy_losses WHERE event_id = ?",
                 (event["id"],),
             ).fetchone()[0]
         )
@@ -3837,16 +3901,13 @@ def _preserve_delivered_recovery_corrections(
         "SELECT sql FROM sqlite_master WHERE type = 'table' "
         "AND name = 'task_recovery_corrections'"
     ).fetchone()
-    correction_schema = " ".join(
-        str(correction_table["sql"] or "").lower().split()
-    )
+    correction_schema = " ".join(str(correction_table["sql"] or "").lower().split())
     coverage_table = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' "
         "AND name = 'task_recovery_correction_gaps'"
     ).fetchone()
     final_schema = (
-        "(marker_kind = 'legacy_partial' and state = 'projected'"
-        in correction_schema
+        "(marker_kind = 'legacy_partial' and state = 'projected'" in correction_schema
         and coverage_table is not None
     )
     if final_schema:
@@ -3889,24 +3950,32 @@ def _preserve_delivered_recovery_corrections(
         for row in old_rows
         if row["state"] == "projected" and row["event_id"] is not None
     }
-    staged_by_event = {
-        int(row["event_id"]): dict(row)
-        for row in conn.execute(
-            "SELECT * FROM task_recovery_delivered_marker_staging"
-        ).fetchall()
-    } if "task_recovery_delivered_marker_staging" in tables else {}
-    staged_gap_ids = {
-        int(row["correction_id"]): [
-            int(link["gap_id"])
-            for link in conn.execute(
-                "SELECT gap_id FROM "
-                "task_recovery_delivered_marker_staging_gaps "
-                "WHERE correction_id = ? ORDER BY gap_id",
-                (row["correction_id"],),
+    staged_by_event = (
+        {
+            int(row["event_id"]): dict(row)
+            for row in conn.execute(
+                "SELECT * FROM task_recovery_delivered_marker_staging"
             ).fetchall()
-        ]
-        for row in staged_by_event.values()
-    } if "task_recovery_delivered_marker_staging_gaps" in tables else {}
+        }
+        if "task_recovery_delivered_marker_staging" in tables
+        else {}
+    )
+    staged_gap_ids = (
+        {
+            int(row["correction_id"]): [
+                int(link["gap_id"])
+                for link in conn.execute(
+                    "SELECT gap_id FROM "
+                    "task_recovery_delivered_marker_staging_gaps "
+                    "WHERE correction_id = ? ORDER BY gap_id",
+                    (row["correction_id"],),
+                ).fetchall()
+            ]
+            for row in staged_by_event.values()
+        }
+        if "task_recovery_delivered_marker_staging_gaps" in tables
+        else {}
+    )
     delivered: list[dict[str, Any]] = []
     delivered_gap_ids: set[int] = set()
     for event in conn.execute(
@@ -3921,18 +3990,14 @@ def _preserve_delivered_recovery_corrections(
                 "Delivered recovery correction payload is invalid"
             ) from exc
         if not isinstance(payload, dict):
-            raise RuntimeError(
-                "Delivered recovery correction payload is invalid"
-            )
+            raise RuntimeError("Delivered recovery correction payload is invalid")
         try:
             job_id = int(payload["task_id"])
             message_id = int(payload["message_id"])
             gap_count = int(payload["gap_count"])
             first_task_event_id = int(payload["first_task_event_id"])
             last_task_event_id = int(payload["last_task_event_id"])
-            successor_task_event_id = int(
-                payload["successor_task_event_id"]
-            )
+            successor_task_event_id = int(payload["successor_task_event_id"])
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             raise RuntimeError(
                 "Delivered recovery correction payload is incomplete"
@@ -3949,9 +4014,7 @@ def _preserve_delivered_recovery_corrections(
             or event["session_id"] is None
             or int(message["session_id"]) != int(event["session_id"])
         ):
-            raise RuntimeError(
-                "Delivered recovery correction message link is invalid"
-            )
+            raise RuntimeError("Delivered recovery correction message link is invalid")
         successor = conn.execute(
             "SELECT id, master_session_id FROM task_recovery_outbox "
             "WHERE job_id = ? AND task_event_id = ? "
@@ -3959,9 +4022,7 @@ def _preserve_delivered_recovery_corrections(
             (job_id, successor_task_event_id),
         ).fetchone()
         if successor is None:
-            raise RuntimeError(
-                "Delivered recovery correction successor is invalid"
-            )
+            raise RuntimeError("Delivered recovery correction successor is invalid")
         marker_kind = (
             "aggregate"
             if "first_successor_task_event_id" in payload
@@ -4001,20 +4062,13 @@ def _preserve_delivered_recovery_corrections(
             covered = [
                 gap
                 for gap in job_gaps
-                if int(gap["successor_task_event_id"])
-                == successor_task_event_id
+                if int(gap["successor_task_event_id"]) == successor_task_event_id
                 and first_task_event_id
                 <= int(gap["predecessor_task_event_id"])
                 <= last_task_event_id
             ]
-        if (
-            gap_count <= 0
-            or len(covered) != gap_count
-            or not covered
-        ):
-            raise RuntimeError(
-                "Delivered recovery correction coverage is invalid"
-            )
+        if gap_count <= 0 or len(covered) != gap_count or not covered:
+            raise RuntimeError("Delivered recovery correction coverage is invalid")
         source = old_by_event.get(int(event["id"]))
         staged = staged_by_event.get(int(event["id"]))
         covered_gap_ids = sorted(int(gap["id"]) for gap in covered)
@@ -4030,12 +4084,8 @@ def _preserve_delivered_recovery_corrections(
                     ),
                     successor_outbox_id=int(successor["id"]),
                     successor_task_event_id=successor_task_event_id,
-                    first_successor_task_event_id=(
-                        first_successor_task_event_id
-                    ),
-                    last_successor_task_event_id=(
-                        last_successor_task_event_id
-                    ),
+                    first_successor_task_event_id=(first_successor_task_event_id),
+                    last_successor_task_event_id=(last_successor_task_event_id),
                     reason="v48_identity_unavailable",
                 )
                 delivered_gap_ids.update(covered_gap_ids)
@@ -4065,9 +4115,7 @@ def _preserve_delivered_recovery_corrections(
                 covered_gap_ids,
             )
             if staged_values != expected_values:
-                raise RuntimeError(
-                    "Staged recovery correction identity is invalid"
-                )
+                raise RuntimeError("Staged recovery correction identity is invalid")
             source = {
                 "id": int(staged["correction_id"]),
                 "attempt_count": int(staged["attempt_count"]),
@@ -4083,12 +4131,8 @@ def _preserve_delivered_recovery_corrections(
                 observed_correction_id=None,
                 successor_outbox_id=int(successor["id"]),
                 successor_task_event_id=successor_task_event_id,
-                first_successor_task_event_id=(
-                    first_successor_task_event_id
-                ),
-                last_successor_task_event_id=(
-                    last_successor_task_event_id
-                ),
+                first_successor_task_event_id=(first_successor_task_event_id),
+                last_successor_task_event_id=(last_successor_task_event_id),
                 reason="v48_identity_unavailable",
             )
             delivered_gap_ids.update(covered_gap_ids)
@@ -4102,64 +4146,45 @@ def _preserve_delivered_recovery_corrections(
                 "gap_count": gap_count,
                 "first_task_event_id": first_task_event_id,
                 "last_task_event_id": last_task_event_id,
-                "first_successor_task_event_id": (
-                    first_successor_task_event_id
-                ),
-                "last_successor_task_event_id": (
-                    last_successor_task_event_id
-                ),
+                "first_successor_task_event_id": (first_successor_task_event_id),
+                "last_successor_task_event_id": (last_successor_task_event_id),
                 "state": "projected",
                 "master_session_id": int(event["session_id"]),
                 "message_id": message_id,
                 "event_id": int(event["id"]),
                 "failure_code": None,
-                "attempt_count": (
-                    int(source["attempt_count"])
-                ),
-                "created_at": (
-                    str(source["created_at"])
-                ),
-                "updated_at": (
-                    str(source["updated_at"])
-                ),
+                "attempt_count": (int(source["attempt_count"])),
+                "created_at": (str(source["created_at"])),
+                "updated_at": (str(source["updated_at"])),
                 "gap_ids": [int(gap["id"]) for gap in covered],
             }
         )
-        delivered_gap_ids.update(
-            int(gap["id"]) for gap in covered
-        )
+        delivered_gap_ids.update(int(gap["id"]) for gap in covered)
 
     old_active_by_job: dict[int, list[dict[str, Any]]] = {}
     for row in old_rows:
         if row["state"] != "projected":
-            old_active_by_job.setdefault(
-                int(row["job_id"]), []
-            ).append(row)
+            old_active_by_job.setdefault(int(row["job_id"]), []).append(row)
     used_ids = {int(marker["id"]) for marker in delivered}
-    next_id = max(
-        [int(row["id"]) for row in old_rows]
-        + [
-            int(row["correction_id"])
-            for row in staged_by_event.values()
-        ]
-        + [0]
-    ) + 1
+    next_id = (
+        max(
+            [int(row["id"]) for row in old_rows]
+            + [int(row["correction_id"]) for row in staged_by_event.values()]
+            + [0]
+        )
+        + 1
+    )
 
     aggregates: list[dict[str, Any]] = []
     for job_id, job_gaps in gaps_by_job.items():
-        uncovered = [
-            gap
-            for gap in job_gaps
-            if int(gap["id"]) not in delivered_gap_ids
-        ]
+        uncovered = [gap for gap in job_gaps if int(gap["id"]) not in delivered_gap_ids]
         if not uncovered:
             continue
         candidates = old_active_by_job.get(job_id, [])
         selected = candidates[0] if candidates else None
         selected_id = (
             int(selected["id"])
-            if selected is not None
-            and int(selected["id"]) not in used_ids
+            if selected is not None and int(selected["id"]) not in used_ids
             else next_id
         )
         if selected_id == next_id:
@@ -4178,32 +4203,22 @@ def _preserve_delivered_recovery_corrections(
             (int(anchor_gap["successor_outbox_id"]),),
         ).fetchone()
         if anchor is None:
-            raise RuntimeError(
-                "Recovery correction aggregate successor is invalid"
-            )
+            raise RuntimeError("Recovery correction aggregate successor is invalid")
         predecessor_events = [
             int(gap["predecessor_task_event_id"]) for gap in uncovered
         ]
-        successor_events = [
-            int(gap["successor_task_event_id"]) for gap in uncovered
-        ]
+        successor_events = [int(gap["successor_task_event_id"]) for gap in uncovered]
         aggregate = {
             "id": selected_id,
             "job_id": job_id,
             "marker_kind": "aggregate",
-            "successor_outbox_id": int(
-                anchor_gap["successor_outbox_id"]
-            ),
+            "successor_outbox_id": int(anchor_gap["successor_outbox_id"]),
             "gap_count": len(uncovered),
             "first_task_event_id": min(predecessor_events),
             "last_task_event_id": max(predecessor_events),
             "first_successor_task_event_id": min(successor_events),
             "last_successor_task_event_id": max(successor_events),
-            "state": (
-                str(selected["state"])
-                if selected is not None
-                else "pending"
-            ),
+            "state": (str(selected["state"]) if selected is not None else "pending"),
             "master_session_id": (
                 selected["master_session_id"]
                 if selected is not None
@@ -4212,31 +4227,20 @@ def _preserve_delivered_recovery_corrections(
             "message_id": None,
             "event_id": None,
             "failure_code": (
-                selected["failure_code"]
-                if selected is not None
-                else None
+                selected["failure_code"] if selected is not None else None
             ),
             "attempt_count": (
-                max(
-                    int(candidate["attempt_count"])
-                    for candidate in candidates
-                )
+                max(int(candidate["attempt_count"]) for candidate in candidates)
                 if candidates
                 else 0
             ),
             "created_at": (
-                min(
-                    str(candidate["created_at"])
-                    for candidate in candidates
-                )
+                min(str(candidate["created_at"]) for candidate in candidates)
                 if candidates
                 else None
             ),
             "updated_at": (
-                max(
-                    str(candidate["updated_at"])
-                    for candidate in candidates
-                )
+                max(str(candidate["updated_at"]) for candidate in candidates)
                 if candidates
                 else None
             ),
@@ -4250,21 +4254,13 @@ def _preserve_delivered_recovery_corrections(
             aggregate["failure_code"] = None
         aggregates.append(aggregate)
 
-    conn.execute(
-        "DROP TRIGGER IF EXISTS "
-        "task_recovery_correction_projected_immutable"
-    )
-    conn.execute(
-        "DROP INDEX IF EXISTS idx_task_recovery_corrections_state"
-    )
-    conn.execute(
-        "DROP INDEX IF EXISTS uq_task_recovery_corrections_active_job"
-    )
+    conn.execute("DROP TRIGGER IF EXISTS task_recovery_correction_projected_immutable")
+    conn.execute("DROP INDEX IF EXISTS idx_task_recovery_corrections_state")
+    conn.execute("DROP INDEX IF EXISTS uq_task_recovery_corrections_active_job")
     if coverage_table is not None:
         conn.execute("DROP TABLE task_recovery_correction_gaps")
     conn.execute(
-        "ALTER TABLE task_recovery_corrections "
-        "RENAME TO task_recovery_corrections_v48"
+        "ALTER TABLE task_recovery_corrections RENAME TO task_recovery_corrections_v48"
     )
     conn.execute(
         """
@@ -4414,10 +4410,7 @@ def _preserve_delivered_recovery_corrections(
             "INSERT INTO task_recovery_correction_gaps("
             "correction_id, gap_id"
             ") VALUES (?, ?)",
-            [
-                (int(marker["id"]), int(gap_id))
-                for gap_id in marker["gap_ids"]
-            ],
+            [(int(marker["id"]), int(gap_id)) for gap_id in marker["gap_ids"]],
         )
     conn.execute("DROP TABLE task_recovery_corrections_v48")
 
@@ -4492,9 +4485,7 @@ def _detach_recovery_audit_history(
             or successor is None
             or len(gap_rows) != int(correction["gap_count"])
         ):
-            raise RuntimeError(
-                "Legacy recovery identity loss coverage is incomplete"
-            )
+            raise RuntimeError("Legacy recovery identity loss coverage is incomplete")
         payload = json.loads(str(correction["payload"]))
         _record_recovery_legacy_loss(
             conn,
@@ -4513,8 +4504,7 @@ def _detach_recovery_audit_history(
             reason="pre_v50_identity_unavailable",
         )
         conn.execute(
-            "DELETE FROM task_recovery_correction_gaps "
-            "WHERE correction_id = ?",
+            "DELETE FROM task_recovery_correction_gaps WHERE correction_id = ?",
             (correction["id"],),
         )
         conn.execute(
@@ -4523,9 +4513,7 @@ def _detach_recovery_audit_history(
         )
 
     conn.execute("DROP TRIGGER IF EXISTS jobs_archive_recovery_history")
-    conn.execute(
-        "DROP TRIGGER IF EXISTS task_recovery_outbox_archive_history"
-    )
+    conn.execute("DROP TRIGGER IF EXISTS task_recovery_outbox_archive_history")
     _execute_sql_batch(
         conn,
         """
@@ -4688,7 +4676,7 @@ def _detach_recovery_audit_history(
           ON correction.id = link.correction_id
           WHERE correction.job_id = OLD.job_id;
         END;
-        """
+        """,
     )
     from .master_projection import assert_task_projection_outbox
 
@@ -4755,8 +4743,7 @@ def _capture_recovery_identity_before_delete(
     for column, definition in additions.items():
         if column not in tombstone_columns:
             conn.execute(
-                "ALTER TABLE task_recovery_history_tombstones "
-                f"ADD COLUMN {definition}"
+                f"ALTER TABLE task_recovery_history_tombstones ADD COLUMN {definition}"
             )
     conn.execute(
         """
@@ -5243,7 +5230,7 @@ def _capture_recovery_identity_before_delete(
             ON task_event.id = OLD.task_event_id
           WHERE job.id = OLD.job_id;
         END;
-        """
+        """,
     )
 
 
@@ -5742,9 +5729,8 @@ def _require_authoritative_recovery_task_session(
           FROM jobs AS job
           WHERE job.session_id = OLD.id;
         END;
-        """
+        """,
     )
-
 
 
 def _rewrite_legacy_last_run_minute(
@@ -5792,8 +5778,7 @@ def _harden_schedule_automation_contract(conn: sqlite3.Connection) -> None:
     if not {"schedules", "workflows"}.issubset(tables):
         return
     columns = {
-        str(row[1])
-        for row in conn.execute("PRAGMA table_info(schedules)").fetchall()
+        str(row[1]) for row in conn.execute("PRAGMA table_info(schedules)").fetchall()
     }
     host_timezone = local_timezone_name()
     if "timezone" not in columns:
@@ -5839,6 +5824,7 @@ def _harden_schedule_automation_contract(conn: sqlite3.Connection) -> None:
                 (schedule_id,),
             )
 
+
 def _expand_master_projection_decision_types(conn: sqlite3.Connection) -> None:
     """Widen projection_type checks for decision events.
 
@@ -5853,9 +5839,7 @@ def _expand_master_projection_decision_types(conn: sqlite3.Connection) -> None:
         return
     columns = {
         str(row[1])
-        for row in conn.execute(
-            "PRAGMA table_info(master_projections)"
-        ).fetchall()
+        for row in conn.execute("PRAGMA table_info(master_projections)").fetchall()
     }
     required_columns = {
         "id",
@@ -6078,10 +6062,13 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
         "ON job_final_approval_intents(job_id, generation DESC)"
     )
 
-    if conn.execute(
-        "SELECT 1 FROM sqlite_master "
-        "WHERE type = 'table' AND name = 'attention_items'"
-    ).fetchone() is None:
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'attention_items'"
+        ).fetchone()
+        is None
+    ):
         return
     rows = conn.execute(
         "SELECT * FROM attention_items "
@@ -6107,10 +6094,15 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
         session_id = target.get("origin_master_session_id")
         if session_id is None:
             session_id = target.get("alpha_session_id")
-        if session_id is None and len(source_parts) >= 3 and source_parts[0] in {
-            "master",
-            "alpha",
-        }:
+        if (
+            session_id is None
+            and len(source_parts) >= 3
+            and source_parts[0]
+            in {
+                "master",
+                "alpha",
+            }
+        ):
             session_id = source_parts[1]
         try:
             session_id = int(session_id)
@@ -6128,11 +6120,15 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
             job_id = int(job_id) if job_id is not None else None
         except (TypeError, ValueError, OverflowError):
             job_id = None
-        if job_id is not None and conn.execute(
-            "SELECT 1 FROM jobs WHERE id = ? "
-            "AND origin_master_session_id = ? AND created_by = ?",
-            (job_id, session_id, session["owner_user_id"]),
-        ).fetchone() is None:
+        if (
+            job_id is not None
+            and conn.execute(
+                "SELECT 1 FROM jobs WHERE id = ? "
+                "AND origin_master_session_id = ? AND created_by = ?",
+                (job_id, session_id, session["owner_user_id"]),
+            ).fetchone()
+            is None
+        ):
             job_id = None
         origin_message_id = target.get("origin_message_id")
         try:
@@ -6141,10 +6137,14 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
             )
         except (TypeError, ValueError, OverflowError):
             origin_message_id = None
-        if origin_message_id is not None and conn.execute(
-            "SELECT 1 FROM messages WHERE id = ? AND session_id = ?",
-            (origin_message_id, session_id),
-        ).fetchone() is None:
+        if (
+            origin_message_id is not None
+            and conn.execute(
+                "SELECT 1 FROM messages WHERE id = ? AND session_id = ?",
+                (origin_message_id, session_id),
+            ).fetchone()
+            is None
+        ):
             origin_message_id = None
         state = "pending" if row["status"] == "open" else "resolved"
         decision_cursor = conn.execute(
@@ -6194,36 +6194,149 @@ def _add_master_decisions(conn: sqlite3.Connection) -> None:
             ),
         )
 
+
+def _add_turn_journal_root_semantics(conn: sqlite3.Connection) -> None:
+    if not conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'turn_file_journals'"
+    ).fetchone():
+        return
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(turn_file_journals)").fetchall()
+    }
+    if "root_semantics" not in columns:
+        conn.execute(
+            "ALTER TABLE turn_file_journals ADD COLUMN "
+            "root_semantics TEXT NOT NULL DEFAULT 'container-v1'"
+        )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
-    (3, "add messages.run_id (links assistant message to its run)", _add_messages_run_id),
+    (
+        3,
+        "add messages.run_id (links assistant message to its run)",
+        _add_messages_run_id,
+    ),
     (4, "add runs.kind (chat | wiki_draft)", _add_runs_kind),
-    (5, "relabel '<user> (private)' personal projects to '(personal)'", _rename_private_projects_to_personal),
-    (6, "add profiles.instructions (per-profile agent instructions / soul)", _add_profiles_instructions),
+    (
+        5,
+        "relabel '<user> (private)' personal projects to '(personal)'",
+        _rename_private_projects_to_personal,
+    ),
+    (
+        6,
+        "add profiles.instructions (per-profile agent instructions / soul)",
+        _add_profiles_instructions,
+    ),
     (7, "add sessions.goal_* (autonomous goal loop)", _add_sessions_goal),
-    (8, "add sessions.manual_title (protect user-renamed chats from auto-title)", _add_sessions_manual_title),
-    (9, "drop dead invites table (single-user: invite routes are 404)", _drop_invites_table),
-    (10, "drop dead project_members table (single-user owner scope)", _drop_project_members_table),
-    (11, "add message_reviews table (Validate sidecar reviews)", _add_message_reviews_table),
+    (
+        8,
+        "add sessions.manual_title (protect user-renamed chats from auto-title)",
+        _add_sessions_manual_title,
+    ),
+    (
+        9,
+        "drop dead invites table (single-user: invite routes are 404)",
+        _drop_invites_table,
+    ),
+    (
+        10,
+        "drop dead project_members table (single-user owner scope)",
+        _drop_project_members_table,
+    ),
+    (
+        11,
+        "add message_reviews table (Validate sidecar reviews)",
+        _add_message_reviews_table,
+    ),
     (12, "add message review apply/merge fields", _add_message_review_apply_fields),
     (13, "add prompt collaborations for multi-agent modes", _add_prompt_collaborations),
-    (14, "drop dead sessions.acp_session_id (agent_sessions is authoritative)", _drop_sessions_acp_session_id),
-    (15, "add FK messages.run_id -> runs(id) ON DELETE SET NULL (table rebuild)", _add_messages_run_id_fk, {"no_auto_tx": True}),
-    (16, "add FKs sessions.task_id/job_id/workflow_id (table rebuild)", _add_sessions_pointer_fks, {"no_auto_tx": True}),
-    (17, "merge tasks into jobs: drop sessions.task_id + tasks table (rebuild)", _drop_tasks_feature, {"no_auto_tx": True}),
-    (18, "add project_areas: wrap existing projects as work containers (T1)", _add_project_areas),
-    (19, "add jobs.target_area_id + job_worktrees: worktree machinery for repo jobs (T1 slice 2)", _add_repo_job_worktrees),
-    (20, "add jobs.rejected_reason: reject-at-review verdict for the review surface (slice 4)", _add_jobs_rejected_reason),
-    (21, "add runs.continued_from_run_id + continuation_count: timeout auto-continuation chain (T5 slice 5)", _add_runs_continuation),
-    (22, "add script_trust: hash-bound one-time approvals for deterministic script steps (T6 slice 6)", _add_script_trust),
-    (23, "add artifact_records: durable deliverable registry seeded from the scanner (T4 slice 8)", _add_artifact_registry),
-    (24, "add project_areas.push_on_merge + job_worktrees push outcome: BYO repo-remote connector (T9 slice 11)", _add_repo_remote_push),
-    (25, "add satpam_watch + satpam_interventions + node_states decision-hold/contract columns: supervision loop (T10 slice 12)", _add_satpam_supervision),
-    (26, "add Alpha identity, job ownership, checkpoints, turn journals, and attention inbox", _add_alpha_foundation),
-    (27, "move graph workflow inputs onto trigger nodes", _move_workflow_inputs_to_trigger),
-    (28, "add Container registry and durable physical Ops migration state", _add_container_foundation),
-    (29, "add durable one-Area Task delegations and dependency DAG contracts", _add_task_delegation_contracts),
+    (
+        14,
+        "drop dead sessions.acp_session_id (agent_sessions is authoritative)",
+        _drop_sessions_acp_session_id,
+    ),
+    (
+        15,
+        "add FK messages.run_id -> runs(id) ON DELETE SET NULL (table rebuild)",
+        _add_messages_run_id_fk,
+        {"no_auto_tx": True},
+    ),
+    (
+        16,
+        "add FKs sessions.task_id/job_id/workflow_id (table rebuild)",
+        _add_sessions_pointer_fks,
+        {"no_auto_tx": True},
+    ),
+    (
+        17,
+        "merge tasks into jobs: drop sessions.task_id + tasks table (rebuild)",
+        _drop_tasks_feature,
+        {"no_auto_tx": True},
+    ),
+    (
+        18,
+        "add project_areas: wrap existing projects as work containers (T1)",
+        _add_project_areas,
+    ),
+    (
+        19,
+        "add jobs.target_area_id + job_worktrees: worktree machinery for repo jobs (T1 slice 2)",
+        _add_repo_job_worktrees,
+    ),
+    (
+        20,
+        "add jobs.rejected_reason: reject-at-review verdict for the review surface (slice 4)",
+        _add_jobs_rejected_reason,
+    ),
+    (
+        21,
+        "add runs.continued_from_run_id + continuation_count: timeout auto-continuation chain (T5 slice 5)",
+        _add_runs_continuation,
+    ),
+    (
+        22,
+        "add script_trust: hash-bound one-time approvals for deterministic script steps (T6 slice 6)",
+        _add_script_trust,
+    ),
+    (
+        23,
+        "add artifact_records: durable deliverable registry seeded from the scanner (T4 slice 8)",
+        _add_artifact_registry,
+    ),
+    (
+        24,
+        "add project_areas.push_on_merge + job_worktrees push outcome: BYO repo-remote connector (T9 slice 11)",
+        _add_repo_remote_push,
+    ),
+    (
+        25,
+        "add satpam_watch + satpam_interventions + node_states decision-hold/contract columns: supervision loop (T10 slice 12)",
+        _add_satpam_supervision,
+    ),
+    (
+        26,
+        "add Alpha identity, job ownership, checkpoints, turn journals, and attention inbox",
+        _add_alpha_foundation,
+    ),
+    (
+        27,
+        "move graph workflow inputs onto trigger nodes",
+        _move_workflow_inputs_to_trigger,
+    ),
+    (
+        28,
+        "add Container registry and durable physical Ops migration state",
+        _add_container_foundation,
+    ),
+    (
+        29,
+        "add durable one-Area Task delegations and dependency DAG contracts",
+        _add_task_delegation_contracts,
+    ),
     (
         30,
         "protect durable Task prerequisites from silent deletion",
@@ -6350,6 +6463,11 @@ MIGRATIONS: list[Migration] = [
         _add_master_decisions,
         {"no_auto_tx": True},
     ),
+    (
+        56,
+        "version turn-journal filesystem root semantics",
+        _add_turn_journal_root_semantics,
+    ),
 ]
 
 
@@ -6366,7 +6484,9 @@ def current_version(conn: sqlite3.Connection) -> int:
     return int(row[0]) if row and row[0] is not None else 0
 
 
-def _backup(conn: sqlite3.Connection, db_path: str, from_v: int, to_v: int) -> Path | None:
+def _backup(
+    conn: sqlite3.Connection, db_path: str, from_v: int, to_v: int
+) -> Path | None:
     """Snapshot the DB before migrating. Returns the backup path (or None for an
     in-memory / not-yet-created DB, where there is nothing to back up)."""
     src = Path(db_path)
@@ -6391,7 +6511,9 @@ def run_migrations(
     Returns the list of versions applied this call."""
     from .auth import iso_now
 
-    migs = sorted(migrations if migrations is not None else MIGRATIONS, key=lambda m: m[0])
+    migs = sorted(
+        migrations if migrations is not None else MIGRATIONS, key=lambda m: m[0]
+    )
     cur = current_version(conn)
     pending = [m for m in migs if m[0] > cur]
     if not pending:

@@ -1,28 +1,35 @@
 from __future__ import annotations
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from fastapi.testclient import TestClient
+from starlette.datastructures import UploadFile
 
-from proxima_api import app_settings
+from proxima_api import app_settings, container_registry
 from proxima_api.main import create_app
 
 
 def client(tmp_path: Path) -> TestClient:
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-        "feature_design_studio": True,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+            "feature_design_studio": True,
+        }
+    )
     return TestClient(app)
 
 
 def setup_project(c: TestClient, tmp_path: Path) -> dict:
     token = c.post("/auth/auto").json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
-    proj = c.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"}).json()
+    proj = c.post(
+        "/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"}
+    ).json()
     # projectctl is /usr/bin/true so create the dir ourselves to mirror real behavior
     Path(proj["path"]).mkdir(parents=True, exist_ok=True)
     return headers
@@ -37,17 +44,30 @@ def test_image_generation_defaults_to_codex(tmp_path):
 
     assert body["provider"] == "codex"
     assert body["defaultProvider"] == "codex"
-    assert [p["id"] for p in body["providers"]] == ["codex", "xai-oauth", "higgsfield", "openai-compatible"]
+    assert [p["id"] for p in body["providers"]] == [
+        "codex",
+        "xai-oauth",
+        "higgsfield",
+        "openai-compatible",
+    ]
 
 
 def test_higgsfield_image_provider_is_selectable(tmp_path):
     c = client(tmp_path)
     token = c.post("/auth/auto").json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
-    app_settings.set_json(c.app.state.db, app_settings.IMAGE_GEN_KEY, {"provider": "auto", "apiKey": None, "baseUrl": None, "model": None})
+    app_settings.set_json(
+        c.app.state.db,
+        app_settings.IMAGE_GEN_KEY,
+        {"provider": "auto", "apiKey": None, "baseUrl": None, "model": None},
+    )
 
     body = c.get("/api/settings/image-gen", headers=headers).json()
-    saved = c.put("/api/settings/image-gen", headers=headers, json={"provider": "higgsfield", "model": "nano_banana_2"})
+    saved = c.put(
+        "/api/settings/image-gen",
+        headers=headers,
+        json={"provider": "higgsfield", "model": "nano_banana_2"},
+    )
 
     assert body["provider"] == "codex"
     assert saved.status_code == 200
@@ -69,9 +89,24 @@ def test_tree_read_write_mkdir_rename_delete(tmp_path):
     body = c.get("/api/projects/demo/file?path=notes/a.txt", headers=headers).json()
     assert body["content"] == "hello"
 
-    assert c.post("/api/projects/demo/fs/mkdir", headers=headers, json={"path": "newdir"}).status_code == 200
-    assert c.post("/api/projects/demo/fs/rename", headers=headers, json={"from": "notes/a.txt", "to": "notes/b.txt"}).status_code == 200
-    assert c.delete("/api/projects/demo/fs?path=notes/b.txt", headers=headers).status_code == 200
+    assert (
+        c.post(
+            "/api/projects/demo/fs/mkdir", headers=headers, json={"path": "newdir"}
+        ).status_code
+        == 200
+    )
+    assert (
+        c.post(
+            "/api/projects/demo/fs/rename",
+            headers=headers,
+            json={"from": "notes/a.txt", "to": "notes/b.txt"},
+        ).status_code
+        == 200
+    )
+    assert (
+        c.delete("/api/projects/demo/fs?path=notes/b.txt", headers=headers).status_code
+        == 200
+    )
 
 
 def test_reference_files_endpoint_is_authenticated_and_project_scoped(tmp_path):
@@ -83,7 +118,9 @@ def test_reference_files_endpoint_is_authenticated_and_project_scoped(tmp_path):
         json={"slug": "other", "name": "Other"},
     ).json()
     projects = c.get("/api/projects", headers=headers).json()["projects"]
-    demo_root = Path(next(project["path"] for project in projects if project["slug"] == "demo"))
+    demo_root = Path(
+        next(project["path"] for project in projects if project["slug"] == "demo")
+    )
     other_root = Path(other["path"])
     other_root.mkdir(parents=True, exist_ok=True)
     (demo_root / "src").mkdir()
@@ -108,14 +145,21 @@ def test_reference_files_endpoint_is_authenticated_and_project_scoped(tmp_path):
     assert "other.py" not in paths
     assert all(set(item) == {"path"} for item in body["files"])
     assert body["truncated"] is False
-    assert fresh.get("/api/projects/missing/reference-files", headers=authenticated).status_code == 404
+    assert (
+        fresh.get(
+            "/api/projects/missing/reference-files", headers=authenticated
+        ).status_code
+        == 404
+    )
 
 
 def test_reference_files_endpoint_caps_results_and_hides_sensitive_paths(tmp_path):
     c = client(tmp_path)
     headers = setup_project(c, tmp_path)
     projects = c.get("/api/projects", headers=headers).json()["projects"]
-    root = Path(next(project["path"] for project in projects if project["slug"] == "demo"))
+    root = Path(
+        next(project["path"] for project in projects if project["slug"] == "demo")
+    )
     for name in ("a.txt", "b.txt", "c.txt"):
         (root / name).write_text(name, encoding="utf-8")
     (root / ".env.local").write_text("TOKEN=secret", encoding="utf-8")
@@ -129,26 +173,56 @@ def test_reference_files_endpoint_caps_results_and_hides_sensitive_paths(tmp_pat
     assert len(body["files"]) == 2
     assert body["truncated"] is True
     assert all(set(item) == {"path"} for item in body["files"])
-    assert all(item["path"] not in {".env.local", "node_modules/dependency.js"} for item in body["files"])
-    assert c.get("/api/projects/demo/reference-files?limit=2001", headers=headers).status_code == 422
+    assert all(
+        item["path"] not in {".env.local", "node_modules/dependency.js"}
+        for item in body["files"]
+    )
+    assert (
+        c.get(
+            "/api/projects/demo/reference-files?limit=2001", headers=headers
+        ).status_code
+        == 422
+    )
 
 
 def test_project_fs_collisions_return_400(tmp_path):
     c = client(tmp_path)
     headers = setup_project(c, tmp_path)
-    assert c.put("/api/projects/demo/file?path=notes/a.txt", headers=headers, json={"content": "hello"}).status_code == 200
-    assert c.post("/api/projects/demo/fs/mkdir", headers=headers, json={"path": "notes/a.txt"}).status_code == 400
-    assert c.post(
-        "/api/projects/demo/fs/rename",
-        headers=headers,
-        json={"from": "notes/a.txt", "to": "notes/a.txt/renamed.txt"},
-    ).status_code == 400
+    assert (
+        c.put(
+            "/api/projects/demo/file?path=notes/a.txt",
+            headers=headers,
+            json={"content": "hello"},
+        ).status_code
+        == 200
+    )
+    assert (
+        c.post(
+            "/api/projects/demo/fs/mkdir", headers=headers, json={"path": "notes/a.txt"}
+        ).status_code
+        == 400
+    )
+    assert (
+        c.post(
+            "/api/projects/demo/fs/rename",
+            headers=headers,
+            json={"from": "notes/a.txt", "to": "notes/a.txt/renamed.txt"},
+        ).status_code
+        == 400
+    )
 
 
 def test_upload_parent_collision_returns_400(tmp_path):
     c = client(tmp_path)
     headers = setup_project(c, tmp_path)
-    assert c.put("/api/projects/demo/file?path=uploads.txt", headers=headers, json={"content": "not a folder"}).status_code == 200
+    assert (
+        c.put(
+            "/api/projects/demo/file?path=uploads.txt",
+            headers=headers,
+            json={"content": "not a folder"},
+        ).status_code
+        == 200
+    )
 
     res = c.post(
         "/api/projects/demo/upload?dir=uploads.txt",
@@ -179,19 +253,83 @@ def test_upload_streams_content_and_deduplicates_names(tmp_path):
     assert second.status_code == 200
     assert first.json()["path"] == "uploads/bundle.bin"
     assert second.json()["path"] == "uploads/bundle-1.bin"
-    project_root = Path(c.get("/api/projects", headers=headers).json()["projects"][0]["path"])
+    project_root = Path(
+        c.get("/api/projects", headers=headers).json()["projects"][0]["path"]
+    )
     assert (project_root / "ops" / first.json()["path"]).read_bytes() == content
     assert (project_root / "ops" / second.json()["path"]).read_bytes() == b"second"
 
 
+def test_upload_stages_async_body_before_container_publish_lock(
+    tmp_path,
+    monkeypatch,
+):
+    c = client(tmp_path)
+    headers = setup_project(c, tmp_path)
+    project = c.app.state.db.execute(
+        "SELECT id, path FROM projects WHERE slug = 'demo'"
+    ).fetchone()
+    read_entered = threading.Event()
+    release_read = threading.Event()
+    real_read = UploadFile.read
+    delayed = False
+
+    async def delayed_read(self, size=-1):
+        nonlocal delayed
+        if self.filename == "slow.bin" and not delayed:
+            delayed = True
+            read_entered.set()
+            assert release_read.wait(timeout=5)
+        return await real_read(self, size)
+
+    monkeypatch.setattr(UploadFile, "read", delayed_read)
+    lock_acquired = threading.Event()
+
+    def take_lock():
+        with container_registry.container_mutation_lock(
+            c.app.state.db,
+            project,
+        ):
+            lock_acquired.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        upload_future = pool.submit(
+            lambda: c.post(
+                "/api/projects/demo/upload",
+                headers=headers,
+                files={
+                    "file": (
+                        "slow.bin",
+                        b"staged",
+                        "application/octet-stream",
+                    )
+                },
+            )
+        )
+        assert read_entered.wait(timeout=5)
+        lock_future = pool.submit(take_lock)
+        lock_was_free = lock_acquired.wait(timeout=0.5)
+        release_read.set()
+        response = upload_future.result(timeout=5)
+        lock_future.result(timeout=5)
+
+    assert lock_was_free is True
+    assert response.status_code == 200, response.text
+    assert (
+        Path(project["path"]) / "ops" / response.json()["path"]
+    ).read_bytes() == b"staged"
+
+
 def test_upload_limit_rejects_and_removes_partial_file(tmp_path):
-    app = create_app({
-        "database_path": str(tmp_path / "limit.db"),
-        "workspace_root": str(tmp_path / "limit-ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-        "max_upload_bytes": 4,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "limit.db"),
+            "workspace_root": str(tmp_path / "limit-ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+            "max_upload_bytes": 4,
+        }
+    )
     c = TestClient(app)
     headers = setup_project(c, tmp_path)
 
@@ -210,13 +348,20 @@ def test_upload_limit_rejects_and_removes_partial_file(tmp_path):
 def test_traversal_is_rejected(tmp_path):
     c = client(tmp_path)
     headers = setup_project(c, tmp_path)
-    assert c.get("/api/projects/demo/tree?path=../..", headers=headers).status_code == 400
+    assert (
+        c.get("/api/projects/demo/tree?path=../..", headers=headers).status_code == 400
+    )
 
 
 def test_read_missing_file_returns_400(tmp_path):
     c = client(tmp_path)
     headers = setup_project(c, tmp_path)
-    assert c.get("/api/projects/demo/file?path=does-not-exist", headers=headers).status_code == 400
+    assert (
+        c.get(
+            "/api/projects/demo/file?path=does-not-exist", headers=headers
+        ).status_code
+        == 400
+    )
 
 
 def test_wiki_personal_crud(tmp_path):
@@ -226,10 +371,29 @@ def test_wiki_personal_crud(tmp_path):
     # personal wiki is created-on-demand with a seeded index.md
     tree = c.get("/api/wiki/tree", headers=headers).json()["entries"]
     assert any(e["name"] == "index.md" for e in tree)
-    assert c.put("/api/wiki/file?path=notes/todo.md", headers=headers, json={"content": "# todo"}).status_code == 200
-    assert c.get("/api/wiki/file?path=notes/todo.md", headers=headers).json()["content"] == "# todo"
-    assert c.post("/api/wiki/fs/rename", headers=headers, json={"from": "notes/todo.md", "to": "notes/done.md"}).status_code == 200
-    assert c.delete("/api/wiki/fs?path=notes/done.md", headers=headers).status_code == 200
+    assert (
+        c.put(
+            "/api/wiki/file?path=notes/todo.md",
+            headers=headers,
+            json={"content": "# todo"},
+        ).status_code
+        == 200
+    )
+    assert (
+        c.get("/api/wiki/file?path=notes/todo.md", headers=headers).json()["content"]
+        == "# todo"
+    )
+    assert (
+        c.post(
+            "/api/wiki/fs/rename",
+            headers=headers,
+            json={"from": "notes/todo.md", "to": "notes/done.md"},
+        ).status_code
+        == 200
+    )
+    assert (
+        c.delete("/api/wiki/fs?path=notes/done.md", headers=headers).status_code == 200
+    )
     assert c.get("/api/wiki/tree?path=../..", headers=headers).status_code == 400
 
 
@@ -237,13 +401,28 @@ def test_wiki_fs_collisions_return_400(tmp_path):
     c = client(tmp_path)
     token = c.post("/auth/auto").json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
-    assert c.put("/api/wiki/file?path=notes/todo.md", headers=headers, json={"content": "# todo"}).status_code == 200
-    assert c.post("/api/wiki/fs/mkdir", headers=headers, json={"path": "notes/todo.md"}).status_code == 400
-    assert c.post(
-        "/api/wiki/fs/rename",
-        headers=headers,
-        json={"from": "notes/todo.md", "to": "notes/todo.md/done.md"},
-    ).status_code == 400
+    assert (
+        c.put(
+            "/api/wiki/file?path=notes/todo.md",
+            headers=headers,
+            json={"content": "# todo"},
+        ).status_code
+        == 200
+    )
+    assert (
+        c.post(
+            "/api/wiki/fs/mkdir", headers=headers, json={"path": "notes/todo.md"}
+        ).status_code
+        == 400
+    )
+    assert (
+        c.post(
+            "/api/wiki/fs/rename",
+            headers=headers,
+            json={"from": "notes/todo.md", "to": "notes/todo.md/done.md"},
+        ).status_code
+        == 400
+    )
 
 
 def test_wiki_all_bulk(tmp_path):
@@ -279,7 +458,11 @@ def test_design_from_image_seeds_full_bleed_scene(tmp_path):
     img.parent.mkdir(parents=True, exist_ok=True)
     img.write_bytes(PNG_1x2)
 
-    res = c.post("/api/projects/demo/designs/from-image", headers=headers, json={"path": "artifacts/media/images/chat-1.png"})
+    res = c.post(
+        "/api/projects/demo/designs/from-image",
+        headers=headers,
+        json={"path": "artifacts/media/images/chat-1.png"},
+    )
 
     assert res.status_code == 200, res.text
     body = res.json()
@@ -287,14 +470,22 @@ def test_design_from_image_seeds_full_bleed_scene(tmp_path):
     ab = scene["artboards"][0]
     assert ab["width"] == 1 and ab["height"] == 2  # dims read from the PNG header
     layer = ab["layers"][0]
-    assert layer["type"] == "image" and layer["src"] == "artifacts/media/images/chat-1.png"
-    assert layer["width"] == ab["width"] and layer["height"] == ab["height"]  # full-bleed
+    assert (
+        layer["type"] == "image" and layer["src"] == "artifacts/media/images/chat-1.png"
+    )
+    assert (
+        layer["width"] == ab["width"] and layer["height"] == ab["height"]
+    )  # full-bleed
 
 
 def test_design_from_image_missing_file_404(tmp_path):
     c = client(tmp_path)
     headers = setup_project(c, tmp_path)
-    res = c.post("/api/projects/demo/designs/from-image", headers=headers, json={"path": "artifacts/nope.png"})
+    res = c.post(
+        "/api/projects/demo/designs/from-image",
+        headers=headers,
+        json={"path": "artifacts/nope.png"},
+    )
     assert res.status_code == 404
 
 
@@ -319,14 +510,24 @@ def test_design_image_edit_uses_codex_directly(tmp_path, monkeypatch):
     monkeypatch.setattr(image_providers, "generate", fake_generate)
     # Even with an xAI OAuth available, codex handles the edit itself now (imageEdit=True),
     # so the fallback never triggers.
-    monkeypatch.setattr(image_providers, "xai_oauth_ready", lambda: {"ready": True, "detail": "ok"})
-    res = c.post("/api/projects/demo/design/image", headers=headers, json={"prompt": "variation", "image": "artifacts/media/images/ref.png"})
+    monkeypatch.setattr(
+        image_providers, "xai_oauth_ready", lambda: {"ready": True, "detail": "ok"}
+    )
+    res = c.post(
+        "/api/projects/demo/design/image",
+        headers=headers,
+        json={"prompt": "variation", "image": "artifacts/media/images/ref.png"},
+    )
     assert res.status_code == 200, res.text
     assert calls == ["codex"]  # codex edits directly, no fallback
 
     # plain text→image is codex too
     calls.clear()
-    res3 = c.post("/api/projects/demo/design/image", headers=headers, json={"prompt": "fresh image"})
+    res3 = c.post(
+        "/api/projects/demo/design/image",
+        headers=headers,
+        json={"prompt": "fresh image"},
+    )
     assert res3.status_code == 200 and calls == ["codex"]
 
 

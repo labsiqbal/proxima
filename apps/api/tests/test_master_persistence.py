@@ -35,8 +35,7 @@ def _alpha_v30_database(path: Path, workspace: Path) -> dict[str, int]:
         "ALTER TABLE jobs RENAME COLUMN origin_master_session_id TO alpha_session_id"
     )
     conn.execute(
-        "CREATE INDEX idx_jobs_alpha "
-        "ON jobs(alpha_session_id, status, created_at)"
+        "CREATE INDEX idx_jobs_alpha ON jobs(alpha_session_id, status, created_at)"
     )
 
     owner_id = int(
@@ -166,21 +165,21 @@ def _alpha_v30_database(path: Path, workspace: Path) -> dict[str, int]:
     )
     checkpoint_id = int(
         conn.execute(
-        "INSERT INTO job_checkpoints(job_id, payload_json, git_refs_json) "
-        "VALUES (?, ?, '[]')",
-        (
-            job_id,
-            json.dumps(
-                {
-                    "job": {
-                        "status": "queued",
-                        "alpha_session_id": alpha_session_id,
-                        "input": {"alpha_dispatched": True},
-                    },
-                    "run_ids": [],
-                }
+            "INSERT INTO job_checkpoints(job_id, payload_json, git_refs_json) "
+            "VALUES (?, ?, '[]')",
+            (
+                job_id,
+                json.dumps(
+                    {
+                        "job": {
+                            "status": "queued",
+                            "alpha_session_id": alpha_session_id,
+                            "input": {"alpha_dispatched": True},
+                        },
+                        "run_ids": [],
+                    }
+                ),
             ),
-        ),
         ).lastrowid
     )
     attention_id = int(
@@ -281,7 +280,7 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
 
-    assert current_version(app.state.db) == 55
+    assert current_version(app.state.db) >= 55
     assert app.state.db.execute(
         "SELECT 1 FROM sqlite_master "
         "WHERE type = 'table' AND name = 'master_decisions'"
@@ -327,27 +326,42 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
         "id": ids["job_id"],
         "origin_master_session_id": ids["session_id"],
     }
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
-    ).fetchone()[0] == 1
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
-    ).fetchone()[0] == 1
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM profiles WHERE system_kind = 'alpha'"
-    ).fetchone()[0] == 0
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM sessions WHERE mode = 'alpha'"
-    ).fetchone()[0] == 0
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM profiles WHERE system_kind = 'alpha'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM sessions WHERE mode = 'alpha'"
+        ).fetchone()[0]
+        == 0
+    )
 
     assert app.state.db.execute(
         "SELECT id FROM messages WHERE id = ? AND session_id = ?",
         (ids["message_id"], ids["session_id"]),
     ).fetchone()
-    assert app.state.db.execute(
-        "SELECT id, kind FROM runs WHERE id = ? AND session_id = ?",
-        (ids["run_id"], ids["session_id"]),
-    ).fetchone()["kind"] == "master"
+    assert (
+        app.state.db.execute(
+            "SELECT id, kind FROM runs WHERE id = ? AND session_id = ?",
+            (ids["run_id"], ids["session_id"]),
+        ).fetchone()["kind"]
+        == "master"
+    )
     assert app.state.db.execute(
         "SELECT id FROM job_checkpoints WHERE id = ? AND job_id = ?",
         (ids["checkpoint_id"], ids["job_id"]),
@@ -360,11 +374,14 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     )
     assert checkpoint_payload["job"]["origin_master_session_id"] == ids["session_id"]
     assert checkpoint_payload["job"]["input"] == {"master_dispatched": True}
-    assert json.loads(
-        app.state.db.execute(
-            "SELECT input FROM jobs WHERE id = ?", (ids["job_id"],)
-        ).fetchone()["input"]
-    )["master_dispatched"] is True
+    assert (
+        json.loads(
+            app.state.db.execute(
+                "SELECT input FROM jobs WHERE id = ?", (ids["job_id"],)
+            ).fetchone()["input"]
+        )["master_dispatched"]
+        is True
+    )
     delegation = app.state.db.execute(
         "SELECT id, origin_session_id, origin_message_id, job_id "
         "FROM task_delegations WHERE id = ?",
@@ -386,12 +403,18 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
         "view": "master",
         "origin_master_session_id": ids["session_id"],
     }
-    assert app.state.db.execute(
-        "SELECT value FROM app_settings WHERE key = 'master.budget.turns'"
-    ).fetchone()["value"] == "17"
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM app_settings WHERE key LIKE 'alpha.%'"
-    ).fetchone()[0] == 0
+    assert (
+        app.state.db.execute(
+            "SELECT value FROM app_settings WHERE key = 'master.budget.turns'"
+        ).fetchone()["value"]
+        == "17"
+    )
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM app_settings WHERE key LIKE 'alpha.%'"
+        ).fetchone()[0]
+        == 0
+    )
     assert json.loads(
         app.state.db.execute(
             "SELECT payload FROM events WHERE run_id = ?", (ids["run_id"],)
@@ -420,14 +443,18 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     master = client.get("/api/master/desk")
     legacy = client.get("/api/alpha/desk")
     assert master.status_code == legacy.status_code == 200
-    assert master.json()["session"]["id"] == legacy.json()["session"]["id"] == ids[
-        "session_id"
-    ]
+    assert (
+        master.json()["session"]["id"]
+        == legacy.json()["session"]["id"]
+        == ids["session_id"]
+    )
     assert master.json()["session"]["mode"] == "master"
     assert legacy.json()["session"]["mode"] == "alpha"
-    assert master.json()["jobs"][0]["id"] == legacy.json()["jobs"][0]["id"] == ids[
-        "job_id"
-    ]
+    assert (
+        master.json()["jobs"][0]["id"]
+        == legacy.json()["jobs"][0]["id"]
+        == ids["job_id"]
+    )
     assert master.json()["jobs"][0]["origin_master_session_id"] == ids["session_id"]
     assert legacy.json()["jobs"][0]["alpha_session_id"] == ids["session_id"]
     assert master.json()["budgets"]["budget_turns"] == 17
@@ -437,17 +464,21 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     assert messages.json()["messages"][0]["content"] == "preserve this history"
 
     app.state.db.execute("SAVEPOINT master_delete_probe")
-    app.state.db.execute(
-        "DELETE FROM sessions WHERE id = ?", (ids["session_id"],)
+    app.state.db.execute("DELETE FROM sessions WHERE id = ?", (ids["session_id"],))
+    assert (
+        app.state.db.execute(
+            "SELECT origin_master_session_id FROM jobs WHERE id = ?", (ids["job_id"],)
+        ).fetchone()["origin_master_session_id"]
+        is None
     )
-    assert app.state.db.execute(
-        "SELECT origin_master_session_id FROM jobs WHERE id = ?", (ids["job_id"],)
-    ).fetchone()["origin_master_session_id"] is None
     app.state.db.execute("ROLLBACK TO master_delete_probe")
     app.state.db.execute("RELEASE master_delete_probe")
-    assert app.state.db.execute(
-        "SELECT origin_master_session_id FROM jobs WHERE id = ?", (ids["job_id"],)
-    ).fetchone()["origin_master_session_id"] == ids["session_id"]
+    assert (
+        app.state.db.execute(
+            "SELECT origin_master_session_id FROM jobs WHERE id = ?", (ids["job_id"],)
+        ).fetchone()["origin_master_session_id"]
+        == ids["session_id"]
+    )
 
 
 def test_restart_runner_switch_and_feature_off_preserve_one_identity(
@@ -472,39 +503,58 @@ def test_restart_runner_switch_and_feature_off_preserve_one_identity(
     client = TestClient(first)
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
-    assert client.put(
-        "/api/settings/master", json={"runner_id": "master-fixture"}
-    ).status_code == 200
+    assert (
+        client.put(
+            "/api/settings/master", json={"runner_id": "master-fixture"}
+        ).status_code
+        == 200
+    )
 
     restarted = _app(db_path, workspace)
-    assert restarted.state.db.execute(
-        "SELECT id FROM profiles WHERE system_kind = 'master'"
-    ).fetchone()["id"] == ids["profile_id"]
-    assert restarted.state.db.execute(
-        "SELECT id FROM sessions WHERE mode = 'master'"
-    ).fetchone()["id"] == ids["session_id"]
-    assert restarted.state.db.execute(
-        "SELECT runner_id FROM sessions WHERE id = ?", (ids["session_id"],)
-    ).fetchone()["runner_id"] == "master-fixture"
+    assert (
+        restarted.state.db.execute(
+            "SELECT id FROM profiles WHERE system_kind = 'master'"
+        ).fetchone()["id"]
+        == ids["profile_id"]
+    )
+    assert (
+        restarted.state.db.execute(
+            "SELECT id FROM sessions WHERE mode = 'master'"
+        ).fetchone()["id"]
+        == ids["session_id"]
+    )
+    assert (
+        restarted.state.db.execute(
+            "SELECT runner_id FROM sessions WHERE id = ?", (ids["session_id"],)
+        ).fetchone()["runner_id"]
+        == "master-fixture"
+    )
 
     disabled = _app(db_path, workspace, enabled=False)
     disabled_client = TestClient(disabled)
     disabled_token = disabled_client.post("/auth/auto").json()["token"]
-    disabled_client.headers.update(
-        {"Authorization": f"Bearer {disabled_token}"}
-    )
+    disabled_client.headers.update({"Authorization": f"Bearer {disabled_token}"})
     response = disabled_client.get("/api/master/desk")
     assert response.status_code == 503
     assert response.json()["detail"]["feature"] == "master_orchestrator"
-    assert disabled.state.db.execute(
-        "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
-    ).fetchone()[0] == 1
-    assert disabled.state.db.execute(
-        "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
-    ).fetchone()[0] == 1
-    assert disabled.state.db.execute(
-        "SELECT origin_master_session_id FROM jobs WHERE id = ?", (ids["job_id"],)
-    ).fetchone()["origin_master_session_id"] == ids["session_id"]
+    assert (
+        disabled.state.db.execute(
+            "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        disabled.state.db.execute(
+            "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        disabled.state.db.execute(
+            "SELECT origin_master_session_id FROM jobs WHERE id = ?", (ids["job_id"],)
+        ).fetchone()["origin_master_session_id"]
+        == ids["session_id"]
+    )
 
 
 def test_partial_column_state_recovers_idempotently_and_conflicts_refuse(
@@ -555,9 +605,12 @@ def test_partial_column_state_recovers_idempotently_and_conflicts_refuse(
     assert "alpha_session_id" not in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
-    assert conn.execute(
-        "SELECT origin_master_session_id FROM jobs WHERE id = ?", (job_id,)
-    ).fetchone()["origin_master_session_id"] == session_id
+    assert (
+        conn.execute(
+            "SELECT origin_master_session_id FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()["origin_master_session_id"]
+        == session_id
+    )
 
     other_session_id = int(
         conn.execute(
@@ -609,12 +662,18 @@ def test_ambiguous_dual_identity_refuses_without_rewriting_rows(tmp_path: Path):
 
     with pytest.raises(MasterPersistenceError, match="multiple Alpha or Master"):
         migrate_master_persistence(conn)
-    assert conn.execute(
-        "SELECT system_kind FROM profiles WHERE id = ?", (master_id,)
-    ).fetchone()["system_kind"] == "master"
-    assert conn.execute(
-        "SELECT system_kind FROM profiles WHERE id = ?", (alpha_id,)
-    ).fetchone()["system_kind"] == "alpha"
+    assert (
+        conn.execute(
+            "SELECT system_kind FROM profiles WHERE id = ?", (master_id,)
+        ).fetchone()["system_kind"]
+        == "master"
+    )
+    assert (
+        conn.execute(
+            "SELECT system_kind FROM profiles WHERE id = ?", (alpha_id,)
+        ).fetchone()["system_kind"]
+        == "alpha"
+    )
 
 
 @pytest.mark.parametrize(
@@ -656,12 +715,18 @@ def test_partially_renamed_identity_recovers_in_place(
 
     migrate_master_persistence(conn)
 
-    assert conn.execute(
-        "SELECT system_kind FROM profiles WHERE id = ?", (profile_id,)
-    ).fetchone()["system_kind"] == "master"
-    assert conn.execute(
-        "SELECT mode FROM sessions WHERE id = ?", (session_id,)
-    ).fetchone()["mode"] == "master"
+    assert (
+        conn.execute(
+            "SELECT system_kind FROM profiles WHERE id = ?", (profile_id,)
+        ).fetchone()["system_kind"]
+        == "master"
+    )
+    assert (
+        conn.execute(
+            "SELECT mode FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()["mode"]
+        == "master"
+    )
 
 
 def test_transactional_migration_refusal_rolls_back_identity_and_version(
@@ -682,12 +747,18 @@ def test_transactional_migration_refusal_rolls_back_identity_and_version(
         run_migrations(conn, str(db_path))
 
     assert current_version(conn) == 30
-    assert conn.execute(
-        "SELECT system_kind FROM profiles WHERE id = ?", (ids["profile_id"],)
-    ).fetchone()["system_kind"] == "alpha"
-    assert conn.execute(
-        "SELECT mode FROM sessions WHERE id = ?", (ids["session_id"],)
-    ).fetchone()["mode"] == "alpha"
+    assert (
+        conn.execute(
+            "SELECT system_kind FROM profiles WHERE id = ?", (ids["profile_id"],)
+        ).fetchone()["system_kind"]
+        == "alpha"
+    )
+    assert (
+        conn.execute(
+            "SELECT mode FROM sessions WHERE id = ?", (ids["session_id"],)
+        ).fetchone()["mode"]
+        == "alpha"
+    )
     assert "alpha_session_id" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -739,8 +810,7 @@ def test_migration_preserves_unrelated_alpha_named_domain_data(tmp_path: Path):
     )
     event_id = int(
         conn.execute(
-            "INSERT INTO events(seq, type, payload) "
-            "VALUES (1, 'business.metric', ?)",
+            "INSERT INTO events(seq, type, payload) VALUES (1, 'business.metric', ?)",
             (
                 json.dumps(
                     {
@@ -769,24 +839,25 @@ def test_migration_preserves_unrelated_alpha_named_domain_data(tmp_path: Path):
         "customer": {"alpha_session_id": "external-id"},
         "alpha_dispatched": False,
     }
-    assert conn.execute(
-        "SELECT input FROM jobs WHERE id = ?", (malformed_job_id,)
-    ).fetchone()["input"] == "not-json"
+    assert (
+        conn.execute(
+            "SELECT input FROM jobs WHERE id = ?", (malformed_job_id,)
+        ).fetchone()["input"]
+        == "not-json"
+    )
     attention = conn.execute(
         "SELECT title, target_json, source_key FROM attention_items WHERE id = ?",
         (attention_id,),
     ).fetchone()
     assert dict(attention) == {
         "title": "Review Project Alpha",
-        "target_json": json.dumps(
-            {"view": "task", "alpha_session_id": "external-id"}
-        ),
+        "target_json": json.dumps({"view": "task", "alpha_session_id": "external-id"}),
         "source_key": "ordinary:alpha",
     }
     assert json.loads(
-        conn.execute(
-            "SELECT payload FROM events WHERE id = ?", (event_id,)
-        ).fetchone()["payload"]
+        conn.execute("SELECT payload FROM events WHERE id = ?", (event_id,)).fetchone()[
+            "payload"
+        ]
     ) == {"alpha": 0.5, "alpha_session_id": "metric-name"}
     audit = conn.execute(
         "SELECT action, target_id, metadata FROM audit_log WHERE id = ?",
@@ -850,9 +921,7 @@ def test_owned_malformed_payload_refuses_and_rolls_back_migration_31(
     workspace = tmp_path / "workspace"
     ids = _alpha_v30_database(db_path, workspace)
     conn = connect(db_path)
-    conn.execute(
-        "UPDATE jobs SET input = 'not-json' WHERE id = ?", (ids["job_id"],)
-    )
+    conn.execute("UPDATE jobs SET input = 'not-json' WHERE id = ?", (ids["job_id"],))
     conn.commit()
 
     with pytest.raises(
@@ -861,12 +930,18 @@ def test_owned_malformed_payload_refuses_and_rolls_back_migration_31(
         run_migrations(conn, str(db_path))
 
     assert current_version(conn) == 30
-    assert conn.execute(
-        "SELECT system_kind FROM profiles WHERE id = ?", (ids["profile_id"],)
-    ).fetchone()["system_kind"] == "alpha"
-    assert conn.execute(
-        "SELECT mode FROM sessions WHERE id = ?", (ids["session_id"],)
-    ).fetchone()["mode"] == "alpha"
+    assert (
+        conn.execute(
+            "SELECT system_kind FROM profiles WHERE id = ?", (ids["profile_id"],)
+        ).fetchone()["system_kind"]
+        == "alpha"
+    )
+    assert (
+        conn.execute(
+            "SELECT mode FROM sessions WHERE id = ?", (ids["session_id"],)
+        ).fetchone()["mode"]
+        == "alpha"
+    )
     assert "alpha_session_id" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -925,9 +1000,12 @@ def test_unrelated_requests_do_not_reconcile_master_identity_per_request(
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
 
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
-    ).fetchone()[0] == 1
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
+        ).fetchone()[0]
+        == 1
+    )
 
     import proxima_api.route_deps as route_deps_module
     import proxima_api.routes.master as master_module
@@ -944,12 +1022,18 @@ def test_unrelated_requests_do_not_reconcile_master_identity_per_request(
     assert desk.status_code == 409
     assert desk.json()["detail"]["code"] == "runner_unavailable"
 
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
-    ).fetchone()[0] == 1
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
-    ).fetchone()[0] == 1
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_startup_contains_operational_master_provisioning_failure(
@@ -970,24 +1054,36 @@ def test_startup_contains_operational_master_provisioning_failure(
     client = TestClient(app)
     assert client.get("/api/health").status_code == 200
 
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
-    ).fetchone()[0] == 0
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
-    ).fetchone()[0] == 0
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
+        ).fetchone()[0]
+        == 0
+    )
 
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
     desk = client.get("/api/master/desk")
     assert desk.status_code == 200
 
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
-    ).fetchone()[0] == 1
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
-    ).fetchone()[0] == 1
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_startup_still_aborts_on_master_persistence_failure(

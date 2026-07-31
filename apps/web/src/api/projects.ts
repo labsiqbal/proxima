@@ -1,5 +1,5 @@
 import { api, ApiError } from './client'
-import type { AreaRemote, Project, ProjectAreas } from '../types'
+import type { AreaRemote, OpsMigrationDetail, Project, ProjectAreas } from '../types'
 
 export const listProjects = (token: string) => api<{ projects: Project[] }>('/api/projects', token)
 export const listProjectAreas = (token: string, slug: string) => api<ProjectAreas>(`/api/projects/${slug}/areas`, token)
@@ -41,3 +41,9 @@ export const linkProjectErrorField = (error: unknown): 'path' | 'folder' | 'name
 }
 export const renameProject = (token: string, slug: string, name: string) => api<Project>(`/api/projects/${slug}`, token, { method: 'PATCH', body: JSON.stringify({ name }) })
 export const deleteProject = (token: string, slug: string) => api<{ ok: boolean }>(`/api/projects/${slug}`, token, { method: 'DELETE' })
+export const getOpsMigration = (token: string, slug: string) =>
+  api<OpsMigrationDetail>(`/api/projects/${encodeURIComponent(slug)}/ops-migration`, token)
+export const validateOpsMigration = (token: string, slug: string) =>
+  api<OpsMigrationDetail>(`/api/projects/${encodeURIComponent(slug)}/ops-migration/validate`, token, { method: 'POST' })
+export const retryOpsMigration = (token: string, slug: string) =>
+  api<OpsMigrationDetail>(`/api/projects/${encodeURIComponent(slug)}/ops-migration/retry`, token, { method: 'POST' })

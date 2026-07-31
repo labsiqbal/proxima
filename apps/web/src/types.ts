@@ -79,6 +79,52 @@ export type ProjectAreas = {
 	code_areas: { id: number; rel_path: string; source: string; push_on_merge?: boolean; remote?: AreaRemote | null }[];
 	ops_area: { id: number; rel_path: string } | null;
 };
+export type OpsMigrationPath = {
+	path: string;
+	destination: string;
+	expected_kind: "directory" | "file";
+	legacy_state: string;
+	physical_state: string;
+	layout: "legacy" | "physical" | "both" | "unavailable";
+	usable_from_active_ops: boolean;
+};
+export type OpsMigrationDetail = {
+	project: { id: number; slug: string; name: string };
+	phase: string;
+	migration_version: number;
+	stored_reason: string | null;
+	active_ops_path: string | null;
+	legacy_owned_paths: OpsMigrationPath[];
+	physical_ops: {
+		path: string;
+		state: string;
+		entries: { path: string; kind: string }[];
+	};
+	inspection: {
+		legacy_root: { inspectable: boolean; reason: string | null };
+		physical_root: { inspectable: boolean; reason: string | null };
+	};
+	conflicts: { path: string; reason: string }[];
+	retry_safe: boolean;
+	validation_reason: string | null;
+	what_remains_usable: {
+		legacy_ops_active: boolean;
+		physical_ops_active: boolean;
+		available_paths: string[];
+		unavailable_paths: string[];
+		summary: string;
+	};
+	attention: {
+		status: string;
+		created_at: string | null;
+		resolved_at: string | null;
+	};
+	timestamps: {
+		started_at: string | null;
+		completed_at: string | null;
+		updated_at: string | null;
+	};
+};
 export type ContainerArea = {
 	id: number;
 	kind: "code" | "ops";

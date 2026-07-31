@@ -1281,11 +1281,77 @@ lists and Home O(1) while per-access realpath jailing still blocks symlink escap
 A repo at `.` is the one intentional containment case; its local git exclude keeps
 `/ops/` out of that repo.
 
+`container_activity.py`, `ops_filesystem.py`, and `ops_publication.py` own the
+cross-process lease, native identity, and descriptor publication boundaries. They
+do not depend on registry projection; `container_registry.py` orchestrates them.
+
 Existing Containers whose Ops row is `.` migrate at startup. The migration first
-builds and hashes a dry-run manifest, then uses atomic same-filesystem moves for only
-known Ops-owned paths. Its durable marker resumes safely after interruption. Any
-collision, changed content, unsupported file type, or ambiguity stops only that
-Container, opens an owner-visible Attention item, and leaves the legacy row active.
+builds and hashes a dry-run manifest. An owner-authored legacy `container.md` is
+hash-bound and moved byte-for-byte; a generated document is planned only when the
+legacy document is absent. Atomic no-clobber publication through stable no-follow
+directory handles publishes only manifest-bound inodes for known Ops-owned paths.
+Regular files are linked from opened descriptors; directories are published entry
+by entry. Manifest version 6 persists every Proxima-created destination directory
+identity before publishing a child and rejects all unbound existing destinations,
+including empty directories. The original legacy name is retained under a
+manifest-bound recovery name only after its complete source snapshot is revalidated;
+a changed source remains untouched for owner intervention. Generated documents
+require anonymous same-filesystem
+storage and persist the anonymous inode identity and expected hash before the first
+visible recovery link. The exact recovery hardlink remains as a durable anchor, so
+retry never infers ownership from a name and cleanup never unlinks a re-resolved
+entry. One cross-process per-Container mutation lock serializes the filesystem and
+durable marker boundary with supported Area, Files, Design, Moodboard, chat-media,
+and turn restore mutations. A separate shared activity lease spans agent runs,
+project terminals, and preview apps. A standalone guardian selected by verified
+absolute path runs in isolated Python mode from a trusted working directory. A
+detached Linux subreaper sentinel or a Windows Job object inherits the lease before
+the writer starts and retains it until the complete process tree exits, including
+after API shutdown or cancellation. Platforms without a complete tree-proof
+primitive refuse guarded Project writers. Guardian records bind both the owning API
+process and guardian by PID and process-start identity. Retry reports a matching
+live owner as an active-process conflict and never signals it; only an identity-proven
+orphan can be recovered through its Linux sentinel or exact named Windows Job.
+Activity-guarded ACP processes use per-run cache scopes, so concurrent runs cannot
+recycle each other's process. Exclusive migration acquisition is bounded, and
+migration and complete Project deletion require that exclusive quiescent lease.
+Async uploads finish staging before they acquire the synchronous publication
+boundary. The durable marker resumes safely after
+interruption. Older markers upgrade only when
+the legacy and physical document state is unambiguous; otherwise every candidate is
+preserved for owner intervention. Any collision, changed content, unsupported file
+type, or ambiguity stops only that Container, opens an owner-visible Attention item,
+and leaves the legacy row active. Every resumed marker rechecks current code-Area
+ownership across the complete physical Ops root and every path type, symlink, content
+hash, and filesystem constraint immediately before applying any remaining move.
+Existing generated content must match its manifest exactly, and a late destination
+can never be replaced. A repaired physical layout with an open Attention item can use
+the same explicit retry boundary to recheck the layout and resolve the item without
+moving content. Root-repository exclusion is updated through the same opened
+no-follow Container descriptor. Fresh Windows Containers open and identity-bind the
+Container before creating `ops/` and every starter component relative to
+no-reparse handles, then use relative no-clobber document creation instead of POSIX
+descriptor APIs. See
+[ADR-0038](adr/0038-owner-safe-container-activity-boundaries.md).
+The Attention item links to a durable Project settings detail route. That surface
+shows the affected Project, exact stored owner-safe reason, migration phase, legacy
+and physical path states, exact physical-root entries, conflicts, and which Ops paths
+remain usable. Owners can reveal either side through an explicit Container-root
+read-only target and refresh read-only validation. Recovery inspection has only tree
+and file-read operations; its Files tree removes mutation controls, opens files
+read-only, and visibly expands and marks directory targets. An already-dirty ordinary
+Files buffer stays mounted and read-only across the inspection adapter swap and path
+browses; inspection never discards those unsaved project bytes, and write returns only
+with the ordinary virtual root. Backend-declared root
+inspectability disables unavailable or unsafe reveal actions with an accessible
+reason. Closing inspection,
+changing Projects, or opening Files normally restores the ordinary virtual writable
+boundary. The durable detail route pins the shell to its Project across reload and
+refresh; switching Settings sections clears the detail route. Retry stays disabled
+until the current layout passes the existing collision, type, hash, symlink, overlap,
+and same-filesystem checks; retry then requires confirmation and resumes through the
+durable marker. Proxima never auto-merges, overwrites, deletes, follows symlinks,
+moves across filesystems, or decides which conflicting content is authoritative.
 All Ops consumers resolve through the row, so Archive, Wiki, artifacts, Designs,
 scripts, reports, exports, and uploads continue to use root-level legacy paths until
 that Container migrates cleanly. `container_registry` caches the bounded identity and
@@ -1317,7 +1383,10 @@ use Container terminology.
 **Endpoints:** `GET /api/containers`, `GET /api/containers/{slug}`,
 `GET /api/containers/{slug}/areas`, compatibility `GET /api/projects` and
 `GET /api/projects/{slug}`, plus `GET/POST /api/projects/{slug}/areas`,
-`DELETE /api/projects/{slug}/areas/{area_id}`, `POST /api/projects/{slug}/areas/detect`.
+`DELETE /api/projects/{slug}/areas/{area_id}`, `POST /api/projects/{slug}/areas/detect`,
+and `GET /api/projects/{slug}/ops-migration`,
+`POST /api/projects/{slug}/ops-migration/validate`, and
+`POST /api/projects/{slug}/ops-migration/retry`.
 
 ## 11. Files & uploads (APIs)
 

@@ -3,11 +3,14 @@ import type { FileEntry, FileTarget } from '../types'
 
 const q = (s: string) => encodeURIComponent(s)
 export type FileRef = string | FileTarget
+export type FileRootSide = 'virtual' | 'container'
 export const fileRefPath = (ref: FileRef) => typeof ref === 'string' ? ref : ref.path
 const targetParam = (target: FileTarget) => q(JSON.stringify(target))
 const refQuery = (ref: FileRef) => typeof ref === 'string'
   ? `path=${q(ref)}`
   : `target=${targetParam(ref)}`
+const rootSideQuery = (rootSide: FileRootSide) =>
+  rootSide === 'container' ? '&root_side=container' : ''
 export const retargetFile = (target: FileTarget, path: string): FileTarget => ({
   ...target,
   path,
@@ -134,8 +137,16 @@ export function relativeFileUrl(
 export const designFromImage = (token: string, slug: string, path: string, title?: string, target?: FileTarget) =>
   api<{ ok: boolean; id: string; title: string; path: string }>(`/api/projects/${q(slug)}/designs/from-image`, token, { method: 'POST', body: JSON.stringify({ path, title, ...(target ? { target } : {}) }) })
 
-export const listTree = (token: string, slug: string, ref: FileRef = '') =>
-  api<{ path: string; target?: FileTarget; entries: FileEntry[] }>(`/api/projects/${slug}/tree?${refQuery(ref)}`, token)
+export const listTree = (
+  token: string,
+  slug: string,
+  ref: FileRef = '',
+  rootSide: FileRootSide = 'virtual',
+) =>
+  api<{ path: string; target?: FileTarget; entries: FileEntry[] }>(
+    `/api/projects/${slug}/tree?${refQuery(ref)}${rootSideQuery(rootSide)}`,
+    token,
+  )
 
 export type ReferenceFile = { path: string }
 export type ReferenceFilesResponse = { files: ReferenceFile[]; truncated: boolean }
@@ -314,31 +325,73 @@ export const listSessionArtifacts = (token: string, sessionId: number) =>
 export const deleteSessionArtifact = (token: string, sessionId: number, ref: FileRef) =>
   api<{ ok: boolean; path: string; target?: FileTarget | null }>(`/api/sessions/${sessionId}/artifacts?${refQuery(ref)}`, token, { method: 'DELETE' })
 
-export const readFile = (token: string, slug: string, ref: FileRef) =>
-  api<{ path: string; target?: FileTarget; content: string }>(`/api/projects/${slug}/file?${refQuery(ref)}`, token)
+export const readFile = (
+  token: string,
+  slug: string,
+  ref: FileRef,
+  rootSide: FileRootSide = 'virtual',
+) =>
+  api<{ path: string; target?: FileTarget; content: string }>(
+    `/api/projects/${slug}/file?${refQuery(ref)}${rootSideQuery(rootSide)}`,
+    token,
+  )
 
-export const writeFile = (token: string, slug: string, ref: FileRef, content: string) =>
-  api<{ ok: boolean; target?: FileTarget }>(`/api/projects/${slug}/file?${refQuery(ref)}`, token, { method: 'PUT', body: JSON.stringify({ content }) })
+export const writeFile = (
+  token: string,
+  slug: string,
+  ref: FileRef,
+  content: string,
+) =>
+  api<{ ok: boolean; target?: FileTarget }>(
+    `/api/projects/${slug}/file?${refQuery(ref)}`,
+    token,
+    { method: 'PUT', body: JSON.stringify({ content }) },
+  )
 
-export const mkdir = (token: string, slug: string, ref: FileRef) =>
-  api<{ ok: boolean; target?: FileTarget }>(`/api/projects/${slug}/fs/mkdir`, token, {
-    method: 'POST',
-    body: JSON.stringify({
-      path: fileRefPath(ref),
-      ...(typeof ref === 'string' ? {} : { target: ref }),
-    }),
-  })
+export const mkdir = (
+  token: string,
+  slug: string,
+  ref: FileRef,
+) =>
+  api<{ ok: boolean; target?: FileTarget }>(
+    `/api/projects/${slug}/fs/mkdir`,
+    token,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        path: fileRefPath(ref),
+        ...(typeof ref === 'string' ? {} : { target: ref }),
+      }),
+    },
+  )
 
-export const renamePath = (token: string, slug: string, from: FileRef, to: FileRef) =>
-  api<{ ok: boolean }>(`/api/projects/${slug}/fs/rename`, token, {
-    method: 'POST',
-    body: JSON.stringify({
-      from: fileRefPath(from),
-      to: fileRefPath(to),
-      ...(typeof from === 'string' ? {} : { from_target: from }),
-      ...(typeof to === 'string' ? {} : { to_target: to }),
-    }),
-  })
+export const renamePath = (
+  token: string,
+  slug: string,
+  from: FileRef,
+  to: FileRef,
+) =>
+  api<{ ok: boolean }>(
+    `/api/projects/${slug}/fs/rename`,
+    token,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        from: fileRefPath(from),
+        to: fileRefPath(to),
+        ...(typeof from === 'string' ? {} : { from_target: from }),
+        ...(typeof to === 'string' ? {} : { to_target: to }),
+      }),
+    },
+  )
 
-export const deletePath = (token: string, slug: string, ref: FileRef) =>
-  api<{ ok: boolean }>(`/api/projects/${slug}/fs?${refQuery(ref)}`, token, { method: 'DELETE' })
+export const deletePath = (
+  token: string,
+  slug: string,
+  ref: FileRef,
+) =>
+  api<{ ok: boolean }>(
+    `/api/projects/${slug}/fs?${refQuery(ref)}`,
+    token,
+    { method: 'DELETE' },
+  )

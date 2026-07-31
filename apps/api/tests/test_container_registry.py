@@ -1,14 +1,31 @@
 from __future__ import annotations
 
+import ast
 import json
 import hashlib
+import errno
+import os
 import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from proxima_api import artifact_registry, container_registry, scripts_library
+from proxima_api import (
+    artifact_registry,
+    container_activity,
+    container_registry,
+    ops_filesystem,
+    ops_publication,
+    scripts_library,
+)
+from proxima_api.container_activity import _MUTATION_LOCK_DEPTH
 from proxima_api.container_registry import (
     ContainerBoundaryError,
     migrate_container_ops,
@@ -53,6 +70,99 @@ def _database(tmp_path: Path):
     return conn
 
 
+def test_container_ownership_modules_do_not_depend_on_registry():
+    for module in (
+        container_activity,
+        ops_filesystem,
+        ops_publication,
+    ):
+        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+        imported = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {
+            str(node.module or "")
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+        }
+        assert all(not name.endswith("container_registry") for name in imported)
+
+
+def _v1_manifest(root: Path, *names: str) -> dict:
+    entries = []
+    for name in names:
+        path = root / name
+        digest, files = container_registry._hash_entry(path)
+        entries.append(
+            {
+                "name": name,
+                "kind": "directory" if path.is_dir() else "file",
+                "sha256": digest,
+                "files": files,
+            }
+        )
+    return {
+        "version": 1,
+        "container_root": str(root),
+        "ops_root": str(root / "ops"),
+        "entries": entries,
+    }
+
+
+def _store_moving_manifest(conn, container_id: int, manifest: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO container_ops_migrations(
+          container_id, migration_version, status, manifest_json, manifest_hash,
+          started_at, updated_at
+        ) VALUES (?, 1, 'moving', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        (
+            container_id,
+            json.dumps(manifest, sort_keys=True),
+            container_registry._manifest_digest(manifest),
+        ),
+    )
+
+
+def _prepare_completed_filesystem_move(
+    conn,
+    container_id: int,
+    root: Path,
+) -> dict:
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    strategy, content, _ = container_registry._manifest_container_doc(manifest)
+    assert strategy == "generate"
+    assert content is not None
+    (root / "ops").mkdir()
+    document = root / "ops" / "container.md"
+    document.write_text(content, encoding="utf-8")
+    recovery = manifest["container_doc"]["recovery_temp"]
+    recovery["phase"] = "complete"
+    recovery["identity"] = container_registry._stat_identity(document.lstat())
+    ops_fd = os.open(root / "ops", os.O_RDONLY)
+    try:
+        for entry in manifest["entries"]:
+            name = str(entry["name"])
+            source = root / name
+            source.rename(root / "ops" / name)
+            snapshot = container_registry._entry_snapshot_at(ops_fd, name)
+            entry["publication"]["destination_snapshot"] = snapshot
+            entry["publication"]["destination_directories"] = (
+                container_registry._snapshot_directory_identities(snapshot)
+            )
+            entry["publication"]["phase"] = "complete"
+    finally:
+        os.close(ops_fd)
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
+    return manifest
+
+
 def test_clean_legacy_ops_migration_preserves_bytes_and_is_idempotent(tmp_path: Path):
     conn = _database(tmp_path)
     root = tmp_path / "legacy"
@@ -83,11 +193,19 @@ def test_clean_legacy_ops_migration_preserves_bytes_and_is_idempotent(tmp_path: 
     ).fetchone()
     assert marker["status"] == "complete"
     manifest = json.loads(marker["manifest_json"])
-    canonical = json.dumps(
-        manifest, sort_keys=True, separators=(",", ":")
-    ).encode()
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
     assert marker["manifest_hash"] == hashlib.sha256(canonical).hexdigest()
     assert all(entry["sha256"] for entry in manifest["entries"])
+    planned_doc = manifest["container_doc"]
+    assert planned_doc["path"] == "container.md"
+    assert planned_doc["strategy"] == "generate"
+    assert (
+        planned_doc["sha256"]
+        == hashlib.sha256(planned_doc["content"].encode("utf-8")).hexdigest()
+    )
+    assert (root / "ops" / "container.md").read_text(encoding="utf-8") == planned_doc[
+        "content"
+    ]
     before = {
         path.relative_to(root).as_posix(): path.read_bytes()
         for path in (root / "ops").rglob("*")
@@ -101,6 +219,218 @@ def test_clean_legacy_ops_migration_preserves_bytes_and_is_idempotent(tmp_path: 
         if path.is_file()
     }
     assert after == before
+
+
+@pytest.mark.parametrize("moved", [(), ("wiki",)])
+def test_v1_moving_manifest_upgrades_unambiguous_partial_layouts(
+    tmp_path: Path,
+    moved: tuple[str, ...],
+):
+    conn = _database(tmp_path)
+    root = tmp_path / f"v1-partial-{len(moved)}"
+    container_id = _legacy_container(conn, root, f"v1-partial-{len(moved)}")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+    manifest = _v1_manifest(root, "wiki", "artifacts")
+    if moved:
+        (root / "ops").mkdir()
+        for name in moved:
+            (root / name).rename(root / "ops" / name)
+        (root / "ops" / "container.md").write_text(
+            container_registry._container_doc_text(f"V1-Partial-{len(moved)}"),
+            encoding="utf-8",
+        )
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is True
+    assert (root / "ops" / "wiki" / "data.txt").read_text(encoding="utf-8") == "wiki"
+    assert (root / "ops" / "artifacts" / "data.txt").read_text(
+        encoding="utf-8"
+    ) == "artifact"
+    marker = conn.execute(
+        "SELECT migration_version, manifest_json FROM container_ops_migrations "
+        "WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    assert marker["migration_version"] == container_registry.OPS_MIGRATION_VERSION
+    upgraded = json.loads(marker["manifest_json"])
+    assert upgraded["version"] == container_registry.OPS_MIGRATION_VERSION
+    assert upgraded["container_doc"]["strategy"] == "generate"
+
+
+def test_v5_planned_directory_manifest_upgrades_with_empty_ownership(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "v5-planned-directory"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "v5-planned-directory",
+    )
+    (root / "wiki").mkdir()
+    (root / "wiki" / "keep.md").write_text(
+        "legacy",
+        encoding="utf-8",
+    )
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    manifest["version"] = 5
+    for entry in manifest["entries"]:
+        entry["publication"].pop("destination_directories")
+    container_registry._upsert_marker(
+        conn,
+        container_id,
+        "moving",
+        manifest,
+    )
+
+    assert migrate_container_ops(conn, container_id) is True
+    marker = conn.execute(
+        "SELECT manifest_json FROM container_ops_migrations WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    upgraded = json.loads(marker["manifest_json"])
+    wiki = next(entry for entry in upgraded["entries"] if entry["name"] == "wiki")
+    assert upgraded["version"] == 6
+    assert set(wiki["publication"]["destination_directories"]) == {"."}
+
+
+def test_v5_partial_directory_without_identity_stops_for_owner(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "v5-ambiguous-directory"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "v5-ambiguous-directory",
+    )
+    (root / "wiki").mkdir()
+    (root / "wiki" / "keep.md").write_text(
+        "legacy",
+        encoding="utf-8",
+    )
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    manifest["version"] = 5
+    wiki = next(entry for entry in manifest["entries"] if entry["name"] == "wiki")
+    wiki["publication"]["phase"] = "publishing"
+    for entry in manifest["entries"]:
+        entry["publication"].pop("destination_directories")
+    (root / "ops" / "wiki").mkdir(parents=True)
+    container_registry._upsert_marker(
+        conn,
+        container_id,
+        "moving",
+        manifest,
+    )
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "wiki" / "keep.md").is_file()
+    assert list((root / "ops" / "wiki").iterdir()) == []
+    detail = container_registry.inspect_ops_migration(
+        conn,
+        container_id,
+    )
+    assert detail["retry_safe"] is False
+    assert "ambiguous ownership" in detail["stored_reason"]
+
+
+def test_v1_completed_moves_upgrade_only_with_exact_generated_document(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "v1-completed"
+    container_id = _legacy_container(conn, root, "v1-completed")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "data.txt").write_text("wiki", encoding="utf-8")
+    manifest = _v1_manifest(root, "wiki")
+    (root / "ops").mkdir()
+    (root / "wiki").rename(root / "ops" / "wiki")
+    generated = container_registry._container_doc_text("V1-Completed")
+    (root / "ops" / "container.md").write_text(generated, encoding="utf-8")
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is True
+    assert (root / "ops" / "container.md").read_text(encoding="utf-8") == generated
+
+
+def test_v1_planned_document_metadata_upgrades_partial_move(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "v1-planned-document"
+    container_id = _legacy_container(conn, root, "v1-planned-document")
+    for name in ("wiki", "artifacts"):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(name, encoding="utf-8")
+    manifest = _v1_manifest(root, "wiki", "artifacts")
+    generated = container_registry._container_doc_text("V1-Planned-Document")
+    manifest["container_doc"] = {
+        "path": "container.md",
+        "content": generated,
+        "sha256": hashlib.sha256(generated.encode("utf-8")).hexdigest(),
+    }
+    (root / "ops").mkdir()
+    (root / "wiki").rename(root / "ops" / "wiki")
+    (root / "ops" / "container.md").write_text(generated, encoding="utf-8")
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is True
+    assert (root / "ops" / "artifacts" / "data.txt").read_text(
+        encoding="utf-8"
+    ) == "artifacts"
+
+
+def test_v1_upgrade_preserves_ambiguous_container_documents_for_owner(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "v1-ambiguous-docs"
+    container_id = _legacy_container(conn, root, "v1-ambiguous-docs")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "data.txt").write_text("wiki", encoding="utf-8")
+    manifest = _v1_manifest(root, "wiki")
+    (root / "ops").mkdir()
+    legacy = b"# Owner legacy document\n"
+    physical = b"# Physical candidate\n"
+    (root / "container.md").write_bytes(legacy)
+    (root / "ops" / "container.md").write_bytes(physical)
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "container.md").read_bytes() == legacy
+    assert (root / "ops" / "container.md").read_bytes() == physical
+    assert (root / "wiki" / "data.txt").read_text(encoding="utf-8") == "wiki"
+
+
+def test_legacy_owner_container_document_is_hash_bound_and_migrated(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "legacy-owner-document"
+    container_id = _legacy_container(conn, root, "legacy-owner-document")
+    owner_document = b"---\r\nidentity: Owner\r\n---\r\n\r\n# Exact bytes\r\n"
+    (root / "container.md").write_bytes(owner_document)
+
+    assert migrate_container_ops(conn, container_id) is True
+    assert not (root / "container.md").exists()
+    assert (root / "ops" / "container.md").read_bytes() == owner_document
+    marker = conn.execute(
+        "SELECT manifest_json FROM container_ops_migrations WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    manifest = json.loads(marker["manifest_json"])
+    assert manifest["container_doc"] == {
+        "path": "container.md",
+        "strategy": "move",
+        "sha256": hashlib.sha256(owner_document).hexdigest(),
+    }
+    assert any(
+        entry["name"] == "container.md"
+        and entry["sha256"] == hashlib.sha256(owner_document).hexdigest()
+        for entry in manifest["entries"]
+    )
 
 
 def test_collision_leaves_legacy_row_and_every_file_unchanged(tmp_path: Path):
@@ -125,16 +455,22 @@ def test_collision_leaves_legacy_row_and_every_file_unchanged(tmp_path: Path):
         if path.is_file()
     }
     assert after == before
-    assert conn.execute(
-        "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
-        (container_id,),
-    ).fetchone()["rel_path"] == "."
+    assert (
+        conn.execute(
+            "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+            (container_id,),
+        ).fetchone()["rel_path"]
+        == "."
+    )
     attention = conn.execute(
         "SELECT status, target_json FROM attention_items WHERE source_key = ?",
         (f"container-ops-migration:{container_id}",),
     ).fetchone()
     assert attention["status"] == "open"
-    assert "physical Ops root is not empty" in json.loads(attention["target_json"])["reason"]
+    assert (
+        "physical Ops root is not empty"
+        in json.loads(attention["target_json"])["reason"]
+    )
     assert migrate_container_ops(conn, container_id) is False
     rerun = {
         path.relative_to(root).as_posix(): path.read_bytes()
@@ -142,6 +478,64 @@ def test_collision_leaves_legacy_row_and_every_file_unchanged(tmp_path: Path):
         if path.is_file()
     }
     assert rerun == before
+
+
+def test_collision_recovery_detail_is_exact_and_read_only(tmp_path: Path):
+    root = tmp_path / "collision-detail"
+    (root / "wiki").mkdir(parents=True)
+    (root / "wiki" / "legacy.md").write_text("legacy", encoding="utf-8")
+    (root / "ops" / "wiki").mkdir(parents=True)
+    (root / "ops" / "wiki" / "physical.md").write_text("physical", encoding="utf-8")
+    api, headers = _api(tmp_path)
+
+    roots = api.get("/api/fs/dirs", headers=headers)
+    assert roots.status_code == 200, roots.text
+    linked = api.post(
+        "/api/projects/link",
+        headers=headers,
+        json={
+            "path": str(root),
+            "root_id": roots.json()["root_id"],
+            "name": "Collision detail",
+            "slug": "collision-detail",
+        },
+    )
+    assert linked.status_code == 201, linked.text
+    before = {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+    response = api.get(
+        "/api/projects/collision-detail/ops-migration",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["project"] == {
+        "id": body["project"]["id"],
+        "slug": "collision-detail",
+        "name": "Collision detail",
+    }
+    assert body["stored_reason"] == "physical Ops root is not empty"
+    assert body["phase"] == "attention"
+    assert body["active_ops_path"] == "."
+    assert body["physical_ops"]["state"] == "populated"
+    assert body["retry_safe"] is False
+    assert body["what_remains_usable"]["legacy_ops_active"] is True
+    assert {
+        item["path"]: item["layout"]
+        for item in body["legacy_owned_paths"]
+        if item["path"] == "wiki"
+    } == {"wiki": "both"}
+
+    after = {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
 
 
 def test_partial_move_recovers_from_durable_manifest(tmp_path: Path, monkeypatch):
@@ -152,21 +546,21 @@ def test_partial_move_recovers_from_durable_manifest(tmp_path: Path, monkeypatch
         (root / dirname).mkdir()
         (root / dirname / "data.bin").write_bytes(data)
 
-    real_replace = container_registry.os.replace
+    real_replace = container_registry._rename_noreplace
     moves = 0
 
     class SimulatedProcessDeath(BaseException):
         pass
 
-    def die_after_one_move(source, destination):
+    def die_after_one_move(source, destination, **kwargs):
         nonlocal moves
         if Path(source).parent == root:
             moves += 1
             if moves == 2:
                 raise SimulatedProcessDeath
-        return real_replace(source, destination)
+        return real_replace(source, destination, **kwargs)
 
-    monkeypatch.setattr(container_registry.os, "replace", die_after_one_move)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", die_after_one_move)
     with pytest.raises(SimulatedProcessDeath):
         migrate_container_ops(conn, container_id)
 
@@ -176,18 +570,23 @@ def test_partial_move_recovers_from_durable_manifest(tmp_path: Path, monkeypatch
     ).fetchone()
     assert marker["status"] == "moving"
     assert marker["manifest_json"]
-    monkeypatch.setattr(container_registry.os, "replace", real_replace)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
 
     assert migrate_container_ops(conn, container_id) is True
     assert (root / "ops" / "wiki" / "data.bin").read_bytes() == b"wiki"
     assert (root / "ops" / "artifacts" / "data.bin").read_bytes() == b"artifact"
-    assert conn.execute(
-        "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
-        (container_id,),
-    ).fetchone()["rel_path"] == "ops"
+    assert (
+        conn.execute(
+            "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+            (container_id,),
+        ).fetchone()["rel_path"]
+        == "ops"
+    )
 
 
-def test_area_validation_rejects_escape_duplicate_overlap_and_ops_symlink(tmp_path: Path):
+def test_area_validation_rejects_escape_duplicate_overlap_and_ops_symlink(
+    tmp_path: Path,
+):
     conn = _database(tmp_path)
     root = tmp_path / "boundaries"
     container_id = _legacy_container(conn, root, "boundaries")
@@ -202,7 +601,10 @@ def test_area_validation_rejects_escape_duplicate_overlap_and_ops_symlink(tmp_pa
         "VALUES (?, 'code', 'repo', 'manual')",
         (container_id,),
     ).lastrowid
-    assert validated_area_roots(conn, container_id)[int(first)] == (root / "repo").resolve()
+    assert (
+        validated_area_roots(conn, container_id)[int(first)]
+        == (root / "repo").resolve()
+    )
 
     (root / "repo" / "nested").mkdir()
     nested = conn.execute(
@@ -293,13 +695,18 @@ def test_migrate_isolates_unhealthy_already_migrated_container(tmp_path: Path):
         (f"container-ops-migration:{missing_id}",),
     ).fetchone()
     assert attention is not None and attention["status"] == "open"
-    assert conn.execute(
-        "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
-        (healthy_id,),
-    ).fetchone()["rel_path"] == "ops"
+    assert (
+        conn.execute(
+            "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+            (healthy_id,),
+        ).fetchone()["rel_path"]
+        == "ops"
+    )
 
 
-def _api(tmp_path: Path, database_path: Path | None = None) -> tuple[TestClient, dict[str, str]]:
+def _api(
+    tmp_path: Path, database_path: Path | None = None
+) -> tuple[TestClient, dict[str, str]]:
     app = create_app(
         {
             "database_path": str(database_path or tmp_path / "api.db"),
@@ -312,6 +719,3040 @@ def _api(tmp_path: Path, database_path: Path | None = None) -> tuple[TestClient,
     api = TestClient(app)
     token = api.post("/auth/auto").json()["token"]
     return api, {"Authorization": f"Bearer {token}"}
+
+
+def _owned_api_legacy(api: TestClient, root: Path, slug: str) -> int:
+    root.mkdir(parents=True, exist_ok=True)
+    conn = api.app.state.db
+    owner_id = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    container_id = conn.execute(
+        "INSERT INTO projects("
+        "slug, name, path, path_identity, owner_user_id"
+        ") VALUES (?, ?, ?, ?, ?)",
+        (
+            slug,
+            slug.replace("-", " ").title(),
+            str(root),
+            directory_identity_for_path(root),
+            owner_id,
+        ),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+        "VALUES (?, 'ops', '.', 'auto')",
+        (container_id,),
+    )
+    return int(container_id)
+
+
+def test_ops_migration_detail_rejects_symlink_without_following_it(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "symlink-layout"
+    outside = tmp_path / "outside-owned-layout"
+    outside.mkdir()
+    (outside / "do-not-read.md").write_text("outside bytes", encoding="utf-8")
+    container_id = _owned_api_legacy(api, root, "symlink-layout")
+    (root / "wiki").symlink_to(outside, target_is_directory=True)
+
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    before = (outside / "do-not-read.md").read_bytes()
+    detail = api.get(
+        "/api/projects/symlink-layout/ops-migration",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["retry_safe"] is False
+    assert "symlink" in body["stored_reason"]
+    assert (
+        next(item for item in body["legacy_owned_paths"] if item["path"] == "wiki")[
+            "legacy_state"
+        ]
+        == "symlink"
+    )
+    retry = api.post(
+        "/api/projects/symlink-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 409
+    assert (outside / "do-not-read.md").read_bytes() == before
+
+
+def test_ops_migration_detail_reports_repo_overlap_and_keeps_legacy_active(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "overlap-layout"
+    container_id = _owned_api_legacy(api, root, "overlap-layout")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "repo-note.md").write_text("repo", encoding="utf-8")
+    api.app.state.db.execute(
+        "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+        "VALUES (?, 'code', 'wiki', 'manual')",
+        (container_id,),
+    )
+
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    detail = api.post(
+        "/api/projects/overlap-layout/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["retry_safe"] is False
+    assert body["active_ops_path"] == "."
+    assert body["stored_reason"] == "legacy Ops path overlaps a repo Area: wiki"
+    assert (root / "wiki" / "repo-note.md").read_text(encoding="utf-8") == "repo"
+
+
+def test_interrupted_move_is_visible_and_owner_retry_resolves_attention(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "interrupted-layout"
+    container_id = _owned_api_legacy(api, root, "interrupted-layout")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+
+    real_replace = container_registry._rename_noreplace
+    moves = 0
+
+    def interrupt_second_move(source, destination, **kwargs):
+        nonlocal moves
+        if Path(source).parent == root:
+            moves += 1
+            if moves == 2:
+                raise OSError("simulated interrupted move")
+        return real_replace(source, destination, **kwargs)
+
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
+
+    detail = api.get(
+        "/api/projects/interrupted-layout/ops-migration",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["phase"] == "moving"
+    assert body["retry_safe"] is True
+    assert body["attention"]["status"] == "open"
+    assert body["what_remains_usable"]["unavailable_paths"]
+    assert {item["layout"] for item in body["legacy_owned_paths"]} == {
+        "both",
+        "physical",
+    }
+
+    retried = api.post(
+        "/api/projects/interrupted-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retried.status_code == 200, retried.text
+    resolved = retried.json()
+    assert resolved["phase"] == "complete"
+    assert resolved["active_ops_path"] == "ops"
+    assert resolved["attention"]["status"] == "resolved"
+    assert resolved["retry_safe"] is False
+    assert (root / "ops" / "wiki" / "data.txt").read_text(encoding="utf-8") == "wiki"
+    assert (root / "ops" / "artifacts" / "data.txt").read_text(
+        encoding="utf-8"
+    ) == "artifact"
+
+
+def test_interrupted_retry_rechecks_late_code_area_before_any_remaining_move(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "late-overlap-layout"
+    container_id = _owned_api_legacy(api, root, "late-overlap-layout")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+
+    real_replace = container_registry._rename_noreplace
+    moves = 0
+
+    def interrupt_second_move(source, destination, **kwargs):
+        nonlocal moves
+        if Path(source).parent == root:
+            moves += 1
+            if moves == 2:
+                raise OSError("simulated interrupted move")
+        return real_replace(source, destination, **kwargs)
+
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
+
+    registered = api.post(
+        "/api/projects/late-overlap-layout/areas",
+        headers=headers,
+        json={"rel_path": "artifacts"},
+    )
+    assert registered.status_code == 201, registered.text
+
+    detail = api.post(
+        "/api/projects/late-overlap-layout/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["retry_safe"] is False
+    assert "overlaps a repo Area" in detail.json()["validation_reason"]
+
+    retry = api.post(
+        "/api/projects/late-overlap-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 409
+    # Non-destructive publication may already own ops/artifacts before the
+    # interrupted source-retention rename. Unsafe retry must leave the still-
+    # legacy source bytes untouched and must not complete the migration.
+    assert (root / "artifacts" / "data.txt").read_text(encoding="utf-8") == "artifact"
+    assert (root / "artifacts").exists()
+    assert retry.json()["detail"]["migration"]["phase"] == "moving"
+    assert retry.json()["detail"]["migration"]["active_ops_path"] == "."
+
+
+def test_interrupted_retry_rejects_late_physical_ops_root_area_before_any_move(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "late-ops-root-overlap"
+    container_id = _owned_api_legacy(api, root, "late-ops-root-overlap")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+
+    real_replace = container_registry._rename_noreplace
+    moves = 0
+
+    def interrupt_second_move(source, destination, **kwargs):
+        nonlocal moves
+        if Path(source).parent == root:
+            moves += 1
+            if moves == 2:
+                raise OSError("simulated interrupted move")
+        return real_replace(source, destination, **kwargs)
+
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
+
+    registered = api.post(
+        "/api/projects/late-ops-root-overlap/areas",
+        headers=headers,
+        json={"rel_path": "ops"},
+    )
+    assert registered.status_code == 201, registered.text
+
+    detail = api.post(
+        "/api/projects/late-ops-root-overlap/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["retry_safe"] is False
+    assert "overlaps a repo Area" in detail.json()["validation_reason"]
+
+    retry = api.post(
+        "/api/projects/late-ops-root-overlap/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 409
+    assert (root / "artifacts" / "data.txt").read_text(encoding="utf-8") == "artifact"
+    assert (root / "artifacts").exists()
+    assert retry.json()["detail"]["migration"]["phase"] == "moving"
+    assert retry.json()["detail"]["migration"]["active_ops_path"] == "."
+
+
+def test_interrupted_retry_rejects_container_doc_symlink_before_remaining_move(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "container-doc-symlink-layout"
+    container_id = _owned_api_legacy(api, root, "container-doc-symlink-layout")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+
+    real_replace = container_registry._rename_noreplace
+    moves = 0
+
+    def interrupt_second_move(source, destination, **kwargs):
+        nonlocal moves
+        if Path(source).parent == root:
+            moves += 1
+            if moves == 2:
+                raise OSError("simulated interrupted move")
+        return real_replace(source, destination, **kwargs)
+
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
+
+    outside = tmp_path / "outside-container.md"
+    outside.write_text("outside", encoding="utf-8")
+    container_doc = root / "ops" / "container.md"
+    container_doc.unlink()
+    container_doc.symlink_to(outside)
+
+    detail = api.post(
+        "/api/projects/container-doc-symlink-layout/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["retry_safe"] is False
+    assert "container.md" in detail.json()["validation_reason"]
+    assert "symlink" in detail.json()["validation_reason"]
+
+    retry = api.post(
+        "/api/projects/container-doc-symlink-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 409
+    assert (root / "artifacts" / "data.txt").read_text(encoding="utf-8") == "artifact"
+    assert (root / "artifacts").exists()
+    assert retry.json()["detail"]["migration"]["phase"] == "moving"
+    assert retry.json()["detail"]["migration"]["active_ops_path"] == "."
+    assert outside.read_text(encoding="utf-8") == "outside"
+
+
+def test_interrupted_retry_rejects_changed_container_doc_before_remaining_move(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "container-doc-tampering"
+    container_id = _owned_api_legacy(api, root, "container-doc-tampering")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+
+    real_replace = container_registry._rename_noreplace
+    moves = 0
+
+    def interrupt_second_move(source, destination, **kwargs):
+        nonlocal moves
+        if Path(source).parent == root:
+            moves += 1
+            if moves == 2:
+                raise OSError("simulated interrupted move")
+        return real_replace(source, destination, **kwargs)
+
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
+
+    (root / "ops" / "container.md").write_text(
+        "# Unplanned authority\n",
+        encoding="utf-8",
+    )
+
+    detail = api.post(
+        "/api/projects/container-doc-tampering/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["retry_safe"] is False
+    reason = detail.json()["validation_reason"] or ""
+    assert "container.md" in reason
+    # Generated docs publish via hardlink to the recovery inode, so rewriting
+    # container.md also mutates the recovery artifact. Fail closed either with
+    # the direct changed-hash reason or recovery ownership ambiguity.
+    assert "changed" in reason or "ambiguous ownership" in reason
+
+    retry = api.post(
+        "/api/projects/container-doc-tampering/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 409
+    assert (root / "artifacts" / "data.txt").read_text(encoding="utf-8") == "artifact"
+    assert (root / "artifacts").exists()
+    assert retry.json()["detail"]["migration"]["phase"] == "moving"
+    assert retry.json()["detail"]["migration"]["active_ops_path"] == "."
+    assert (root / "ops" / "container.md").read_text(
+        encoding="utf-8"
+    ) == "# Unplanned authority\n"
+
+
+def test_retry_serializes_late_area_registration_before_manifest_apply(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "serialized-area-registration"
+    container_id = _owned_api_legacy(api, root, "serialized-area-registration")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+
+    real_replace = container_registry._rename_noreplace
+    moves = 0
+
+    def interrupt_second_move(source, destination, **kwargs):
+        nonlocal moves
+        if Path(source).parent == root:
+            moves += 1
+            if moves == 2:
+                raise OSError("simulated interrupted move")
+        return real_replace(source, destination, **kwargs)
+
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
+
+    real_snapshot_at = container_registry._entry_snapshot_at
+    apply_entered = threading.Event()
+    release_apply = threading.Event()
+
+    def pause_manifest_apply(directory_fd: int, name: str):
+        result = real_snapshot_at(directory_fd, name)
+        if name != "artifacts" or apply_entered.is_set():
+            return result
+        # Route-level inspect snapshots outside the mutation lock. Pause only
+        # once retry validation/apply holds the shared per-Container lock so
+        # late Area registration must block behind it.
+        depths = getattr(_MUTATION_LOCK_DEPTH, "values", None) or {}
+        if any(depth > 0 for depth in depths.values()):
+            apply_entered.set()
+            assert release_apply.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(
+        container_registry,
+        "_entry_snapshot_at",
+        pause_manifest_apply,
+    )
+    area_finished = threading.Event()
+
+    def add_area():
+        try:
+            return api.post(
+                "/api/projects/serialized-area-registration/areas",
+                headers=headers,
+                json={"rel_path": "ops"},
+            )
+        finally:
+            area_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        retry_future = pool.submit(
+            lambda: api.post(
+                "/api/projects/serialized-area-registration/ops-migration/retry",
+                headers=headers,
+            )
+        )
+        assert apply_entered.wait(timeout=5)
+        area_future = pool.submit(add_area)
+        area_was_blocked = not area_finished.wait(timeout=0.25)
+        release_apply.set()
+        retry = retry_future.result(timeout=5)
+        area = area_future.result(timeout=5)
+
+    assert area_was_blocked is True
+    assert retry.status_code == 200, retry.text
+    assert area.status_code == 409, area.text
+    assert (root / "ops" / "artifacts" / "data.txt").read_text(
+        encoding="utf-8"
+    ) == "artifact"
+
+
+def test_container_mutation_lock_excludes_another_process(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "multi-process-lock"
+    container_id = _legacy_container(conn, root, "multi-process-lock")
+    database = tmp_path / "proxima.db"
+    attempted = tmp_path / "attempted"
+    acquired = tmp_path / "acquired"
+    script = "\n".join(
+        (
+            "import sys",
+            "from pathlib import Path",
+            "from proxima_api.container_registry import container_mutation_lock",
+            "from proxima_api.db import connect",
+            "db_path, container_id, attempted, acquired = sys.argv[1:]",
+            "Path(attempted).write_text('attempted', encoding='utf-8')",
+            "with container_mutation_lock(connect(db_path), int(container_id)):",
+            "    Path(acquired).write_text('acquired', encoding='utf-8')",
+        )
+    )
+    api_root = Path(__file__).resolve().parents[1]
+
+    with container_registry.container_mutation_lock(conn, container_id):
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(database),
+                str(container_id),
+                str(attempted),
+                str(acquired),
+            ],
+            cwd=api_root,
+        )
+        deadline = time.monotonic() + 5
+        while not attempted.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert attempted.exists()
+        time.sleep(0.2)
+        assert not acquired.exists()
+
+    assert process.wait(timeout=5) == 0
+    assert acquired.read_text(encoding="utf-8") == "acquired"
+
+
+def test_retry_waits_for_active_container_process_lease(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "active-process-lease"
+    container_id = _legacy_container(conn, root, "active-process-lease")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "keep.md").write_text("keep", encoding="utf-8")
+    with container_registry.container_mutation_lock(conn, container_id):
+        lease = container_registry.acquire_container_activity_lease(
+            conn,
+            container_id,
+        )
+    finished = threading.Event()
+    result: list[bool] = []
+
+    def migrate():
+        try:
+            result.append(migrate_container_ops(conn, container_id))
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=migrate)
+    thread.start()
+    try:
+        assert finished.wait(timeout=0.25) is False
+    finally:
+        lease.release()
+    thread.join(timeout=5)
+
+    assert finished.is_set()
+    assert result == [True]
+    assert (root / "ops" / "wiki" / "keep.md").is_file()
+
+
+def test_retain_activity_lease_releases_after_identity_exits(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "retained-activity-exit"
+    container_id = _legacy_container(conn, root, "retained-activity-exit")
+    (root / "wiki").mkdir()
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        start_new_session=True,
+    )
+    identity = container_registry.process_start_identity(child.pid)
+    assert identity
+    container_registry.retain_activity_lease(
+        lease,
+        pid=child.pid,
+        start_identity=identity,
+    )
+
+    blocked = threading.Event()
+    finished = threading.Event()
+    result: list[bool] = []
+
+    def migrate():
+        blocked.set()
+        try:
+            result.append(migrate_container_ops(conn, container_id))
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=migrate)
+    thread.start()
+    assert blocked.wait(timeout=1)
+    assert finished.wait(timeout=0.2) is False
+
+    child.kill()
+    child.wait(timeout=5)
+    thread.join(timeout=5)
+    assert finished.is_set()
+    assert result == [True]
+    assert lease._released is True
+
+
+def test_retain_activity_lease_without_identity_keeps_quiescence_blocked(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "retained-activity-unbound"
+    container_id = _legacy_container(conn, root, "retained-activity-unbound")
+    (root / "wiki").mkdir()
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    container_registry.retain_activity_lease(lease, pid=None, start_identity=None)
+
+    finished = threading.Event()
+    result: list[bool] = []
+
+    def migrate():
+        try:
+            result.append(migrate_container_ops(conn, container_id))
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=migrate)
+    thread.start()
+    try:
+        assert finished.wait(timeout=0.25) is False
+        assert lease._released is False
+    finally:
+        lease.release()
+    thread.join(timeout=5)
+    assert finished.is_set()
+    assert result == [True]
+
+
+def test_retry_returns_when_active_process_cannot_be_recovered(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "bounded-active-process"
+    container_id = _legacy_container(conn, root, "bounded-active-process")
+    (root / "wiki").mkdir()
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "QUIESCENCE_TIMEOUT_SECONDS",
+        0.05,
+    )
+    started = time.monotonic()
+    try:
+        assert migrate_container_ops(conn, container_id) is False
+    finally:
+        lease.release()
+
+    assert time.monotonic() - started < 1
+    detail = container_registry.inspect_ops_migration(conn, container_id)
+    assert "active processes" in str(detail["stored_reason"])
+
+
+def test_container_activity_lease_excludes_quiescence_in_another_process(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "multi-process-activity"
+    container_id = _legacy_container(conn, root, "multi-process-activity")
+    database = tmp_path / "proxima.db"
+    attempted = tmp_path / "activity-attempted"
+    acquired = tmp_path / "activity-acquired"
+    script = "\n".join(
+        (
+            "import sys",
+            "from pathlib import Path",
+            "from proxima_api.container_registry import container_quiescence_lock",
+            "from proxima_api.db import connect",
+            "db_path, container_id, attempted, acquired = sys.argv[1:]",
+            "Path(attempted).write_text('attempted', encoding='utf-8')",
+            "with container_quiescence_lock(connect(db_path), int(container_id)):",
+            "    Path(acquired).write_text('acquired', encoding='utf-8')",
+        )
+    )
+    api_root = Path(__file__).resolve().parents[1]
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    try:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(database),
+                str(container_id),
+                str(attempted),
+                str(acquired),
+            ],
+            cwd=api_root,
+        )
+        deadline = time.monotonic() + 5
+        while not attempted.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert attempted.exists()
+        time.sleep(0.2)
+        assert not acquired.exists()
+    finally:
+        lease.release()
+
+    assert process.wait(timeout=5) == 0
+    assert acquired.read_text(encoding="utf-8") == "acquired"
+
+
+def test_activity_guardian_survives_parent_exit_and_detached_writer(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "guardian-parent-exit"
+    container_id = _legacy_container(conn, root, "guardian-parent-exit")
+    database = tmp_path / "proxima.db"
+    ready = tmp_path / "guardian-ready"
+    acquired = tmp_path / "guardian-acquired"
+    api_root = Path(__file__).resolve().parents[1]
+    descendant = "import time; time.sleep(0.8)"
+    writer = "\n".join(
+        (
+            "import subprocess, sys",
+            f"subprocess.Popen([sys.executable, '-c', {descendant!r}], start_new_session=True)",
+        )
+    )
+    launcher = "\n".join(
+        (
+            "import os, subprocess, sys",
+            "from pathlib import Path",
+            "from proxima_api.container_registry import acquire_container_activity_lease",
+            "from proxima_api.db import connect",
+            "db_path, container_id, ready, writer = sys.argv[1:]",
+            "lease = acquire_container_activity_lease(connect(db_path), int(container_id))",
+            "command, options = lease.guard_process([sys.executable, '-c', writer])",
+            "subprocess.Popen(command, cwd=os.getcwd(), **options)",
+            "lease.mark_process_started()",
+            "Path(ready).write_text('ready', encoding='utf-8')",
+            "os._exit(0)",
+        )
+    )
+    parent = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            launcher,
+            str(database),
+            str(container_id),
+            str(ready),
+            writer,
+        ],
+        cwd=api_root,
+    )
+    assert parent.wait(timeout=5) == 0
+    assert ready.is_file()
+    finished = threading.Event()
+
+    def acquire_quiescence() -> None:
+        with container_registry.container_quiescence_lock(conn, container_id):
+            acquired.write_text("acquired", encoding="utf-8")
+        finished.set()
+
+    thread = threading.Thread(target=acquire_quiescence)
+    thread.start()
+    assert finished.wait(timeout=0.25) is False
+    thread.join(timeout=5)
+
+    assert finished.is_set()
+    assert acquired.read_text(encoding="utf-8") == "acquired"
+
+
+def test_activity_guardian_uses_isolated_verified_script(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "guardian-import-shadow"
+    container_id = _legacy_container(conn, root, "guardian-import-shadow")
+    project_package = root / "proxima_api"
+    project_package.mkdir()
+    (project_package / "__init__.py").write_text("", encoding="utf-8")
+    (project_package / "activity_guardian.py").write_text(
+        "from pathlib import Path\nPath('shadowed').write_text('yes')\n",
+        encoding="utf-8",
+    )
+    target_ran = root / "target-ran"
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    command, options = lease.guard_process(
+        [
+            sys.executable,
+            "-c",
+            (f"from pathlib import Path; Path({str(target_ran)!r}).write_text('yes')"),
+        ]
+    )
+    assert command[1:3] == ["-I", "-S"]
+    assert Path(command[3]).is_absolute()
+    process = subprocess.Popen(command, cwd=root, **options)
+    lease.mark_process_started()
+    lease.release()
+
+    assert process.wait(timeout=5) == 0
+    assert target_ran.read_text(encoding="utf-8") == "yes"
+    assert not (root / "shadowed").exists()
+
+
+def test_activity_guardian_rejects_unsupported_process_tree_platform(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "guardian-unsupported-platform"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "guardian-unsupported-platform",
+    )
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    monkeypatch.setattr(container_activity.sys, "platform", "darwin")
+    try:
+        with pytest.raises(
+            container_registry.ContainerBoundaryError,
+            match="cannot prove complete Project process-tree exit",
+        ):
+            lease.guard_process([sys.executable, "-c", "pass"])
+    finally:
+        lease.release()
+
+
+def test_owner_retry_does_not_stop_verified_live_guardian(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "guardian-owner-recovery"
+    container_id = _legacy_container(conn, root, "guardian-owner-recovery")
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    command, options = lease.guard_process(
+        [sys.executable, "-c", "import time; time.sleep(60)"]
+    )
+    process = subprocess.Popen(command, cwd=root, **options)
+    lease.mark_process_started()
+    lease.release()
+    database = tmp_path / "proxima.db"
+    record_dir = database.parent / f".{database.name}.container-locks"
+    deadline = time.monotonic() + 5
+    while (
+        not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+
+    recovery = container_registry.recover_container_activity_guardians(
+        conn,
+        container_id,
+    )
+    assert recovery.active == 1
+    assert recovery.recovered == 0
+    assert recovery.unresolved == 0
+    assert process.poll() is None
+    process.terminate()
+    assert process.wait(timeout=5) != 0
+
+
+def test_retry_route_reports_live_project_process_without_stopping_it(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "live-guardian-retry"
+    container_id = _owned_api_legacy(
+        api,
+        root,
+        "live-guardian-retry",
+    )
+    (root / "wiki").mkdir()
+    lease = container_registry.acquire_container_activity_lease(
+        api.app.state.db,
+        container_id,
+    )
+    command, options = lease.guard_process(
+        [sys.executable, "-c", "import time; time.sleep(60)"]
+    )
+    process = subprocess.Popen(command, cwd=root, **options)
+    lease.mark_process_started()
+    lease.release()
+    database = Path(api.app.state.config["database_path"])
+    record_dir = database.parent / f".{database.name}.container-locks"
+    deadline = time.monotonic() + 5
+    while (
+        not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+    try:
+        response = api.post(
+            "/api/projects/live-guardian-retry/ops-migration/retry",
+            headers=headers,
+        )
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert detail["active_processes"] == 1
+        assert detail["unresolved_processes"] == 0
+        assert "still active" in detail["message"]
+        assert process.poll() is None
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=5)
+
+
+def test_owner_retry_recovers_verified_orphan_guardian(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "guardian-orphan-recovery"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "guardian-orphan-recovery",
+    )
+    database = tmp_path / "proxima.db"
+    ready = tmp_path / "orphan-ready"
+    api_root = Path(__file__).resolve().parents[1]
+    launcher = "\n".join(
+        (
+            "import os, subprocess, sys",
+            "from pathlib import Path",
+            "from proxima_api.container_registry import acquire_container_activity_lease",
+            "from proxima_api.db import connect",
+            "database, container_id, root, ready = sys.argv[1:]",
+            "lease = acquire_container_activity_lease(connect(database), int(container_id))",
+            "command, options = lease.guard_process([sys.executable, '-c', 'import time; time.sleep(60)'])",
+            "subprocess.Popen(command, cwd=root, **options)",
+            "lease.mark_process_started()",
+            "lease.release()",
+            "Path(ready).write_text('ready', encoding='utf-8')",
+            "os._exit(0)",
+        )
+    )
+    parent = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            launcher,
+            str(database),
+            str(container_id),
+            str(root),
+            str(ready),
+        ],
+        cwd=api_root,
+    )
+    assert parent.wait(timeout=5) == 0
+    assert ready.is_file()
+    record_dir = database.parent / f".{database.name}.container-locks"
+    deadline = time.monotonic() + 5
+    while (
+        not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+
+    recovery = container_registry.recover_container_activity_guardians(
+        conn,
+        container_id,
+    )
+    assert recovery.active == 0
+    assert recovery.recovered == 1
+    assert recovery.unresolved == 0
+    with container_registry.container_quiescence_lock(
+        conn,
+        container_id,
+    ):
+        pass
+
+
+def test_windows_orphan_recovery_uses_identity_bound_job(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "windows-job-recovery"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "windows-job-recovery",
+    )
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "a" * 32
+    job_name = f"Local\\ProximaActivity-{guardian_id}"
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
+    record.write_text(
+        json.dumps(
+            {
+                "job_name": job_name,
+                "sentinel_pid": 4242,
+                "sentinel_start": "start",
+                "owner_pid": 1,
+                "owner_start": "dead-owner",
+            }
+        ),
+        encoding="utf-8",
+    )
+    terminated: list[str] = []
+
+    def terminate_job(name: str) -> bool:
+        terminated.append(name)
+        # Successful job teardown removes the durable guardian record.
+        record.unlink(missing_ok=True)
+        return True
+
+    monkeypatch.setattr(
+        container_activity,
+        "_verified_guardian",
+        lambda _payload, _guardian: (4242, "start"),
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_owner_is_live",
+        lambda _payload: False,
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_platform_is_windows",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_terminate_windows_job",
+        terminate_job,
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_process_has_identity",
+        lambda _pid, _start: False,
+    )
+
+    recovery = container_registry.recover_container_activity_guardians(
+        conn,
+        container_id,
+    )
+
+    assert terminated == [job_name]
+    assert recovery.recovered == 1
+    assert recovery.active == 0
+    assert recovery.unresolved == 0
+    assert not record.exists()
+
+
+def test_stale_guardian_record_blocks_recovery_and_migrate(
+    tmp_path: Path,
+):
+    """Dead-sentinel leftover records must never look quiescent."""
+    conn = _database(tmp_path)
+    root = tmp_path / "stale-guardian-migrate"
+    container_id = _legacy_container(conn, root, "stale-guardian-migrate")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_text("keep", encoding="utf-8")
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "b" * 32
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": 2_000_000_001,
+                "sentinel_start": "dead-sentinel",
+                "owner_pid": 2_000_000_002,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    recovery = container_registry.recover_container_activity_guardians(
+        conn,
+        container_id,
+    )
+    assert recovery.active == 0
+    assert recovery.unresolved == 1
+    assert recovery.recovered == 0
+
+    blocked = False
+    try:
+        with container_registry.container_quiescence_lock(conn, container_id):
+            pass
+    except ContainerBoundaryError as exc:
+        blocked = True
+        assert "ownership could not be verified" in str(exc)
+    assert blocked, "exclusive flock must still fail closed on leftover records"
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "wiki" / "note.md").read_text(encoding="utf-8") == "keep"
+    assert not (root / "ops").exists() or not (root / "ops" / "wiki").exists()
+    detail = container_registry.inspect_ops_migration(conn, container_id)
+    assert "ownership could not be verified" in str(detail["stored_reason"])
+
+
+def test_malformed_guardian_record_blocks_quiescence(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "malformed-guardian"
+    container_id = _legacy_container(conn, root, "malformed-guardian")
+    (root / "wiki").mkdir()
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    # Wrong id length / charset is unparseable identity state.
+    bad = record_dir / f"{container_id}.activity.not-a-valid-id.guardian.json"
+    bad.write_text("{not-json", encoding="utf-8")
+    good_name = record_dir / f"{container_id}.activity.{'c' * 32}.guardian.json"
+    good_name.write_text("not-json-either", encoding="utf-8")
+
+    recovery = container_registry.recover_container_activity_guardians(
+        conn,
+        container_id,
+    )
+    assert recovery.unresolved >= 1
+    assert recovery.active == 0
+    assert migrate_container_ops(conn, container_id) is False
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="dead-sentinel reparented writer proof uses Linux /proc",
+)
+def test_dead_sentinel_live_orphan_blocks_migrate_and_retry(
+    tmp_path: Path,
+):
+    """SIGKILL'd sentinel + live reparented writer must block Ops migration."""
+    conn = _database(tmp_path)
+    root = tmp_path / "dead-sentinel-orphan"
+    container_id = _legacy_container(conn, root, "dead-sentinel-orphan")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_text("owner-bytes", encoding="utf-8")
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "d" * 32
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
+    ready = tmp_path / "orphan-writer-ready"
+
+    sentinel = os.fork()
+    if sentinel == 0:
+        try:
+            os.setsid()
+            writer = os.fork()
+            if writer == 0:
+                try:
+                    ready.write_text(str(os.getpid()), encoding="utf-8")
+                    while True:
+                        time.sleep(1)
+                finally:
+                    os._exit(0)
+            while True:
+                time.sleep(1)
+        finally:
+            os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    start = container_activity.process_start_identity(sentinel) or ""
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": sentinel,
+                "sentinel_start": start,
+                "owner_pid": os.getpid(),
+                "owner_start": "",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.kill(sentinel, 9)
+    try:
+        os.waitpid(sentinel, 0)
+    except ChildProcessError:
+        pass
+    time.sleep(0.05)
+    assert Path(f"/proc/{writer_pid}").exists()
+    assert record.exists()
+
+    try:
+        recovery = container_registry.recover_container_activity_guardians(
+            conn,
+            container_id,
+        )
+        assert recovery.unresolved >= 1
+        assert recovery.active == 0
+        assert migrate_container_ops(conn, container_id) is False
+        assert (root / "wiki" / "note.md").read_text(encoding="utf-8") == "owner-bytes"
+        # Exclusive flock can succeed (sentinel released it) but leftover
+        # record must still fail closed.
+        blocked = False
+        try:
+            with container_registry.container_quiescence_lock(
+                conn,
+                container_id,
+            ):
+                pass
+        except ContainerBoundaryError:
+            blocked = True
+        assert blocked
+    finally:
+        try:
+            os.kill(writer_pid, 9)
+        except OSError:
+            pass
+        try:
+            os.waitpid(writer_pid, 0)
+        except ChildProcessError:
+            pass
+
+
+def test_reconcile_never_unlinks_on_sentinel_death_alone(
+    tmp_path: Path,
+):
+    """Incomplete identity must retain the durable guardian record."""
+    record_dir = tmp_path / "locks"
+    record_dir.mkdir(mode=0o700)
+    record = record_dir / f"1.activity.{'f' * 32}.guardian.json"
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": 2_000_000_011,
+                "sentinel_start": "gone",
+            }
+        ),
+        encoding="utf-8",
+    )
+    tree = container_activity.GuardedWriterTree(
+        guardian_record=record,
+        known_identities={2_000_000_011: "gone"},
+        members_observed=False,
+    )
+    assert container_activity._reconcile_recovered_guardian_record(tree) is False
+    assert record.exists()
+
+
+def test_reconcile_never_unlinks_on_sentinel_only_observation(
+    tmp_path: Path,
+):
+    """Sentinel-only observation must not clear the durable guardian record."""
+    record_dir = tmp_path / "locks"
+    record_dir.mkdir(mode=0o700)
+    record = record_dir / f"1.activity.{'f' * 32}.guardian.json"
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": 2_000_000_021,
+                "sentinel_start": "gone-sentinel",
+            }
+        ),
+        encoding="utf-8",
+    )
+    tree = container_activity.GuardedWriterTree(
+        guardian_record=record,
+        known_identities={2_000_000_021: "gone-sentinel"},
+        members_observed=True,
+    )
+    assert container_activity._reconcile_recovered_guardian_record(tree) is False
+    assert record.exists()
+
+
+def test_seed_live_members_requires_identity_complete_descendants(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Child identity failure and sentinel-only walks stay incomplete."""
+    from proxima_api import process_containment as process_containment_module
+
+    record_dir = tmp_path / "locks"
+    record_dir.mkdir(mode=0o700)
+    record = record_dir / f"1.activity.{'c' * 32}.guardian.json"
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": 4242,
+                "sentinel_start": "sentinel-start",
+            }
+        ),
+        encoding="utf-8",
+    )
+    tree = container_activity.GuardedWriterTree(
+        guardian_record=record,
+    )
+
+    monkeypatch.setattr(
+        container_activity,
+        "_process_has_identity",
+        lambda pid, start: pid == 4242 and start == "sentinel-start",
+    )
+
+    # Sentinel-only walk: no writer descendant captured.
+    monkeypatch.setattr(
+        process_containment_module,
+        "process_tree_pids",
+        lambda _root: {4242},
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_process_start_identity",
+        lambda pid: "sentinel-start" if pid == 4242 else None,
+    )
+    tree.seed_live_members()
+    assert tree.members_observed is False
+    assert tree.known_identities.get(4242) == "sentinel-start"
+
+    # Writer visible but identity unreadable: stay incomplete.
+    tree.members_observed = False
+    monkeypatch.setattr(
+        process_containment_module,
+        "process_tree_pids",
+        lambda _root: {4242, 4243},
+    )
+
+    def start_identity(pid: int) -> str | None:
+        if pid == 4242:
+            return "sentinel-start"
+        return None
+
+    monkeypatch.setattr(
+        container_activity,
+        "_process_start_identity",
+        start_identity,
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_process_exists",
+        lambda pid: pid in {4242, 4243},
+    )
+    tree.seed_live_members()
+    assert tree.members_observed is False
+    assert 4243 not in tree.known_identities
+
+    # Stable walk with identity-bound writer becomes complete.
+    def complete_identity(pid: int) -> str | None:
+        if pid == 4242:
+            return "sentinel-start"
+        if pid == 4243:
+            return "writer-start"
+        return None
+
+    monkeypatch.setattr(
+        container_activity,
+        "_process_start_identity",
+        complete_identity,
+    )
+    tree.seed_live_members()
+    assert tree.members_observed is True
+    assert tree.known_identities[4243] == "writer-start"
+
+
+def test_seed_live_members_treats_proc_walk_race_as_incomplete(
+    monkeypatch,
+):
+    from proxima_api import process_containment as process_containment_module
+
+    walk_results: list[set[int]] = [{4242}, {4242, 4243}]
+
+    def racing_tree(_root: int) -> set[int]:
+        if walk_results:
+            return walk_results.pop(0)
+        return {4242, 4243}
+
+    tree = container_activity.GuardedWriterTree(
+        launcher_pid=4242,
+        launcher_start="launcher-start",
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_process_has_identity",
+        lambda pid, start: pid == 4242 and start == "launcher-start",
+    )
+    monkeypatch.setattr(
+        process_containment_module,
+        "process_tree_pids",
+        racing_tree,
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_process_start_identity",
+        lambda pid: {
+            4242: "launcher-start",
+            4243: "writer-start",
+        }.get(pid),
+    )
+    tree.seed_live_members()
+    assert tree.members_observed is False
+    assert tree.known_identities.get(4243) == "writer-start"
+
+
+def test_reconcile_unlinks_only_after_observed_members_exit(
+    tmp_path: Path,
+):
+    record_dir = tmp_path / "locks"
+    record_dir.mkdir(mode=0o700)
+    record = record_dir / f"1.activity.{'a' * 32}.guardian.json"
+    record.write_text("{}", encoding="utf-8")
+    tree = container_activity.GuardedWriterTree(
+        guardian_record=record,
+        known_identities={2_000_000_012: "gone"},
+        members_observed=True,
+    )
+    assert container_activity._reconcile_recovered_guardian_record(tree) is True
+    assert not record.exists()
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="live writer identity proof uses Linux /proc",
+)
+def test_reconcile_retains_record_while_seeded_writer_live(
+    tmp_path: Path,
+):
+    writer = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+    )
+    try:
+        start = container_activity.process_start_identity(writer.pid)
+        assert start
+        record_dir = tmp_path / "locks"
+        record_dir.mkdir(mode=0o700)
+        record = record_dir / f"1.activity.{'b' * 32}.guardian.json"
+        record.write_text("{}", encoding="utf-8")
+        tree = container_activity.GuardedWriterTree(
+            guardian_record=record,
+            known_identities={
+                writer.pid: start,
+                2_000_000_013: "dead-sentinel",
+            },
+            members_observed=True,
+        )
+        assert container_activity._reconcile_recovered_guardian_record(tree) is False
+        assert record.exists()
+    finally:
+        writer.kill()
+        writer.wait(timeout=5)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="incomplete observation recovery proof uses Linux /proc",
+)
+def test_recovery_sentinel_only_observation_keeps_missed_orphan_blocked(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Sentinel-only seed must not signal or clear while a writer stays live."""
+    from proxima_api import process_containment as process_containment_module
+
+    conn = _database(tmp_path)
+    root = tmp_path / "recovery-sentinel-only"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "recovery-sentinel-only",
+    )
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_text("keep", encoding="utf-8")
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "2" * 32
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
+    ready = tmp_path / "sentinel-only-ready"
+
+    sentinel = os.fork()
+    if sentinel == 0:
+        try:
+            os.setsid()
+            writer = os.fork()
+            if writer == 0:
+                try:
+                    ready.write_text(str(os.getpid()), encoding="utf-8")
+                    while True:
+                        time.sleep(1)
+                finally:
+                    os._exit(0)
+            while True:
+                time.sleep(1)
+        finally:
+            os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    start = container_activity.process_start_identity(sentinel) or ""
+    assert start
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": sentinel,
+                "sentinel_start": start,
+                "owner_pid": 2_000_000_031,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        container_activity,
+        "_verified_guardian",
+        lambda _payload, _guardian: (sentinel, start),
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_owner_is_live",
+        lambda _payload: False,
+    )
+    # Force sentinel-only observation even though the writer is live.
+    monkeypatch.setattr(
+        process_containment_module,
+        "process_tree_pids",
+        lambda _root: {sentinel},
+    )
+
+    killed: list[tuple[int, int]] = []
+    real_kill = os.kill
+
+    def track_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", track_kill)
+
+    try:
+        recovery = container_registry.recover_container_activity_guardians(
+            conn,
+            container_id,
+            timeout=0.4,
+        )
+        assert record.exists()
+        assert recovery.recovered == 0
+        assert recovery.unresolved >= 1
+        assert recovery.active == 0
+        assert (sentinel, signal.SIGTERM) not in killed
+        assert Path(f"/proc/{writer_pid}").exists()
+        assert migrate_container_ops(conn, container_id) is False
+        assert (root / "wiki" / "note.md").read_text(encoding="utf-8") == "keep"
+    finally:
+        monkeypatch.setattr(os, "kill", real_kill)
+        for pid in (writer_pid, sentinel):
+            try:
+                real_kill(pid, 9)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="identity-miss recovery proof uses Linux /proc",
+)
+def test_recovery_child_identity_miss_keeps_record_and_blocks_migrate(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Live child without start identity must not be signaled or cleared."""
+    from proxima_api import process_containment as process_containment_module
+
+    conn = _database(tmp_path)
+    root = tmp_path / "recovery-identity-miss"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "recovery-identity-miss",
+    )
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_text("keep", encoding="utf-8")
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "3" * 32
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
+    ready = tmp_path / "identity-miss-ready"
+
+    sentinel = os.fork()
+    if sentinel == 0:
+        try:
+            os.setsid()
+            writer = os.fork()
+            if writer == 0:
+                try:
+                    ready.write_text(str(os.getpid()), encoding="utf-8")
+                    while True:
+                        time.sleep(1)
+                finally:
+                    os._exit(0)
+            while True:
+                time.sleep(1)
+        finally:
+            os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    start = container_activity.process_start_identity(sentinel) or ""
+    assert start
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": sentinel,
+                "sentinel_start": start,
+                "owner_pid": 2_000_000_032,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        container_activity,
+        "_verified_guardian",
+        lambda _payload, _guardian: (sentinel, start),
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_owner_is_live",
+        lambda _payload: False,
+    )
+    monkeypatch.setattr(
+        process_containment_module,
+        "process_tree_pids",
+        lambda _root: {sentinel, writer_pid},
+    )
+    real_start_identity = container_activity._process_start_identity
+
+    def hide_writer_identity(pid: int) -> str | None:
+        if pid == writer_pid:
+            return None
+        return real_start_identity(pid)
+
+    monkeypatch.setattr(
+        container_activity,
+        "_process_start_identity",
+        hide_writer_identity,
+    )
+
+    killed: list[tuple[int, int]] = []
+    real_kill = os.kill
+
+    def track_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", track_kill)
+
+    try:
+        recovery = container_registry.recover_container_activity_guardians(
+            conn,
+            container_id,
+            timeout=0.4,
+        )
+        assert record.exists()
+        assert recovery.recovered == 0
+        assert recovery.unresolved >= 1
+        assert (sentinel, signal.SIGTERM) not in killed
+        assert Path(f"/proc/{writer_pid}").exists()
+        assert migrate_container_ops(conn, container_id) is False
+    finally:
+        monkeypatch.setattr(os, "kill", real_kill)
+        for pid in (writer_pid, sentinel):
+            try:
+                real_kill(pid, 9)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="recovery-signal-then-sentinel-crash proof uses Linux /proc",
+)
+def test_recovery_signal_then_sentinel_crash_retains_live_orphan(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Unclean sentinel death after recovery signal must keep live orphans blocked."""
+    conn = _database(tmp_path)
+    root = tmp_path / "recovery-unclean-sentinel"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "recovery-unclean-sentinel",
+    )
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_text("keep", encoding="utf-8")
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "e" * 32
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
+    ready = tmp_path / "recovery-orphan-ready"
+
+    sentinel = os.fork()
+    if sentinel == 0:
+        try:
+            os.setsid()
+            writer = os.fork()
+            if writer == 0:
+                try:
+                    ready.write_text(str(os.getpid()), encoding="utf-8")
+                    while True:
+                        time.sleep(1)
+                finally:
+                    os._exit(0)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            while True:
+                time.sleep(1)
+        finally:
+            os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    start = container_activity.process_start_identity(sentinel) or ""
+    assert start
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": sentinel,
+                "sentinel_start": start,
+                "owner_pid": 2_000_000_014,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        container_activity,
+        "_verified_guardian",
+        lambda _payload, _guardian: (sentinel, start),
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_owner_is_live",
+        lambda _payload: False,
+    )
+
+    real_kill = os.kill
+
+    def unclean_kill(pid: int, sig: int) -> None:
+        # Recovery SIGTERM becomes an unclean sentinel death; do not touch the
+        # reparented writer here so the durable record must retain the blocker.
+        if pid == sentinel and sig == signal.SIGTERM:
+            real_kill(pid, 9)
+            return
+        if pid == writer_pid:
+            return
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", unclean_kill)
+    monkeypatch.setattr(
+        container_activity.GuardedWriterTree,
+        "terminate",
+        lambda self, **_kwargs: False,
+    )
+
+    try:
+        recovery = container_registry.recover_container_activity_guardians(
+            conn,
+            container_id,
+            timeout=0.6,
+        )
+        assert record.exists(), (
+            "unclean sentinel death must not drop the durable guardian record"
+        )
+        assert recovery.unresolved >= 1
+        assert recovery.active == 0
+        assert Path(f"/proc/{writer_pid}").exists()
+        assert migrate_container_ops(conn, container_id) is False
+        assert (root / "wiki" / "note.md").read_text(encoding="utf-8") == "keep"
+        blocked = False
+        try:
+            with container_registry.container_quiescence_lock(
+                conn,
+                container_id,
+            ):
+                pass
+        except ContainerBoundaryError:
+            blocked = True
+        assert blocked
+    finally:
+        monkeypatch.setattr(os, "kill", real_kill)
+        for pid in (writer_pid, sentinel):
+            try:
+                real_kill(pid, 9)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="delayed tree-exit recovery proof uses Linux /proc",
+)
+def test_recovery_clears_record_after_delayed_observed_tree_exit(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Once every seeded member exits, recovery may clear the leftover record."""
+    conn = _database(tmp_path)
+    root = tmp_path / "recovery-delayed-exit"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "recovery-delayed-exit",
+    )
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "1" * 32
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
+    ready = tmp_path / "delayed-exit-ready"
+
+    sentinel = os.fork()
+    if sentinel == 0:
+        try:
+            os.setsid()
+            writer = os.fork()
+            if writer == 0:
+                try:
+                    ready.write_text(str(os.getpid()), encoding="utf-8")
+                    time.sleep(0.35)
+                finally:
+                    os._exit(0)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            while True:
+                time.sleep(1)
+        finally:
+            os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    start = container_activity.process_start_identity(sentinel) or ""
+    assert start
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": sentinel,
+                "sentinel_start": start,
+                "owner_pid": 2_000_000_015,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        container_activity,
+        "_verified_guardian",
+        lambda _payload, _guardian: (sentinel, start),
+    )
+    monkeypatch.setattr(
+        container_activity,
+        "_owner_is_live",
+        lambda _payload: False,
+    )
+    real_kill = os.kill
+
+    def unclean_kill(pid: int, sig: int) -> None:
+        if pid == sentinel and sig == signal.SIGTERM:
+            real_kill(pid, 9)
+            return
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", unclean_kill)
+
+    try:
+        recovery = container_registry.recover_container_activity_guardians(
+            conn,
+            container_id,
+            timeout=2.0,
+        )
+        assert recovery.recovered == 1
+        assert recovery.unresolved == 0
+        assert recovery.active == 0
+        assert not record.exists()
+        with container_registry.container_quiescence_lock(
+            conn,
+            container_id,
+        ):
+            pass
+    finally:
+        monkeypatch.setattr(os, "kill", real_kill)
+        for pid in (writer_pid, sentinel):
+            try:
+                real_kill(pid, 9)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+
+
+def test_generated_container_doc_creation_never_clobbers_late_content(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "late-container-doc"
+    container_id = _legacy_container(conn, root, "late-container-doc")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "keep.md").write_text("keep", encoding="utf-8")
+    real_publish = container_registry._publish_anonymous_file
+    injected = False
+
+    def inject_destination(temp_fd: int, parent_fd: int, target_name: str):
+        nonlocal injected
+        if not injected:
+            injected = True
+            (root / "ops" / "container.md").write_bytes(b"late owner content")
+        return real_publish(temp_fd, parent_fd, target_name)
+
+    monkeypatch.setattr(
+        container_registry,
+        "_publish_anonymous_file",
+        inject_destination,
+    )
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "ops" / "container.md").read_bytes() == b"late owner content"
+    assert (root / "wiki" / "keep.md").read_text(encoding="utf-8") == "keep"
+
+
+def test_manifest_publication_never_clobbers_late_destination(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "late-manifest-destination"
+    container_id = _legacy_container(conn, root, "late-manifest-destination")
+    (root / "design.md").write_bytes(b"legacy design")
+    real_publish = container_registry._publish_open_regular_file
+    injected = False
+
+    def inject_destination(source_fd: int, destination_fd: int, name: str):
+        nonlocal injected
+        if not injected:
+            injected = True
+            (root / "ops" / name).write_bytes(b"late destination")
+        return real_publish(source_fd, destination_fd, name)
+
+    monkeypatch.setattr(
+        container_registry,
+        "_publish_open_regular_file",
+        inject_destination,
+    )
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "design.md").read_bytes() == b"legacy design"
+    assert (root / "ops" / "design.md").read_bytes() == b"late destination"
+
+
+def test_directory_publication_rejects_unbound_late_destination(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "late-directory-destination"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "late-directory-destination",
+    )
+    (root / "wiki").mkdir()
+    (root / "wiki" / "keep.md").write_text(
+        "legacy",
+        encoding="utf-8",
+    )
+    real_publish = container_registry._publish_bound_directory_at
+    injected = False
+
+    def inject_directory(*args, **kwargs):
+        nonlocal injected
+        if not injected:
+            injected = True
+            (root / "ops" / "wiki").mkdir()
+        return real_publish(*args, **kwargs)
+
+    monkeypatch.setattr(
+        container_registry,
+        "_publish_bound_directory_at",
+        inject_directory,
+    )
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "wiki" / "keep.md").read_text(encoding="utf-8") == "legacy"
+    assert list((root / "ops" / "wiki").iterdir()) == []
+
+
+def test_directory_identity_is_durable_before_content_publication(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "directory-identity-before-fill"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "directory-identity-before-fill",
+    )
+    (root / "wiki" / "nested").mkdir(parents=True)
+    (root / "wiki" / "nested" / "keep.md").write_text(
+        "legacy",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def inspect_manifest_then_stop(
+        _source_fd: int,
+        _destination_fd: int,
+        _name: str,
+    ) -> None:
+        row = conn.execute(
+            "SELECT manifest_json FROM container_ops_migrations WHERE container_id = ?",
+            (container_id,),
+        ).fetchone()
+        manifest = json.loads(row["manifest_json"])
+        wiki = next(entry for entry in manifest["entries"] if entry["name"] == "wiki")
+        captured.update(wiki["publication"]["destination_directories"])
+        raise container_registry.OpsMigrationCollision("stop after ownership check")
+
+    monkeypatch.setattr(
+        container_registry,
+        "_publish_open_regular_file",
+        inspect_manifest_then_stop,
+    )
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert set(captured) == {".", "nested"}
+    assert all(
+        isinstance(identity, dict)
+        and isinstance(identity.get("device"), int)
+        and isinstance(identity.get("inode"), int)
+        for identity in captured.values()
+    )
+    assert (root / "wiki" / "nested" / "keep.md").is_file()
+
+
+@pytest.mark.parametrize(
+    "stage",
+    ("before_temp", "after_ready", "after_publish"),
+)
+def test_generated_document_recovers_each_owned_write_stage(
+    tmp_path: Path,
+    stage: str,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / f"document-stage-{stage}"
+    container_id = _legacy_container(conn, root, f"document-stage-{stage}")
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    planned = manifest["container_doc"]
+    recovery = planned["recovery_temp"]
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
+    (root / "ops").mkdir()
+    recovery_path = root / "ops" / recovery["path"]
+    if stage in {"after_ready", "after_publish"}:
+        recovery_path.write_bytes(planned["content"].encode())
+        recovery["phase"] = "ready"
+        recovery["identity"] = container_registry._stat_identity(recovery_path.lstat())
+        container_registry._upsert_marker(
+            conn,
+            container_id,
+            "moving",
+            manifest,
+        )
+    if stage == "after_publish":
+        (root / "ops" / "container.md").hardlink_to(recovery_path)
+
+    assert migrate_container_ops(conn, container_id) is True
+    assert (root / "ops" / "container.md").read_text(encoding="utf-8") == planned[
+        "content"
+    ]
+    assert recovery_path.samefile(root / "ops" / "container.md")
+
+
+@pytest.mark.parametrize("phase", ("prepared", "ready"))
+def test_anonymous_document_publication_resumes_each_link_boundary(
+    tmp_path: Path,
+    phase: str,
+):
+    parent = tmp_path / "anonymous-publication"
+    parent.mkdir()
+    target = parent / "container.md"
+    content = "durable generated document"
+    expected_hash = hashlib.sha256(content.encode()).hexdigest()
+    recovery = container_registry._planned_recovery_temp(expected_hash)
+
+    class SimulatedCrash(BaseException):
+        pass
+
+    def persist() -> None:
+        if recovery["phase"] == phase:
+            raise SimulatedCrash
+
+    with pytest.raises(SimulatedCrash):
+        container_registry._atomic_write_if_missing(
+            target,
+            content,
+            expected_hash=expected_hash,
+            recovery_temp=recovery,
+            persist_recovery=persist,
+        )
+
+    container_registry._atomic_write_if_missing(
+        target,
+        content,
+        expected_hash=expected_hash,
+        recovery_temp=recovery,
+        persist_recovery=lambda: None,
+    )
+
+    assert target.read_text(encoding="utf-8") == content
+    assert recovery["phase"] == "complete"
+    assert (parent / recovery["path"]).samefile(target)
+
+
+def test_missing_anonymous_storage_never_creates_named_recovery(
+    tmp_path: Path,
+    monkeypatch,
+):
+    parent = tmp_path / "named-publication"
+    parent.mkdir()
+    target = parent / "container.md"
+    content = "durable generated document"
+    expected_hash = hashlib.sha256(content.encode()).hexdigest()
+    recovery = container_registry._planned_recovery_temp(expected_hash)
+    real_open = os.open
+
+    def no_anonymous(path, flags, *args, **kwargs):
+        if hasattr(os, "O_TMPFILE") and flags & os.O_TMPFILE == os.O_TMPFILE:
+            raise OSError(errno.ENOTSUP, "anonymous files unavailable")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(container_registry.os, "open", no_anonymous)
+    with pytest.raises(
+        container_registry.OpsMigrationCollision,
+        match="cannot publish recovery data anonymously",
+    ):
+        container_registry._atomic_write_if_missing(
+            target,
+            content,
+            expected_hash=expected_hash,
+            recovery_temp=recovery,
+            persist_recovery=lambda: None,
+        )
+
+    assert not target.exists()
+    assert not (parent / recovery["path"]).exists()
+    assert recovery["phase"] == "planned"
+
+
+def test_fresh_document_uses_no_clobber_target_without_anonymous_storage(
+    tmp_path: Path,
+    monkeypatch,
+):
+    parent = tmp_path / "fresh-document"
+    parent.mkdir()
+    target = parent / "container.md"
+    content = "fresh document"
+    real_open = os.open
+
+    def no_anonymous(path, flags, *args, **kwargs):
+        if hasattr(os, "O_TMPFILE") and flags & os.O_TMPFILE == os.O_TMPFILE:
+            raise OSError(errno.ENOTSUP, "anonymous files unavailable")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(container_registry.os, "open", no_anonymous)
+    container_registry._atomic_write_if_missing(target, content)
+
+    assert target.read_text(encoding="utf-8") == content
+
+
+def test_v2_generated_document_manifest_upgrades_with_owned_recovery(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "v2-generated-document"
+    container_id = _legacy_container(conn, root, "v2-generated-document")
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    manifest["version"] = 2
+    manifest["container_doc"].pop("recovery_temp")
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is True
+    marker = conn.execute(
+        "SELECT migration_version, manifest_json "
+        "FROM container_ops_migrations WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    upgraded = json.loads(marker["manifest_json"])
+    assert marker["migration_version"] == container_registry.OPS_MIGRATION_VERSION
+    assert upgraded["version"] == container_registry.OPS_MIGRATION_VERSION
+    recovery = upgraded["container_doc"]["recovery_temp"]
+    assert recovery["path"].startswith(container_registry.RECOVERY_TEMP_PREFIX)
+    assert recovery["phase"] == "complete"
+    assert recovery["identity"]
+
+
+def test_v4_planned_document_upgrades_to_owned_recovery_protocol(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "v4-generated-document"
+    container_id = _legacy_container(conn, root, "v4-generated-document")
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    manifest["version"] = 4
+    manifest["container_doc"]["recovery_temp"].pop("ownership_token", None)
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is True
+    marker = conn.execute(
+        "SELECT migration_version, manifest_json "
+        "FROM container_ops_migrations WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    upgraded = json.loads(marker["manifest_json"])
+    recovery = upgraded["container_doc"]["recovery_temp"]
+    assert marker["migration_version"] == container_registry.OPS_MIGRATION_VERSION
+    assert upgraded["version"] == container_registry.OPS_MIGRATION_VERSION
+    assert "ownership_token" not in recovery
+    assert recovery["phase"] == "complete"
+
+
+def test_recovery_temp_cleanup_requires_exact_manifest_ownership(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "ambiguous-recovery-temp"
+    container_id = _legacy_container(conn, root, "ambiguous-recovery-temp")
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    recovery = manifest["container_doc"]["recovery_temp"]
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
+    (root / "ops").mkdir()
+    ambiguous = b"owner bytes at internal-looking path"
+    (root / "ops" / recovery["path"]).write_bytes(ambiguous)
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "ops" / recovery["path"]).read_bytes() == ambiguous
+    assert not (root / "ops" / "container.md").exists()
+
+
+def test_recovery_temp_spoof_with_exact_bytes_is_preserved(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "spoofed-recovery-temp"
+    container_id = _legacy_container(conn, root, "spoofed-recovery-temp")
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    planned = manifest["container_doc"]
+    recovery = planned["recovery_temp"]
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
+    (root / "ops").mkdir()
+    spoof = root / "ops" / recovery["path"]
+    spoof.write_text(planned["content"], encoding="utf-8")
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert spoof.read_text(encoding="utf-8") == planned["content"]
+    assert not (root / "ops" / "container.md").exists()
+
+
+def test_unproven_generated_document_with_exact_bytes_is_preserved(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "unproven-generated-document"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "unproven-generated-document",
+    )
+    (root / "wiki").mkdir()
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    planned = manifest["container_doc"]
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
+    (root / "ops").mkdir()
+    target = root / "ops" / "container.md"
+    target.write_text(planned["content"], encoding="utf-8")
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert target.read_text(encoding="utf-8") == planned["content"]
+    assert (root / "wiki").is_dir()
+
+
+def test_recovery_artifact_intent_is_unpredictable_and_manifest_bound(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    first_root = tmp_path / "recovery-intent-first"
+    second_root = tmp_path / "recovery-intent-second"
+    first_id = _legacy_container(conn, first_root, "recovery-intent-first")
+    second_id = _legacy_container(
+        conn,
+        second_root,
+        "recovery-intent-second",
+    )
+    first = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, first_id),
+    )["container_doc"]["recovery_temp"]
+    second = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, second_id),
+    )["container_doc"]["recovery_temp"]
+
+    assert first["path"] != second["path"]
+    assert first["phase"] == second["phase"] == "planned"
+    assert first["identity"] is second["identity"] is None
+
+
+def test_retry_serializes_virtual_file_write_before_root_resolution(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "serialized-file-write"
+    container_id = _owned_api_legacy(api, root, "serialized-file-write")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "existing.md").write_text("existing", encoding="utf-8")
+    _prepare_completed_filesystem_move(api.app.state.db, container_id, root)
+
+    apply_entered = threading.Event()
+    release_apply = threading.Event()
+    real_exclude = container_registry.exclude_ops_from_root_repo
+
+    def pause_before_database_switch(path: Path, **kwargs):
+        apply_entered.set()
+        assert release_apply.wait(timeout=5)
+        return real_exclude(path, **kwargs)
+
+    monkeypatch.setattr(
+        container_registry,
+        "exclude_ops_from_root_repo",
+        pause_before_database_switch,
+    )
+    write_finished = threading.Event()
+
+    def write_file():
+        try:
+            return api.put(
+                "/api/projects/serialized-file-write/file",
+                params={"path": "wiki/new.md"},
+                headers=headers,
+                json={"content": "late owner edit"},
+            )
+        finally:
+            write_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        retry_future = pool.submit(
+            lambda: api.post(
+                "/api/projects/serialized-file-write/ops-migration/retry",
+                headers=headers,
+            )
+        )
+        assert apply_entered.wait(timeout=5)
+        write_future = pool.submit(write_file)
+        write_was_blocked = not write_finished.wait(timeout=0.25)
+        release_apply.set()
+        retry = retry_future.result(timeout=5)
+        write = write_future.result(timeout=5)
+
+    assert write_was_blocked is True
+    assert retry.status_code == 200, retry.text
+    assert write.status_code == 200, write.text
+    assert not (root / "wiki").exists()
+    assert (root / "ops" / "wiki" / "new.md").read_text(
+        encoding="utf-8"
+    ) == "late owner edit"
+
+
+def test_retry_serializes_complete_project_purge(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "serialized-project-delete"
+    container_id = _owned_api_legacy(api, root, "serialized-project-delete")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "existing.md").write_text("existing", encoding="utf-8")
+    _prepare_completed_filesystem_move(api.app.state.db, container_id, root)
+
+    apply_entered = threading.Event()
+    release_apply = threading.Event()
+    real_exclude = container_registry.exclude_ops_from_root_repo
+
+    def pause_before_database_switch(path: Path, **kwargs):
+        apply_entered.set()
+        assert release_apply.wait(timeout=5)
+        return real_exclude(path, **kwargs)
+
+    monkeypatch.setattr(
+        container_registry,
+        "exclude_ops_from_root_repo",
+        pause_before_database_switch,
+    )
+    delete_finished = threading.Event()
+
+    def delete_project():
+        try:
+            return api.delete(
+                "/api/projects/serialized-project-delete",
+                headers=headers,
+            )
+        finally:
+            delete_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        retry_future = pool.submit(
+            lambda: api.post(
+                "/api/projects/serialized-project-delete/ops-migration/retry",
+                headers=headers,
+            )
+        )
+        assert apply_entered.wait(timeout=5)
+        delete_future = pool.submit(delete_project)
+        delete_was_blocked = not delete_finished.wait(timeout=0.25)
+        release_apply.set()
+        try:
+            retry = retry_future.result(timeout=5)
+        except Exception as exc:
+            retry = exc
+        delete = delete_future.result(timeout=5)
+
+    assert delete_was_blocked is True
+    assert not isinstance(retry, Exception)
+    assert retry.status_code == 200, retry.text
+    assert delete.status_code == 200, delete.text
+    assert root.is_dir()
+    assert (root / "ops" / "wiki" / "existing.md").read_text(
+        encoding="utf-8"
+    ) == "existing"
+    assert (
+        api.app.state.db.execute(
+            "SELECT 1 FROM projects WHERE id = ?",
+            (container_id,),
+        ).fetchone()
+        is None
+    )
+
+
+def test_delete_recovers_verified_orphan_guardian(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "delete-orphan-recovery"
+    container_id = _owned_api_legacy(api, root, "delete-orphan-recovery")
+    (root / "keep.txt").write_text("keep", encoding="utf-8")
+    database = Path(api.app.state.config["database_path"])
+    ready = tmp_path / "delete-orphan-ready"
+    api_root = Path(__file__).resolve().parents[1]
+    launcher = "\n".join(
+        (
+            "import os, subprocess, sys",
+            "from pathlib import Path",
+            "from proxima_api.container_registry import acquire_container_activity_lease",
+            "from proxima_api.db import connect",
+            "database, container_id, root, ready = sys.argv[1:]",
+            "lease = acquire_container_activity_lease(connect(database), int(container_id))",
+            "command, options = lease.guard_process([sys.executable, '-c', 'import time; time.sleep(60)'])",
+            "subprocess.Popen(command, cwd=root, **options)",
+            "lease.mark_process_started()",
+            "lease.release()",
+            "Path(ready).write_text('ready', encoding='utf-8')",
+            "os._exit(0)",
+        )
+    )
+    parent = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            launcher,
+            str(database),
+            str(container_id),
+            str(root),
+            str(ready),
+        ],
+        cwd=api_root,
+    )
+    assert parent.wait(timeout=5) == 0
+    assert ready.is_file()
+    record_dir = database.parent / f".{database.name}.container-locks"
+    deadline = time.monotonic() + 5
+    while (
+        not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+
+    response = api.delete(
+        "/api/projects/delete-orphan-recovery",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"ok": True, "slug": "delete-orphan-recovery"}
+    assert (
+        api.app.state.db.execute(
+            "SELECT 1 FROM projects WHERE id = ?",
+            (container_id,),
+        ).fetchone()
+        is None
+    )
+    assert not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
+
+
+def test_delete_reports_live_project_process_without_stopping_it(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "live-guardian-delete"
+    container_id = _owned_api_legacy(api, root, "live-guardian-delete")
+    (root / "keep.txt").write_text("keep", encoding="utf-8")
+    lease = container_registry.acquire_container_activity_lease(
+        api.app.state.db,
+        container_id,
+    )
+    command, options = lease.guard_process(
+        [sys.executable, "-c", "import time; time.sleep(60)"]
+    )
+    process = subprocess.Popen(command, cwd=root, **options)
+    lease.mark_process_started()
+    lease.release()
+    database = Path(api.app.state.config["database_path"])
+    record_dir = database.parent / f".{database.name}.container-locks"
+    deadline = time.monotonic() + 5
+    while (
+        not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+    try:
+        response = api.delete(
+            "/api/projects/live-guardian-delete",
+            headers=headers,
+        )
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert detail["active_processes"] == 1
+        assert detail["unresolved_processes"] == 0
+        assert "active processes" in detail["message"]
+        assert process.poll() is None
+        assert root.exists()
+        assert (
+            api.app.state.db.execute(
+                "SELECT 1 FROM projects WHERE id = ?",
+                (container_id,),
+            ).fetchone()
+            is not None
+        )
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=5)
+
+
+def test_delete_reports_unresolved_guardian_identity(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "unresolved-guardian-delete"
+    container_id = _owned_api_legacy(
+        api,
+        root,
+        "unresolved-guardian-delete",
+    )
+    (root / "keep.txt").write_text("keep", encoding="utf-8")
+    database = Path(api.app.state.config["database_path"])
+    record_dir = database.parent / f".{database.name}.container-locks"
+    record_dir.mkdir(mode=0o700, exist_ok=True)
+    guardian_id = "d" * 32
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": 2_000_000_011,
+                "sentinel_start": "dead-sentinel",
+                "owner_pid": 2_000_000_012,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = api.delete(
+        "/api/projects/unresolved-guardian-delete",
+        headers=headers,
+    )
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["active_processes"] == 0
+    assert detail["unresolved_processes"] >= 1
+    assert "ownership could not be verified" in detail["message"]
+    assert root.exists()
+    assert record.exists()
+    assert (
+        api.app.state.db.execute(
+            "SELECT 1 FROM projects WHERE id = ?",
+            (container_id,),
+        ).fetchone()
+        is not None
+    )
+
+
+def test_delete_blocks_while_shared_writer_lease_is_held(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "shared-writer-delete"
+    container_id = _owned_api_legacy(api, root, "shared-writer-delete")
+    (root / "keep.txt").write_text("keep", encoding="utf-8")
+    lease = container_registry.acquire_container_activity_lease(
+        api.app.state.db,
+        container_id,
+    )
+    try:
+        response = api.delete(
+            "/api/projects/shared-writer-delete",
+            headers=headers,
+        )
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert "message" in detail
+        assert detail["active_processes"] == 0
+        assert detail["unresolved_processes"] == 0
+        assert "active processes" in detail["message"]
+        assert root.exists()
+        assert (
+            api.app.state.db.execute(
+                "SELECT 1 FROM projects WHERE id = ?",
+                (container_id,),
+            ).fetchone()
+            is not None
+        )
+    finally:
+        lease.release()
+
+    cleared = api.delete(
+        "/api/projects/shared-writer-delete",
+        headers=headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert (
+        api.app.state.db.execute(
+            "SELECT 1 FROM projects WHERE id = ?",
+            (container_id,),
+        ).fetchone()
+        is None
+    )
+
+
+def test_retry_serializes_design_writer_before_root_resolution(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "serialized-design-writer"
+    container_id = _owned_api_legacy(api, root, "serialized-design-writer")
+    image = root / "artifacts" / "media" / "images" / "source.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    )
+    (root / "wiki").mkdir()
+    (root / "wiki" / "existing.md").write_text("existing", encoding="utf-8")
+    _prepare_completed_filesystem_move(api.app.state.db, container_id, root)
+    apply_entered = threading.Event()
+    release_apply = threading.Event()
+    real_exclude = container_registry.exclude_ops_from_root_repo
+
+    def pause_before_database_switch(path: Path, **kwargs):
+        apply_entered.set()
+        assert release_apply.wait(timeout=5)
+        return real_exclude(path, **kwargs)
+
+    monkeypatch.setattr(
+        container_registry,
+        "exclude_ops_from_root_repo",
+        pause_before_database_switch,
+    )
+    design_finished = threading.Event()
+
+    def create_design():
+        try:
+            return api.post(
+                "/api/projects/serialized-design-writer/designs/from-image",
+                headers=headers,
+                json={"path": "artifacts/media/images/source.png"},
+            )
+        finally:
+            design_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        retry_future = pool.submit(
+            lambda: api.post(
+                "/api/projects/serialized-design-writer/ops-migration/retry",
+                headers=headers,
+            )
+        )
+        assert apply_entered.wait(timeout=5)
+        design_future = pool.submit(create_design)
+        design_was_blocked = not design_finished.wait(timeout=0.25)
+        release_apply.set()
+        retry = retry_future.result(timeout=5)
+        design = design_future.result(timeout=5)
+
+    assert design_was_blocked is True
+    assert retry.status_code == 200, retry.text
+    assert design.status_code == 200, design.text
+    scene = root / "ops" / design.json()["path"] / "scene.json"
+    assert scene.is_file()
+
+
+def test_parent_symlink_swap_cannot_redirect_manifest_move(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "parent-swap"
+    outside = tmp_path / "outside-parent-swap"
+    parked = tmp_path / "parked-physical-ops"
+    outside.mkdir()
+    container_id = _legacy_container(conn, root, "parent-swap")
+    (root / "design.md").write_bytes(b"legacy design")
+    real_rename = container_registry._rename_noreplace
+    swapped = False
+
+    def swap_parent_then_rename(*args, **kwargs):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            (root / "ops").rename(parked)
+            (root / "ops").symlink_to(outside, target_is_directory=True)
+        return real_rename(*args, **kwargs)
+
+    monkeypatch.setattr(
+        container_registry,
+        "_rename_noreplace",
+        swap_parent_then_rename,
+    )
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert not (outside / "design.md").exists()
+    assert (parked / "design.md").read_bytes() == b"legacy design"
+
+
+def test_manifest_publication_cannot_select_swapped_source_name(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "inode-swap"
+    container_id = _legacy_container(conn, root, "inode-swap")
+    source = root / "design.md"
+    source.write_bytes(b"manifest design")
+    parked = root / "design-original.md"
+    real_publish = container_registry._publish_open_regular_file
+    swapped = False
+
+    def swap_inode_then_publish(*args, **kwargs):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            source.rename(parked)
+            source.write_bytes(b"late owner replacement")
+        return real_publish(*args, **kwargs)
+
+    monkeypatch.setattr(
+        container_registry,
+        "_publish_open_regular_file",
+        swap_inode_then_publish,
+    )
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert source.read_bytes() == b"late owner replacement"
+    assert parked.read_bytes() == b"manifest design"
+    assert (root / "ops" / "design.md").read_bytes() == b"manifest design"
+    retained = list(
+        (root / "ops").glob(f"{container_registry.RETAINED_SOURCE_PREFIX}*-design.md")
+    )
+    assert retained == []
+
+
+def test_git_exclude_uses_opened_root_after_path_replacement(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "exclude-root-swap"
+    parked = tmp_path / "exclude-root-parked"
+    outside = tmp_path / "exclude-outside"
+    container_id = _legacy_container(conn, root, "exclude-root-swap")
+    (root / "wiki").mkdir()
+    (root / ".git" / "info").mkdir(parents=True)
+    (outside / ".git" / "info").mkdir(parents=True)
+    real_exclude = container_registry._exclude_ops_from_root_repo_at
+    swapped = False
+
+    def replace_root_then_exclude(root_fd: int):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            root.rename(parked)
+            root.symlink_to(outside, target_is_directory=True)
+        return real_exclude(root_fd)
+
+    monkeypatch.setattr(
+        container_registry,
+        "_exclude_ops_from_root_repo_at",
+        replace_root_then_exclude,
+    )
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert "/ops/" in (parked / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert not (outside / ".git" / "info" / "exclude").exists()
+
+
+def test_migration_detail_exposes_unavailable_root_inspectability(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "unavailable-inspection-root"
+    _owned_api_legacy(api, root, "unavailable-inspection-root")
+    unavailable = tmp_path / "moved-unavailable-inspection-root"
+    root.rename(unavailable)
+
+    detail = api.get(
+        "/api/projects/unavailable-inspection-root/ops-migration",
+        headers=headers,
+    )
+
+    assert detail.status_code == 200, detail.text
+    legacy = detail.json()["inspection"]["legacy_root"]
+    assert legacy["inspectable"] is False
+    assert "missing" in legacy["reason"]
+
+
+def test_repaired_physical_layout_can_retry_to_resolve_open_attention(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "repaired-physical-layout"
+    container_id = _owned_api_legacy(api, root, "repaired-physical-layout")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "data.txt").write_text("wiki", encoding="utf-8")
+    assert migrate_container_ops(api.app.state.db, container_id) is True
+
+    unavailable = tmp_path / "temporarily-unavailable-ops"
+    (root / "ops").rename(unavailable)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    unavailable.rename(root / "ops")
+
+    detail = api.post(
+        "/api/projects/repaired-physical-layout/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["phase"] == "complete"
+    assert body["attention"]["status"] == "open"
+    assert body["retry_safe"] is True
+
+    retry = api.post(
+        "/api/projects/repaired-physical-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 200, retry.text
+    resolved = retry.json()
+    assert resolved["phase"] == "complete"
+    assert resolved["attention"]["status"] == "resolved"
+    assert resolved["retry_safe"] is False
+    assert (root / "ops" / "wiki" / "data.txt").read_text(encoding="utf-8") == "wiki"
+
+
+def test_file_api_can_inspect_explicit_container_side_after_migration(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "explicit-container-side"
+    container_id = _owned_api_legacy(api, root, "explicit-container-side")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "physical.txt").write_text("physical", encoding="utf-8")
+    assert migrate_container_ops(api.app.state.db, container_id) is True
+    (root / "wiki").mkdir()
+    (root / "wiki" / "legacy.txt").write_text("legacy", encoding="utf-8")
+
+    virtual = api.get(
+        "/api/projects/explicit-container-side/file",
+        params={"path": "wiki/physical.txt"},
+        headers=headers,
+    )
+    assert virtual.status_code == 200, virtual.text
+    assert virtual.json()["content"] == "physical"
+
+    legacy = api.get(
+        "/api/projects/explicit-container-side/file",
+        params={"path": "wiki/legacy.txt", "root_side": "container"},
+        headers=headers,
+    )
+    physical = api.get(
+        "/api/projects/explicit-container-side/file",
+        params={"path": "ops/wiki/physical.txt", "root_side": "container"},
+        headers=headers,
+    )
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json()["content"] == "legacy"
+    assert physical.status_code == 200, physical.text
+    assert physical.json()["content"] == "physical"
+
+
+def test_explicit_container_side_rejects_every_file_mutation(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "read-only-container-side"
+    container_id = _owned_api_legacy(api, root, "read-only-container-side")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "physical.txt").write_text("physical", encoding="utf-8")
+    assert migrate_container_ops(api.app.state.db, container_id) is True
+    (root / "wiki").mkdir()
+    (root / "wiki" / "write.txt").write_text("keep write", encoding="utf-8")
+    (root / "wiki" / "rename.txt").write_text("keep rename", encoding="utf-8")
+    (root / "wiki" / "delete.txt").write_text("keep delete", encoding="utf-8")
+
+    responses = [
+        api.put(
+            "/api/projects/read-only-container-side/file",
+            params={"path": "wiki/write.txt", "root_side": "container"},
+            headers=headers,
+            json={"content": "changed"},
+        ),
+        api.post(
+            "/api/projects/read-only-container-side/fs/mkdir",
+            params={"root_side": "container"},
+            headers=headers,
+            json={"path": "wiki/created"},
+        ),
+        api.post(
+            "/api/projects/read-only-container-side/fs/rename",
+            params={"root_side": "container"},
+            headers=headers,
+            json={"from": "wiki/rename.txt", "to": "wiki/renamed.txt"},
+        ),
+        api.delete(
+            "/api/projects/read-only-container-side/fs",
+            params={"path": "wiki/delete.txt", "root_side": "container"},
+            headers=headers,
+        ),
+    ]
+
+    assert [response.status_code for response in responses] == [422, 422, 422, 422]
+    assert (root / "wiki" / "write.txt").read_text(encoding="utf-8") == "keep write"
+    assert not (root / "wiki" / "created").exists()
+    assert (root / "wiki" / "rename.txt").read_text(encoding="utf-8") == "keep rename"
+    assert not (root / "wiki" / "renamed.txt").exists()
+    assert (root / "wiki" / "delete.txt").read_text(encoding="utf-8") == "keep delete"
+
+
+def test_validation_blocks_cross_filesystem_retry_before_any_move(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "cross-device-layout"
+    container_id = _owned_api_legacy(api, root, "cross-device-layout")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "keep.md").write_text("keep", encoding="utf-8")
+    assert migrate_container_ops(api.app.state.db, container_id) is True
+
+    # Restore a legacy marker-free layout so validation, not migration, owns the check.
+    (root / "wiki").mkdir()
+    (root / "wiki" / "keep.md").write_text("keep", encoding="utf-8")
+    shutil.rmtree(root / "ops")
+    api.app.state.db.execute(
+        "UPDATE project_areas SET rel_path = '.' WHERE project_id = ? AND kind = 'ops'",
+        (container_id,),
+    )
+    api.app.state.db.execute(
+        "DELETE FROM container_ops_migrations WHERE container_id = ?",
+        (container_id,),
+    )
+    real_device = container_registry._path_device
+
+    def different_device(path: Path) -> int:
+        device = real_device(path)
+        return device + 1 if path == root / "wiki" else device
+
+    monkeypatch.setattr(container_registry, "_path_device", different_device)
+    detail = api.post(
+        "/api/projects/cross-device-layout/ops-migration/validate",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["retry_safe"] is False
+    assert "different filesystems" in detail.json()["validation_reason"]
+    retry = api.post(
+        "/api/projects/cross-device-layout/ops-migration/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 409
+    assert (root / "wiki" / "keep.md").read_text(encoding="utf-8") == "keep"
+    assert not (root / "ops").exists()
 
 
 def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
@@ -351,11 +3792,14 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
     assert refreshed["summary"] == "Launch workspace."
     assert refreshed["source_hash"] != registry["source_hash"]
 
-    assert api.put(
-        "/api/projects/fresh/file?path=wiki/note.md",
-        headers=headers,
-        json={"content": "# Note"},
-    ).status_code == 200
+    assert (
+        api.put(
+            "/api/projects/fresh/file?path=wiki/note.md",
+            headers=headers,
+            json={"content": "# Note"},
+        ).status_code
+        == 200
+    )
     assert (root / "ops" / "wiki" / "note.md").read_text() == "# Note"
     notes = api.get("/api/projects/fresh/wiki/all", headers=headers).json()["notes"]
     assert notes == [{"path": "note.md", "content": "# Note"}]
@@ -371,11 +3815,16 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
         "/api/projects/fresh/artifacts?since_minutes=525600",
         headers=headers,
     ).json()["artifacts"]
-    assert any(item["path"] == "artifacts/media/images/source.png" for item in artifacts)
-    assert api.get(
-        "/api/projects/fresh/raw?path=artifacts/media/images/source.png",
-        headers=headers,
-    ).status_code == 200
+    assert any(
+        item["path"] == "artifacts/media/images/source.png" for item in artifacts
+    )
+    assert (
+        api.get(
+            "/api/projects/fresh/raw?path=artifacts/media/images/source.png",
+            headers=headers,
+        ).status_code
+        == 200
+    )
 
     design = api.post(
         "/api/projects/fresh/designs/from-image",
@@ -391,6 +3840,120 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
     assert scripts_library.scan_catalog(root / "ops") == [
         {"rel_path": "report.sh", "description": "build the report"}
     ]
+
+
+def test_fresh_container_uses_windows_no_reparse_boundary(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root = tmp_path / "windows-fresh"
+    root.mkdir()
+    called: list[tuple[Path, str, tuple[str, ...]]] = []
+
+    def create_windows(
+        container: Path,
+        name: str,
+        starter_dirs: tuple[str, ...],
+    ) -> Path:
+        called.append((container, name, starter_dirs))
+        physical = container / "ops"
+        physical.mkdir()
+        (physical / "container.md").write_text("owned", encoding="utf-8")
+        return physical
+
+    monkeypatch.setattr(
+        container_registry,
+        "_platform_is_windows",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        container_registry,
+        "_create_physical_ops_root_windows",
+        create_windows,
+    )
+
+    physical = container_registry.create_physical_ops_root(
+        root,
+        "Windows",
+    )
+
+    assert physical == root.absolute() / "ops"
+    assert called == [
+        (
+            root.absolute(),
+            "Windows",
+            container_registry.DEFAULT_STARTER_DIRS,
+        )
+    ]
+
+
+def test_windows_starter_directories_are_created_relative_to_stable_handles(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root = tmp_path / "windows-relative"
+    root.mkdir()
+    handles: dict[int, Path] = {}
+    next_handle = 10
+    created: list[tuple[Path, str]] = []
+
+    def open_directory(path: Path):
+        nonlocal next_handle
+        handle = next_handle
+        next_handle += 1
+        handles[handle] = path
+        return handle, (1, hash(path))
+
+    def create_directory(parent_handle: int, name: str):
+        nonlocal next_handle
+        parent = handles[parent_handle]
+        target = parent / name
+        target.mkdir(exist_ok=True)
+        created.append((parent, name))
+        handle = next_handle
+        next_handle += 1
+        handles[handle] = target
+        return handle, (1, hash(target))
+
+    def create_file(parent_handle: int, name: str, content: bytes):
+        (handles[parent_handle] / name).write_bytes(content)
+
+    monkeypatch.setattr(
+        container_registry,
+        "_windows_open_directory",
+        open_directory,
+    )
+    monkeypatch.setattr(
+        container_registry,
+        "_windows_create_directory_at",
+        create_directory,
+    )
+    monkeypatch.setattr(
+        container_registry,
+        "_windows_create_file_at",
+        create_file,
+    )
+    monkeypatch.setattr(
+        container_registry,
+        "_windows_close_handle",
+        lambda _handle: None,
+    )
+
+    physical = container_registry._create_physical_ops_root_windows(
+        root,
+        "Windows relative",
+        ("wiki/deep", "artifacts"),
+    )
+
+    assert physical == root / "ops"
+    assert created == [
+        (root, "ops"),
+        (physical, "wiki"),
+        (physical / "wiki", "deep"),
+        (physical, "artifacts"),
+    ]
+    assert (physical / "wiki" / "deep").is_dir()
+    assert (physical / "container.md").is_file()
 
 
 def test_project_list_survives_ops_descendant_symlink(tmp_path: Path):
@@ -448,7 +4011,9 @@ def test_archive_list_survives_unavailable_container(tmp_path: Path):
             "SELECT id FROM projects WHERE slug = 'broken'"
         ).fetchone()["id"]
     )
-    assert artifact_registry.seed_project(api.app.state.db, project_id, root / "ops") >= 1
+    assert (
+        artifact_registry.seed_project(api.app.state.db, project_id, root / "ops") >= 1
+    )
 
     shutil.rmtree(root)
 
@@ -478,15 +4043,13 @@ def test_collision_container_keeps_legacy_ops_features_available(tmp_path: Path)
         "# Description: legacy script\n", encoding="utf-8"
     )
     (root / "ops" / "wiki").mkdir(parents=True)
-    (root / "ops" / "wiki" / "collision.md").write_text(
-        "# Collision", encoding="utf-8"
-    )
+    (root / "ops" / "wiki" / "collision.md").write_text("# Collision", encoding="utf-8")
     conn.close()
 
     api, headers = _api(tmp_path, db_path)
-    notes = api.get(
-        "/api/projects/legacy-api/wiki/all", headers=headers
-    ).json()["notes"]
+    notes = api.get("/api/projects/legacy-api/wiki/all", headers=headers).json()[
+        "notes"
+    ]
     assert notes == [{"path": "note.md", "content": "# Legacy"}]
     artifacts = api.get(
         "/api/projects/legacy-api/artifacts?since_minutes=525600",
@@ -494,14 +4057,16 @@ def test_collision_container_keeps_legacy_ops_features_available(tmp_path: Path)
     ).json()["artifacts"]
     assert any(item["path"] == "artifacts/keep.txt" for item in artifacts)
     assert any(
-        item["type"] == "design"
-        and item["path"] == "artifacts/design/legacy"
+        item["type"] == "design" and item["path"] == "artifacts/design/legacy"
         for item in artifacts
     )
-    assert api.get(
-        "/api/projects/legacy-api/raw?path=artifacts/keep.txt",
-        headers=headers,
-    ).content == b"legacy artifact"
+    assert (
+        api.get(
+            "/api/projects/legacy-api/raw?path=artifacts/keep.txt",
+            headers=headers,
+        ).content
+        == b"legacy artifact"
+    )
     archive = api.get(
         "/api/archive?project=legacy-api",
         headers=headers,

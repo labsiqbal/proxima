@@ -1,23 +1,52 @@
 """Session-scoped file journals for hands-on Chat turns."""
+
 from __future__ import annotations
 
 import base64
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+ROOT_CONTAINER_V1 = "container-v1"
+ROOT_CONTAINER_VIRTUAL_V2 = "container-virtual-v2"
+ROOT_OPS_V1 = "ops-v1"
+ROOT_SEMANTICS = frozenset({ROOT_CONTAINER_V1, ROOT_CONTAINER_VIRTUAL_V2, ROOT_OPS_V1})
 MAX_FILES = 400
 MAX_TOTAL_BYTES = 8 * 1024 * 1024
 MAX_FILE_BYTES = 1024 * 1024
 SKIP_PARTS = {
-    ".git", "node_modules", "dist", "build", ".next", ".cache", "coverage",
-    "__pycache__", ".venv", "venv",
+    ".git",
+    "node_modules",
+    "dist",
+    "build",
+    ".next",
+    ".cache",
+    "coverage",
+    "__pycache__",
+    ".venv",
+    "venv",
 }
 SKIP_SUFFIXES = {
-    ".mp4", ".mov", ".mkv", ".webm", ".zip", ".gz", ".tar", ".db", ".sqlite",
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".woff", ".woff2",
+    ".mp4",
+    ".mov",
+    ".mkv",
+    ".webm",
+    ".zip",
+    ".gz",
+    ".tar",
+    ".db",
+    ".sqlite",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".pdf",
+    ".woff",
+    ".woff2",
 }
 
 
@@ -30,7 +59,10 @@ def _eligible(root: Path, path: Path) -> bool:
         rel = path.relative_to(root)
     except ValueError:
         return False
-    return not any(part in SKIP_PARTS for part in rel.parts) and path.suffix.lower() not in SKIP_SUFFIXES
+    return (
+        not any(part in SKIP_PARTS for part in rel.parts)
+        and path.suffix.lower() not in SKIP_SUFFIXES
+    )
 
 
 def _hash(content: bytes) -> str:
@@ -42,7 +74,8 @@ def _iter_files(root: Path):
     for directory, names, files in os.walk(root, followlinks=False):
         directory_path = Path(directory)
         names[:] = sorted(
-            name for name in names
+            name
+            for name in names
             if name not in SKIP_PARTS and not (directory_path / name).is_symlink()
         )
         for name in sorted(files):
@@ -112,7 +145,10 @@ def record_journal(
     session_id: int,
     root: Path,
     before: dict[str, dict[str, Any]],
+    root_semantics: str = ROOT_CONTAINER_VIRTUAL_V2,
 ) -> dict[str, Any] | None:
+    if root_semantics not in ROOT_SEMANTICS:
+        raise TurnRestoreError("turn journal root semantics are invalid")
     after = _current_files(root.resolve())
     entries: list[dict[str, Any]] = []
     for rel in sorted(set(before) | set(after)):
@@ -132,8 +168,10 @@ def record_journal(
     if not entries:
         return None
     conn.execute(
-        "INSERT INTO turn_file_journals(message_id, session_id, entries_json) VALUES (?, ?, ?)",
-        (message_id, session_id, json.dumps(entries)),
+        "INSERT INTO turn_file_journals("
+        "message_id, session_id, entries_json, root_semantics"
+        ") VALUES (?, ?, ?, ?)",
+        (message_id, session_id, json.dumps(entries), root_semantics),
     )
     return {"paths": [entry["path"] for entry in entries], "count": len(entries)}
 
@@ -157,17 +195,21 @@ def _journal_for_message(conn, message_id: int):
 
 def preview(conn, message_id: int) -> dict[str, Any]:
     row, entries = _journal_for_message(conn, message_id)
-    active = [dict(item) for item in conn.execute(
-        "SELECT j.id, j.title FROM jobs j WHERE j.project_id IS ? "
-        "AND j.origin_master_session_id IS NOT NULL AND j.status = 'running' ORDER BY j.id",
-        (row["project_id"],),
-    ).fetchall()]
+    active = [
+        dict(item)
+        for item in conn.execute(
+            "SELECT j.id, j.title FROM jobs j WHERE j.project_id IS ? "
+            "AND j.origin_master_session_id IS NOT NULL AND j.status = 'running' ORDER BY j.id",
+            (row["project_id"],),
+        ).fetchall()
+    ]
     return {
         "message_id": message_id,
         "paths": [entry["path"] for entry in entries],
         "warning": (
             "Master has active work in this Container. Restoring may overwrite those Task-agents' changes."
-            if active else None
+            if active
+            else None
         ),
         "active_master_tasks": active,
     }
@@ -177,27 +219,39 @@ def restore(
     conn,
     message_id: int,
     *,
-    root: Path,
+    root: Path | None = None,
+    resolve_root: Callable[[str, str], Path] | None = None,
     confirmed: bool,
     accept_active_master: bool = False,
     accept_active_alpha: bool | None = None,
 ) -> dict[str, Any]:
     if accept_active_alpha is not None:
         if accept_active_master and not accept_active_alpha:
-            raise TurnRestoreError("conflicting Master and Alpha restore acknowledgements")
+            raise TurnRestoreError(
+                "conflicting Master and Alpha restore acknowledgements"
+            )
         accept_active_master = accept_active_alpha
     impact = preview(conn, message_id)
     if not confirmed:
         raise TurnRestoreError("restore confirmation is required")
     if impact["active_master_tasks"] and not accept_active_master:
         raise TurnRestoreError("active Master work must be acknowledged before restore")
-    _row, entries = _journal_for_message(conn, message_id)
-    root = root.resolve()
+    row, entries = _journal_for_message(conn, message_id)
+    root_semantics = str(row["root_semantics"] or ROOT_CONTAINER_V1)
+    if root_semantics not in ROOT_SEMANTICS:
+        raise TurnRestoreError("turn journal root semantics are invalid")
+    if root is None and resolve_root is None:
+        raise TurnRestoreError("turn journal root is unavailable")
     restored: list[str] = []
     for entry in entries:
         rel = str(entry.get("path") or "")
-        target = (root / rel).resolve()
-        if target != root and root not in target.parents:
+        current_root = (
+            resolve_root(root_semantics, rel) if resolve_root is not None else root
+        )
+        assert current_root is not None
+        current_root = current_root.resolve()
+        target = (current_root / rel).resolve()
+        if target != current_root and current_root not in target.parents:
             raise TurnRestoreError(f"journal path leaves the project: {rel}")
         encoded = entry.get("before_content_b64")
         if encoded is None:
@@ -207,7 +261,9 @@ def restore(
             try:
                 content = base64.b64decode(encoded, validate=True)
             except (ValueError, TypeError) as exc:
-                raise TurnRestoreError(f"journal content is unreadable for {rel}") from exc
+                raise TurnRestoreError(
+                    f"journal content is unreadable for {rel}"
+                ) from exc
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
         restored.append(rel)

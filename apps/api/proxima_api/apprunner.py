@@ -247,6 +247,10 @@ def _socket_ownership(
         for pid in owner_pids
     )
     if not authority.containment_required:
+        # Without PID containment, process-group membership is the only proof
+        # Stop can own. A setsid descendant (including activity-guardian
+        # sentinels) is DETACHED here; status may still upgrade to VERIFIED
+        # when an identity-bound writer tree proves the listener members.
         if managed_group:
             return PortOwnership.VERIFIED
         return (
@@ -358,6 +362,13 @@ _PORT_RE2 = re.compile(
 class EffectLease(Protocol):
     def release(self) -> None: ...
 
+    def guard_process(
+        self,
+        command: list[str],
+    ) -> tuple[list[str], dict[str, Any]]: ...
+
+    def mark_process_started(self) -> None: ...
+
 
 @dataclass
 class LaunchReservation:
@@ -391,6 +402,7 @@ class AppManager:
         self._unadopted: set[str] = set()
         self._state_root = Path(state_root) if state_root else None
         self._profile = profile
+        self._retained_ingress: list[Any] = []
 
     def _retain_effect(
         self,
@@ -405,6 +417,25 @@ class AppManager:
         for lease in self._retained_effects.pop(slug, []):
             lease.release()
 
+    def _retain_ingress(self, lease: Any) -> None:
+        self._retained_ingress.append(lease)
+
+    def _writer_tree(self, app: dict[str, Any]):
+        tree = app.get("writer_tree")
+        if tree is not None:
+            return tree
+        from .container_activity import GuardedWriterTree
+
+        lease = app.get("effect_lease")
+        activity = getattr(lease, "_activity", None) or lease
+        tree = GuardedWriterTree.bind(
+            activity,
+            launcher_pid=app.get("proc_pid"),
+            launcher_start=app.get("proc_start_identity"),
+        )
+        app["writer_tree"] = tree
+        return tree
+
     def _finish_effect(
         self,
         slug: str,
@@ -415,10 +446,32 @@ class AppManager:
         lease = app.pop("effect_lease", None)
         if lease is None:
             return
+        tree = app.get("writer_tree")
+        if tree is None:
+            tree = self._writer_tree({**app, "effect_lease": lease})
+        pid = app.get("proc_pid")
+        start_identity = app.get("proc_start_identity")
+        finish = getattr(lease, "finish", None)
+        if finish is not None:
+            finish(
+                process_exited=terminated,
+                pid=pid,
+                start_identity=start_identity,
+                tree=tree,
+                retain_ingress=self._retain_ingress,
+            )
+            return
         if terminated:
             lease.release()
-        else:
-            self._retain_effect(slug, lease)
+            return
+        from .container_activity import retain_activity_lease
+
+        retain_activity_lease(
+            lease,
+            pid=pid,
+            start_identity=start_identity,
+            tree=tree,
+        )
 
     def _track_cleanup(
         self,
@@ -636,6 +689,11 @@ class AppManager:
                 "Preview supervisor authority could not be persisted"
             ) from exc
         shell_argv = ["cmd", "/c", command] if IS_WINDOWS else ["bash", "-lc", command]
+        guard = getattr(effect_lease, "guard_process", None)
+        if guard is not None:
+            # Preview broker owns the actual Popen flags; wrap argv so the child
+            # still runs under the activity guardian process tree.
+            shell_argv, _guard_options = guard(shell_argv)
         spawn_task = asyncio.create_task(
             broker.spawn(
                 shell_argv,
@@ -673,6 +731,9 @@ class AppManager:
             )
             reservation.cleanup_task = cleanup
             raise
+        mark = getattr(effect_lease, "mark_process_started", None)
+        if mark is not None:
+            mark()
         try:
             self._register_app(
                 slug=slug,
@@ -1094,7 +1155,22 @@ class AppManager:
             "output_broker": broker,
             "stop_lock": asyncio.Lock(),
             "stopped": False,
+            "proc_pid": int(proc.pid)
+            if getattr(proc, "pid", None) is not None
+            else None,
+            "proc_start_identity": None,
         }
+        if app["proc_pid"] is not None:
+            from .container_activity import process_start_identity
+
+            app["proc_start_identity"] = process_start_identity(app["proc_pid"])
+        app["writer_tree"] = None
+        if app.get("effect_lease") is not None:
+            app["writer_tree"] = self._writer_tree(app)
+            try:
+                app["writer_tree"].seed_live_members()
+            except Exception:
+                pass
         self._persist_app(slug, app)
         self._apps[slug] = app
         if self.contained and containment_pid_namespace is None:
@@ -1614,6 +1690,13 @@ class AppManager:
             await self._settle_authority_task(app)
             if not app.get("output_error"):
                 await self._snapshot_output(app)
+            # Activity guardians keep writers under a setsid sentinel / job that
+            # outlives a killed launcher and may still occupy the managed
+            # cgroup. Always finalize through the identity-bound tree instead of
+            # waiting on scope_live alone (which would never clear).
+            if self._has_guarded_writer_tree(app):
+                await self._finalize_exited_app(slug, app)
+                return
             if app["proc"].scope_live:
                 app["leader_exited_scope_live"] = True
                 app["output_task"] = asyncio.create_task(self._watch_output(slug, app))
@@ -1666,7 +1749,14 @@ class AppManager:
         self._remove_app_record(slug, app)
         self._clear_reservation(slug, int(app["generation"]))
         self._last_exit[slug] = result
-        self._finish_effect(slug, app, terminated=True)
+        tree = self._writer_tree(app)
+        terminated = True
+        try:
+            if tree.exited() is not True:
+                terminated = bool(tree.terminate())
+        except Exception:
+            terminated = tree.exited() is True
+        self._finish_effect(slug, app, terminated=bool(terminated))
         self._release_retained_effects(slug)
         self._unadopted.discard(slug)
         app["stopped"] = True
@@ -1989,26 +2079,89 @@ class AppManager:
                 if app.get("stop_task") is asyncio.current_task():
                     app.pop("stop_task", None)
                 return False
+            # Any effect lease is finished through the identity-bound writer
+            # tree. Launcher death alone never proves tree exit; tree.terminate
+            # is the stop authority for activity retention.
+            tree = (
+                self._writer_tree(app) if app.get("effect_lease") is not None else None
+            )
+            terminated = True
+            if tree is not None:
+                try:
+                    if tree.exited() is not True:
+                        terminated = bool(
+                            await asyncio.to_thread(
+                                tree.terminate,
+                                grace_seconds=4.0,
+                                kill_seconds=2.0,
+                            )
+                        )
+                except Exception:
+                    terminated = tree.exited() is True
+                if not terminated:
+                    # Identity-bound tree still live: split ingress from activity
+                    # and leave ownership unresolved. Never claim a clean stop.
+                    await self._snapshot_output(app)
+                    if self._apps.get(slug) is app:
+                        self._apps.pop(slug, None)
+                    self._remove_app_record(slug, app)
+                    self._finish_effect(
+                        slug,
+                        app,
+                        terminated=False,
+                    )
+                    self._unadopted.discard(slug)
+                    app["stopped"] = True
+                    self._clear_reservation(slug, int(app["generation"]))
+                    if preserve_status:
+                        self._last_exit[slug] = {
+                            "state": "ownership_unknown",
+                            "running": True,
+                            "ready": False,
+                            "requested_port": app["port"],
+                            "command": app["command"],
+                            "log": app["log"][-40:],
+                            "message": (
+                                "Stop could not prove identity-bound writer-tree "
+                                "exit. Activity remains retained until the tree "
+                                "is proven clear."
+                            ),
+                        }
+                    if app.get("stop_task") is asyncio.current_task():
+                        app.pop("stop_task", None)
+                    return False
+                # Tree proven clear; refresh launcher so cleanup can finish.
+                try:
+                    await proc.refresh()
+                except OutputBrokerUnavailable:
+                    pass
             if proc.returncode is None or proc.scope_live:
-                app["stop_requested"] = False
-                app["output_task"] = asyncio.create_task(self._watch_output(slug, app))
-                app["exit_task"] = asyncio.create_task(self._watch_exit(slug, app))
-                if preserve_status:
-                    self._last_exit[slug] = {
-                        "state": "ownership_unknown",
-                        "running": True,
-                        "ready": False,
-                        "requested_port": app["port"],
-                        "command": app["command"],
-                        "log": app["log"][-40:],
-                        "message": (
-                            "The preview left its launch-specific managed "
-                            "scope. Proxima did not signal it."
-                        ),
-                    }
-                if app.get("stop_task") is asyncio.current_task():
-                    app.pop("stop_task", None)
-                return False
+                if tree is not None and terminated:
+                    # Guardian tree is gone; launcher metadata may lag. Treat as
+                    # stopped rather than leaving an unresolved scope.
+                    pass
+                else:
+                    app["stop_requested"] = False
+                    app["output_task"] = asyncio.create_task(
+                        self._watch_output(slug, app)
+                    )
+                    app["exit_task"] = asyncio.create_task(self._watch_exit(slug, app))
+                    if preserve_status:
+                        self._last_exit[slug] = {
+                            "state": "ownership_unknown",
+                            "running": True,
+                            "ready": False,
+                            "requested_port": app["port"],
+                            "command": app["command"],
+                            "log": app["log"][-40:],
+                            "message": (
+                                "The preview left its launch-specific managed "
+                                "scope. Proxima did not signal it."
+                            ),
+                        }
+                    if app.get("stop_task") is asyncio.current_task():
+                        app.pop("stop_task", None)
+                    return False
             await self._snapshot_output(app)
             try:
                 await app["output_broker"].disconnect()
@@ -2017,10 +2170,18 @@ class AppManager:
             if self._apps.get(slug) is app:
                 self._apps.pop(slug, None)
             self._remove_app_record(slug, app)
+            if tree is None:
+                tree = self._writer_tree(app)
+                terminated = True
+                try:
+                    if tree.exited() is not True:
+                        terminated = bool(tree.terminate())
+                except Exception:
+                    terminated = tree.exited() is True
             self._finish_effect(
                 slug,
                 app,
-                terminated=True,
+                terminated=bool(terminated),
             )
             self._release_retained_effects(slug)
             self._unadopted.discard(slug)
@@ -2087,6 +2248,11 @@ class AppManager:
             if _port_open(candidate_port)
             else PortOwnership.NO_LISTENER
         )
+        ownership = self._upgrade_ownership_with_writer_tree(
+            app,
+            ownership,
+            candidate_port,
+        )
         if (
             app.get("terminal_state") == "port_conflict"
             or ownership == PortOwnership.FOREIGN
@@ -2148,6 +2314,91 @@ class AppManager:
             "message": reason,
         }
 
+    @staticmethod
+    def _writer_tree_verifies_port(tree: Any, port: int) -> bool:
+        """True when every listener on port is identity-bound to the writer tree.
+
+        Activity guardians call setsid() in a sentinel, so the real app leaves
+        the launcher process group. Uncontained ownership therefore reports
+        DETACHED; this proof upgrades only when seedable tree identities match
+        the live listener PIDs exactly.
+        """
+        from .container_activity import process_start_identity
+
+        inodes = _listening_socket_inodes(port)
+        if not inodes:
+            return False
+        processes = _process_table(inodes)
+        if processes is None:
+            return False
+        owners_by_inode: dict[str, set[int]] = {inode: set() for inode in inodes}
+        for pid, (_ppid, _pgrp, sockets) in processes.items():
+            for inode in sockets:
+                if inode in owners_by_inode:
+                    owners_by_inode[inode].add(int(pid))
+        if any(not pids for pids in owners_by_inode.values()):
+            return False
+        owner_pids = {pid for pids in owners_by_inode.values() for pid in pids}
+        try:
+            tree.seed_live_members()
+        except Exception:
+            return False
+        known = getattr(tree, "known_identities", None) or {}
+        if not known:
+            return False
+        for pid in owner_pids:
+            start = process_start_identity(int(pid))
+            if not start or known.get(int(pid)) != start:
+                return False
+        return True
+
+    @staticmethod
+    def _has_guarded_writer_tree(app: dict[str, Any]) -> bool:
+        """True when the app has a durable activity-guardian writer binding."""
+        tree = app.get("writer_tree")
+        if tree is not None:
+            if getattr(tree, "guardian_record", None) is not None:
+                return True
+            if getattr(tree, "job_name", None):
+                return True
+        lease = app.get("effect_lease")
+        if lease is None:
+            return False
+        cursor: Any = lease
+        seen: set[int] = set()
+        while cursor is not None and id(cursor) not in seen:
+            seen.add(id(cursor))
+            if getattr(cursor, "_guardian_record", None) is not None:
+                return True
+            cursor = getattr(cursor, "_activity", None) or getattr(
+                cursor, "_inner", None
+            )
+        return False
+
+    def _upgrade_ownership_with_writer_tree(
+        self,
+        app: dict[str, Any],
+        ownership: PortOwnership,
+        port: int,
+    ) -> PortOwnership:
+        if ownership != PortOwnership.DETACHED:
+            return ownership
+        # Never upgrade from a launcher-only process-tree walk. Unguarded
+        # setsid children must stay DETACHED / ownership_unknown.
+        if not self._has_guarded_writer_tree(app):
+            return ownership
+        tree = app.get("writer_tree")
+        if tree is None:
+            try:
+                tree = self._writer_tree(app)
+            except Exception:
+                return ownership
+        if tree is None:
+            return ownership
+        if self._writer_tree_verifies_port(tree, int(port)):
+            return PortOwnership.VERIFIED
+        return ownership
+
     def status(self, slug: str) -> dict[str, Any]:
         app = self._apps.get(slug)
         if not app:
@@ -2156,6 +2407,26 @@ class AppManager:
                 "running": False,
                 "ready": False,
             }
+        if app.get("proc") is not None and app["proc"].returncode is not None:
+            tree = self._writer_tree(app)
+            # Launcher exit is not writer-tree exit. Poll path stays non-blocking:
+            # report fail-closed live-tree state and leave termination to stop.
+            if tree.exited() is not True:
+                eff_port = app.get("detected_port") or app["port"]
+                return {
+                    "state": "running",
+                    "running": True,
+                    "ready": False,
+                    "requested_port": app["port"],
+                    "port": eff_port,
+                    "command": app["command"],
+                    "log": app.get("log", [])[-40:],
+                    "writer_tree_live": True,
+                    "message": (
+                        "The launch leader exited while writer processes may "
+                        "still be alive. Stop proves the identity-bound tree."
+                    ),
+                }
         if app.get("output_error"):
             if app["proc"].returncode is not None and not app["proc"].scope_live:
                 result = self._exited_status(app)
@@ -2202,6 +2473,12 @@ class AppManager:
             if port_open
             else PortOwnership.NO_LISTENER
         )
+        if port_open:
+            ownership = self._upgrade_ownership_with_writer_tree(
+                app,
+                ownership,
+                candidate_port,
+            )
         if ownership == PortOwnership.FOREIGN:
             app["terminal_state"] = "port_conflict"
             self._signal_managed_process(app)
@@ -2269,6 +2546,11 @@ class AppManager:
             port,
             client_port,
             authority=app["authority"],
+        )
+        ownership = self._upgrade_ownership_with_writer_tree(
+            app,
+            ownership,
+            int(port),
         )
         if ownership == PortOwnership.FOREIGN:
             app["terminal_state"] = "port_conflict"

@@ -327,6 +327,43 @@ export function shellModeFromSearch(search: string): ShellMode {
   return new URLSearchParams(search).get('mode') === 'delegate' ? 'delegate' : 'work'
 }
 
+export function opsMigrationSlugFromHash(hash: string): string | null {
+  const match = hash.match(/^#settings\/projects\/([^/]+)\/ops-migration$/)
+  if (!match) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return null
+  }
+}
+
+export function projectForShellScope(args: {
+  projects: Project[]
+  migrationSlug?: string | null
+  sessionProjectSlug?: string | null
+  currentProject?: Project | null
+}): Project | null {
+  if (args.migrationSlug) {
+    const routed = args.projects.find(project => project.slug === args.migrationSlug)
+    if (routed) return routed
+  }
+  if (args.sessionProjectSlug) {
+    const fromSession = args.projects.find(
+      project => project.slug === args.sessionProjectSlug,
+    )
+    if (fromSession) return fromSession
+  }
+  if (
+    args.currentProject
+    && args.projects.some(project => project.slug === args.currentProject?.slug)
+  ) {
+    return args.currentProject
+  }
+  return args.projects.find(project => project.visibility === 'private')
+    || args.projects[0]
+    || null
+}
+
 /** Delegate owns only its global desk and its cross-project review destinations. */
 export function isDelegateDestination(view: View): boolean {
   return view === 'master' || view === 'activity' || view === 'artifacts' || view === 'task'
@@ -415,6 +452,25 @@ export function App() {
   }, [view])
   // Settings section deep-link (e.g. Projects manage from account menu / home recovery).
   const [settingsSection, setSettingsSection] = React.useState<SettingsSectionKey>('account')
+  const [opsMigrationSlug, setOpsMigrationSlug] = React.useState<string | null>(
+    () => opsMigrationSlugFromHash(window.location.hash),
+  )
+  const [projects, setProjects] = React.useState<Project[]>([])
+  const [activeProject, setActiveProjectState] = React.useState<Project | null>(null)
+  const activeProjectRef = React.useRef<Project | null>(null)
+  const setActiveProject = React.useCallback((update: Project | null | ((prev: Project | null) => Project | null)) => {
+    if (typeof update === 'function') {
+      setActiveProjectState(prev => {
+        const next = update(prev)
+        activeProjectRef.current = next
+        return next
+      })
+      return
+    }
+    activeProjectRef.current = update
+    setActiveProjectState(update)
+  }, [])
+  const [projectFallbackNotice, setProjectFallbackNotice] = React.useState('')
   const [features, setFeatures] = React.useState<AppFeatures>(DEFAULT_FEATURES)
   React.useEffect(() => { if (view === 'settings') void updates.refresh() }, [view, updates.refresh])
   const [activeTaskId, setActiveTaskId] = React.useState<number | null>(null)
@@ -484,6 +540,14 @@ export function App() {
     setPendingArtifact(null)
     setPendingMasterMessageId(null)
     setReturnToChat(null)
+    setOpsMigrationSlug(null)
+    if (window.location.hash.startsWith('#settings/projects/')) {
+      window.history.replaceState(
+        window.history.state,
+        '',
+        `${window.location.pathname}${window.location.search}`,
+      )
+    }
   }, [])
   const clearDeepStack = React.useCallback(() => {
     setNavStack([])
@@ -603,6 +667,32 @@ export function App() {
     }))
     setView('design')
   }, [])
+  const openOpsMigration = React.useCallback((slug: string) => {
+    const project = projects.find(item => item.slug === slug)
+    if (project) setActiveProject(project)
+    setSettingsSection('projects')
+    setOpsMigrationSlug(slug)
+    setView('settings')
+    const hash = `#settings/projects/${encodeURIComponent(slug)}/ops-migration`
+    if (window.location.hash !== hash) {
+      window.history.pushState(
+        { ...window.history.state, proximaView: view },
+        '',
+        hash,
+      )
+    }
+  }, [projects, setActiveProject, view])
+  const closeOpsMigration = React.useCallback(() => {
+    setOpsMigrationSlug(null)
+    setSettingsSection('projects')
+    if (window.location.hash.startsWith('#settings/projects/')) {
+      window.history.replaceState(
+        { ...window.history.state, proximaView: 'settings' },
+        '',
+        `${window.location.pathname}${window.location.search}`,
+      )
+    }
+  }, [])
   const viewEnabled = React.useCallback((v: View) => isFeatureViewEnabled(v, features), [features])
   // When GraphScreen reports stage=editor from an in-surface open (library → plan),
   // ensure chrome Back + project lock know about the deep frame.
@@ -713,9 +803,15 @@ export function App() {
     changeShellMode('delegate')
     setPendingMasterMessageId(plan.pendingMasterMessageId)
   }, [changeShellMode, features.masterOrchestrator])
-  const openAttentionTarget = React.useCallback((target: { view?: string; job_id?: number; engine?: string; origin_message_id?: number }) => {
+  const openAttentionTarget = React.useCallback((target: { view?: string; job_id?: number; engine?: string; origin_message_id?: number; container_slug?: unknown }) => {
     if (target.job_id != null) {
       openJobByEngine(target.job_id, target.engine, view)
+      return
+    }
+    if (typeof target.container_slug === 'string' && target.container_slug) {
+      clearPendingNavigation()
+      clearDeepStack()
+      openOpsMigration(target.container_slug)
       return
     }
     if (target.view === 'master' || target.view === 'alpha') {
@@ -724,7 +820,7 @@ export function App() {
     }
     if (target.view === 'settings') { clearPendingNavigation(); clearDeepStack(); setView('settings'); return }
     if (target.view === 'activity') { clearPendingNavigation(); clearDeepStack(); setView('activity') }
-  }, [clearPendingNavigation, clearDeepStack, openJobByEngine, openMasterConversation, view])
+  }, [clearPendingNavigation, clearDeepStack, openJobByEngine, openMasterConversation, openOpsMigration, view])
   const goView = (v: View) => {
     if (v === 'master') {
       changeShellMode('delegate')
@@ -826,26 +922,10 @@ export function App() {
   }, [])
   const sessionEnabled = React.useCallback((session: ChatSession) => isFeatureSessionEnabled(session, features), [features])
   const [profiles, setProfiles] = React.useState<Profile[]>([])
-  const [projects, setProjects] = React.useState<Project[]>([])
   const [sessions, setSessions] = React.useState<ChatSession[]>([])
   const [runners, setRunners] = React.useState<Runner[]>([])
   const [runnerReadiness, setRunnerReadiness] = React.useState<RunnerReadinessMap>({})
   const [activeProfile, setActiveProfile] = React.useState<Profile | null>(null)
-  const [activeProject, setActiveProjectState] = React.useState<Project | null>(null)
-  const activeProjectRef = React.useRef<Project | null>(null)
-  const setActiveProject = React.useCallback((update: Project | null | ((prev: Project | null) => Project | null)) => {
-    if (typeof update === 'function') {
-      setActiveProjectState(prev => {
-        const next = update(prev)
-        activeProjectRef.current = next
-        return next
-      })
-      return
-    }
-    activeProjectRef.current = update
-    setActiveProjectState(update)
-  }, [])
-  const [projectFallbackNotice, setProjectFallbackNotice] = React.useState('')
   const [activeSession, setActiveSession] = React.useState<ChatSession | null>(null)
   const activeSessionRef = React.useRef<ChatSession | null>(null)
   activeSessionRef.current = activeSession
@@ -955,7 +1035,17 @@ export function App() {
         setView('artifacts')
         return
       }
+      const migrationSlug = opsMigrationSlugFromHash(window.location.hash)
+      if (migrationSlug) {
+        setOpsMigrationSlug(migrationSlug)
+        setSettingsSection('projects')
+        const project = projects.find(item => item.slug === migrationSlug)
+        if (project) setActiveProject(project)
+        setView('settings')
+        return
+      }
       setArchiveRecord(null)
+      setOpsMigrationSlug(null)
       setNavStack(stack => stack.filter(e => e.kind !== 'task' && e.kind !== 'archive-record'))
       setActiveTaskId(null)
       if (nextMode === 'delegate') {
@@ -1002,7 +1092,8 @@ export function App() {
       workRouteBootstrapped.current = true
       if (
         window.location.hash.startsWith('#task/') ||
-        window.location.hash.startsWith('#archive/')
+        window.location.hash.startsWith('#archive/') ||
+        opsMigrationSlugFromHash(window.location.hash) != null
       ) {
         syncWorkRoute(undefined, true)
       }
@@ -1023,6 +1114,7 @@ export function App() {
     projects,
     sessionEnabled,
     sessions,
+    setActiveProject,
     token,
     user?.id,
     viewEnabled,
@@ -1167,9 +1259,15 @@ export function App() {
       sessionEnabled,
     )
     setActiveSession(nextSession)
-    setActiveProject(nextProject)
+    // Ops migration hash locks shell scope onto that Project; otherwise keep the
+    // Work URL / preference resolution above.
+    setActiveProject(projectForShellScope({
+      projects: projectBody.projects,
+      migrationSlug: opsMigrationSlug,
+      currentProject: nextProject,
+    }))
     setWorkCatalogReady(true)
-  }, [token, sessionEnabled, user?.id, setActiveProject])
+  }, [opsMigrationSlug, token, sessionEnabled, user?.id, setActiveProject])
 
   React.useEffect(() => {
     if (!user || !activeProject) return
@@ -1182,12 +1280,15 @@ export function App() {
   // while an older chat session remains selected in memory (Chat header already
   // prefers the session project over a desynced shell pick).
   React.useEffect(() => {
-    if (!activeSession?.project_slug) return
     setActiveProject(current => {
-      if (current?.slug === activeSession.project_slug) return current
-      return projects.find(p => p.slug === activeSession.project_slug) || current
+      return projectForShellScope({
+        projects,
+        migrationSlug: opsMigrationSlug,
+        sessionProjectSlug: activeSession?.project_slug,
+        currentProject: current,
+      })
     })
-  }, [activeSession?.id, activeSession?.project_slug, projects])
+  }, [activeSession?.id, activeSession?.project_slug, opsMigrationSlug, projects])
 
   // On first load, treat existing sessions as already seen (only NEW activity dots).
   React.useEffect(() => {
@@ -1433,7 +1534,7 @@ export function App() {
     designCanvasOpen,
     settingsStack: false,
   }
-  const projectLocked = projectSwitcherLocked(deepFlags)
+  const projectLocked = projectSwitcherLocked(deepFlags) || opsMigrationSlug != null
   const chromeBackEnabled = canGoBack(navStack)
   const chromeBackTitle = chromeBackLabel(navStack)
 
@@ -1635,7 +1736,7 @@ export function App() {
       )}
       {view === 'profiles' && <React.Suspense fallback={<ViewFallback label="Loading agents..." />}><ProfilesScreen token={token} profiles={profiles} onActiveProfile={setActiveProfile} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading..." />}><RunnersScreen runners={runners} runnerReadiness={runnerReadiness} token={token} onRefresh={refreshAll} /></React.Suspense>}
-      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} runners={runners} runnerReadiness={runnerReadiness} features={features} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} initialSection={settingsSection} /></React.Suspense>}
+      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} opsMigrationSlug={opsMigrationSlug} onActiveProject={setActiveProject} onOpenOpsMigration={project => openOpsMigration(project.slug)} onCloseOpsMigration={closeOpsMigration} runners={runners} runnerReadiness={runnerReadiness} features={features} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} initialSection={settingsSection} /></React.Suspense>}
       {updates.modalOpen && updates.status?.latest && <UpdateModal status={updates.status} onApply={updates.apply} onClose={updates.closeModal} />}
       {updates.applying && <UpdateOverlay applying={updates.applying} onDismiss={updates.dismissApplying} />}
       <DialogHost />

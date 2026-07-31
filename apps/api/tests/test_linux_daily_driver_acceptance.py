@@ -16,16 +16,18 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _app(tmp_path: Path):
-    return create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "workspace"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-        "feature_master_orchestrator": True,
-        "feature_safe_self_update": False,
-        "preview_bind_host": "127.0.0.1",
-        "update_check": False,
-    })
+    return create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+            "feature_master_orchestrator": True,
+            "feature_safe_self_update": False,
+            "preview_bind_host": "127.0.0.1",
+            "update_check": False,
+        }
+    )
 
 
 def _write_executable(path: Path, text: str) -> None:
@@ -53,8 +55,8 @@ def test_service_lifecycle_targets_only_the_isolated_linux_user_unit(
         fake_bin / "systemctl",
         (
             "#!/bin/sh\n"
-            "if [ \"$1\" = \"--user\" ] && [ \"$2\" = \"cat\" ]; then exit 0; fi\n"
-            "printf '%s\\n' \"$*\" >> \"$CALL_LOG\"\n"
+            'if [ "$1" = "--user" ] && [ "$2" = "cat" ]; then exit 0; fi\n'
+            'printf \'%s\\n\' "$*" >> "$CALL_LOG"\n'
         ),
     )
 
@@ -97,7 +99,7 @@ def test_service_lifecycle_refuses_unknown_platform_before_manager_call(
     _write_executable(fake_bin / "uname", "#!/bin/sh\nprintf 'FreeBSD\\n'\n")
     _write_executable(
         fake_bin / "systemctl",
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CALL_LOG\"\n",
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$CALL_LOG"\n',
     )
 
     for action in ("status", "init-config", "build", "serve"):
@@ -117,7 +119,10 @@ def test_service_lifecycle_refuses_unknown_platform_before_manager_call(
 
         assert result.returncode == 1
         assert "unsupported host platform" in result.stderr
-        assert "No service, config, database, or runtime data was changed." in result.stderr
+        assert (
+            "No service, config, database, or runtime data was changed."
+            in result.stderr
+        )
     assert not calls.exists()
     assert list(home.iterdir()) == []
 
@@ -163,7 +168,9 @@ def test_linux_doctor_reports_supported_platform_in_isolated_runtime(
     assert "ok: data dirs writable" in result.stdout
     assert (data / "workspace").is_dir()
     assert (data / "profiles").is_dir()
-    assert 'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"' in config.read_text(encoding="utf-8")
+    assert 'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"' in config.read_text(
+        encoding="utf-8"
+    )
     assert 'PROXIMA_FEATURE_SAFE_SELF_UPDATE="0"' in config.read_text(encoding="utf-8")
 
 
@@ -179,7 +186,9 @@ def test_pty_terminal_round_trip_matches_owner_shell(tmp_path: Path) -> None:
                 break
         assert b"proxima-pty-ready" in output
     finally:
-        assert terminal.close() is True
+        closed = terminal.close()
+        assert closed.session_stopped is True
+        assert closed.child_reaped is True
 
 
 def test_online_backup_restores_a_verified_isolated_database(tmp_path: Path) -> None:
@@ -213,7 +222,10 @@ def test_online_backup_restores_a_verified_isolated_database(tmp_path: Path) -> 
     shutil.copy2(snapshot, restored)
     with sqlite3.connect(restored) as conn:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        assert conn.execute("SELECT value FROM acceptance").fetchone()[0] == "before-backup"
+        assert (
+            conn.execute("SELECT value FROM acceptance").fetchone()[0]
+            == "before-backup"
+        )
 
 
 def test_local_and_tailnet_reverse_proxy_entry_share_the_authenticated_app(
@@ -272,7 +284,9 @@ def test_upgrade_readiness_is_fail_closed_and_preserves_fixture_flags(
 
     assert result.returncode == 1
     assert "safe self-update activation is unavailable" in result.stderr
-    assert "No checkout, runtime data, service, or database was changed." in result.stderr
+    assert (
+        "No checkout, runtime data, service, or database was changed." in result.stderr
+    )
     assert config.read_text(encoding="utf-8") == expected
     assert not service_calls.exists()
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api } from './client'
+import { api, ApiError } from './client'
 
-describe('api error fields', () => {
+describe('api client error rendering', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
@@ -35,5 +35,41 @@ describe('api error fields', () => {
         field: 'name',
         message: expect.stringContaining('at most 120 characters'),
       })
+  })
+
+  it('prefers structured detail.message over raw JSON blobs', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      text: async () => JSON.stringify({
+        detail: {
+          message: 'Project processes are still active; stop them before retrying.',
+          active_processes: 2,
+          unresolved_processes: 1,
+          migration: { phase: 'attention' },
+        },
+      }),
+    }))
+
+    await expect(api('/api/projects/demo/ops-migration/retry', 'token', { method: 'POST' }))
+      .rejects
+      .toMatchObject({
+        status: 409,
+        message: expect.stringContaining(
+          'Project processes are still active; stop them before retrying.',
+        ),
+      })
+
+    try {
+      await api('/api/projects/demo/ops-migration/retry', 'token', { method: 'POST' })
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApiError)
+      const message = (error as ApiError).message
+      expect(message).toContain('Active processes: 2.')
+      expect(message).toContain('Unverified processes: 1.')
+      expect(message).not.toContain('"migration"')
+      expect(message).not.toContain('{')
+    }
   })
 })

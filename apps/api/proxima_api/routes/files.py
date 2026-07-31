@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
@@ -47,6 +50,95 @@ from ..target_preview import (
 logger = logging.getLogger("proxima.api")
 
 
+class _LeaseGroup:
+    """Ingress admission plus optional writer-activity lease for one effect."""
+
+    def __init__(self, *ingress_leases: Any, activity: Any | None = None) -> None:
+        self._ingress = list(ingress_leases)
+        self._activity = activity
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        activity = self._activity
+        self._activity = None
+        ingress = list(self._ingress)
+        self._ingress.clear()
+        if activity is not None:
+            activity.release()
+        for lease in reversed(ingress):
+            lease.release()
+
+    def finish(
+        self,
+        *,
+        process_exited: bool,
+        pid: int | None = None,
+        start_identity: str | None = None,
+        tree: Any | None = None,
+        retain_ingress: Any | None = None,
+    ) -> None:
+        if self._released:
+            return
+        self._released = True
+        activity = self._activity
+        self._activity = None
+        ingress = list(self._ingress)
+        self._ingress.clear()
+        # Launcher exit alone is not writer-tree exit. When a tree handle is
+        # present, only release once it proves clear; otherwise retain.
+        tree_clear = True
+        if tree is not None:
+            try:
+                tree_clear = tree.exited() is True
+            except Exception:
+                tree_clear = False
+        if process_exited and tree_clear:
+            if activity is not None:
+                activity.release()
+            for lease in reversed(ingress):
+                lease.release()
+            return
+        if activity is not None:
+            container_registry.retain_activity_lease(
+                activity,
+                pid=pid,
+                start_identity=start_identity,
+                tree=tree,
+            )
+        for lease in ingress:
+            if retain_ingress is not None:
+                retain_ingress(lease)
+            else:
+                lease.release()
+
+    def guard_process(
+        self,
+        command: list[str],
+    ) -> tuple[list[str], dict[str, Any]]:
+        if self._activity is not None:
+            guard = getattr(self._activity, "guard_process", None)
+            if guard is not None:
+                return guard(command)
+        for lease in self._ingress:
+            guard = getattr(lease, "guard_process", None)
+            if guard is not None:
+                return guard(command)
+        return command, {}
+
+    def mark_process_started(self) -> None:
+        if self._activity is not None:
+            mark = getattr(self._activity, "mark_process_started", None)
+            if mark is not None:
+                mark()
+        for lease in self._ingress:
+            mark = getattr(lease, "mark_process_started", None)
+            if mark is not None:
+                mark()
+
+
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
@@ -57,6 +149,12 @@ def register(app, deps):
     _project_root = deps["_project_root"]
     _ops_root = deps["_ops_root"]
     _virtual_root = deps["_virtual_root"]
+
+    @contextmanager
+    def _project_mutation(slug: str, user: dict[str, Any]):
+        project = visible_project(slug, user)
+        with container_registry.container_mutation_lock(db(), project):
+            yield project
 
     def _owner_session(request: Request, *, bearer_only: bool = False) -> str:
         authorization = request.headers.get("authorization", "")
@@ -114,6 +212,16 @@ def register(app, deps):
         ) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    def _file_root(
+        slug: str,
+        path: str,
+        user: dict[str, Any],
+        root_side: Literal["virtual", "container"],
+    ) -> Path:
+        if root_side == "container":
+            return _project_root(slug, user)
+        return _virtual_root(slug, path, user)
+
     def _audit_fs(user: dict[str, Any], action: str, slug: str, path: str) -> None:
         """Project-scoped path audit (file writes, app starts, tree ops)."""
         _audit(user, action, "project", slug, {"path": path})
@@ -136,9 +244,13 @@ def register(app, deps):
         slug: str,
         path: str = "",
         target: str = "",
+        root_side: Literal["virtual", "container"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
         try:
+            if root_side == "container":
+                root = _file_root(slug, path, user, root_side)
+                return {"path": path, "entries": fsapi.list_tree(root, path)}
             project = visible_project(slug, user)
             context = file_targets.target_context(db(), project)
             if path or target:
@@ -254,8 +366,17 @@ def register(app, deps):
         slug: str,
         path: str = "",
         target: str = "",
+        root_side: Literal["virtual", "container"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
+        if root_side == "container":
+            if not path:
+                raise HTTPException(status_code=400, detail="file path is required")
+            root = _file_root(slug, path, user, root_side)
+            try:
+                return {"path": path, "content": fsapi.read_file(root, path)}
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         resolved = _resolved_file(slug, user, path=path, target=target)
         if not resolved.locator.path:
             raise HTTPException(status_code=400, detail="file path is required")
@@ -277,33 +398,35 @@ def register(app, deps):
         payload: FileWriteRequest,
         path: str = "",
         target: str = "",
+        root_side: Literal["virtual"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
-        resolved = _resolved_file(slug, user, path=path, target=target)
-        if not resolved.locator.path:
-            raise HTTPException(status_code=400, detail="file path is required")
-        try:
-            fsapi.write_file(
-                resolved.root,
-                resolved.locator.path,
-                payload.content,
+        _ = root_side  # mutations stay on the virtual/FileTarget path only
+        with _project_mutation(slug, user) as project:
+            resolved = _resolved_file(
+                slug, user, path=path, target=target, project=project
             )
-        except fsapi.FsError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if (
-            resolved.locator.area.kind == "ops"
-            and resolved.locator.path == container_registry.CONTAINER_DOC
-        ):
-            container_registry.refresh_registry_projection(
-                db(),
-                visible_project(slug, user),
-            )
-        _audit_fs(user, "file.write", slug, resolved.locator.path)
-        return {
-            "ok": True,
-            "path": path or resolved.locator.path,
-            "target": resolved.locator.payload(),
-        }
+            if not resolved.locator.path:
+                raise HTTPException(status_code=400, detail="file path is required")
+            try:
+                fsapi.write_file(
+                    resolved.root,
+                    resolved.locator.path,
+                    payload.content,
+                )
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if (
+                resolved.locator.area.kind == "ops"
+                and resolved.locator.path == container_registry.CONTAINER_DOC
+            ):
+                container_registry.refresh_registry_projection(db(), project)
+            _audit_fs(user, "file.write", slug, resolved.locator.path)
+            return {
+                "ok": True,
+                "path": path or resolved.locator.path,
+                "target": resolved.locator.payload(),
+            }
 
     @app.post("/api/projects/{slug}/upload")
     async def project_upload(
@@ -314,52 +437,61 @@ def register(app, deps):
     ):
         name = Path(file.filename or "file").name or "file"
         folder = (dir or "uploads").strip("/") or "uploads"
-        root = _virtual_root(slug, folder, user)
-        try:
-            target = fsapi.resolve_in_project(root, f"{folder}/{name}")
-        except fsapi.FsError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=f"cannot create upload directory: {exc.strerror}",
-            ) from exc
-        # Stream from UploadFile's spool instead of copying the whole upload into
-        # RAM. Exclusive creation also makes same-name concurrent uploads de-dupe
-        # safely instead of racing between exists() and write_bytes().
-        stem, suffix, index = target.stem, target.suffix, 0
         max_bytes = int(cfg.get("max_upload_bytes") or 100 * 1024 * 1024)
-        while True:
-            candidate = (
-                target if index == 0 else target.parent / f"{stem}-{index}{suffix}"
-            )
-            try:
-                written = 0
-                with candidate.open("xb") as output:
-                    while chunk := await file.read(1024 * 1024):
-                        written += len(chunk)
-                        if written > max_bytes:
-                            raise HTTPException(
-                                status_code=413,
-                                detail=f"upload exceeds {max_bytes // (1024 * 1024)} MB limit",
-                            )
-                        output.write(chunk)
-                target = candidate
-                break
-            except FileExistsError:
-                index += 1
-            except HTTPException:
-                candidate.unlink(missing_ok=True)
-                raise
-            except OSError as exc:
-                candidate.unlink(missing_ok=True)
-                raise HTTPException(
-                    status_code=400, detail=f"cannot write upload: {exc.strerror}"
-                ) from exc
-        rel = f"{folder}/{target.name}"
-        _audit_fs(user, "file.upload", slug, rel)
+        written = 0
+        # Stage the full upload outside the project mutation lock so a slow client
+        # cannot hold Container writers while bytes are still arriving.
+        with tempfile.SpooledTemporaryFile(
+            max_size=min(max_bytes, 8 * 1024 * 1024),
+            mode="w+b",
+        ) as staged:
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"upload exceeds {max_bytes // (1024 * 1024)} MB limit",
+                    )
+                staged.write(chunk)
+            staged.seek(0)
+            with _project_mutation(slug, user):
+                root = _virtual_root(slug, folder, user)
+                try:
+                    target = fsapi.resolve_in_project(root, f"{folder}/{name}")
+                except fsapi.FsError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"cannot create upload directory: {exc.strerror}",
+                    ) from exc
+                # Exclusive creation de-dupes same-name concurrent uploads safely
+                # instead of racing between exists() and write_bytes().
+                stem, suffix, index = target.stem, target.suffix, 0
+                while True:
+                    candidate = (
+                        target
+                        if index == 0
+                        else target.parent / f"{stem}-{index}{suffix}"
+                    )
+                    try:
+                        with candidate.open("xb") as output:
+                            shutil.copyfileobj(staged, output, 1024 * 1024)
+                        target = candidate
+                        break
+                    except FileExistsError:
+                        index += 1
+                        staged.seek(0)
+                    except OSError as exc:
+                        candidate.unlink(missing_ok=True)
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"cannot write upload: {exc.strerror}",
+                        ) from exc
+                rel = f"{folder}/{target.name}"
+                _audit_fs(user, "file.upload", slug, rel)
         return {"path": rel, "name": target.name}
 
     # ── Image-generation provider settings ────────────────────────────────
@@ -716,80 +848,81 @@ def register(app, deps):
                 .fetchone()
             )
             if p:
-                try:
-                    context = file_targets.target_context(db(), p)
-                    if target:
-                        locator = file_targets.parse_locator(target)
-                    else:
-                        if not artifact_path:
+                with _project_mutation(p["slug"], user):
+                    try:
+                        context = file_targets.target_context(db(), p)
+                        if target:
+                            locator = file_targets.parse_locator(target)
+                        else:
+                            if not artifact_path:
+                                raise file_targets.FileTargetError(
+                                    "artifact path is required"
+                                )
+                            locator = file_targets.add_artifact_target(
+                                db(),
+                                p,
+                                {"path": artifact_path},
+                                context=context,
+                            )["target"]
+                        resolved = file_targets.resolve_locator(
+                            db(),
+                            p,
+                            locator,
+                            context=context,
+                        )
+                        ops_root = context.ops_root()
+                        if (
+                            resolved.path != ops_root
+                            and ops_root not in resolved.path.parents
+                        ):
+                            raise file_targets.FileTargetError(
+                                "session artifact is outside the Ops workspace"
+                            )
+                        stored_path = (
+                            ""
+                            if resolved.path == ops_root
+                            else resolved.path.relative_to(ops_root).as_posix()
+                        )
+                        if not stored_path:
                             raise file_targets.FileTargetError(
                                 "artifact path is required"
                             )
-                        locator = file_targets.add_artifact_target(
-                            db(),
-                            p,
-                            {"path": artifact_path},
-                            context=context,
-                        )["target"]
-                    resolved = file_targets.resolve_locator(
-                        db(),
-                        p,
-                        locator,
-                        context=context,
-                    )
-                    ops_root = context.ops_root()
-                    if (
-                        resolved.path != ops_root
-                        and ops_root not in resolved.path.parents
-                    ):
-                        raise file_targets.FileTargetError(
-                            "session artifact is outside the Ops workspace"
-                        )
-                    stored_path = (
-                        ""
-                        if resolved.path == ops_root
-                        else resolved.path.relative_to(ops_root).as_posix()
-                    )
-                    if not stored_path:
-                        raise file_targets.FileTargetError(
-                            "artifact path is required"
-                        )
-                    if artifact_path and artifact_path != stored_path:
-                        raise file_targets.FileTargetError(
-                            "artifact path does not match file target"
-                        )
-                    fsapi.delete(resolved.root, resolved.locator.path)
-                except fsapi.FsError:
-                    pass
-                except (
-                    container_registry.ContainerBoundaryError,
-                    file_targets.FileTargetError,
-                ) as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
-                _audit_fs(user, "artifact.delete", p["slug"], stored_path)
-        if not stored_path:
-            raise HTTPException(status_code=400, detail="artifact path is required")
-        target_payload = resolved.locator.payload() if resolved is not None else None
-
-        def retained(items: list[Any]) -> list[Any]:
-            kept: list[Any] = []
-            for item in items:
-                if not isinstance(item, dict):
-                    kept.append(item)
-                    continue
-                if item.get("path") == stored_path:
-                    continue
-                raw_target = item.get("target")
-                if raw_target and target_payload is not None:
-                    try:
-                        if file_targets.parse_locator(raw_target) == resolved.locator:
-                            continue
-                    except file_targets.FileTargetError:
+                        if artifact_path and artifact_path != stored_path:
+                            raise file_targets.FileTargetError(
+                                "artifact path does not match file target"
+                            )
+                        fsapi.delete(resolved.root, resolved.locator.path)
+                    except fsapi.FsError:
                         pass
-                kept.append(item)
-            return kept
+                    except (
+                        container_registry.ContainerBoundaryError,
+                        file_targets.FileTargetError,
+                    ) as exc:
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+                    _audit_fs(user, "artifact.delete", p["slug"], stored_path)
+            if not stored_path:
+                raise HTTPException(status_code=400, detail="artifact path is required")
+            target_payload = resolved.locator.payload() if resolved is not None else None
 
-        update_produced_artifacts(db(), session_id, retained)
+            def retained(items: list[Any]) -> list[Any]:
+                kept: list[Any] = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        kept.append(item)
+                        continue
+                    if item.get("path") == stored_path:
+                        continue
+                    raw_target = item.get("target")
+                    if raw_target and target_payload is not None:
+                        try:
+                            if file_targets.parse_locator(raw_target) == resolved.locator:
+                                continue
+                        except file_targets.FileTargetError:
+                            pass
+                    kept.append(item)
+                return kept
+
+            update_produced_artifacts(db(), session_id, retained)
         for m in (
             db()
             .execute(
@@ -934,16 +1067,34 @@ def register(app, deps):
         payload: AppStartRequest,
         user: dict[str, Any] = Depends(current_user),
     ):
-        root = _project_root(slug, user)
-        cwd = root
-        if payload.dir:
+        project = visible_project(slug, user)
+        with container_registry.container_mutation_lock(db(), project):
+            activity_lease = container_registry.acquire_container_activity_lease(
+                db(),
+                project,
+            )
             try:
-                cwd = fsapi.resolve_in_project(root, payload.dir)
-            except fsapi.FsError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            if not cwd.is_dir():
-                raise HTTPException(status_code=400, detail="folder not found")
-        effect_lease = maintenance.background_lease()
+                root = _project_root(slug, user)
+                cwd = root
+                if payload.dir:
+                    try:
+                        cwd = fsapi.resolve_in_project(root, payload.dir)
+                    except fsapi.FsError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+                    if not cwd.is_dir():
+                        raise HTTPException(status_code=400, detail="folder not found")
+            except BaseException:
+                activity_lease.release()
+                raise
+        try:
+            maintenance_lease = maintenance.background_lease()
+        except BaseException:
+            activity_lease.release()
+            raise
+        effect_lease = _LeaseGroup(
+            maintenance_lease,
+            activity=activity_lease,
+        )
         try:
             await app.state.app_manager.start(
                 slug,
@@ -953,6 +1104,7 @@ def register(app, deps):
                 effect_lease=effect_lease,
             )
         except apprunner.PortInUseError as exc:
+            effect_lease.release()
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -962,6 +1114,7 @@ def register(app, deps):
                 },
             ) from exc
         except apprunner.OutputBrokerUnavailable as exc:
+            effect_lease.release()
             raise HTTPException(
                 status_code=503,
                 detail={
@@ -970,6 +1123,9 @@ def register(app, deps):
                     "message": str(exc),
                 },
             ) from exc
+        except BaseException:
+            effect_lease.release()
+            raise
         # Preview relay: the app's own remote-reachable origin (best-effort; the
         # app still runs without it and localhost preview needs no relay).
         try:
@@ -1107,62 +1263,70 @@ def register(app, deps):
 
     @app.post("/api/projects/{slug}/fs/mkdir")
     def project_mkdir(
-        slug: str, payload: FsPathRequest, user: dict[str, Any] = Depends(current_user)
+        slug: str,
+        payload: FsPathRequest,
+        root_side: Literal["virtual"] = "virtual",
+        user: dict[str, Any] = Depends(current_user),
     ):
-        resolved = _resolved_file(
-            slug,
-            user,
-            path=payload.path,
-            target=payload.target or "",
-        )
-        try:
-            fsapi.mkdir(resolved.root, resolved.locator.path)
-        except fsapi.FsError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit_fs(user, "fs.mkdir", slug, resolved.locator.path)
-        return {
-            "ok": True,
-            "path": payload.path,
-            "target": resolved.locator.payload(),
-        }
+        _ = root_side  # mutations stay on the virtual/FileTarget path only
+        with _project_mutation(slug, user):
+            resolved = _resolved_file(
+                slug,
+                user,
+                path=payload.path,
+                target=payload.target or "",
+            )
+            try:
+                fsapi.mkdir(resolved.root, resolved.locator.path)
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            _audit_fs(user, "fs.mkdir", slug, resolved.locator.path)
+            return {
+                "ok": True,
+                "path": payload.path,
+                "target": resolved.locator.payload(),
+            }
 
     @app.post("/api/projects/{slug}/fs/rename")
     def project_rename(
         slug: str,
         payload: FsRenameRequest,
+        root_side: Literal["virtual"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
-        source = _resolved_file(
-            slug,
-            user,
-            path=payload.from_,
-            target=payload.from_target or "",
-        )
-        destination = _resolved_file(
-            slug,
-            user,
-            path=payload.to,
-            target=payload.to_target or "",
-        )
-        if source.root != destination.root:
-            raise HTTPException(
-                status_code=400,
-                detail="cannot move a file across Container Area boundaries",
+        _ = root_side  # mutations stay on the virtual/FileTarget path only
+        with _project_mutation(slug, user):
+            source = _resolved_file(
+                slug,
+                user,
+                path=payload.from_,
+                target=payload.from_target or "",
             )
-        try:
-            fsapi.rename(
-                source.root,
-                source.locator.path,
-                destination.locator.path,
+            destination = _resolved_file(
+                slug,
+                user,
+                path=payload.to,
+                target=payload.to_target or "",
             )
-        except fsapi.FsError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit_fs(
-            user,
-            "fs.rename",
-            slug,
-            f"{source.locator.path} -> {destination.locator.path}",
-        )
+            if source.root != destination.root:
+                raise HTTPException(
+                    status_code=400,
+                    detail="cannot move a file across Container Area boundaries",
+                )
+            try:
+                fsapi.rename(
+                    source.root,
+                    source.locator.path,
+                    destination.locator.path,
+                )
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            _audit_fs(
+                user,
+                "fs.rename",
+                slug,
+                f"{source.locator.path} -> {destination.locator.path}",
+            )
         return {"ok": True}
 
     @app.delete("/api/projects/{slug}/fs")
@@ -1170,19 +1334,22 @@ def register(app, deps):
         slug: str,
         path: str = "",
         target: str = "",
+        root_side: Literal["virtual"] = "virtual",
         user: dict[str, Any] = Depends(current_user),
     ):
-        resolved = _resolved_file(slug, user, path=path, target=target)
-        try:
-            fsapi.delete(resolved.root, resolved.locator.path)
-        except fsapi.FsError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit_fs(user, "fs.delete", slug, resolved.locator.path)
-        return {
-            "ok": True,
-            "path": path or resolved.locator.path,
-            "target": resolved.locator.payload(),
-        }
+        _ = root_side  # mutations stay on the virtual/FileTarget path only
+        with _project_mutation(slug, user):
+            resolved = _resolved_file(slug, user, path=path, target=target)
+            try:
+                fsapi.delete(resolved.root, resolved.locator.path)
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            _audit_fs(user, "fs.delete", slug, resolved.locator.path)
+            return {
+                "ok": True,
+                "path": path or resolved.locator.path,
+                "target": resolved.locator.payload(),
+            }
 
     @app.get("/api/projects/{slug}/raw")
     def project_raw(

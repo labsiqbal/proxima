@@ -12,6 +12,7 @@ leaves an `'excluded'` tombstone so re-detection cannot resurrect it.
 
 Root resolution and boundary validation live in ``container_registry.py``.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -19,6 +20,7 @@ from pathlib import Path
 
 from .container_registry import (
     OPS_RELPATH,
+    container_mutation_lock,
     create_physical_ops_root,
     exclude_ops_from_root_repo,
     validated_area_roots,
@@ -26,7 +28,21 @@ from .container_registry import (
 
 # Mirrors the detect_apps scan in routes/files.py: bounded depth, skip heavy
 # and tooling dirs, never follow hidden folders.
-SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "dist", "build", ".next", "__pycache__", ".cache", "target", ".hermes", ".claude", OPS_RELPATH}
+SKIP_DIRS = {
+    "node_modules",
+    ".git",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    "__pycache__",
+    ".cache",
+    "target",
+    ".hermes",
+    ".claude",
+    OPS_RELPATH,
+}
 MAX_DEPTH = 2  # scan the root + two subfolder levels
 MAX_AREAS = 50
 
@@ -55,7 +71,11 @@ def detect_code_areas(root: Path) -> list[str]:
             return
         for c in children:
             try:
-                if c.is_dir() and c.name not in SKIP_DIRS and not c.name.startswith("."):
+                if (
+                    c.is_dir()
+                    and c.name not in SKIP_DIRS
+                    and not c.name.startswith(".")
+                ):
                     scan(c, depth + 1)
             except OSError:
                 pass
@@ -76,6 +96,16 @@ def ensure_ops_area(
     migrations may explicitly request ``.`` so the resumable filesystem
     migration can move known content after the schema transaction commits.
     """
+    with container_mutation_lock(conn, project_id):
+        _ensure_ops_area_locked(conn, project_id, rel_path=rel_path)
+
+
+def _ensure_ops_area_locked(
+    conn: sqlite3.Connection,
+    project_id: int,
+    *,
+    rel_path: str,
+) -> None:
     existing = conn.execute(
         "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops'",
         (project_id,),
@@ -116,6 +146,22 @@ def sync_code_areas(
     repo marker is gone has nothing left to block and is garbage-collected.
     A missing/unreadable root simply detects nothing - valid (zero code areas).
     """
+    with container_mutation_lock(conn, project_id):
+        return _sync_code_areas_locked(
+            conn,
+            project_id,
+            root,
+            validate=validate,
+        )
+
+
+def _sync_code_areas_locked(
+    conn: sqlite3.Connection,
+    project_id: int,
+    root: str | Path,
+    *,
+    validate: bool,
+) -> dict:
     root = Path(root)
     detected = set(detect_code_areas(root)) if root.is_dir() else set()
     if "." in detected:
@@ -159,15 +205,22 @@ def areas_payload(conn: sqlite3.Connection, project_id: int) -> dict:
     ).fetchall()
     code = [
         {
-            "id": r["id"], "rel_path": r["rel_path"], "source": r["source"],
+            "id": r["id"],
+            "rel_path": r["rel_path"],
+            "source": r["source"],
             "push_on_merge": bool(r["push_on_merge"]),
             # The URL pinned at opt-in (audit F3) - what a push will insist on.
             "push_remote_url": r["push_remote_url"],
         }
-        for r in rows if r["kind"] == "code"
+        for r in rows
+        if r["kind"] == "code"
     ]
     ops = next(
-        ({"id": r["id"], "rel_path": r["rel_path"]} for r in rows if r["kind"] == "ops"),
+        (
+            {"id": r["id"], "rel_path": r["rel_path"]}
+            for r in rows
+            if r["kind"] == "ops"
+        ),
         None,
     )
     return {"code_areas": code, "ops_area": ops}

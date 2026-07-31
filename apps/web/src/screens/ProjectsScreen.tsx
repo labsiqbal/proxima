@@ -2,6 +2,7 @@ import React from 'react'
 import { createProject, renameProject, deleteProject } from '../api/projects'
 import { ContainerSettingsModal } from '../components/projects/ContainerSettings'
 import { FolderLinker } from '../components/projects/FolderLinker'
+import { OpsMigrationDetail } from '../components/projects/OpsMigrationDetail'
 import { confirmDialog, promptDialog } from '../components/ui/Dialog'
 import type { Project } from '../types'
 
@@ -14,11 +15,14 @@ const REMOVE_EXPLANATION =
   'A linked folder is only unlinked — your real files stay. A project Proxima created is '
   + 'deleted from disk. Either way its chats and tasks go with it.'
 
-export function ProjectsScreen({ token, projects, activeProject, onActiveProject, onRefresh }: {
+export function ProjectsScreen({ token, projects, activeProject, opsMigrationSlug, onActiveProject, onOpenOpsMigration, onCloseOpsMigration, onRefresh }: {
   token: string
   projects: Project[]
   activeProject: Project | null
+  opsMigrationSlug?: string | null
   onActiveProject: (p: Project) => void
+  onOpenOpsMigration?: (project: Project) => void
+  onCloseOpsMigration?: () => void
   onRefresh: () => Promise<void>
 }) {
   const [query, setQuery] = React.useState('')
@@ -89,6 +93,26 @@ export function ProjectsScreen({ token, projects, activeProject, onActiveProject
 
   const filtered = projects.filter(project =>
     `${project.name} ${project.slug}`.toLowerCase().includes(query.trim().toLowerCase()))
+  const opsMigrationProject = opsMigrationSlug
+    ? projects.find(project => project.slug === opsMigrationSlug)
+    : null
+
+  if (opsMigrationSlug) {
+    return opsMigrationProject
+      ? <OpsMigrationDetail
+          token={token}
+          project={opsMigrationProject}
+          onBack={() => onCloseOpsMigration?.()}
+          onChanged={onRefresh}
+        />
+      : <section className="ops-migration-detail" aria-labelledby="ops-migration-missing-title">
+          <button type="button" className="ghost-button" onClick={() => onCloseOpsMigration?.()}>Back to projects</button>
+          <div className="placeholder-view"><div className="assistant-bubble compact">
+            <h2 id="ops-migration-missing-title">Project not found</h2>
+            <p className="muted">The Ops migration link points to <code>{opsMigrationSlug}</code>, which is not registered for this owner.</p>
+          </div></div>
+        </section>
+  }
 
   return <section className="tasks-view projects-view">
     <div className="tasks-head">
@@ -150,6 +174,14 @@ export function ProjectsScreen({ token, projects, activeProject, onActiveProject
                 onClick={() => setSettingsFor(project)}
               >
                 Code areas
+              </button>
+              <button
+                className="ghost-button"
+                disabled={!!busy}
+                aria-label={`Ops migration for ${project.name}`}
+                onClick={() => onOpenOpsMigration?.(project)}
+              >
+                Ops migration
               </button>
             </div>
           </div>

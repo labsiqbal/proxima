@@ -5,12 +5,14 @@ Design Studio's own surface (gated by PROXIMA_FEATURE_DESIGN_STUDIO). They reach
 the shared filesystem + provider settings, but live in their own module so the
 feature can be reasoned about (and eventually toggled) as a unit.
 """
+
 from __future__ import annotations
 
 import json
 import mimetypes
 import secrets
 import time
+from contextlib import contextmanager
 from typing import Any
 
 from fastapi import Depends, HTTPException
@@ -36,6 +38,12 @@ def register(app, deps):
     profile_for_user = deps["profile_for_user"]
     visible_project = deps["visible_project"]
 
+    @contextmanager
+    def _project_mutation(slug: str, user: dict[str, Any]):
+        project = visible_project(slug, user)
+        with container_registry.container_mutation_lock(db(), project):
+            yield project
+
     def _audit_fs(user: dict[str, Any], action: str, slug: str, path: str) -> None:
         db().execute(
             "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, 'project', ?, ?)",
@@ -50,7 +58,11 @@ def register(app, deps):
         return {"items": moodboard.read_items(root)}
 
     @app.post("/api/projects/{slug}/design/moodboard")
-    def add_moodboard_item(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
+    def add_moodboard_item(
+        slug: str,
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Add a URL preview or an already-uploaded screenshot to the Moodboard.
 
         URL preview fetches are best-effort. A reachable page without usable OG
@@ -58,17 +70,19 @@ def register(app, deps):
         """
         features.require(cfg, features.DESIGN_STUDIO)
         data = payload or {}
-        root = _ops_root(slug, user)
         raw_url = str(data.get("url") or "").strip()
         image_path = str(data.get("imagePath") or "").strip()
         if not raw_url and not image_path:
-            raise HTTPException(status_code=400, detail="Give a URL or an uploaded screenshot.")
+            raise HTTPException(
+                status_code=400, detail="Give a URL or an uploaded screenshot."
+            )
         item_id = f"mb-{int(time.time() * 1000)}-{secrets.token_hex(3)}"
         warning = ""
         title = str(data.get("title") or "").strip()[:240]
         site_name = str(data.get("siteName") or "").strip()[:120]
         favicon_url = ""
         url = ""
+        preview_image: tuple[bytes | None, str] | None = None
         if raw_url:
             try:
                 preview = moodboard.fetch_link_preview(raw_url)
@@ -79,19 +93,19 @@ def register(app, deps):
             site_name = site_name or preview["siteName"]
             favicon_url = preview["faviconUrl"]
             warning = preview["warning"]
-            image_path = moodboard.cache_preview_image(
-                root,
-                item_id,
+            preview_image = (
                 preview.get("imageBytes"),
                 str(preview.get("imageMime") or ""),
-            ) or ""
+            )
         else:
-            try:
-                source = moodboard.validate_local_image(root, image_path)
-            except (ValueError, fsapi.FsError, OSError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            title = title or source.stem
-            site_name = site_name or "Uploaded screenshot"
+            with _project_mutation(slug, user):
+                root = _ops_root(slug, user)
+                try:
+                    source = moodboard.validate_local_image(root, image_path)
+                except (ValueError, fsapi.FsError, OSError) as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                title = title or source.stem
+                site_name = site_name or "Uploaded screenshot"
         created = moodboard.now_iso()
         item = {
             "id": item_id,
@@ -107,20 +121,44 @@ def register(app, deps):
             "createdAt": created,
             "updatedAt": created,
         }
-        try:
-            moodboard.append_item(root, item)
-        except ValueError as exc:
-            if image_path and image_path.startswith(f"{moodboard.IMAGE_DIR}/") and raw_url:
-                try:
-                    fsapi.resolve_in_project(root, image_path).unlink(missing_ok=True)
-                except (OSError, fsapi.FsError):
-                    pass
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit_fs(user, "design.moodboard.add", slug, moodboard.STORE_PATH)
+        with _project_mutation(slug, user):
+            root = _ops_root(slug, user)
+            if preview_image is not None:
+                image_path = (
+                    moodboard.cache_preview_image(
+                        root,
+                        item_id,
+                        preview_image[0],
+                        preview_image[1],
+                    )
+                    or ""
+                )
+                item["imagePath"] = image_path or None
+            try:
+                moodboard.append_item(root, item)
+            except ValueError as exc:
+                if (
+                    image_path
+                    and image_path.startswith(f"{moodboard.IMAGE_DIR}/")
+                    and raw_url
+                ):
+                    try:
+                        fsapi.resolve_in_project(root, image_path).unlink(
+                            missing_ok=True
+                        )
+                    except (OSError, fsapi.FsError):
+                        pass
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            _audit_fs(user, "design.moodboard.add", slug, moodboard.STORE_PATH)
         return {"item": item, "warning": warning or None}
 
     @app.patch("/api/projects/{slug}/design/moodboard/{item_id}")
-    def update_moodboard_item(slug: str, item_id: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
+    def update_moodboard_item(
+        slug: str,
+        item_id: str,
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Edit a Moodboard note/tags or select it for design-run context."""
         features.require(cfg, features.DESIGN_STUDIO)
         data = payload or {}
@@ -132,27 +170,49 @@ def register(app, deps):
         if "useAsReference" in data:
             patch["useAsReference"] = bool(data.get("useAsReference"))
         if not patch:
-            raise HTTPException(status_code=400, detail="No editable Moodboard fields were provided.")
-        root = _ops_root(slug, user)
-        item = moodboard.patch_item(root, item_id, patch)
+            raise HTTPException(
+                status_code=400, detail="No editable Moodboard fields were provided."
+            )
+        with _project_mutation(slug, user):
+            root = _ops_root(slug, user)
+            item = moodboard.patch_item(root, item_id, patch)
+            if item is not None:
+                _audit_fs(
+                    user,
+                    "design.moodboard.update",
+                    slug,
+                    moodboard.STORE_PATH,
+                )
         if item is None:
             raise HTTPException(status_code=404, detail="Moodboard item not found.")
-        _audit_fs(user, "design.moodboard.update", slug, moodboard.STORE_PATH)
         return {"item": item}
 
     @app.delete("/api/projects/{slug}/design/moodboard/{item_id}")
-    def remove_moodboard_item(slug: str, item_id: str, user: dict[str, Any] = Depends(current_user)):
+    def remove_moodboard_item(
+        slug: str, item_id: str, user: dict[str, Any] = Depends(current_user)
+    ):
         """Delete a Moodboard card and its private cached/uploaded image."""
         features.require(cfg, features.DESIGN_STUDIO)
-        root = _ops_root(slug, user)
-        item = moodboard.delete_item(root, item_id)
+        with _project_mutation(slug, user):
+            root = _ops_root(slug, user)
+            item = moodboard.delete_item(root, item_id)
+            if item is not None:
+                _audit_fs(
+                    user,
+                    "design.moodboard.delete",
+                    slug,
+                    moodboard.STORE_PATH,
+                )
         if item is None:
             raise HTTPException(status_code=404, detail="Moodboard item not found.")
-        _audit_fs(user, "design.moodboard.delete", slug, moodboard.STORE_PATH)
         return {"ok": True, "id": item_id}
 
     @app.post("/api/projects/{slug}/design/brand-guide")
-    def generate_brand_guide(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
+    def generate_brand_guide(
+        slug: str,
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Kick off an agent run that synthesises a project's brand guideline into
         <project>/design.md from reference URLs (crawled here), uploaded reference
         images (vision), and free-text notes. The generated design.md is then
@@ -161,7 +221,9 @@ def register(app, deps):
         and reloads design.md when it finishes."""
         features.require(cfg, features.DESIGN_STUDIO)
         data = payload or {}
-        urls = [u for u in (data.get("urls") or []) if isinstance(u, str) and u.strip()][:8]
+        urls = [
+            u for u in (data.get("urls") or []) if isinstance(u, str) and u.strip()
+        ][:8]
         notes = (data.get("notes") or "").strip()[:4000]
         image_rels: list[str] = []
         root = _ops_root(slug, user)
@@ -174,7 +236,10 @@ def register(app, deps):
             except fsapi.FsError:
                 continue
         if not urls and not image_rels and not notes:
-            raise HTTPException(status_code=400, detail="Give at least one reference URL, image, or a note to generate from.")
+            raise HTTPException(
+                status_code=400,
+                detail="Give at least one reference URL, image, or a note to generate from.",
+            )
 
         digests = [brand_extract.fetch_url_digest(u) for u in urls]
         parts = [
@@ -193,9 +258,17 @@ def register(app, deps):
             "even from thin references; where the references conflict, pick one deliberate direction.",
         ]
         if digests:
-            parts += ["", "## Reference URLs (crawled)", *[brand_extract.digest_to_markdown(d) for d in digests]]
+            parts += [
+                "",
+                "## Reference URLs (crawled)",
+                *[brand_extract.digest_to_markdown(d) for d in digests],
+            ]
         if image_rels:
-            parts += ["", "## Reference images", "The attached image(s) are visual references — read their palette, mood, composition, and type."]
+            parts += [
+                "",
+                "## Reference images",
+                "The attached image(s) are visual references — read their palette, mood, composition, and type.",
+            ]
         if notes:
             parts += ["", "## Owner's notes / preferences", notes]
         prompt = "\n".join(parts)
@@ -211,19 +284,49 @@ def register(app, deps):
             (title, project["id"], user["id"], profile["id"], profile["runner_id"]),
         )
         session_id = int(cur.lastrowid)
-        db().execute("INSERT INTO messages(session_id, role, content, author) VALUES (?, 'user', ?, ?)", (session_id, "Generate design.md brand guideline from the provided references.", user["username"]))
+        db().execute(
+            "INSERT INTO messages(session_id, role, content, author) VALUES (?, 'user', ?, ?)",
+            (
+                session_id,
+                "Generate design.md brand guideline from the provided references.",
+                user["username"],
+            ),
+        )
         run = db().execute(
             "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind) "
             "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, 'brand_guide')",
-            (session_id, project["id"], user["id"], profile["id"], profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"]),
+            (
+                session_id,
+                project["id"],
+                user["id"],
+                profile["id"],
+                profile["runner_id"],
+                prompt,
+                profile["default_model"],
+                profile["hermes_home"],
+            ),
         )
         run_id = int(run.lastrowid)
-        app.state.worker.add_event(run_id, session_id, project["id"], "run.queued", {"runner": profile["runner_id"], "kind": "brand_guide"})
+        app.state.worker.add_event(
+            run_id,
+            session_id,
+            project["id"],
+            "run.queued",
+            {"runner": profile["runner_id"], "kind": "brand_guide"},
+        )
         _audit_fs(user, "design.brand_guide", slug, "design.md")
-        return {"run_id": run_id, "session_id": session_id, "urls": [{"url": d["url"], "ok": d.get("ok", False)} for d in digests]}
+        return {
+            "run_id": run_id,
+            "session_id": session_id,
+            "urls": [{"url": d["url"], "ok": d.get("ok", False)} for d in digests],
+        }
 
     @app.post("/api/projects/{slug}/designs/from-image")
-    def design_from_image(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
+    def design_from_image(
+        slug: str,
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Seed a new Design Studio scene containing an existing project image as a
         full-bleed layer — the 'edit this image in Design Studio' bridge from chat."""
         features.require(cfg, features.DESIGN_STUDIO)
@@ -234,88 +337,111 @@ def register(app, deps):
             target = ""
         if not rel and target == "":
             raise HTTPException(status_code=400, detail="path is required")
-        try:
-            project = visible_project(slug, user)
-            resolved = file_targets.resolve_request(
-                db(),
-                project,
-                path=rel,
-                target=target,
+        with _project_mutation(slug, user) as project:
+            try:
+                resolved = file_targets.resolve_request(
+                    db(),
+                    project,
+                    path=rel,
+                    target=target,
+                )
+            except (
+                container_registry.ContainerBoundaryError,
+                file_targets.FileTargetError,
+            ) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if resolved.locator.area.kind != "ops":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Design Studio image sources must belong to the Ops Area",
+                )
+            source = resolved.path
+            rel = resolved.locator.path
+            root = resolved.root
+            if not source.is_file():
+                raise HTTPException(status_code=404, detail=f"file not found: {rel}")
+            design_id, scene = design_scenes.scene_for_image(
+                rel,
+                design_scenes.image_dims(source),
+                payload.get("title"),
+                resolved.locator.payload(),
             )
-        except (
-            container_registry.ContainerBoundaryError,
-            file_targets.FileTargetError,
-        ) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if resolved.locator.area.kind != "ops":
-            raise HTTPException(
-                status_code=400,
-                detail="Design Studio image sources must belong to the Ops Area",
-            )
-        source = resolved.path
-        rel = resolved.locator.path
-        root = resolved.root
-        if not source.is_file():
-            raise HTTPException(status_code=404, detail=f"file not found: {rel}")
-        design_id, scene = design_scenes.scene_for_image(
-            rel,
-            design_scenes.image_dims(source),
-            payload.get("title"),
-            resolved.locator.payload(),
-        )
-        d = fsapi.resolve_in_project(root, f"artifacts/design/{design_id}")
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")
-        _audit_fs(user, "design.from_image", slug, f"{rel} -> artifacts/design/{design_id}")
+            d = fsapi.resolve_in_project(root, f"artifacts/design/{design_id}")
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")
+            _audit_fs(user, "design.from_image", slug, f"{rel} -> artifacts/design/{design_id}")
         return {"ok": True, "id": design_id, "title": scene["title"], "path": f"artifacts/design/{design_id}"}
 
     @app.post("/api/projects/{slug}/design/image")
-    async def design_image(slug: str, payload: ImageGenRequest, user: dict[str, Any] = Depends(current_user)):
+    async def design_image(
+        slug: str,
+        payload: ImageGenRequest,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Generate (text→image) or edit (image+prompt→image) via the configured
         provider (Settings); save the result into the project's shared design
         asset library and return its path."""
         features.require(cfg, features.DESIGN_STUDIO)
-        root = _ops_root(slug, user)
         prov = media_settings.resolve_image_gen(db())
         # Source/reference images — the multi-image list wins over the single `image`.
-        src_paths = payload.images if payload.images else ([payload.image] if payload.image else [])
+        src_paths = (
+            payload.images
+            if payload.images
+            else ([payload.image] if payload.image else [])
+        )
         sources: list[tuple[bytes, str]] = []
-        for rel in src_paths:
-            try:
-                src = fsapi.resolve_in_project(root, rel)
-                if not src.is_file():
-                    raise fsapi.FsError(f"source image does not exist: {rel}")
-                sources.append((src.read_bytes(), mimetypes.guess_type(src.name)[0] or "application/octet-stream"))
-            except fsapi.FsError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except OSError as exc:
-                raise HTTPException(status_code=400, detail=f"cannot read source image: {exc.strerror}") from exc
+        with _project_mutation(slug, user):
+            root = _ops_root(slug, user)
+            for rel in src_paths:
+                try:
+                    src = fsapi.resolve_in_project(root, rel)
+                    if not src.is_file():
+                        raise fsapi.FsError(f"source image does not exist: {rel}")
+                    sources.append(
+                        (
+                            src.read_bytes(),
+                            mimetypes.guess_type(src.name)[0]
+                            or "application/octet-stream",
+                        )
+                    )
+                except fsapi.FsError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                except OSError as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"cannot read source image: {exc.strerror}",
+                    ) from exc
         caps = image_providers.get_provider(prov.get("provider")).capabilities or {}
         # Edit/reference requests need an edit-capable provider. When the selected one
         # is text-to-image only, fall back to xAI OAuth (single image) if connected.
         if sources and caps.get("imageEdit") is False:
             if image_providers.xai_oauth_ready().get("ready"):
-                prov = {**prov, "provider": "xai-oauth", "apiKey": None, "baseUrl": None, "model": None}
+                prov = {
+                    **prov,
+                    "provider": "xai-oauth",
+                    "apiKey": None,
+                    "baseUrl": None,
+                    "model": None,
+                }
                 caps = image_providers.get_provider("xai-oauth").capabilities or {}
             else:
-                raise HTTPException(status_code=400, detail="The selected image provider is text-to-image only and no edit-capable fallback is connected. Switch the provider in Settings → Image generation (e.g. xAI OAuth) to edit or use reference images.")
+                raise HTTPException(
+                    status_code=400,
+                    detail="The selected image provider is text-to-image only and no edit-capable fallback is connected. Switch the provider in Settings → Image generation (e.g. xAI OAuth) to edit or use reference images.",
+                )
         # Only referenceImages-capable providers get multiple images; others use the first.
         if len(sources) > 1 and not caps.get("referenceImages"):
             sources = sources[:1]
         image_bytes = sources[0][0] if sources else None
         image_mime = sources[0][1] if sources else None
         extra_images = sources[1:] or None
-        target = fsapi.resolve_in_project(root, f"artifacts/design/_assets/gen-{int(time.time())}.png")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        i = 1
-        while target.exists():
-            target = target.parent / f"gen-{int(time.time())}-{i}.png"; i += 1
         model = payload.model or prov.get("model")
         if not model and prov.get("provider") in {"auto", "higgsfield"}:
             model = media_settings.resolve_higgsfield_settings(db()).get("imageModel")
         try:
             raw = image_providers.generate(
-                prov["provider"], prov.get("apiKey"),
+                prov["provider"],
+                prov.get("apiKey"),
                 prompt=payload.prompt,
                 model=model,
                 size=payload.size,
@@ -327,12 +453,24 @@ def register(app, deps):
         except image_providers.ImageProviderError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not raw:
-            raise HTTPException(status_code=502, detail="provider returned no image data")
+            raise HTTPException(
+                status_code=502, detail="provider returned no image data"
+            )
         # Every provider returns bytes — persist them here (the out_path shortcut was
         # dead: generate() never wrote files itself).
-        target.write_bytes(raw)
-        rel = f"artifacts/design/_assets/{target.name}"
-        _audit_fs(user, "design.image", slug, rel)
+        with _project_mutation(slug, user):
+            root = _ops_root(slug, user)
+            target = fsapi.resolve_in_project(
+                root, f"artifacts/design/_assets/gen-{int(time.time())}.png"
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            i = 1
+            while target.exists():
+                target = target.parent / f"gen-{int(time.time())}-{i}.png"
+                i += 1
+            target.write_bytes(raw)
+            rel = f"artifacts/design/_assets/{target.name}"
+            _audit_fs(user, "design.image", slug, rel)
         return {"path": rel, "name": target.name}
 
     @app.get("/api/projects/{slug}/design/image-models")
@@ -345,12 +483,27 @@ def register(app, deps):
         if spec.kind == "codex":
             return {"models": [], "configured": True, "kind": "codex"}
         if spec.kind == "auto":
-            return {"models": [], "configured": True, "kind": "auto", "model": prov.get("model")}
+            return {
+                "models": [],
+                "configured": True,
+                "kind": "auto",
+                "model": prov.get("model"),
+            }
         if spec.kind == "higgsfield":
             readiness = image_providers.readiness_snapshot(
                 enabled=not maintenance.fenced(),
                 higgsfield_cli=True,
             )
             hstatus = readiness["higgsfield"] or {}
-            return {"models": [], "configured": bool(hstatus.get("ready")), "kind": "higgsfield", "model": prov.get("model")}
-        return {"models": [], "configured": bool(prov.get("apiKey")), "kind": "http", "model": prov.get("model")}
+            return {
+                "models": [],
+                "configured": bool(hstatus.get("ready")),
+                "kind": "higgsfield",
+                "model": prov.get("model"),
+            }
+        return {
+            "models": [],
+            "configured": bool(prov.get("apiKey")),
+            "kind": "http",
+            "model": prov.get("model"),
+        }

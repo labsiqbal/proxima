@@ -46,19 +46,12 @@ def test_multiline_route_decorator_is_in_generated_api_reference():
 
 def test_task_reconciliation_adr_is_indexed_and_scoped():
     root = Path(__file__).resolve().parents[3]
-    adr_path = (
-        root
-        / "docs"
-        / "adr"
-        / "0027-durable-task-reconciliation-protocol.md"
-    )
+    adr_path = root / "docs" / "adr" / "0027-durable-task-reconciliation-protocol.md"
     adr = adr_path.read_text(encoding="utf-8")
-    index = (root / "docs" / "adr" / "README.md").read_text(
+    index = (root / "docs" / "adr" / "README.md").read_text(encoding="utf-8")
+    architecture = (root / "docs" / "reference" / "architecture.md").read_text(
         encoding="utf-8"
     )
-    architecture = (
-        root / "docs" / "reference" / "architecture.md"
-    ).read_text(encoding="utf-8")
     normalized_adr = " ".join(adr.split())
 
     assert "0027-durable-task-reconciliation-protocol.md" in index
@@ -71,3 +64,34 @@ def test_task_reconciliation_adr_is_indexed_and_scoped():
         "authoritative Task-session provenance",
     ):
         assert required in normalized_adr
+
+
+def test_handler_without_docstring_does_not_borrow_the_next_handler_docstring(
+    tmp_path, monkeypatch
+):
+    generator = _generator_module()
+    routes = tmp_path / "routes"
+    routes.mkdir()
+    (routes / "sample.py").write_text(
+        (
+            "from fastapi import FastAPI\n"
+            "app = FastAPI()\n"
+            "\n"
+            "@app.get('/api/first')\n"
+            "def first_handler():\n"
+            "    return {}\n"
+            "\n"
+            "@app.get('/api/second')\n"
+            "def second_handler():\n"
+            '    """Second handler description."""\n'
+            "    return {}\n"
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(generator, "PKG_DIR", tmp_path)
+
+    endpoints = generator._collect_endpoints()
+    rows = {row["path"]: row for row in endpoints["routes/sample.py"]}
+
+    assert rows["/api/first"]["doc"] == ""
+    assert rows["/api/second"]["doc"] == "Second handler description."

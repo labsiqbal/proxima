@@ -4,9 +4,12 @@ import type { FileRef } from './files'
 
 // A uniform filesystem interface so the tree + editor can operate on any source
 // (a project's files, a project's wiki subfolder, or the personal wiki).
-export type FsAdapter = {
+export type ReadOnlyFsAdapter = {
   list: (ref: FileRef) => Promise<{ entries: FileEntry[] }>
   read: (ref: FileRef) => Promise<{ content: string }>
+}
+
+export type FsAdapter = ReadOnlyFsAdapter & {
   write: (ref: FileRef, content: string) => Promise<unknown>
   mkdir: (ref: FileRef) => Promise<unknown>
   rename: (from: FileRef, to: FileRef) => Promise<unknown>
@@ -24,6 +27,16 @@ export function projectFs(token: string, slug: string, base = ''): FsAdapter {
     write: (ref, content) => files.writeFile(token, slug, scoped(base, ref), content),
     mkdir: ref => files.mkdir(token, slug, scoped(base, ref)),
     rename: (from, to) => files.renamePath(token, slug, scoped(base, from), scoped(base, to)),
-    remove: ref => files.deletePath(token, slug, scoped(base, ref))
+    remove: ref => files.deletePath(token, slug, scoped(base, ref)),
+  }
+}
+
+export function containerInspectionFs(
+  token: string,
+  slug: string,
+): ReadOnlyFsAdapter {
+  return {
+    list: path => files.listTree(token, slug, path, 'container'),
+    read: path => files.readFile(token, slug, path, 'container'),
   }
 }

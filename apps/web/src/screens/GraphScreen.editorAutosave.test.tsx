@@ -576,10 +576,15 @@ describe('GraphScreen editor autosave actions', () => {
     })
 
     render(<GraphScreen {...props} pendingJobId={55} />)
-    await screen.findByRole('heading', { name: 'Review plan' })
+    const renameButton = await screen.findByRole('button', {
+      name: 'Rename workflow Review plan',
+    })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rename workflow Review plan' }))
-    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), { target: { value: 'Renamed review' } })
+    fireEvent.click(renameButton)
+    // Wait for the controlled input commit: review-stage polls can re-render the
+    // header between the click and the next assertion under CI load.
+    const nameInput = await screen.findByRole('textbox', { name: 'Workflow name' })
+    fireEvent.change(nameInput, { target: { value: 'Renamed review' } })
 
     fireEvent.click(screen.getByRole('button', { name: 'Select node' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Approve node' }))

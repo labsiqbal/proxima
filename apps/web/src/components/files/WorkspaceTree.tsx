@@ -1,6 +1,6 @@
 import React from 'react'
 import type { FileEntry, FileTarget } from '../../types'
-import type { FsAdapter } from '../../api/fsAdapter'
+import type { FsAdapter, ReadOnlyFsAdapter } from '../../api/fsAdapter'
 import { retargetFile, type FileRef } from '../../api/files'
 import { IconFile, IconFolder, IconChevronRight, IconFilePlus, IconFolderPlus } from '../shell/icons'
 import { confirmDialog } from '../ui/Dialog'
@@ -9,13 +9,16 @@ import { confirmDialog } from '../ui/Dialog'
 const FileEditor = React.lazy(() => import('./FileEditor').then(m => ({ default: m.FileEditor })))
 
 type Ctl = {
-  fs: FsAdapter; refreshKey: number
+  fs: ReadOnlyFsAdapter
+  writableFs: FsAdapter | null
+  refreshKey: number
   fileFilter?: (name: string) => boolean
   busy: boolean
   expanded: Set<string>; toggle: (p: string) => void
   creating: { dir: string; target?: FileTarget; type: 'file' | 'dir' } | null
   renaming: { path: string; target?: FileTarget } | null
   activePath: string | null
+  activePathKind: 'root' | 'directory' | 'file'
   openFile: (p: string, target?: FileTarget) => void
   openMenu: (e: React.MouseEvent, path: string | null, isDir: boolean, target?: FileTarget) => void
   submitCreate: (name: string) => void
@@ -106,7 +109,14 @@ function Level({ dir, target, depth, t }: { dir: string; target?: FileTarget; de
       if (entry.type === 'dir') {
         const open = t.expanded.has(path)
         return <div key={path}>
-          <button className="tree-row dir" style={{ paddingLeft: 8 + depth * 12 }} onClick={() => t.toggle(path)} onContextMenu={e => t.openMenu(e, path, true, entry.target)}>
+          <button
+            data-path={path}
+            className={`tree-row dir ${t.activePathKind === 'directory' && t.activePath === path ? 'active' : ''}`}
+            style={{ paddingLeft: 8 + depth * 12 }}
+            aria-expanded={open}
+            onClick={() => t.toggle(path)}
+            onContextMenu={t.writableFs ? e => t.openMenu(e, path, true, entry.target) : undefined}
+          >
             <span className={`tree-chevron ${open ? 'open' : ''}`}><IconChevronRight size={13} /></span>
             <span className="tree-ico"><IconFolder size={15} /></span>
             <span className="tree-name">{entry.name}</span>
@@ -114,18 +124,31 @@ function Level({ dir, target, depth, t }: { dir: string; target?: FileTarget; de
           {open && <Level dir={path} target={entry.target} depth={depth + 1} t={t} />}
         </div>
       }
-      return <button key={path} data-path={path} className={`tree-row file ${t.activePath === path ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 12 }} onClick={() => t.openFile(path, entry.target)} onContextMenu={e => t.openMenu(e, path, false, entry.target)}>
+      return <button key={path} data-path={path} className={`tree-row file ${t.activePathKind === 'file' && t.activePath === path ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 12 }} onClick={() => t.openFile(path, entry.target)} onContextMenu={t.writableFs ? e => t.openMenu(e, path, false, entry.target) : undefined}>
         <span className="tree-ico"><IconFile size={15} /></span>
         <span className="tree-name">{entry.name}</span>
       </button>
     })}
-    {loaded && entries.length === 0 && depth === 0 && !t.creating && <p className="muted tree-empty">Empty · use + to add</p>}
+    {loaded && entries.length === 0 && depth === 0 && !t.creating && <p className="muted tree-empty">{t.writableFs ? 'Empty · use + to add' : 'Empty'}</p>}
   </div>
 }
 
-export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSignal = 0, onOpenFile, onChange, activePath, fileFilter, defaultExt }: { fs: FsAdapter; title: string; className?: string; refreshSignal?: number; onOpenFile?: (path: string, target?: FileTarget) => void; onChange?: () => void; activePath?: string | null; fileFilter?: (name: string) => boolean; defaultExt?: string }) {
+function writableAdapter(fs: ReadOnlyFsAdapter | FsAdapter): FsAdapter | null {
+  if (
+    'write' in fs
+    && 'mkdir' in fs
+    && 'rename' in fs
+    && 'remove' in fs
+  ) {
+    return fs
+  }
+  return null
+}
+
+export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSignal = 0, onOpenFile, onChange, activePath, activePathKind = 'file', fileFilter, defaultExt }: { fs: ReadOnlyFsAdapter | FsAdapter; title: string; className?: string; refreshSignal?: number; onOpenFile?: (path: string, target?: FileTarget) => void; onChange?: () => void; activePath?: string | null; activePathKind?: 'root' | 'directory' | 'file'; fileFilter?: (name: string) => boolean; defaultExt?: string }) {
   const [refreshKey, setRefreshKey] = React.useState(0)
   const [editing, setEditing] = React.useState<{ path: string; target?: FileTarget } | null>(null)
+  const [browsePath, setBrowsePath] = React.useState<string | null>(null)
   const [treeError, setTreeError] = React.useState<string | null>(null)
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
   const [creating, setCreating] = React.useState<{ dir: string; target?: FileTarget; type: 'file' | 'dir' } | null>(null)
@@ -135,7 +158,21 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
   const mountedRef = React.useRef(true)
   const actionSeq = React.useRef(0)
   const treeScrollRef = React.useRef<HTMLDivElement | null>(null)
+  const editingDirtyRef = React.useRef(false)
+  const [editingDirty, setEditingDirty] = React.useState(false)
+  const writableFs = writableAdapter(fs)
+  const retainDirtyBuffer = !!(editing && editingDirty && !writableFs)
   const refresh = () => setRefreshKey(k => k + 1)
+  const clearEditing = React.useCallback(() => {
+    editingDirtyRef.current = false
+    setEditingDirty(false)
+    setBrowsePath(null)
+    setEditing(null)
+  }, [])
+  const onEditorDirtyChange = React.useCallback((dirty: boolean) => {
+    editingDirtyRef.current = dirty
+    setEditingDirty(dirty)
+  }, [])
   React.useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -144,8 +181,20 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
     }
   }, [])
 
-  // Reset view when the source (fs) or external refresh signal changes.
-  React.useEffect(() => { actionSeq.current += 1; setBusy(false); setEditing(null); setExpanded(new Set()); setRefreshKey(k => k + 1) }, [fs])
+  // Reset the tree when the source (fs) changes. Keep an open dirty editor mounted
+  // so recovery inspection can swap adapters without discarding unsaved bytes;
+  // FileEditor flips that buffer read-only and restores write on the way back.
+  React.useEffect(() => {
+    actionSeq.current += 1
+    setBusy(false)
+    setCreating(null)
+    setRenaming(null)
+    setMenu(null)
+    setBrowsePath(null)
+    setExpanded(new Set())
+    setRefreshKey(k => k + 1)
+    if (!editingDirtyRef.current) clearEditing()
+  }, [fs, clearEditing])
   React.useEffect(() => { if (refreshSignal) setRefreshKey(k => k + 1) }, [refreshSignal])
   React.useEffect(() => {
     const onChange = () => setRefreshKey(k => k + 1)
@@ -155,26 +204,28 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
 
   // "Reveal in Files" (and any external activePath): expand every ancestor so the
   // highlighted row is actually visible, not buried under a collapsed folder.
-  // Close any inline editor too - it is absolute-positioned over the tree and
-  // would hide the highlight Reveal is supposed to show. Archive already has
-  // Open for content.
+  // Close a clean inline editor - it is absolute-positioned over the tree and
+  // would hide the highlight Reveal is supposed to show. A dirty buffer stays
+  // mounted (read-only under inspection) so recovery cannot discard owner edits.
   // Re-run when `fs` changes too: the reset effect above clears `expanded`, and
   // a same-path reveal after a project switch would otherwise stay collapsed.
   React.useEffect(() => {
     if (!activePath) return
-    setEditing(null)
+    setBrowsePath(null)
+    if (!editingDirtyRef.current) clearEditing()
     const parts = activePath.split('/').filter(Boolean)
-    if (parts.length <= 1) return
+    const limit = activePathKind === 'directory' ? parts.length : parts.length - 1
+    if (limit <= 0) return
     setExpanded(s => {
       const next = new Set(s)
       let acc = ''
-      for (let i = 0; i < parts.length - 1; i++) {
+      for (let i = 0; i < limit; i++) {
         acc = acc ? `${acc}/${parts[i]}` : parts[i]
         next.add(acc)
       }
       return next
     })
-  }, [activePath, fs])
+  }, [activePath, activePathKind, fs, clearEditing])
 
   // After ancestors expand and their children load, scroll the highlighted row
   // into view inside the tree scroller (not the whole page).
@@ -228,29 +279,37 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
     if (onOpenFile) {
       if (target) onOpenFile(path, target)
       else onOpenFile(path)
+      return
     }
-    else setEditing({ path, target })
+    // During recovery inspection a dirty ordinary Files buffer stays mounted and
+    // read-only. Browse selection is shown in the tree only; never replace bytes.
+    if (editingDirtyRef.current && !writableFs) {
+      setBrowsePath(path)
+      return
+    }
+    setBrowsePath(null)
+    setEditing({ path, target })
   }
 
   function startCreate(dir: string, type: 'file' | 'dir', target?: FileTarget) {
-    if (busy) return
+    if (busy || !writableFs) return
     setRenaming(null)
     if (dir) setExpanded(s => new Set(s).add(dir))
     setCreating({ dir, target, type })
   }
   async function submitCreate(name: string) {
-    const c = creating; if (!c || busy) return
+    const c = creating; if (!c || busy || !writableFs) return
     setCreating(null)
     if (c.type === 'file' && defaultExt && !/\.[a-z0-9]+$/i.test(name)) name = `${name}.${defaultExt}`
     const full = c.dir ? `${c.dir}/${name}` : name
     const ref = childRef(c.target, full, name)
-    if (c.type === 'dir') await guard(fs.mkdir(ref))
-    else if (await guard(fs.write(ref, ''))) {
+    if (c.type === 'dir') await guard(writableFs.mkdir(ref))
+    else if (await guard(writableFs.write(ref, ''))) {
       openFile(full, typeof ref === 'string' ? undefined : ref)
     }
   }
   async function submitRename(path: string, name: string) {
-    if (busy) return
+    if (busy || !writableFs) return
     const current = renaming
     setRenaming(null)
     const parent = path.split('/').slice(0, -1).join('/')
@@ -263,7 +322,7 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
         current.target.path.split('/').slice(0, -1).concat(name).filter(Boolean).join('/'),
       )
       : to
-    if (await guard(fs.rename(fromRef, toRef)) && editing?.path === path) {
+    if (await guard(writableFs.rename(fromRef, toRef)) && editing?.path === path) {
       setEditing({
         path: to,
         target: typeof toRef === 'string' ? undefined : toRef,
@@ -271,20 +330,26 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
     }
   }
   async function remove(path: string, target?: FileTarget) {
-    if (busy) return
+    if (busy || !writableFs) return
     if (!(await confirmDialog({ title: `Delete "${base(path)}"?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true }))) return
-    if (
-      await guard(fs.remove(target || path))
+if (
+      await guard(writableFs.remove(target || path))
       && (editing?.path === path || editing?.path.startsWith(path + '/'))
-    ) setEditing(null)
+    ) clearEditing()
   }
 
+  const treeActivePath = browsePath ?? (activePath !== undefined ? activePath : editing?.path || null)
+  const treeActivePathKind = browsePath != null
+    ? 'file'
+    : (activePath !== undefined ? activePathKind : 'file')
   const t: Ctl = {
-    fs, refreshKey, fileFilter, busy, expanded,
+    fs, writableFs, refreshKey, fileFilter, busy, expanded,
     toggle: p => { if (!busy) setExpanded(s => { const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n }) },
-    creating, renaming, activePath: activePath !== undefined ? activePath : editing?.path || null,
+    creating, renaming, activePath: treeActivePath,
+    activePathKind: treeActivePathKind,
     openFile,
     openMenu: (e, path, isDir, target) => {
+      if (!writableFs) return
       e.preventDefault()
       e.stopPropagation()
       setMenu({ x: e.clientX, y: e.clientY, path, isDir, target })
@@ -303,15 +368,23 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
       )
     : undefined
 
-  return <aside className={className}>
+  const rootClassName = retainDirtyBuffer
+    ? `${className} files-retain-dirty`.trim()
+    : className
+
+  return <aside className={rootClassName}>
     <div className="tree-toolbar"><strong>{title}</strong><div className="tree-actions">
-      <button title="New file" aria-label="New file" onClick={() => startCreate('', 'file')} disabled={busy}><IconFilePlus size={16} /></button>
-      <button title="New folder" aria-label="New folder" onClick={() => startCreate('', 'dir')} disabled={busy}><IconFolderPlus size={16} /></button>
+      {writableFs
+        ? <>
+            <button title="New file" aria-label="New file" onClick={() => startCreate('', 'file')} disabled={busy}><IconFilePlus size={16} /></button>
+            <button title="New folder" aria-label="New folder" onClick={() => startCreate('', 'dir')} disabled={busy}><IconFolderPlus size={16} /></button>
+          </>
+        : <span className="tree-read-only">Read-only</span>}
     </div></div>
     {treeError && <p className="tree-error">{treeError}</p>}
-    <div className="tree-scroll" ref={treeScrollRef} onContextMenu={e => { if (e.target === e.currentTarget) t.openMenu(e, null, true) }}><Level dir="" depth={0} t={t} /></div>
-    {!onOpenFile && editing && <React.Suspense fallback={<div className="file-editor"><div className="file-editor-head"><strong>{base(editing.path)}</strong></div><p className="muted" style={{ padding: '10px' }}>Loading editor…</p></div>}><FileEditor fs={fs} path={editing.path} target={editing.target} onClose={() => setEditing(null)} /></React.Suspense>}
-    {menu && <div className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={e => e.stopPropagation()}>
+    <div className="tree-scroll" ref={treeScrollRef} onContextMenu={writableFs ? e => { if (e.target === e.currentTarget) t.openMenu(e, null, true) } : undefined}><Level dir="" depth={0} t={t} /></div>
+{!onOpenFile && editing && <React.Suspense fallback={<div className={`file-editor${retainDirtyBuffer ? ' file-editor-retained' : ''}`}><div className="file-editor-head"><strong>{base(editing.path)}</strong></div><p className="muted file-editor-loading">Loading editor…</p></div>}><FileEditor fs={fs} write={writableFs?.write} path={editing.path} target={editing.target} onClose={clearEditing} onDirtyChange={onEditorDirtyChange} /></React.Suspense>}
+    {writableFs && menu && <div className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={e => e.stopPropagation()}>
       <button onClick={() => { startCreate(menuDir, 'file', menuDirTarget); setMenu(null) }} disabled={busy}>New File</button>
       <button onClick={() => { startCreate(menuDir, 'dir', menuDirTarget); setMenu(null) }} disabled={busy}>New Folder</button>
       {menu.path != null && <><div className="ctx-sep" /><button onClick={() => { if (!busy) setRenaming({ path: menu.path as string, target: menu.target }); setMenu(null) }} disabled={busy}>Rename</button><button className="danger" onClick={() => { const p = menu.path as string; const target = menu.target; setMenu(null); void remove(p, target) }} disabled={busy}>Delete</button></>}

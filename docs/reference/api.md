@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-193 endpoints across 18 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+194 endpoints across 18 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -14,12 +14,12 @@
 - [`routes/chat.py`](#routes-chat-py) - 25 endpoints
 - [`routes/containers.py`](#routes-containers-py) - 3 endpoints
 - [`routes/design.py`](#routes-design-py) - 8 endpoints
-- [`routes/files.py`](#routes-files-py) - 34 endpoints
+- [`routes/files.py`](#routes-files-py) - 32 endpoints
 - [`routes/graph.py`](#routes-graph-py) - 14 endpoints
 - [`routes/graphs.py`](#routes-graphs-py) - 2 endpoints
 - [`routes/master.py`](#routes-master-py) - 20 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) - 12 endpoints
-- [`routes/projects.py`](#routes-projects-py) - 12 endpoints
+- [`routes/projects.py`](#routes-projects-py) - 15 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) - 6 endpoints
 - [`routes/self_updates.py`](#routes-self-updates-py) - 5 endpoints
 - [`routes/update.py`](#routes-update-py) - 3 endpoints
@@ -131,7 +131,6 @@
 | DELETE | `/api/projects/{slug}/fs` | `project_delete` |  |
 | POST | `/api/projects/{slug}/fs/mkdir` | `project_mkdir` |  |
 | POST | `/api/projects/{slug}/fs/rename` | `project_rename` |  |
-| POST | `/api/projects/{slug}/preview-mode` | `project_preview_mode` |  |
 | GET | `/api/projects/{slug}/raw` | `project_raw` |  |
 | GET | `/api/projects/{slug}/reference-files` | `project_reference_files` | Safe, path-only project file index for @-reference autocomplete. |
 | GET | `/api/projects/{slug}/tree` | `project_tree` |  |
@@ -152,7 +151,6 @@
 | PUT | `/api/settings/runs` | `set_run_settings` |  |
 | GET | `/api/settings/satpam` | `get_satpam_settings` | Satpam supervision thresholds (slice 12, T10): N consecutive |
 | PUT | `/api/settings/satpam` | `set_satpam_settings` |  |
-| GET | `/api/target-preview/{slug}/{area_kind}/{area_id}/{file_path:path}` | `project_target_preview` |  |
 
 
 ## routes/graph.py
@@ -236,13 +234,16 @@
 | POST | `/api/projects` | `create_project` |  |
 | POST | `/api/projects/link` | `link_project` | Register a folder as a project (no scaffold under the data dir). The |
 | DELETE | `/api/projects/{slug}` | `delete_project` |  |
-| GET | `/api/projects/{slug}` | `get_project` |  |
+| GET | `/api/projects/{slug}` | `get_project` | Return one owner-visible Project compatibility payload. |
 | PATCH | `/api/projects/{slug}` | `update_project` |  |
 | GET | `/api/projects/{slug}/areas` | `list_project_areas` | The project's container areas: code areas (git-repo subfolders, |
 | POST | `/api/projects/{slug}/areas` | `add_project_area` | Manually register (or correct) a code area - T1's hybrid override. |
 | POST | `/api/projects/{slug}/areas/detect` | `detect_project_areas` | Re-run code-area auto-detection on demand. Only auto rows follow the |
 | DELETE | `/api/projects/{slug}/areas/{area_id}` | `remove_project_area` | Remove a code area. The row becomes an 'excluded' tombstone (not a |
 | PATCH | `/api/projects/{slug}/areas/{area_id}` | `update_project_area` | Per-area settings - today that is the T9 push-after-merge toggle |
+| GET | `/api/projects/{slug}/ops-migration` | `get_ops_migration` | Inspect one Project's physical Ops migration without changing its files. |
+| POST | `/api/projects/{slug}/ops-migration/retry` | `retry_ops_migration` | Retry only a currently safe layout using the durable migration marker. |
+| POST | `/api/projects/{slug}/ops-migration/validate` | `validate_ops_migration` | Refresh the read-only collision and retry-safety projection. |
 
 
 ## routes/reviews.py
@@ -330,4 +331,4 @@
 
 
 ---
-_Generated 2026-07-31 11:07 UTC._
+_Generated 2026-07-31 11:08 UTC._

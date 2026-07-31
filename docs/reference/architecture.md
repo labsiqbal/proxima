@@ -308,6 +308,11 @@ remain unchanged, and model-supplied targets are otherwise removed. See
 extended by [ADR-0035](../adr/0035-frame-bound-area-preview-admission.md) and the
 explicit trust transition recorded in
 [ADR-0036](../adr/0036-active-file-preview-is-explicit-trusted-mode.md).
+`container_activity.py` owns cross-process mutation and process-lifetime leases,
+`ops_filesystem.py` owns native no-follow identity primitives, and
+`ops_publication.py` owns descriptor-relative migration publication. Those deep
+ownership modules do not depend on registry projection; `container_registry.py`
+orchestrates them while remaining the canonical root resolver.
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
@@ -343,14 +348,77 @@ stays fail-closed. The intentional repo-at-root plus `ops/` containment is permi
 and `/ops/` is added to the root repo's local git exclude.
 
 Legacy Ops rows at `.` remain usable until migration succeeds. Startup creates a
-dry-run manifest with content hashes, rejects collisions or ambiguous types before
-moving anything, and atomically renames only known Ops-owned paths on the same
-filesystem. A durable `moving` marker supports restart after any completed rename.
+dry-run manifest with content hashes. It includes an existing owner-authored
+`container.md` as a byte-preserving move, or binds exact generated content only when
+that legacy document is absent. It rejects collisions or ambiguous types before
+publication. Regular files are linked into authoritative names from opened,
+manifest-bound descriptors. Directories are published entry by entry relative to
+stable no-follow descriptors. Manifest version 6 records each Proxima-created
+destination directory identity before any child is published, and rejects every
+unbound existing directory even when it is empty. The legacy name is moved only
+after its complete source snapshot is revalidated; a changed name remains untouched
+for owner intervention. Generated documents require anonymous same-filesystem
+storage and persist device, inode, and expected hash before the first visible
+no-clobber recovery link. The exact recovery link remains as a durable anchor; no
+cleanup unlinks a re-resolved name. Every manifest entry binds the opened top-level
+inode plus descendant file and directory identities, and descriptor-relative
+no-follow hashing rejects swaps even when replacement bytes match. A durable
+`moving` marker supports restart after each publication phase. Older moving markers
+upgrade in memory and are persisted at
+the current version only when legacy and physical document state identifies one safe
+continuation; ambiguous candidates remain untouched for owner intervention.
 Failures open a `container_ops_migration` Attention item and retain the legacy row;
 per-Container migration failures are isolated so one unhealthy Container (missing
 drive, deleted Area folder) never aborts control-plane startup.
+`container_registry.inspect_ops_migration` projects the durable marker, exact stored
+Attention reason, `lstat`-based path states, conflicts, active-layout usability, and
+retry safety without changing the filesystem or following symlinks. The Project
+routes expose that projection for inspection and refresh. The retry route first
+requires a safe current projection, then delegates to the same hash-bound,
+same-filesystem migration routine used at startup. Immediately before every manifest
+application, that boundary rechecks current code-Area ownership plus path type,
+symlink, hash, and filesystem constraints, including ownership of the complete
+physical Ops root and an exact match for any existing manifest-bound
+`ops/container.md`. Migration planning, apply, durable state updates, and short-lived
+filesystem mutations share a cross-process per-Container mutation lock. Design,
+Moodboard, chat-media publication, uploads, and turn restore use that same
+root-resolution boundary. Agent runs, project terminals, and preview apps retain a
+shared activity lease for their complete mutation-capable lifetime. The guardian is
+a standalone script selected by verified absolute path, launched with isolated
+Python import behavior, and changes to a trusted working directory before it adopts
+the lease. A detached Linux subreaper sentinel or Windows Job object owns the writer
+tree. If a platform cannot prove complete tree exit, Proxima fails closed by
+refusing to start the guarded writer. The record binds both the guardian and its
+owning API process by PID and process-start identity. A matching live owner is an
+active-process conflict and is never signaled. Proven API orphans can be recovered
+through the Linux sentinel or the exact unpredictable named Windows Job.
+Activity-guarded ACP processes use per-run cache scopes, so one concurrent run
+cannot recycle another run's process. Migration and complete
+Project purge require bounded exclusive quiescence and return an active-process
+reason instead of waiting forever. Explicit owner retry recovers only project-scoped
+guardians whose trusted owner, guardian, interpreter, script, and platform control
+identities still match.
+Upload request bodies are staged before synchronous publication. Virtual roots are
+resolved only after acquiring the appropriate boundary, and late destinations fail
+without replacement. See
+[ADR-0038](../adr/0038-owner-safe-container-activity-boundaries.md).
+Root-repository exclusion traverses `.git/info/exclude` relative to the already-open
+Container descriptor. Fresh Windows Container creation opens and identity-binds the
+Container handle before creating `ops/`, creates every starter path component
+relative to stable no-reparse handles, and uses a relative no-clobber file create,
+while unsafe legacy migration remains
+fail-closed when an equivalent move primitive is unavailable. A repaired
+already-physical layout with open migration Attention
+becomes explicitly retryable; the same boundary revalidates it and resolves Attention
+without moving content. It does not add merge, overwrite, delete, cross-device move,
+symlink-following, or content-authority behavior.
 Archive, Wiki, artifacts, Design, scripts, reports, exports, uploads, and the virtual
-file API all resolve through the active Ops row.
+file API all resolve through the active Ops row. Recovery reveal actions can opt into
+an explicit read-only Container-root file target so legacy `wiki` and physical
+`ops/wiki` remain independently inspectable even after physical Ops becomes active.
+Only tree and file reads accept that target; write, mkdir, rename, and delete remain
+virtual-root operations. The inspection projection declares each root's inspectability
+and refusal reason so unavailable or unsafe root actions never dispatch a read.
 
 The authenticated public Fleet boundary uses Container terminology:
 `GET /api/containers`, `GET /api/containers/{slug}`, and
@@ -398,8 +466,9 @@ public payloads; `knowledge_rebuild_intents` is the per-Container outbox written
 by the database in the same transaction that completes an Ops Task;
 `job_checkpoints` stores job-row/node/run
 state plus git/worktree refs (never a DB backup or filesystem zip);
-`turn_file_journals` stores bounded before-content for paths changed by a Chat turn
-and cascades with the session; `attention_items` stores durable Master, budget, and
+`turn_file_journals` stores bounded before-content plus versioned filesystem-root
+semantics for paths changed by a Chat turn and cascades with the session;
+`attention_items` stores durable Master, budget, and
 permission needs-you items while review/satpam items are projected into the same API;
 `master_decisions` stores each non-approval owner question, bounded response contract,
 pending/deferred/resolved state, response attribution, and exact links to its
@@ -926,7 +995,10 @@ Normal project Chat snapshots bounded eligible files at the turn boundary and us
 tool events as the journal trigger. Only changed paths and their pre-turn bytes are
 persisted; dependency/build/cache/git/media paths and oversized files are skipped.
 The journal lives for the session, previews every impacted path, and warns before an
-owner restores while Master work is active in the same project.
+owner restores while Master work is active in the same project. Pre-migration rows
+default to legacy Container-relative semantics. Restore resolves those virtual paths
+through the current Ops Area while holding the Container mutation lock, so an old
+`wiki/...` entry cannot recreate a hidden root-level tree after migration.
 
 Runs are per-session serialized and bounded-concurrent globally; a heartbeat +
 reaper fail hung runs, and a per-turn quota cancels stragglers. The quota

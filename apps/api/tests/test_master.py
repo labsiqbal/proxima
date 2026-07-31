@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 import subprocess
@@ -8,7 +9,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from proxima_api.master_runtime import master_capacity, execute_tool, handle_master_response
+from proxima_api.master_runtime import (
+    master_capacity,
+    execute_tool,
+    handle_master_response,
+)
 from proxima_api.run_prompting import RunPrompting
 from proxima_api.job_checkpoints import (
     CheckpointError,
@@ -35,14 +40,14 @@ def _client(tmp_path: Path):
     client = TestClient(app)
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
-    created = client.post("/api/projects", json={"slug": "master-project", "name": "Master project"})
+    created = client.post(
+        "/api/projects", json={"slug": "master-project", "name": "Master project"}
+    )
     assert created.status_code == 201
     return app, client
 
 
-def test_master_desk_creates_hidden_system_identity(
-    tmp_path: Path, monkeypatch
-):
+def test_master_desk_creates_hidden_system_identity(tmp_path: Path, monkeypatch):
     app, client = _client(tmp_path)
 
     desk = client.get("/api/master/desk")
@@ -51,24 +56,42 @@ def test_master_desk_creates_hidden_system_identity(
     assert desk.json()["session"]["mode"] == "master"
     assert desk.json()["capacity"] == {"running": 0, "max": 3, "free": 3, "queued": 0}
     assert client.get("/api/sessions").json()["sessions"] == []
-    assert [profile["name"] for profile in client.get("/api/profiles").json()["profiles"]] == ["Default"]
+    assert [
+        profile["name"] for profile in client.get("/api/profiles").json()["profiles"]
+    ] == ["Default"]
     master_profile = app.state.db.execute(
         "SELECT id, name, system_kind FROM profiles WHERE system_kind = 'master'"
     ).fetchone()
-    assert {key: master_profile[key] for key in ("name", "system_kind")} == {"name": "Master", "system_kind": "master"}
-    assert client.post("/api/sessions", json={"title": "Imposter", "profile_id": master_profile["id"]}).status_code == 404
+    assert {key: master_profile[key] for key in ("name", "system_kind")} == {
+        "name": "Master",
+        "system_kind": "master",
+    }
+    assert (
+        client.post(
+            "/api/sessions",
+            json={"title": "Imposter", "profile_id": master_profile["id"]},
+        ).status_code
+        == 404
+    )
     origin_master_session_id = desk.json()["session"]["id"]
-    assert client.patch(f"/api/sessions/{origin_master_session_id}", json={"title": "Imposter"}).status_code == 409
+    assert (
+        client.patch(
+            f"/api/sessions/{origin_master_session_id}", json={"title": "Imposter"}
+        ).status_code
+        == 409
+    )
     assert client.delete(f"/api/sessions/{origin_master_session_id}").status_code == 409
     master_run = client.post(
         "/api/master/messages", json={"content": "List current work"}
     )
     assert master_run.status_code == 409
+    assert master_run.json()["detail"]["code"] == "master_runner_not_conforming"
     assert (
-        master_run.json()["detail"]["code"]
-        == "master_runner_not_conforming"
+        client.put(
+            "/api/settings/master", json={"runner_id": "not-a-runner"}
+        ).status_code
+        == 422
     )
-    assert client.put("/api/settings/master", json={"runner_id": "not-a-runner"}).status_code == 422
     monkeypatch.setattr(
         "proxima_api.routes.master.master_runner_conformance",
         lambda runner_id: (runner_id == "codex", ""),
@@ -76,9 +99,12 @@ def test_master_desk_creates_hidden_system_identity(
     switched = client.put("/api/settings/master", json={"runner_id": "codex"})
     assert switched.status_code == 200
     assert switched.json()["runner_id"] == "codex"
-    assert app.state.db.execute(
-        "SELECT COUNT(*) AS c FROM profiles WHERE system_kind='master'"
-    ).fetchone()["c"] == 1
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) AS c FROM profiles WHERE system_kind='master'"
+        ).fetchone()["c"]
+        == 1
+    )
 
 
 def test_alpha_route_alias_reads_the_same_master_records(tmp_path: Path):
@@ -93,9 +119,12 @@ def test_alpha_route_alias_reads_the_same_master_records(tmp_path: Path):
     assert master.json()["jobs"] == legacy.json()["jobs"]
     assert "master_run" in master.json()
     assert "alpha_run" in legacy.json()
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
-    ).fetchone()[0] == 1
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_master_message_acceptance_returns_canonical_durable_message(
@@ -145,9 +174,9 @@ def test_master_message_acceptance_returns_canonical_durable_message(
         (body["message"]["id"],),
     ).fetchone()
     assert dict(context) == body["message"]["master_target"]
-    listed = client.get(
-        f"/api/sessions/{body['session_id']}/messages"
-    ).json()["messages"]
+    listed = client.get(f"/api/sessions/{body['session_id']}/messages").json()[
+        "messages"
+    ]
     assert listed[0]["master_target"] == body["message"]["master_target"]
     assert client.get("/api/master/desk").json()["event_cursor"] > 0
 
@@ -204,14 +233,20 @@ def test_generic_run_producers_refuse_the_master_session(tmp_path: Path):
     ]
 
     assert [response.status_code for response in responses] == [409] * 6
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM messages WHERE session_id = ?",
-        (session_id,),
-    ).fetchone()[0] == before["messages"]
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM runs WHERE session_id = ?",
-        (session_id,),
-    ).fetchone()[0] == before["runs"]
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0]
+        == before["messages"]
+    )
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM runs WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0]
+        == before["runs"]
+    )
     goal = app.state.db.execute(
         "SELECT goal_text, goal_status FROM sessions WHERE id = ?",
         (session_id,),
@@ -227,10 +262,18 @@ def test_master_focus_is_versioned_durable_and_pending_until_turn_closes(
         "proxima_api.routes.master.master_runner_conformance",
         lambda _runner_id: (True, ""),
     )
-    first = client.post("/api/projects", json={"slug": "focus-one", "name": "Focus one"}).json()
-    second = client.post("/api/projects", json={"slug": "focus-two", "name": "Focus two"}).json()
-    first_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (first["slug"],)).fetchone()["id"]
-    second_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (second["slug"],)).fetchone()["id"]
+    first = client.post(
+        "/api/projects", json={"slug": "focus-one", "name": "Focus one"}
+    ).json()
+    second = client.post(
+        "/api/projects", json={"slug": "focus-two", "name": "Focus two"}
+    ).json()
+    first_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = ?", (first["slug"],)
+    ).fetchone()["id"]
+    second_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = ?", (second["slug"],)
+    ).fetchone()["id"]
 
     desk = client.get("/api/master/desk").json()
     assert desk["focus"] == {
@@ -240,25 +283,46 @@ def test_master_focus_is_versioned_durable_and_pending_until_turn_closes(
         "pending": False,
         "version": 0,
     }
-    changed = client.put("/api/master/focus", json={"container_id": first_id, "version": 0})
+    changed = client.put(
+        "/api/master/focus", json={"container_id": first_id, "version": 0}
+    )
     assert changed.status_code == 200
     focus = changed.json()["focus"]
     assert focus["current_container_id"] == first_id
     assert focus["current_epoch_id"] is not None
     assert focus["version"] == 1
-    assert client.put("/api/master/focus", json={"container_id": second_id, "version": 0}).status_code == 409
+    assert (
+        client.put(
+            "/api/master/focus", json={"container_id": second_id, "version": 0}
+        ).status_code
+        == 409
+    )
 
-    queued = client.post("/api/master/messages", json={"content": "Stay in the first Container"})
+    queued = client.post(
+        "/api/master/messages", json={"content": "Stay in the first Container"}
+    )
     assert queued.status_code == 202
     run_id = queued.json()["run_id"]
-    assert app.state.db.execute("SELECT focus_epoch_id FROM runs WHERE id = ?", (run_id,)).fetchone()["focus_epoch_id"] == focus["current_epoch_id"]
-    pending = client.put("/api/master/focus", json={"container_id": second_id, "version": 1})
+    assert (
+        app.state.db.execute(
+            "SELECT focus_epoch_id FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()["focus_epoch_id"]
+        == focus["current_epoch_id"]
+    )
+    pending = client.put(
+        "/api/master/focus", json={"container_id": second_id, "version": 1}
+    )
     assert pending.status_code == 200
     assert pending.json()["pending"] is True
     assert pending.json()["focus"]["current_container_id"] == first_id
     assert pending.json()["focus"]["pending_container_id"] == second_id
     assert pending.json()["focus"]["pending"] is True
-    assert client.post("/api/master/messages", json={"content": "Must not queue"}).status_code == 409
+    assert (
+        client.post(
+            "/api/master/messages", json={"content": "Must not queue"}
+        ).status_code
+        == 409
+    )
 
     app.state.db.execute("UPDATE runs SET status = 'completed' WHERE id = ?", (run_id,))
     applied = master_focus.apply_pending_if_idle(
@@ -286,9 +350,7 @@ def test_master_focus_is_versioned_durable_and_pending_until_turn_closes(
         "pending": True,
         "version": 4,
     }
-    cancelled = client.post(
-        f"/api/runs/{fleet_turn.json()['run_id']}/cancel"
-    )
+    cancelled = client.post(f"/api/runs/{fleet_turn.json()['run_id']}/cancel")
     assert cancelled.status_code == 200
     after_cancel = client.get("/api/master/desk").json()["focus"]
     assert after_cancel == {
@@ -298,36 +360,57 @@ def test_master_focus_is_versioned_durable_and_pending_until_turn_closes(
         "pending": False,
         "version": 5,
     }
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM messages WHERE session_id = ? AND content LIKE 'Master Focus changed%'",
-        (desk["session"]["id"],),
-    ).fetchone()[0] == 3
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ? AND content LIKE 'Master Focus changed%'",
+            (desk["session"]["id"],),
+        ).fetchone()[0]
+        == 3
+    )
 
 
 def test_master_prompt_history_never_splices_prior_focus_epoch(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/master/desk").json()
     session_id = desk["session"]["id"]
-    first = client.post("/api/projects", json={"slug": "history-one", "name": "History one"}).json()
-    second = client.post("/api/projects", json={"slug": "history-two", "name": "History two"}).json()
-    first_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (first["slug"],)).fetchone()["id"]
-    second_id = app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (second["slug"],)).fetchone()["id"]
+    first = client.post(
+        "/api/projects", json={"slug": "history-one", "name": "History one"}
+    ).json()
+    second = client.post(
+        "/api/projects", json={"slug": "history-two", "name": "History two"}
+    ).json()
+    first_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = ?", (first["slug"],)
+    ).fetchone()["id"]
+    second_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug = ?", (second["slug"],)
+    ).fetchone()["id"]
     epoch_one = master_focus.change_focus(
-        app.state.db, master_session_id=session_id, container_id=first_id, expected_version=0
+        app.state.db,
+        master_session_id=session_id,
+        container_id=first_id,
+        expected_version=0,
     )["current_epoch_id"]
     old = app.state.db.execute(
         "INSERT INTO messages(session_id, role, content) VALUES (?, 'assistant', 'HOSTILE-A-ONLY')",
         (session_id,),
     )
-    master_focus.stamp_message(app.state.db, message_id=old.lastrowid, focus_epoch_id=epoch_one)
+    master_focus.stamp_message(
+        app.state.db, message_id=old.lastrowid, focus_epoch_id=epoch_one
+    )
     epoch_two = master_focus.change_focus(
-        app.state.db, master_session_id=session_id, container_id=second_id, expected_version=1
+        app.state.db,
+        master_session_id=session_id,
+        container_id=second_id,
+        expected_version=1,
     )["current_epoch_id"]
     current = app.state.db.execute(
         "INSERT INTO messages(session_id, role, content) VALUES (?, 'user', 'Container B request')",
         (session_id,),
     )
-    master_focus.stamp_message(app.state.db, message_id=current.lastrowid, focus_epoch_id=epoch_two)
+    master_focus.stamp_message(
+        app.state.db, message_id=current.lastrowid, focus_epoch_id=epoch_two
+    )
 
     history = RunPrompting._master_history(
         app.state.db,
@@ -355,8 +438,7 @@ def test_explicit_master_target_is_validated_and_focuses_before_enqueue(
         "SELECT id FROM projects WHERE slug = 'explicit-target'"
     ).fetchone()["id"]
     target_area_id = app.state.db.execute(
-        "SELECT id FROM project_areas "
-        "WHERE project_id = ? AND kind = 'ops'",
+        "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops'",
         (target_id,),
     ).fetchone()["id"]
 
@@ -454,9 +536,9 @@ def test_explicit_master_target_is_validated_and_focuses_before_enqueue(
     ).fetchone()
     assert epoch["container_id"] == target_id
     assert epoch["ended_at"] is not None
-    assert client.get("/api/master/desk").json()["focus"][
-        "current_container_id"
-    ] is None
+    assert (
+        client.get("/api/master/desk").json()["focus"]["current_container_id"] is None
+    )
 
 
 def test_master_run_messages_are_attributed_at_persistence_boundary(
@@ -501,8 +583,7 @@ def test_master_run_messages_are_attributed_at_persistence_boundary(
         match="Message Focus epoch attribution is immutable",
     ):
         app.state.db.execute(
-            "UPDATE message_focus SET focus_epoch_id = NULL "
-            "WHERE message_id = ?",
+            "UPDATE message_focus SET focus_epoch_id = NULL WHERE message_id = ?",
             (message.lastrowid,),
         )
     with pytest.raises(
@@ -548,14 +629,23 @@ def test_multi_dispatch_rolls_back_every_job_when_one_task_is_invalid(tmp_path: 
         {
             "start": False,
             "tasks": [
-                {"title": "Valid first task", "brief": "Do valid work", "project_slug": project["slug"]},
+                {
+                    "title": "Valid first task",
+                    "brief": "Do valid work",
+                    "project_slug": project["slug"],
+                },
                 {"title": "Missing brief", "project_slug": project["slug"]},
             ],
         },
     )
 
     assert result["ok"] is False
-    assert app.state.db.execute("SELECT COUNT(*) AS c FROM jobs WHERE origin_master_session_id IS NOT NULL").fetchone()["c"] == 0
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) AS c FROM jobs WHERE origin_master_session_id IS NOT NULL"
+        ).fetchone()["c"]
+        == 0
+    )
 
 
 def test_master_batch_dispatch_uses_durable_idempotent_dependency_dag(
@@ -608,12 +698,10 @@ def test_master_batch_dispatch_uses_durable_idempotent_dependency_dag(
         "running",
         "queued",
     ]
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM task_delegations"
-    ).fetchone()[0] == 2
-    dependency = app.state.db.execute(
-        "SELECT * FROM task_dependencies"
-    ).fetchone()
+    assert (
+        app.state.db.execute("SELECT COUNT(*) FROM task_delegations").fetchone()[0] == 2
+    )
+    dependency = app.state.db.execute("SELECT * FROM task_dependencies").fetchone()
     assert dependency["task_id"] == first["result"]["jobs"][1]["id"]
     assert dependency["depends_on_task_id"] == first["result"]["jobs"][0]["id"]
     blocked = app.state.db.execute(
@@ -678,19 +766,30 @@ def test_duplicate_dispatch_envelopes_reject_the_round_before_mutation(tmp_path:
     )
 
     assert calls[0]["error"]["code"] == "duplicate_tool_call"
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM jobs WHERE origin_master_session_id = ?",
-        (desk["session"]["id"],),
-    ).fetchone()[0] == 0
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM jobs WHERE origin_master_session_id = ?",
+            (desk["session"]["id"],),
+        ).fetchone()[0]
+        == 0
+    )
 
 
-def test_master_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_to_three(tmp_path: Path):
+def test_master_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_to_three(
+    tmp_path: Path,
+):
     app, client = _client(tmp_path)
     desk = client.get("/api/master/desk").json()
-    owner_id = app.state.db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    owner_id = app.state.db.execute(
+        "SELECT id FROM users ORDER BY id LIMIT 1"
+    ).fetchone()["id"]
     project = client.get("/api/projects").json()["projects"][0]
     tasks = [
-        {"title": f"Slice {index}", "brief": f"Do independent slice {index}", "project_slug": project["slug"]}
+        {
+            "title": f"Slice {index}",
+            "brief": f"Do independent slice {index}",
+            "project_slug": project["slug"],
+        }
         for index in range(4)
     ]
 
@@ -708,13 +807,23 @@ def test_master_in_process_multi_dispatch_is_autonomous_checkpointed_and_scoped_
     rows = app.state.db.execute(
         "SELECT id, input, origin_master_session_id FROM jobs ORDER BY id"
     ).fetchall()
-    assert {json.loads(row["input"])["execution_policy"] for row in rows} == {"autonomous"}
+    assert {json.loads(row["input"])["execution_policy"] for row in rows} == {
+        "autonomous"
+    }
     assert {row["origin_master_session_id"] for row in rows} == {desk["session"]["id"]}
-    assert app.state.db.execute("SELECT COUNT(*) FROM job_checkpoints").fetchone()[0] == 4
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM audit_log WHERE action = 'master.job.create'"
-    ).fetchone()[0] == 4
-    run_ids = [row["id"] for row in app.state.db.execute("SELECT id FROM runs ORDER BY id").fetchall()]
+    assert (
+        app.state.db.execute("SELECT COUNT(*) FROM job_checkpoints").fetchone()[0] == 4
+    )
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'master.job.create'"
+        ).fetchone()[0]
+        == 4
+    )
+    run_ids = [
+        row["id"]
+        for row in app.state.db.execute("SELECT id FROM runs ORDER BY id").fetchall()
+    ]
     assert all(app.state.worker._auto_approve_on(run_id) for run_id in run_ids)
 
     claimed = [app.state.worker.claim_run() for _ in range(3)]
@@ -734,7 +843,13 @@ def test_master_capacity_counts_each_queued_worker_run(tmp_path: Path):
         desk["session"]["id"],
         "dispatch_jobs",
         {
-            "tasks": [{"title": "Parallel plan", "brief": "Run branches", "project_slug": project["slug"]}],
+            "tasks": [
+                {
+                    "title": "Parallel plan",
+                    "brief": "Run branches",
+                    "project_slug": project["slug"],
+                }
+            ],
         },
     )["result"]["jobs"][0]
     session_id = app.state.db.execute(
@@ -762,13 +877,29 @@ def test_master_capacity_counts_each_queued_worker_run(tmp_path: Path):
 def test_master_starts_saved_graph_plan_through_in_process_engine(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/master/desk").json()
-    owner_id = app.state.db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
-    project_id = app.state.db.execute("SELECT id FROM projects WHERE slug='master-project'").fetchone()["id"]
+    owner_id = app.state.db.execute(
+        "SELECT id FROM users ORDER BY id LIMIT 1"
+    ).fetchone()["id"]
+    project_id = app.state.db.execute(
+        "SELECT id FROM projects WHERE slug='master-project'"
+    ).fetchone()["id"]
     workflow_id = app.state.db.execute(
         "INSERT INTO workflows(project_id, name, graph, steps, created_by) VALUES (?, 'Saved plan', ?, '[]', ?)",
         (
             project_id,
-            json.dumps({"nodes": [{"id": "one", "name": "One", "instruction": "Do one", "output_kind": "text"}], "edges": []}),
+            json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "id": "one",
+                            "name": "One",
+                            "instruction": "Do one",
+                            "output_kind": "text",
+                        }
+                    ],
+                    "edges": [],
+                }
+            ),
             owner_id,
         ),
     ).lastrowid
@@ -783,10 +914,17 @@ def test_master_starts_saved_graph_plan_through_in_process_engine(tmp_path: Path
     )
 
     assert result["ok"] is True
-    job = app.state.db.execute("SELECT * FROM jobs WHERE id = ?", (result["result"]["job"]["id"],)).fetchone()
+    job = app.state.db.execute(
+        "SELECT * FROM jobs WHERE id = ?", (result["result"]["job"]["id"],)
+    ).fetchone()
     assert job["engine"] == "graph"
     assert job["origin_master_session_id"] == desk["session"]["id"]
-    assert app.state.db.execute("SELECT COUNT(*) FROM job_checkpoints WHERE job_id = ?", (job["id"],)).fetchone()[0] == 1
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM job_checkpoints WHERE job_id = ?", (job["id"],)
+        ).fetchone()[0]
+        == 1
+    )
     app.state.db.execute(
         "UPDATE jobs SET status = 'review' WHERE id = ?",
         (job["id"],),
@@ -812,7 +950,10 @@ def test_checkpoint_restore_never_resets_the_shared_project_checkout(tmp_path: P
     project = client.get("/api/projects").json()["projects"][0]
     root = Path(project["path"])
     subprocess.run(["git", "init", "-q", str(root)], check=True)
-    subprocess.run(["git", "-C", str(root), "config", "user.email", "owner@example.invalid"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "owner@example.invalid"],
+        check=True,
+    )
     subprocess.run(["git", "-C", str(root), "config", "user.name", "Owner"], check=True)
     (root / "state.txt").write_text("before\n")
     subprocess.run(["git", "-C", str(root), "add", "state.txt"], check=True)
@@ -823,7 +964,16 @@ def test_checkpoint_restore_never_resets_the_shared_project_checkout(tmp_path: P
         {"id": 1},
         desk["session"]["id"],
         "dispatch_jobs",
-        {"start": False, "tasks": [{"title": "Safe restore", "brief": "Work", "project_slug": project["slug"]}]},
+        {
+            "start": False,
+            "tasks": [
+                {
+                    "title": "Safe restore",
+                    "brief": "Work",
+                    "project_slug": project["slug"],
+                }
+            ],
+        },
     )["result"]["jobs"][0]
     checkpoint = create_checkpoint(app.state.db, job["id"])
     assert checkpoint["git_refs"][0]["restore_strategy"] == "reference_only"
@@ -832,16 +982,25 @@ def test_checkpoint_restore_never_resets_the_shared_project_checkout(tmp_path: P
     subprocess.run(["git", "-C", str(root), "add", "state.txt"], check=True)
     subprocess.run(["git", "-C", str(root), "commit", "-qm", "later"], check=True)
     later_head = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, text=True, capture_output=True
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        text=True,
+        capture_output=True,
     ).stdout.strip()
     app.state.db.execute("UPDATE jobs SET status='done' WHERE id=?", (job["id"],))
 
     restored = restore_checkpoint(app.state.db, checkpoint["id"], confirmed=True)
 
     assert restored["git_restored"] == []
-    assert subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, text=True, capture_output=True
-    ).stdout.strip() == later_head
+    assert (
+        subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        == later_head
+    )
     assert (root / "state.txt").read_text() == "later\n"
 
 
@@ -851,7 +1010,10 @@ def test_master_repo_checkpoint_captures_and_restores_the_job_worktree(tmp_path:
     project = client.get("/api/projects").json()["projects"][0]
     root = Path(project["path"])
     subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
-    subprocess.run(["git", "-C", str(root), "config", "user.email", "owner@example.invalid"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "owner@example.invalid"],
+        check=True,
+    )
     subprocess.run(["git", "-C", str(root), "config", "user.name", "Owner"], check=True)
     (root / "state.txt").write_text("before\n")
     subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
@@ -866,17 +1028,22 @@ def test_master_repo_checkpoint_captures_and_restores_the_job_worktree(tmp_path:
         desk["session"]["id"],
         "dispatch_jobs",
         {
-            "tasks": [{
-                "title": "Restorable repo work",
-                "brief": "Change the repo",
-                "project_slug": project["slug"],
-                "target_area_id": area_id,
-            }],
+            "tasks": [
+                {
+                    "title": "Restorable repo work",
+                    "brief": "Change the repo",
+                    "project_slug": project["slug"],
+                    "target_area_id": area_id,
+                }
+            ],
         },
     )["result"]["jobs"][0]
-    checkpoint = dict(app.state.db.execute(
-        "SELECT * FROM job_checkpoints WHERE job_id = ? ORDER BY id LIMIT 1", (job["id"],)
-    ).fetchone())
+    checkpoint = dict(
+        app.state.db.execute(
+            "SELECT * FROM job_checkpoints WHERE job_id = ? ORDER BY id LIMIT 1",
+            (job["id"],),
+        ).fetchone()
+    )
     checkpoint["git_refs"] = json.loads(checkpoint["git_refs_json"])
     assert checkpoint["git_refs"][0]["restore_strategy"] == "worktree_reset"
     worktree = Path(checkpoint["git_refs"][0]["worktree_path"])
@@ -921,12 +1088,14 @@ def test_checkpoint_restore_compensates_after_post_reset_failure(
         desk["session"]["id"],
         "dispatch_jobs",
         {
-            "tasks": [{
-                "title": "Compensated repo work",
-                "brief": "Change the repo",
-                "project_slug": project["slug"],
-                "target_area_id": areas["code_areas"][0]["id"],
-            }],
+            "tasks": [
+                {
+                    "title": "Compensated repo work",
+                    "brief": "Change the repo",
+                    "project_slug": project["slug"],
+                    "target_area_id": areas["code_areas"][0]["id"],
+                }
+            ],
         },
     )["result"]["jobs"][0]
     checkpoint = app.state.db.execute(
@@ -962,17 +1131,23 @@ def test_checkpoint_restore_compensates_after_post_reset_failure(
             confirmed=True,
         )
 
-    assert subprocess.run(
-        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
-        check=True,
-        text=True,
-        capture_output=True,
-    ).stdout.strip() == after_head
+    assert (
+        subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        == after_head
+    )
     assert (worktree / "state.txt").read_text() == "after\n"
-    assert app.state.db.execute(
-        "SELECT status FROM jobs WHERE id = ?",
-        (job["id"],),
-    ).fetchone()["status"] == "failed"
+    assert (
+        app.state.db.execute(
+            "SELECT status FROM jobs WHERE id = ?",
+            (job["id"],),
+        ).fetchone()["status"]
+        == "failed"
+    )
 
 
 def test_checkpoint_restore_callback_failure_prevents_destructive_reset(
@@ -992,11 +1167,13 @@ def test_checkpoint_restore_callback_failure_prevents_destructive_reset(
         "dispatch_jobs",
         {
             "start": False,
-            "tasks": [{
-                "title": "Validate before reset",
-                "brief": "Keep destructive restore safe",
-                "project_slug": project["slug"],
-            }],
+            "tasks": [
+                {
+                    "title": "Validate before reset",
+                    "brief": "Keep destructive restore safe",
+                    "project_slug": project["slug"],
+                }
+            ],
         },
     )["result"]["jobs"][0]
     checkpoint = create_checkpoint(app.state.db, job["id"])
@@ -1006,11 +1183,13 @@ def test_checkpoint_restore_callback_failure_prevents_destructive_reset(
         "UPDATE job_checkpoints SET git_refs_json = ? WHERE id = ?",
         (
             json.dumps(
-                [{
-                    "restore_strategy": "worktree_reset",
-                    "worktree_path": str(fake_worktree),
-                    "sha": "checkpoint",
-                }]
+                [
+                    {
+                        "restore_strategy": "worktree_reset",
+                        "worktree_path": str(fake_worktree),
+                        "sha": "checkpoint",
+                    }
+                ]
             ),
             checkpoint["id"],
         ),
@@ -1044,10 +1223,13 @@ def test_checkpoint_restore_callback_failure_prevents_destructive_reset(
         )
 
     assert reset_called is False
-    assert app.state.db.execute(
-        "SELECT status FROM jobs WHERE id = ?",
-        (job["id"],),
-    ).fetchone()["status"] == "failed"
+    assert (
+        app.state.db.execute(
+            "SELECT status FROM jobs WHERE id = ?",
+            (job["id"],),
+        ).fetchone()["status"]
+        == "failed"
+    )
 
 
 def test_checkpoint_restore_rereads_concurrent_progress_after_preflight(
@@ -1067,11 +1249,13 @@ def test_checkpoint_restore_rereads_concurrent_progress_after_preflight(
         "dispatch_jobs",
         {
             "start": False,
-            "tasks": [{
-                "title": "Concurrent restore",
-                "brief": "Preserve newly started work",
-                "project_slug": project["slug"],
-            }],
+            "tasks": [
+                {
+                    "title": "Concurrent restore",
+                    "brief": "Preserve newly started work",
+                    "project_slug": project["slug"],
+                }
+            ],
         },
     )["result"]["jobs"][0]
     checkpoint = create_checkpoint(app.state.db, job["id"])
@@ -1125,29 +1309,38 @@ def test_checkpoint_restore_rereads_concurrent_progress_after_preflight(
     racer.close()
 
     assert response.status_code == 409
-    assert response.json()["detail"] == (
-        "conflicting jobs are running in this project"
+    assert response.json()["detail"] == ("conflicting jobs are running in this project")
+    assert (
+        app.state.db.execute(
+            "SELECT status FROM jobs WHERE id = ?",
+            (job["id"],),
+        ).fetchone()["status"]
+        == "running"
     )
-    assert app.state.db.execute(
-        "SELECT status FROM jobs WHERE id = ?",
-        (job["id"],),
-    ).fetchone()["status"] == "running"
-    assert app.state.db.execute(
-        "SELECT status FROM runs WHERE id = ?",
-        (raced_run_id,),
-    ).fetchone()["status"] == "running"
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM events WHERE type = 'job.update' "
-        "AND json_extract(payload, '$.mutation') = 'checkpoint_restored' "
-        "AND json_extract(payload, '$.job_id') = ?",
-        (job["id"],),
-    ).fetchone()[0] == 0
+    assert (
+        app.state.db.execute(
+            "SELECT status FROM runs WHERE id = ?",
+            (raced_run_id,),
+        ).fetchone()["status"]
+        == "running"
+    )
+    assert (
+        app.state.db.execute(
+            "SELECT COUNT(*) FROM events WHERE type = 'job.update' "
+            "AND json_extract(payload, '$.mutation') = 'checkpoint_restored' "
+            "AND json_extract(payload, '$.job_id') = ?",
+            (job["id"],),
+        ).fetchone()[0]
+        == 0
+    )
 
 
 def test_checkpoint_fifo_keeps_thirty_unpinned(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/master/desk").json()
-    owner_id = app.state.db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    owner_id = app.state.db.execute(
+        "SELECT id FROM users ORDER BY id LIMIT 1"
+    ).fetchone()["id"]
     project = client.get("/api/projects").json()["projects"][0]
     result = execute_tool(
         app.state.db,
@@ -1155,7 +1348,12 @@ def test_checkpoint_fifo_keeps_thirty_unpinned(tmp_path: Path):
         {"id": owner_id},
         desk["session"]["id"],
         "dispatch_jobs",
-        {"tasks": [{"title": "One", "brief": "Do one", "project_slug": project["slug"]}], "start": False},
+        {
+            "tasks": [
+                {"title": "One", "brief": "Do one", "project_slug": project["slug"]}
+            ],
+            "start": False,
+        },
     )
     job_id = result["result"]["jobs"][0]["id"]
 
@@ -1202,13 +1400,61 @@ def test_turn_restore_previews_paths_and_restores_pre_turn_content(tmp_path: Pat
     assert preview.json()["paths"] == ["notes.txt"]
     assert restored.status_code == 200
     assert target.read_text() == "before"
-    assert client.get(f"/api/chat/messages/{message_id}/restore-turn").status_code == 404
+    assert (
+        client.get(f"/api/chat/messages/{message_id}/restore-turn").status_code == 404
+    )
 
 
-def test_unattended_supervisor_enforces_turn_budget_and_surfaces_clean_stop(tmp_path: Path):
+def test_pre_migration_turn_journal_restores_through_active_ops_root(
+    tmp_path: Path,
+):
+    app, client = _client(tmp_path)
+    project = client.get("/api/projects").json()["projects"][0]
+    root = Path(project["path"])
+    target = root / "ops" / "wiki" / "migrated.md"
+    target.write_text("after", encoding="utf-8")
+    session = client.post(
+        "/api/sessions",
+        json={"title": "Legacy journal", "project_slug": project["slug"]},
+    ).json()
+    message_id = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content) "
+        "VALUES (?, 'assistant', 'Changed it')",
+        (session["id"],),
+    ).lastrowid
+    entries = [
+        {
+            "path": "wiki/migrated.md",
+            "before_hash": None,
+            "before_content_b64": base64.b64encode(b"before").decode("ascii"),
+            "after_hash": "unused",
+        }
+    ]
+    app.state.db.execute(
+        "INSERT INTO turn_file_journals("
+        "message_id, session_id, entries_json"
+        ") VALUES (?, ?, ?)",
+        (message_id, session["id"], json.dumps(entries)),
+    )
+
+    restored = client.post(
+        f"/api/chat/messages/{message_id}/restore-turn",
+        json={"confirm": True},
+    )
+
+    assert restored.status_code == 200, restored.text
+    assert target.read_text(encoding="utf-8") == "before"
+    assert not (root / "wiki").exists()
+
+
+def test_unattended_supervisor_enforces_turn_budget_and_surfaces_clean_stop(
+    tmp_path: Path,
+):
     app, client = _client(tmp_path)
     desk = client.get("/api/master/desk").json()
-    owner_id = app.state.db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    owner_id = app.state.db.execute(
+        "SELECT id FROM users ORDER BY id LIMIT 1"
+    ).fetchone()["id"]
     project = client.get("/api/projects").json()["projects"][0]
     execute_tool(
         app.state.db,
@@ -1224,7 +1470,9 @@ def test_unattended_supervisor_enforces_turn_budget_and_surfaces_clean_stop(tmp_
             "start": False,
         },
     )
-    app_settings.set_master_settings(app.state.worker_db, unattended=True, budget_turns=1)
+    app_settings.set_master_settings(
+        app.state.worker_db, unattended=True, budget_turns=1
+    )
 
     first = app.state.master_supervisor.tick()
     second = app.state.master_supervisor.tick()
@@ -1249,7 +1497,15 @@ def test_script_trust_attention_shows_hash_and_uses_in_process_approval(tmp_path
             "title": "Script plan",
             "project_slug": project["slug"],
             "graph": {
-                "nodes": [{"id": "script", "name": "Script", "type": "script", "command": "hello.py", "output_kind": "text"}],
+                "nodes": [
+                    {
+                        "id": "script",
+                        "name": "Script",
+                        "type": "script",
+                        "command": "hello.py",
+                        "output_kind": "text",
+                    }
+                ],
                 "edges": [],
             },
         },
@@ -1269,19 +1525,26 @@ def test_script_trust_attention_shows_hash_and_uses_in_process_approval(tmp_path
     assert item["inline_ok"] is True
     assert item["run_projection"]["status"] == "failed"
     assert item["created_at"].endswith("Z")
-    approved = client.post(f"/api/attention/{item['id']}/act", json={"action": "approve"})
+    approved = client.post(
+        f"/api/attention/{item['id']}/act", json={"action": "approve"}
+    )
     assert approved.status_code == 200
-    assert app.state.db.execute(
-        "SELECT content_hash FROM script_trust WHERE project_id = (SELECT id FROM projects WHERE slug=?)",
-        (project["slug"],),
-    ).fetchone()["content_hash"] == digest
+    assert (
+        app.state.db.execute(
+            "SELECT content_hash FROM script_trust WHERE project_id = (SELECT id FROM projects WHERE slug=?)",
+            (project["slug"],),
+        ).fetchone()["content_hash"]
+        == digest
+    )
 
 
 def test_permission_attention_closes_when_choice_is_delivered(tmp_path: Path):
     app, client = _client(tmp_path)
     session = client.post("/api/sessions", json={"title": "Permission"}).json()
     user = app.state.db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
-    profile = app.state.db.execute("SELECT * FROM profiles WHERE is_default = 1").fetchone()
+    profile = app.state.db.execute(
+        "SELECT * FROM profiles WHERE is_default = 1"
+    ).fetchone()
     run_id = app.state.db.execute(
         "INSERT INTO runs(session_id, user_id, profile_id, runner_id, status, prompt) "
         "VALUES (?, ?, ?, ?, 'running', 'test')",
@@ -1299,21 +1562,31 @@ def test_permission_attention_closes_when_choice_is_delivered(tmp_path: Path):
 
     app.state.worker.active_runs[run_id] = (Proc(), "session")
     assert app.state.worker.resolve_permission(run_id, "request-1", "allow") is True
-    assert app.state.db.execute(
-        "SELECT status FROM attention_items WHERE source_key = ?",
-        (f"permission:{run_id}:request-1",),
-    ).fetchone()["status"] == "resolved"
+    assert (
+        app.state.db.execute(
+            "SELECT status FROM attention_items WHERE source_key = ?",
+            (f"permission:{run_id}:request-1",),
+        ).fetchone()["status"]
+        == "resolved"
+    )
 
 
 def test_disallowed_master_tool_returns_structured_error(tmp_path: Path):
     app, client = _client(tmp_path)
     desk = client.get("/api/master/desk").json()
-    owner_id = app.state.db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    owner_id = app.state.db.execute(
+        "SELECT id FROM users ORDER BY id LIMIT 1"
+    ).fetchone()["id"]
 
-    result = execute_tool(app.state.db, app, {"id": owner_id}, desk["session"]["id"], "wipe_database", {})
+    result = execute_tool(
+        app.state.db, app, {"id": owner_id}, desk["session"]["id"], "wipe_database", {}
+    )
 
     assert result == {
         "ok": False,
         "tool": "wipe_database",
-        "error": {"code": "tool_not_allowed", "message": "Master tool 'wipe_database' is not allowed"},
+        "error": {
+            "code": "tool_not_allowed",
+            "message": "Master tool 'wipe_database' is not allowed",
+        },
     }
