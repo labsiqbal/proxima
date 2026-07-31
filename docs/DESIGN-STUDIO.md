@@ -161,6 +161,8 @@ source, optional note, and tags. Search and tag filters stay client-side.
 
 - Storage: `artifacts/moodboard/items.json`, with cached OG images and uploaded
   screenshots under `artifacts/moodboard/images/`.
+- Display: local card images, including SVG, load through authenticated raw bytes into
+  managed blob URLs rather than preview-origin document rendering.
 - API: the gated `/api/projects/{slug}/design/moodboard` list/add route plus item
   patch/delete routes in `routes/design.py`.
 - Link add: `moodboard.fetch_link_preview()` reads bounded HTML metadata and caches the

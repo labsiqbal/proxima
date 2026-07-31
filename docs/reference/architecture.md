@@ -274,8 +274,9 @@ Ops-at-dot keeps `ops/...` as an Area-relative literal instead of stripping it.
 `target_preview.py` owns targeted preview transport. The authenticated
 `/api/target-preview/{slug}/{kind}/{id}/{path}` entry validates the locator and asks
 `TargetPreviewManager` for an Area-only origin: a named local host, an apps-domain
-host, or a plain HTTP relay. HTTPS remote entry fails with 503 when no distinct TLS
-Area origin is configured. `TargetPreviewMiddleware` routes Area hosts before the
+host, or a plain HTTP relay. HTTPS remote HTML entry fails with 503 when no distinct
+TLS Area origin is configured, in both passive and trusted active mode.
+`TargetPreviewMiddleware` routes Area hosts before the
 application and applies one capability and Fetch Metadata admission gate to every
 transport. Each admitted resource is resolved again through `file_targets.py`.
 HTML enters that origin with a passive, script-free capability by default. Artifact
@@ -295,10 +296,10 @@ Markdown resources resolve relative to both the source document directory and it
 target. A validated target context is reused throughout each tree, Archive, or
 message-list request while each path still crosses the realpath jail. Artifact links
 whose Area context or individual path cannot be validated are omitted rather than
-downgraded to a path-only identity. Design canvas, thumbnail, and export images with a
-canonical target are hydrated from authenticated raw bytes into managed blob URLs,
-which are revoked with component lifetime. Design reply locator fields are treated as
-untrusted:
+downgraded to a path-only identity. Design canvas, thumbnail, Moodboard, and export
+images with a canonical target, plus SVG pixels on those surfaces, are hydrated from
+authenticated raw bytes into managed blob URLs, which are revoked with component
+lifetime. Design reply locator fields are treated as untrusted:
 an existing image or frame target survives only when both the layer id and source
 remain unchanged, and model-supplied targets are otherwise removed. See
 [ADR-0029](../adr/0029-canonical-file-targets.md),
@@ -597,8 +598,9 @@ HTML frames use the Area-stable preview namespace, and Markdown sibling resource
 inherit the source document's Area and directory. Chat and task result media,
 Iterate and Archive Markdown, session deletion, and the Design Studio image bridge
 retain the same target. Design scene image layers persist the target beside the
-source path, and canvas, gallery, Archive thumbnail, image-frame, and export
-renderers pass it to the media resolver.
+source path, and canvas, gallery, Moodboard, Archive thumbnail, image-frame, and
+export renderers pass it to the media resolver. SVG display uses authenticated raw
+bytes rather than preview-origin document rendering.
 
 **Add feedback to chat** resolves the record's existing `session_id` (or the chat that
 opened the artifact), returns to that session, and seeds the ordinary `Composer` with

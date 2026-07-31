@@ -1359,8 +1359,9 @@ mode. Active content remains origin-isolated from Proxima and every other Area.
 Disabling, closing, changing Areas, or restarting revokes the active generation and
 reloads passive content; stale cookies and URLs cannot restore it. Service Workers and
 Shared Workers remain unavailable. An HTTPS remote install without a distinct TLS
-Area origin returns 503 for active canonical previews; passive media remains
-available through the authenticated route. The security contract and deployment
+Area origin returns 503 for HTML preview entry in both passive and trusted active
+mode; non-HTML passive media remains available through the authenticated route.
+The security contract and deployment
 matrix are owned by [Security boundaries](security-boundaries.md#canonical-file-preview);
 the locator and request flow are detailed in [Architecture](reference/architecture.md),
 [ADR-0029](adr/0029-canonical-file-targets.md), and
@@ -1574,7 +1575,8 @@ Chat result cards and the iterate Result view keep using the live scan
 
 **Native rich review (ArtifactViewer v2):** opening an ordinary artifact keeps the
 existing image, video, PDF, Markdown, HTML, JSON, CSV, and text renderers, but wraps
-them in one review workspace. The owner can pin numbered notes directly onto the
+them in one review workspace. HTML uses the passive Area preview from §11 until the
+owner enables trusted active mode for that viewer. The owner can pin numbered notes directly onto the
 rendered artifact, add overall feedback, and choose **Add feedback to chat**. Review
 notes are browser-local until that action; Proxima then opens the artifact's producing
 chat session and places an editable, path-linked review brief in the normal composer.
