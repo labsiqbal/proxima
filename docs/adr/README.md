@@ -68,4 +68,8 @@ Supersedes / superseded-by / links to feature docs.
 | [0008](0008-external-safe-update-authority.md) | Safe update authority stays outside candidate releases | Accepted |
 | [0009](0009-one-durable-master-interface-state.md) | One durable Master interface state | Accepted |
 | [0010](0010-preview-authority-requires-verified-connections.md) | Preview authority requires verified managed connections | Superseded by ADR-0011 |
-| [0011](0011-preview-containment-membership-and-detached-output.md) | Preview containment membership and detached output | Accepted |
+| [0011](0011-preview-containment-membership-and-detached-output.md) | Preview containment membership and detached output | Superseded by ADR-0012 |
+| [0012](0012-exact-containment-proof-gates-preview-authority.md) | Exact containment proof gates preview authority | Accepted |
+| [0013](0013-detached-preview-output-uses-os-sink-helpers.md) | Detached preview output uses OS sink helpers | Accepted |
+| [0014](0014-automatic-preview-relay-binds-explicit-interfaces.md) | Automatic preview relay binds explicit interfaces | Accepted |
+| [0015](0015-preview-authentication-precedes-target-resolution.md) | Preview authentication precedes target resolution | Accepted |

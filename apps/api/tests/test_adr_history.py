@@ -29,7 +29,14 @@ def test_preview_authority_adr_history_is_append_only():
         / "adr"
         / "0011-preview-containment-membership-and-detached-output.md"
     ).read_text(encoding="utf-8")
-    assert "- Status: Accepted" in adr_0011
+    assert "- Status: Superseded by ADR-0012" in adr_0011
+    accepted_0011 = adr_0011.replace(
+        "- Status: Superseded by ADR-0012",
+        "- Status: Accepted",
+    )
+    assert hashlib.sha256(accepted_0011.encode()).hexdigest() == (
+        "23881eb7a47ee1aae99d7235f239d615739608df7f964589e1dbc9c4650e5133"
+    )
     assert "Supersedes ADR-0010" in adr_0011
 
     index = (ROOT / "docs" / "adr" / "README.md").read_text(
@@ -42,5 +49,28 @@ def test_preview_authority_adr_history_is_append_only():
     ) in index
     assert (
         "0011-preview-containment-membership-and-detached-output.md) "
-        "| Preview containment membership and detached output | Accepted |"
+        "| Preview containment membership and detached output "
+        "| Superseded by ADR-0012 |"
     ) in index
+
+    successors = {
+        "0012-exact-containment-proof-gates-preview-authority.md": (
+            "Exact containment proof gates preview authority"
+        ),
+        "0013-detached-preview-output-uses-os-sink-helpers.md": (
+            "Detached preview output uses OS sink helpers"
+        ),
+        "0014-automatic-preview-relay-binds-explicit-interfaces.md": (
+            "Automatic preview relay binds explicit interfaces"
+        ),
+        "0015-preview-authentication-precedes-target-resolution.md": (
+            "Preview authentication precedes target resolution"
+        ),
+    }
+    for filename, title in successors.items():
+        adr = (ROOT / "docs" / "adr" / filename).read_text(
+            encoding="utf-8",
+        )
+        assert "- Status: Accepted" in adr
+        assert adr.count("\n## Decision\n") == 1
+        assert f"| {title} | Accepted |" in index

@@ -7,7 +7,7 @@ relative assets resolve and no port is exposed directly.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import json
 import os
@@ -20,11 +20,11 @@ import time
 from typing import Any, Protocol
 
 from .process_containment import pid_namespace_argv
+from .preview_output import BoundedLineBuffer, DetachedOutputSinks
 from .runners import subprocess_env
 
 PROLONGED_START_SECONDS = 15
 FINAL_DRAIN_SECONDS = 1
-CONTAINMENT_INFO_SECONDS = 1
 _LINEAGE_ENV = "PROXIMA_APP_LINEAGE"
 
 
@@ -217,6 +217,11 @@ def _socket_ownership(
         _is_descendant(pid, authority.leader_pid, processes)
         for pid in owner_pids
     )
+    live_lineage = all(
+        processes[pid][1] == group_id
+        or _is_descendant(pid, authority.leader_pid, processes)
+        for pid in owner_pids
+    )
     lineage_matches = all(
         _process_has_lineage(pid, authority.lineage_token)
         for pid in owner_pids
@@ -231,7 +236,11 @@ def _socket_ownership(
         )
     if not managed_group and not descendants and not lineage_matches:
         return PortOwnership.FOREIGN
-    if not lineage_matches or authority.containment_pid_namespace is None:
+    if (
+        not live_lineage
+        or not lineage_matches
+        or authority.containment_pid_namespace is None
+    ):
         return PortOwnership.DETACHED
     owner_namespaces = {
         _pid_namespace_id(pid)
@@ -328,7 +337,7 @@ class AppManager:
         # and after an explicit Stop.
         self._last_exit: dict[str, dict[str, Any]] = {}
         self._retained_effects: list[EffectLease] = []
-        self._discard_tasks: set[asyncio.Task[None]] = set()
+        self._output_sinks = DetachedOutputSinks()
 
     def _finish_effect(
         self,
@@ -353,7 +362,12 @@ class AppManager:
         *,
         effect_lease: EffectLease | None = None,
     ) -> None:
-        await self.stop(slug, preserve_status=False)
+        try:
+            await self.stop(slug, preserve_status=False)
+        except BaseException:
+            if effect_lease is not None:
+                effect_lease.release()
+            raise
         # Fail before spawning when a user-owned preview has this port.  In
         # particular, never "fix" a collision by killing a process we do not own.
         if _port_open(port):
@@ -362,6 +376,8 @@ class AppManager:
                 requested_port=port,
                 log=[],
             )
+            if effect_lease is not None:
+                effect_lease.release()
             raise PortInUseError(port)
         self._last_exit.pop(slug, None)
         env = subprocess_env(
@@ -381,10 +397,13 @@ class AppManager:
         # group so we can clean-kill the whole tree later.
         containment_read_fd: int | None = None
         containment_write_fd: int | None = None
+        spawn_task: asyncio.Task[asyncio.subprocess.Process] | None = None
         try:
             if IS_WINDOWS:
                 shell_argv = ["cmd", "/c", command]
-                extra = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                extra: dict[str, Any] = {
+                    "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
+                }
             else:
                 shell_argv = ["bash", "-lc", command]
                 extra = {"start_new_session": True}
@@ -398,37 +417,93 @@ class AppManager:
                     info_fd=containment_write_fd,
                 )
                 extra["pass_fds"] = (containment_write_fd,)
-            proc = await asyncio.create_subprocess_exec(
-                *shell_argv, cwd=cwd, env=env,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                **extra,
+            spawn_task = asyncio.create_task(
+                asyncio.create_subprocess_exec(
+                    *shell_argv,
+                    cwd=cwd,
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    **extra,
+                )
             )
+            proc = await asyncio.shield(spawn_task)
+        except asyncio.CancelledError as cancellation:
+            if spawn_task is None:
+                self._close_fd(containment_read_fd)
+                if effect_lease is not None:
+                    effect_lease.release()
+                raise
+            try:
+                proc = await spawn_task
+            except BaseException:
+                self._close_fd(containment_read_fd)
+                if effect_lease is not None:
+                    effect_lease.release()
+                raise cancellation
+            finally:
+                self._close_fd(containment_write_fd)
+                containment_write_fd = None
+            app = self._register_app(
+                slug=slug,
+                proc=proc,
+                port=port,
+                command=command,
+                lineage_token=lineage_token,
+                effect_lease=effect_lease,
+                containment_read_fd=containment_read_fd,
+            )
+            cleanup = asyncio.create_task(
+                self._abandon_provisional_app(slug, app)
+            )
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                await cleanup
+            raise cancellation
         except BaseException:
-            if containment_read_fd is not None:
-                os.close(containment_read_fd)
+            self._close_fd(containment_read_fd)
             if effect_lease is not None:
                 effect_lease.release()
             raise
         finally:
-            if containment_write_fd is not None:
-                os.close(containment_write_fd)
-        containment_pid_namespace = None
-        if containment_read_fd is not None:
-            try:
-                containment_pid_namespace = (
-                    await self._read_containment_pid_namespace(
-                        containment_read_fd,
-                        proc,
-                    )
-                )
-            finally:
-                os.close(containment_read_fd)
+            self._close_fd(containment_write_fd)
+        self._register_app(
+            slug=slug,
+            proc=proc,
+            port=port,
+            command=command,
+            lineage_token=lineage_token,
+            effect_lease=effect_lease,
+            containment_read_fd=containment_read_fd,
+        )
+
+    @staticmethod
+    def _close_fd(fd: int | None) -> None:
+        if fd is None:
+            return
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+    def _register_app(
+        self,
+        *,
+        slug: str,
+        proc: asyncio.subprocess.Process,
+        port: int,
+        command: str,
+        lineage_token: str,
+        effect_lease: EffectLease | None,
+        containment_read_fd: int | None,
+    ) -> dict[str, Any]:
         authority = ProcessAuthority(
             leader_pid=proc.pid,
             process_group=proc.pid if not IS_WINDOWS else None,
             lineage_token=lineage_token,
             containment_required=self.contained,
-            containment_pid_namespace=containment_pid_namespace,
+            containment_pid_namespace=None,
         )
         app = {
             "proc": proc,
@@ -441,18 +516,59 @@ class AppManager:
         }
         self._apps[slug] = app
         app["drain_task"] = asyncio.create_task(self._drain(slug, proc))
+        if containment_read_fd is not None:
+            app["authority_task"] = asyncio.create_task(
+                self._complete_containment_authority(
+                    slug,
+                    app,
+                    containment_read_fd,
+                )
+            )
+        return app
+
+    async def _complete_containment_authority(
+        self,
+        slug: str,
+        app: dict[str, Any],
+        info_fd: int,
+    ) -> None:
+        try:
+            namespace = await self._read_containment_pid_namespace(
+                info_fd,
+                app["proc"],
+            )
+        finally:
+            self._close_fd(info_fd)
+        if self._apps.get(slug) is app:
+            app["authority"] = replace(
+                app["authority"],
+                containment_pid_namespace=namespace,
+            )
+
+    async def _abandon_provisional_app(
+        self,
+        slug: str,
+        app: dict[str, Any],
+    ) -> None:
+        if self._apps.get(slug) is app:
+            await self.stop(slug, preserve_status=False)
+
+    @staticmethod
+    async def _settle_authority_task(app: dict[str, Any]) -> None:
+        task = app.get("authority_task")
+        if not isinstance(task, asyncio.Task) or task is asyncio.current_task():
+            return
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     @staticmethod
     async def _read_containment_pid_namespace(
         info_fd: int,
         proc: asyncio.subprocess.Process,
     ) -> int | None:
-        deadline = (
-            asyncio.get_running_loop().time()
-            + CONTAINMENT_INFO_SECONDS
-        )
         data = b""
-        while asyncio.get_running_loop().time() < deadline:
+        while True:
             try:
                 chunk = os.read(info_fd, 4096)
             except BlockingIOError:
@@ -495,15 +611,13 @@ class AppManager:
 
     async def _drain(self, slug: str, proc: asyncio.subprocess.Process) -> None:
         assert proc.stdout
-        pending = b""
+        lines = BoundedLineBuffer()
         try:
             while True:
                 chunk = await proc.stdout.read(4096)
                 if not chunk:
                     break
-                pending += chunk
-                while b"\n" in pending:
-                    line, pending = pending.split(b"\n", 1)
+                for line in lines.feed(chunk):
                     app = self._apps.get(slug)
                     if app and app.get("proc") is proc:
                         self._append_log(app, line)
@@ -513,9 +627,11 @@ class AppManager:
         finally:
             app = self._apps.get(slug)
             if app and app.get("proc") is proc:
+                pending = lines.finish()
                 if pending:
                     self._append_log(app, pending)
                 if proc.returncode is not None and not app.get("stop_requested"):
+                    await self._settle_authority_task(app)
                     result = self._terminal_status_after_exit(app)
                     self._apps.pop(slug, None)
                     self._last_exit[slug] = result
@@ -523,24 +639,6 @@ class AppManager:
                     app,
                     terminated=proc.returncode is not None,
                 )
-
-    async def _discard_output(
-        self,
-        stdout: asyncio.StreamReader,
-    ) -> None:
-        try:
-            while await stdout.read(65536):
-                pass
-        except (OSError, RuntimeError):
-            pass
-
-    def _start_discard_drain(
-        self,
-        stdout: asyncio.StreamReader,
-    ) -> None:
-        task = asyncio.create_task(self._discard_output(stdout))
-        self._discard_tasks.add(task)
-        task.add_done_callback(self._discard_tasks.discard)
 
     @staticmethod
     def _stopped_status(previous: dict[str, Any]) -> dict[str, Any]:
@@ -582,6 +680,7 @@ class AppManager:
             return
         app["stop_requested"] = True
         proc = app["proc"]
+        await self._settle_authority_task(app)
         if proc.returncode is None:
             try:
                 if IS_WINDOWS:
@@ -618,7 +717,7 @@ class AppManager:
                 drain_task.cancel()
                 await asyncio.gather(drain_task, return_exceptions=True)
                 if proc.stdout is not None:
-                    self._start_discard_drain(proc.stdout)
+                    self._output_sinks.handoff(proc.stdout)
         if self._apps.get(slug) is app:
             self._apps.pop(slug, None)
         self._finish_effect(
@@ -734,7 +833,7 @@ class AppManager:
         ownership: PortOwnership,
     ) -> dict[str, Any]:
         reason = (
-            "The listener detached from Proxima's managed process group, "
+            "The listener lacks complete live managed-lineage proof, "
             "so its lifetime cannot be verified."
             if ownership == PortOwnership.DETACHED
             else "Proxima cannot verify who owns the listener on this host."

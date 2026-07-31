@@ -1,6 +1,6 @@
 # ADR-0011: Preview containment membership and detached output
 
-- Status: Accepted
+- Status: Superseded by ADR-0012
 - Date: 2026-07-31
 
 ## Context

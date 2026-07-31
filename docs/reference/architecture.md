@@ -1146,8 +1146,10 @@ starting, ready, conflicted, exited, or stopped. Reloading the preview does not 
 the log panel, and explicit Stop awaits stdout draining so the most recent buffer,
 including terminal shutdown output, remains available for the stopped/retry
 state. Final draining has a bounded grace period: output already available is retained.
-If an uncontained child keeps stdout open, a tracked background task reads and discards
-later bytes without retaining app state until EOF. Stop returns without closing that
+The pending partial line has a fixed byte bound, so newline-free streams cannot grow
+memory without limit. If an uncontained child keeps stdout open, the read end transfers
+to a minimal OS discard helper that survives API event-loop shutdown, accumulates no
+output, exits at EOF, and is reaped independently. Stop returns without closing that
 read end, so the child is neither blocked nor signaled.
 Conflict feedback keeps the candidate port visible with Stop, retry, and
 change-port actions. When
@@ -1161,6 +1163,8 @@ authentication runs before target resolution or procfs ownership work. Proxy pat
 Cookie/Authorization before forwarding and ignore upstream `Set-Cookie`;
 same-origin/generated HTML previews omit `allow-same-origin`. These are lightweight
 self-hosted mitigations, not OS isolation of the project process.
+See ADR-0012 through ADR-0015 for the focused authority, output, binding, and
+authentication decisions.
 
 ### 9. Update check and candidate gate plus disabled switch fixture
 

@@ -1230,9 +1230,11 @@ the conflict stays visible with logs, Stop, retry, and change-port actions. Unav
 procfs evidence and uncontained detached descendants fail closed as
 `ownership_unknown`. For a contained launch, every socket owner must carry the
 launch marker and match the exact launch-specific PID namespace reported by
-Bubblewrap, even when it retains the managed process group. The marker alone
-never grants authority; it keeps a reparented uncontained descendant in that
-fail-closed state instead of misclassifying it as a foreign listener.
+Bubblewrap, and retain positive live process-group or ancestry evidence to the
+managed leader. Marker plus namespace without live lineage never grants
+authority. The managed process and stdout are registered immediately after
+spawn while containment proof completes asynchronously, and preview stays fail
+closed until that proof is available.
 A start with no listener after 15 seconds shows an actionable prolonged-start warning
 with Stop and logs instead of an infinite spinner. When a command self-exits (short
 script, crash, or non-server entry point), status keeps
@@ -1244,9 +1246,10 @@ so stopped/retry feedback shows the most recent command output, including termin
 shutdown lines drained before the stopped snapshot. The exited relay
 returns HTTP 503 until Stop or the next start releases or replaces that listener.
 Final drain waiting is bounded and retains output already available. If a detached
-child keeps stdout open, a tracked background reader discards later bytes without
-retaining app state until EOF, so Stop neither blocks nor closes the read end and never
-signals that child.
+child keeps stdout open, a minimal OS helper owns the read end independently of the
+API event loop and discards later fixed-size reads until EOF. Partial-line retention
+has a fixed byte bound, the helper is reaped after EOF, and Stop or graceful service
+shutdown neither blocks nor signals that child through pipe closure.
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
 ## 13. Image generation and Design Studio

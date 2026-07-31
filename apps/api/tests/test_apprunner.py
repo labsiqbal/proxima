@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 import shlex
 import shutil
 import signal
@@ -14,6 +15,7 @@ import pytest
 
 from proxima_api import apprunner
 from proxima_api.apprunner import AppManager, PortInUseError
+from proxima_api.preview_output import MAX_PENDING_LINE_BYTES
 
 
 class _FakeStdout:
@@ -65,6 +67,27 @@ def test_app_runner_ignores_stale_drain_from_replaced_process():
 
     assert manager._apps["demo"]["log"] == []
     assert "detected_port" not in manager._apps["demo"]
+
+
+def test_app_runner_bounds_newline_free_output():
+    manager = AppManager()
+    chunks = [b"x" * 4096] * 100
+    proc = _FakeProcess(chunks)
+    manager._apps["demo"] = {
+        "proc": proc,
+        "port": 5180,
+        "command": "flood",
+        "started_at": time.time(),
+        "log": [],
+    }
+
+    asyncio.run(manager._drain("demo", proc))  # type: ignore[arg-type]
+
+    assert chunks == []
+    assert len(manager._apps["demo"]["log"]) == 1
+    assert len(manager._apps["demo"]["log"][0].encode()) == (
+        MAX_PENDING_LINE_BYTES
+    )
 
 
 def test_app_runner_keeps_exit_log_across_status_polls(tmp_path):
@@ -253,7 +276,7 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
             status = manager.status("demo")
             assert status["state"] == "stopped"
             assert "inherited-tail" in status["log"]
-            assert manager._discard_tasks
+            assert manager._output_sinks.active_pids()
             write_trigger_file.write_text("write")
             for _ in range(200):
                 if write_result_file.is_file():
@@ -273,10 +296,322 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
                 except ProcessLookupError:
                     pass
             for _ in range(200):
-                if not manager._discard_tasks:
+                if not manager._output_sinks.active_pids():
                     break
                 await asyncio.sleep(0.01)
-            assert not manager._discard_tasks
+            assert not manager._output_sinks.active_pids()
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+def test_detached_output_sink_survives_event_loop_shutdown_and_reaps(
+    tmp_path,
+):
+    child_pid_file = tmp_path / "service-child.pid"
+    helper_pid_file = tmp_path / "service-helper.pid"
+    loop_closed_file = tmp_path / "service-loop.closed"
+    write_trigger_file = tmp_path / "service-write.trigger"
+    write_result_file = tmp_path / "service-write.result"
+    worker_code = (
+        "import os, pathlib, time\n"
+        f"trigger = pathlib.Path({str(write_trigger_file)!r})\n"
+        f"result = pathlib.Path({str(write_result_file)!r})\n"
+        "while not trigger.exists():\n"
+        "    time.sleep(0.01)\n"
+        "try:\n"
+        "    for _ in range(32):\n"
+        "        os.write(1, b'after-loop-close\\n')\n"
+        "except OSError as exc:\n"
+        "    result.write_text(f'error:{exc.errno}')\n"
+        "else:\n"
+        "    result.write_text('success')\n"
+    )
+    launcher_code = (
+        "import os, subprocess, sys, time; "
+        f"child = subprocess.Popen("
+        f"[sys.executable, '-c', {worker_code!r}], "
+        "start_new_session=True); "
+        f"open({str(child_pid_file)!r}, 'w').write(str(child.pid)); "
+        "os.execv(sys.executable, "
+        "[sys.executable, '-c', 'import time; time.sleep(60)'])"
+    )
+    command = (
+        f"exec {shlex.quote(sys.executable)} "
+        f"-c {shlex.quote(launcher_code)}"
+    )
+    service_code = f"""
+import asyncio
+from pathlib import Path
+import time
+from proxima_api.apprunner import AppManager
+
+async def run():
+    manager = AppManager()
+    await manager.start(
+        "demo",
+        {str(tmp_path)!r},
+        {command!r},
+        {_free_port()},
+    )
+    child = Path({str(child_pid_file)!r})
+    for _ in range(300):
+        if child.exists():
+            break
+        await asyncio.sleep(0.01)
+    await manager.stop("demo")
+    helpers = manager._output_sinks.active_pids()
+    Path({str(helper_pid_file)!r}).write_text(str(next(iter(helpers))))
+    await manager.shutdown()
+
+asyncio.run(run())
+Path({str(loop_closed_file)!r}).write_text("closed")
+time.sleep(60)
+"""
+    api_root = Path(apprunner.__file__).resolve().parents[1]
+    env = os.environ.copy()
+    existing_path = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        str(api_root)
+        if not existing_path
+        else str(api_root) + os.pathsep + existing_path
+    )
+    service = subprocess.Popen(
+        [sys.executable, "-c", service_code],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    child_pid = None
+    try:
+        deadline = time.monotonic() + 8
+        while (
+            not loop_closed_file.is_file()
+            and service.poll() is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+        if service.poll() is not None:
+            pytest.fail(service.stderr.read())
+        assert loop_closed_file.is_file()
+        child_pid = int(child_pid_file.read_text())
+        helper_pid = int(helper_pid_file.read_text())
+
+        write_trigger_file.write_text("write")
+        deadline = time.monotonic() + 4
+        while (
+            not write_result_file.is_file()
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+        assert write_result_file.read_text() == "success"
+
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            try:
+                os.kill(helper_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("detached output helper was not reaped after EOF")
+        assert service.poll() is None
+    finally:
+        if child_pid is not None:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if service.poll() is None:
+            os.killpg(os.getpgid(service.pid), signal.SIGTERM)
+        service.wait(timeout=5)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+@pytest.mark.parametrize("stage", ["before_spawn", "after_spawn"])
+def test_cancelled_start_reaps_provisional_process(
+    monkeypatch,
+    tmp_path,
+    stage,
+):
+    manager = AppManager(contained=True)
+    original_spawn = asyncio.create_subprocess_exec
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    spawned = {}
+
+    class Lease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    lease = Lease()
+
+    async def delayed_spawn(*args, **kwargs):
+        if stage == "before_spawn":
+            entered.set()
+            await release.wait()
+        proc = await original_spawn(*args, **kwargs)
+        spawned["proc"] = proc
+        if stage == "after_spawn":
+            entered.set()
+            await release.wait()
+        return proc
+
+    monkeypatch.setattr(
+        apprunner,
+        "pid_namespace_argv",
+        lambda argv, **_kwargs: list(argv),
+    )
+    monkeypatch.setattr(
+        apprunner.asyncio,
+        "create_subprocess_exec",
+        delayed_spawn,
+    )
+
+    async def run_case():
+        task = asyncio.create_task(
+            manager.start(
+                "demo",
+                str(tmp_path),
+                "sleep 60",
+                _free_port(),
+                effect_lease=lease,
+            )
+        )
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=4)
+
+        proc = spawned["proc"]
+        assert proc.returncode is not None
+        assert "demo" not in manager._apps
+        assert lease.released is True
+
+    asyncio.run(run_case())
+
+
+def test_cancelled_start_before_spawn_releases_effect_lease(
+    monkeypatch,
+    tmp_path,
+):
+    manager = AppManager()
+    entered = asyncio.Event()
+    gate = asyncio.Event()
+
+    class Lease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    lease = Lease()
+
+    async def blocked_stop(*_args, **_kwargs):
+        entered.set()
+        await gate.wait()
+
+    monkeypatch.setattr(manager, "stop", blocked_stop)
+
+    async def run_case():
+        task = asyncio.create_task(
+            manager.start(
+                "demo",
+                str(tmp_path),
+                "sleep 60",
+                _free_port(),
+                effect_lease=lease,
+            )
+        )
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert lease.released is True
+        assert not manager._apps
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="information fd requires POSIX")
+def test_containment_proof_completes_asynchronously_and_stop_owns_it(
+    monkeypatch,
+    tmp_path,
+):
+    manager = AppManager(contained=True)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_proof(_info_fd, _proc):
+        entered.set()
+        await release.wait()
+        return 4242
+
+    monkeypatch.setattr(
+        apprunner,
+        "pid_namespace_argv",
+        lambda argv, **_kwargs: list(argv),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_read_containment_pid_namespace",
+        slow_proof,
+    )
+
+    async def run_case():
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "echo provisional-output; sleep 60",
+            _free_port(),
+        )
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        app = manager._apps["demo"]
+        proof_task = app["authority_task"]
+        assert app["authority"].containment_pid_namespace is None
+        for _ in range(100):
+            if "provisional-output" in app["log"]:
+                break
+            await asyncio.sleep(0.01)
+        assert "provisional-output" in app["log"]
+
+        release.set()
+        await asyncio.wait_for(proof_task, timeout=2)
+        assert app["authority"].containment_pid_namespace == 4242
+
+        second_gate = asyncio.Event()
+
+        async def blocked_proof(_info_fd, _proc):
+            await second_gate.wait()
+            return 5252
+
+        monkeypatch.setattr(
+            manager,
+            "_read_containment_pid_namespace",
+            blocked_proof,
+        )
+        await manager.stop("demo", preserve_status=False)
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "sleep 60",
+            _free_port(),
+        )
+        app = manager._apps["demo"]
+        proof_task = app["authority_task"]
+        await manager.stop("demo", preserve_status=False)
+
+        assert proof_task.done()
+        assert proof_task.cancelled()
+        assert app["proc"].returncode is not None
+        assert "demo" not in manager._apps
 
     asyncio.run(run_case())
 
@@ -500,6 +835,37 @@ def test_detached_descendant_requires_exact_pid_namespace_membership(
         authority=exact_proof,
     ) == apprunner.PortOwnership.VERIFIED
 
+    monkeypatch.setattr(
+        apprunner,
+        "_process_table",
+        lambda _inodes: {
+            leader_pid: (1, leader_pid, set()),
+            detached_pid: (1, detached_pid, {listener_inode}),
+        },
+    )
+    assert apprunner._listener_ownership(
+        5180,
+        authority=exact_proof,
+    ) == apprunner.PortOwnership.DETACHED
+
+    monkeypatch.setattr(
+        apprunner,
+        "_process_table",
+        lambda _inodes: {
+            leader_pid: (1, leader_pid, set()),
+            detached_pid: (leader_pid, detached_pid, {listener_inode}),
+        },
+    )
+    monkeypatch.setattr(
+        apprunner,
+        "_process_has_lineage",
+        lambda _pid, _token: False,
+    )
+    assert apprunner._listener_ownership(
+        5180,
+        authority=exact_proof,
+    ) == apprunner.PortOwnership.DETACHED
+
 
 def test_uncontained_detached_listener_is_not_a_preview(tmp_path):
     """A setsid child is outside the managed process group. Without PID
@@ -618,6 +984,10 @@ def test_stolen_marker_outside_containment_never_verifies(tmp_path):
                 "sleep 60",
                 port,
             )
+            await asyncio.wait_for(
+                manager._apps["demo"]["authority_task"],
+                timeout=2,
+            )
             authority = manager._apps["demo"]["authority"]
             assert authority.containment_pid_namespace is not None
             foreign_env = os.environ.copy()
@@ -674,6 +1044,10 @@ def test_detached_listener_inside_exact_containment_is_ready(tmp_path):
                 "$PORT --bind 127.0.0.1 >/dev/null 2>&1 & wait"
             )
             await manager.start("demo", str(tmp_path), command, port)
+            await asyncio.wait_for(
+                manager._apps["demo"]["authority_task"],
+                timeout=2,
+            )
             authority = manager._apps["demo"]["authority"]
             assert authority.containment_pid_namespace is not None
             status = {}

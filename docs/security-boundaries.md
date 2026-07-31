@@ -415,15 +415,20 @@ socket-owner visibility, and uncontained descendants that detach into another pr
 group report `ownership_unknown`; their listener is not previewed. Each launch receives
 an ephemeral lineage marker so a detached owner remains identifiable after reparenting
 without becoming trusted. For a contained launch, every socket owner must carry that
-marker and match the exact launch-specific PID namespace identity reported by
-Bubblewrap, even when it retains the managed process group. Missing or mismatched
-membership remains ownership-unknown.
+marker, match the exact launch-specific PID namespace identity reported by Bubblewrap,
+and retain positive live process-group or ancestry evidence to the managed leader.
+Marker and namespace evidence without live lineage remains ownership-unknown. Proxima
+registers the provisional process and begins output draining immediately after spawn
+while namespace proof completes asynchronously; readiness stays fail closed until it
+completes.
 Stopping waits a bounded interval for available stdout and retains the collected tail.
-A tracked background reader then discards later detached output without retaining app
-state until EOF, keeping the read end valid so Stop never signals that child. This policy
-preserves the ownership boundary instead of treating a successful TCP handshake as
-ownership evidence. See
-[ADR-0011](adr/0011-preview-containment-membership-and-detached-output.md).
+Partial-line retention has a fixed byte bound. A minimal OS helper then owns the read
+end and discards later detached output in fixed chunks until EOF, independently of the
+API event loop, so Stop and graceful service shutdown never signal that child through
+pipe closure. This policy preserves the ownership boundary instead of treating a
+successful TCP handshake as ownership evidence. See
+[ADR-0012](adr/0012-exact-containment-proof-gates-preview-authority.md) and
+[ADR-0013](adr/0013-detached-preview-output-uses-os-sink-helpers.md).
 
 Preview without an apps domain opens one **relay listener per running app**.
 The relay's interface is `PROXIMA_PREVIEW_BIND`; the default is `auto`: the Tailscale
