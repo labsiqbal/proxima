@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 	listReferenceFiles: vi.fn(),
 	listArtifacts: vi.fn(),
 	uploadFile: vi.fn(),
+	confirmDialog: vi.fn(),
 }));
 
 vi.mock("../../api/commands", () => ({
@@ -24,6 +25,10 @@ vi.mock("../../api/files", () => ({
 	listReferenceFiles: mocks.listReferenceFiles,
 	listArtifacts: mocks.listArtifacts,
 	uploadFile: mocks.uploadFile,
+}));
+
+vi.mock("../ui/Dialog", () => ({
+	confirmDialog: mocks.confirmDialog,
 }));
 
 const referenceFiles = {
@@ -501,6 +506,79 @@ describe("Composer review draft handoff", () => {
 			"Review feedback for [report](artifacts/report.md):",
 		);
 		expect(consumed).toHaveBeenCalledTimes(1);
+	});
+
+	it("preserves an unsent draft through an explicit append conflict", async () => {
+		const consumed = vi.fn();
+		const onSubmit = vi.fn().mockResolvedValue(undefined);
+		mocks.confirmDialog.mockResolvedValue(true);
+		const view = render(
+			<Composer
+				token=""
+				textareaLabel="Message"
+				promptModes={false}
+				onDraftSeedConsumed={consumed}
+				onSubmit={onSubmit}
+			/>,
+		);
+		const textarea = screen.getByRole("textbox", { name: "Message" });
+		await userEvent.type(textarea, "Existing unsent draft");
+
+		view.rerender(
+			<Composer
+				token=""
+				textareaLabel="Message"
+				promptModes={false}
+				draftSeed="Artifact review feedback"
+				draftSeedNonce={1}
+				onDraftSeedConsumed={consumed}
+				onSubmit={onSubmit}
+			/>,
+		);
+
+		await waitFor(() => expect(mocks.confirmDialog).toHaveBeenCalledWith({
+			title: "This chat already has an unsent draft",
+			message: "Append the artifact feedback to preserve both drafts, or keep the current draft unchanged.",
+			confirmLabel: "Append feedback",
+			cancelLabel: "Keep current draft",
+		}));
+
+		await waitFor(() => expect(textarea).toHaveValue("Existing unsent draft\n\nArtifact review feedback"));
+		await waitFor(() => expect(textarea).toHaveFocus());
+		expect(consumed).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the existing draft when the feedback conflict is cancelled", async () => {
+		const consumed = vi.fn();
+		const onSubmit = vi.fn().mockResolvedValue(undefined);
+		mocks.confirmDialog.mockResolvedValue(false);
+		const view = render(
+			<Composer
+				token=""
+				textareaLabel="Message"
+				promptModes={false}
+				onDraftSeedConsumed={consumed}
+				onSubmit={onSubmit}
+			/>,
+		);
+		const textarea = screen.getByRole("textbox", { name: "Message" });
+		await userEvent.type(textarea, "Existing unsent draft");
+
+		view.rerender(
+			<Composer
+				token=""
+				textareaLabel="Message"
+				promptModes={false}
+				draftSeed="Artifact review feedback"
+				draftSeedNonce={2}
+				onDraftSeedConsumed={consumed}
+				onSubmit={onSubmit}
+			/>,
+		);
+
+		await waitFor(() => expect(mocks.confirmDialog).toHaveBeenCalled());
+		expect(textarea).toHaveValue("Existing unsent draft");
+		await waitFor(() => expect(consumed).toHaveBeenCalledTimes(1));
 	});
 });
 

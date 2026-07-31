@@ -57,20 +57,36 @@ const mediaBriefIsThin = (brief: string) => {
   return detail.split(/\s+/).filter(Boolean).length < 3
 }
 
-export async function resolveArtifactReviewSession(args: {
+export async function resolveArtifactReviewTarget<TProject extends { slug: string }>(args: {
   sessions: ChatSession[]
   sessionId: number | null
   fallback: ChatSession | null
   loadSession: (sessionId: number) => Promise<ChatSession>
-}): Promise<ChatSession | null> {
-  if (args.sessionId == null) return args.fallback
-  const listed = args.sessions.find(session => session.id === args.sessionId)
-  if (listed) return listed
-  try {
-    return await args.loadSession(args.sessionId)
-  } catch {
-    return null
+  projects: TProject[]
+}): Promise<
+  | { ok: true; session: ChatSession; project: TProject }
+  | { ok: false; message: string }
+> {
+  let session: ChatSession | null = null
+  if (args.sessionId == null) {
+    session = args.fallback
+  } else {
+    session = args.sessions.find(candidate => candidate.id === args.sessionId) ?? null
+    if (!session) {
+      try {
+        session = await args.loadSession(args.sessionId)
+      } catch {
+        return { ok: false, message: 'The chat that produced this artifact is no longer available.' }
+      }
+    }
   }
+  if (!session) return { ok: false, message: 'This artifact has no producing chat to receive feedback.' }
+  if (session.mode === 'design') {
+    return { ok: false, message: 'The chat that produced this artifact is no longer available.' }
+  }
+  const project = args.projects.find(candidate => candidate.slug === session?.project_slug)
+  if (!project) return { ok: false, message: "The project that owns this artifact's chat is no longer available." }
+  return { ok: true, session, project }
 }
 
 export async function createAndStartOpsTask(token: string, request: OpsTaskRequest): Promise<number> {
@@ -770,29 +786,34 @@ export function App() {
 
   async function continueArtifactReview(feedback: ArtifactReviewFeedback) {
     const seq = ++reviewHandoffSeq.current
-    const target = await resolveArtifactReviewSession({
+    const resolved = await resolveArtifactReviewTarget({
       sessions,
       sessionId: feedback.sessionId,
       fallback: returnToChat || activeSession,
       loadSession: sessionId => getSession(token, sessionId),
+      projects,
     })
-    if (!mountedRef.current || seq !== reviewHandoffSeq.current) return
-    if (!target) {
-      setError('This artifact has no chat session to receive feedback. Open it from its producing chat and try again.')
-      return
+    if (!mountedRef.current || seq !== reviewHandoffSeq.current) {
+      return { ok: false as const, message: 'The artifact review changed before feedback could be handed off.' }
     }
+    if (!resolved.ok) {
+      setError(resolved.message)
+      return resolved
+    }
+    const { session: target, project } = resolved
     clearTaskHash()
     clearArchiveHash()
     setArchiveRecord(null)
     clearPendingNavigation()
     clearDeepStack()
     setActiveSession(target)
-    const project = projects.find(candidate => candidate.slug === target.project_slug)
-    if (project) setActiveProject(project)
+    setActiveProject(project)
     markSeen(target.id, target.updated_at)
     reviewDraftNonce.current += 1
     setReviewDraft({ text: feedback.text, nonce: reviewDraftNonce.current })
+    setError('')
     setView('chat')
+    return { ok: true as const }
   }
 
   const designCanvasOpen = designStage === 'studio'

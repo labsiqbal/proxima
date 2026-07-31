@@ -4,6 +4,7 @@ import { previewUrl, type Artifact } from '../../api/files'
 import { projectFs } from '../../api/fsAdapter'
 import { MessageContent } from '../chat/MessageContent'
 import { MermaidDiagram } from './MermaidDiagram'
+import { trapModalTab } from '../ui/modalFocus'
 import {
   formatArtifactReviewDraft,
   hasArtifactReviewFeedback,
@@ -50,6 +51,10 @@ export type ArtifactReviewFeedback = {
   text: string
   artifact: Artifact
 }
+
+export type ArtifactReviewHandoffResult =
+  | { ok: true }
+  | { ok: false; message: string }
 
 // Minimal RFC-ish CSV/TSV parse (handles quotes + escaped quotes + CRLF).
 function parseDelimited(text: string, delim: string): string[][] {
@@ -100,7 +105,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
   onClose: () => void
   onEditSource?: (artifact: Artifact) => void
   reviewSessionId?: number | null
-  onSendFeedback?: (feedback: ArtifactReviewFeedback) => void
+  onSendFeedback?: (feedback: ArtifactReviewFeedback) => ArtifactReviewHandoffResult | Promise<ArtifactReviewHandoffResult>
 }) {
   const item = items[index]
   const path = item?.path || ''
@@ -116,8 +121,25 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
   const [activeAnnotationId, setActiveAnnotationId] = React.useState<string | null>(null)
   const [review, setReview] = React.useState<ArtifactReviewState>(() => loadArtifactReview(slug, path))
   const [whiteboard, setWhiteboard] = React.useState<{ source: string; diagramIndex: number } | null>(null)
+  const [handoffPending, setHandoffPending] = React.useState(false)
+  const [handoffError, setHandoffError] = React.useState('')
   const loadSeq = React.useRef(0)
   const noteRef = React.useRef<HTMLTextAreaElement>(null)
+  const dialogRef = React.useRef<HTMLDivElement>(null)
+  const closeRef = React.useRef<HTMLButtonElement>(null)
+  const triggerRef = React.useRef<HTMLElement | null>(null)
+  const handoffCompletedRef = React.useRef(false)
+  const descriptionId = React.useId()
+
+  React.useLayoutEffect(() => {
+    triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    closeRef.current?.focus()
+    return () => {
+      if (!handoffCompletedRef.current) {
+        requestAnimationFrame(() => triggerRef.current?.focus())
+      }
+    }
+  }, [])
 
   const updateReview = React.useCallback((mutate: (current: ArtifactReviewState) => ArtifactReviewState) => {
     setReview(current => {
@@ -132,11 +154,18 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
 
   React.useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      const target = event.target
+      const editing = target instanceof HTMLInputElement
+        || target instanceof HTMLTextAreaElement
+        || target instanceof HTMLSelectElement
+        || (target instanceof HTMLElement && target.isContentEditable)
       if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
         if (whiteboard) setWhiteboard(null)
         else onClose()
-      } else if (!whiteboard && event.key === 'ArrowLeft') previous()
-      else if (!whiteboard && event.key === 'ArrowRight') next()
+      } else if (!whiteboard && !editing && event.key === 'ArrowLeft') previous()
+      else if (!whiteboard && !editing && event.key === 'ArrowRight') next()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -151,6 +180,8 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     setPendingNote('')
     setActiveAnnotationId(null)
     setWhiteboard(null)
+    setHandoffPending(false)
+    setHandoffError('')
     setReview(loadArtifactReview(slug, path))
     if (!['markdown', 'mermaid', 'csv', 'json', 'text'].includes(kind)) return
     const seq = ++loadSeq.current
@@ -236,17 +267,44 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
       : { ...current, whiteboardPaths: [...current.whiteboardPaths, whiteboardPath] })
   }
 
-  const addToChat = () => {
-    if (!onSendFeedback || !hasArtifactReviewFeedback(review)) return
-    onSendFeedback({
-      sessionId: reviewSessionId,
-      text: formatArtifactReviewDraft({ title: item.title || name, path, review }),
-      artifact: item,
-    })
+  const addToChat = async () => {
+    if (!onSendFeedback || !hasArtifactReviewFeedback(review) || handoffPending) return
+    setHandoffPending(true)
+    setHandoffError('')
+    try {
+      const result = await onSendFeedback({
+        sessionId: reviewSessionId,
+        text: formatArtifactReviewDraft({ title: item.title || name, path, review }),
+        artifact: item,
+      })
+      if (!result.ok) {
+        setHandoffError(result.message)
+        return
+      }
+      handoffCompletedRef.current = true
+      onClose()
+    } catch {
+      setHandoffError('Feedback could not be handed off. The review is still open so you can try again.')
+    } finally {
+      setHandoffPending(false)
+    }
   }
 
   return createPortal(
-    <div className="av-overlay" onClick={event => { if (event.target === event.currentTarget) onClose() }}>
+    <div
+      className="av-overlay"
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Artifact review: ${item.title || name}`}
+      aria-describedby={descriptionId}
+      tabIndex={-1}
+      onKeyDown={event => {
+        if (dialogRef.current) trapModalTab(event, dialogRef.current)
+      }}
+      onClick={event => { if (event.target === event.currentTarget) onClose() }}
+    >
+      <span className="sr-only" id={descriptionId}>Review this artifact and add editable feedback to its producing chat.</span>
       {whiteboard
         ? <React.Suspense fallback={<div className="av-msg muted">Loading whiteboard...</div>}>
           <ExcalidrawWhiteboard
@@ -261,12 +319,12 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
         </React.Suspense>
         : <>
           <header className="av-bar" onClick={event => event.stopPropagation()}>
-            <div className="av-title"><strong title={path}>{name}</strong><span className="av-review-label">Review</span>{items.length > 1 && <span className="av-count">{index + 1} / {items.length}</span>}</div>
+            <div className="av-title"><h2 title={path}>Artifact review: {item.title || name}</h2><span className="av-review-label">Review</span>{items.length > 1 && <span className="av-count">{index + 1} / {items.length}</span>}</div>
             <div className="av-actions">
               <button type="button" className={`ghost-button ${annotating ? 'active' : ''}`} aria-pressed={annotating} onClick={() => { setAnnotating(current => !current); setPendingPoint(null) }}>{annotating ? 'Click artifact to pin' : 'Annotate'}</button>
               {EDITABLE.has(kind) && onEditSource && <button type="button" className="ghost-button" onClick={() => onEditSource(item)}>Edit source</button>}
               <a className="ghost-button" href={previewUrl(slug, path)} download={name}>Download</a>
-              <button type="button" className="ghost-button" onClick={onClose} title="Close (Esc)" aria-label="Close artifact review">✕</button>
+              <button type="button" className="ghost-button" ref={closeRef} onClick={onClose} title="Close (Esc)" aria-label="Close artifact review">✕</button>
             </div>
           </header>
           <div className="av-workspace">
@@ -306,8 +364,9 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
               {review.whiteboardPaths.length > 0 && <div className="av-whiteboard-links"><strong>Edited whiteboard</strong>{review.whiteboardPaths.map(whiteboardPath => <span className="mono" key={whiteboardPath}>{whiteboardPath}</span>)}</div>}
               <label className="av-general-note">General feedback<textarea value={review.generalNote} onChange={event => updateReview(current => ({ ...current, generalNote: event.target.value }))} placeholder="Overall direction, tone, or requested changes" /></label>
               <div className="av-review-submit">
-                <button type="button" className="primary-button" disabled={!onSendFeedback || !hasArtifactReviewFeedback(review)} onClick={addToChat}>Add feedback to chat</button>
+                <button type="button" className="primary-button" disabled={!onSendFeedback || !hasArtifactReviewFeedback(review) || handoffPending} onClick={() => void addToChat()}>{handoffPending ? 'Opening chat...' : 'Add feedback to chat'}</button>
                 <p className="muted">Opens this artifact's Proxima chat with an editable feedback draft.</p>
+                {handoffError && <p className="av-handoff-error" role="alert">{handoffError}</p>}
               </div>
             </aside>
           </div>
