@@ -45,4 +45,25 @@ describe('authoritative run projection', () => {
 
     expect(projection.status).toBe('failed')
   })
+
+  it('trusts authoritative projections with a null start time', () => {
+    const projection = projectRun({
+      status: 'queued',
+      started_at: '2026-07-31T04:59:00Z',
+      finished_at: '2026-07-31T05:00:00Z',
+      run_projection: {
+        status: 'queued',
+        started_at: null,
+        finished_at: null,
+        duration_seconds: null,
+      },
+    })
+
+    expect(projection).toEqual({
+      status: 'queued',
+      started_at: null,
+      finished_at: null,
+      duration_seconds: null,
+    })
+  })
 })

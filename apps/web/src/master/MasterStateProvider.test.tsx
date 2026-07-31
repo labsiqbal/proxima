@@ -139,7 +139,7 @@ function Probe() {
       <output data-testid="cursor">{state.connection.resumeCursor}</output>
       <output data-testid="messages">{state.messages.map(message => message.content).join('|')}</output>
       <output data-testid="message-ids">{state.messages.map(message => message.id ?? 'pending').join('|')}</output>
-      <output data-testid="jobs">{state.desk?.jobs.map(job => `${job.id}:${job.desk_status}`).join('|')}</output>
+      <output data-testid="jobs">{state.desk?.jobs.map(job => `${job.id}:${job.desk_status}:${job.started_at ?? 'null'}:${job.finished_at ?? 'null'}`).join('|')}</output>
       <output data-testid="active-run">{state.activeRun?.status || 'idle'}</output>
       <output data-testid="draft">{state.composer.draft}</output>
       <output data-testid="selection">
@@ -459,10 +459,41 @@ describe('MasterStateProvider', () => {
   })
 
   it('projects checkpoint recovery into Fleet and human-readable history', async () => {
+    vi.mocked(getMasterDesk).mockResolvedValue({
+      ...desk,
+      jobs: [{
+        id: 7,
+        project_id: 21,
+        project_slug: 'acme',
+        project_name: 'Acme',
+        workflow_id: null,
+        session_id: 9,
+        origin_master_session_id: 9,
+        title: 'Task #7',
+        status: 'failed',
+        desk_status: 'failed',
+        run_status: null,
+        engine: 'linear',
+        current_step_idx: 0,
+        input: {},
+        steps_state: [],
+        schedule_id: null,
+        created_by: null,
+        created_at: '2026-07-27T09:00:00Z',
+        updated_at: '2026-07-27T09:30:00Z',
+        started_at: '2026-07-27T09:05:00Z',
+        finished_at: '2026-07-27T09:30:00Z',
+        archived_at: null,
+        blocked_reason: null,
+      }],
+    } as never)
     renderProvider()
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
     const source = FakeEventSource.instances[0]
     act(() => source.open())
+    await waitFor(() => expect(screen.getAllByTestId('jobs')[0]).toHaveTextContent(
+      '7:failed:2026-07-27T09:05:00Z:2026-07-27T09:30:00Z',
+    ))
     act(() => source.emit('master.task.recovered', {
       id: 13,
       seq: 2,
@@ -485,7 +516,7 @@ describe('MasterStateProvider', () => {
       created_at: '2026-07-27T10:01:00Z',
     }))
 
-    expect(screen.getAllByTestId('jobs')[0]).toHaveTextContent('7:queued')
+    expect(screen.getAllByTestId('jobs')[0]).toHaveTextContent('7:queued:null:null')
     expect(screen.getAllByTestId('messages')[0]).toHaveTextContent(
       'owner restored Task #7 from checkpoint #3: Failed to Queued.',
     )
@@ -521,6 +552,8 @@ describe('MasterStateProvider', () => {
           first_task_event_id: 30,
           last_task_event_id: 30,
           successor_task_event_id: 31,
+          first_successor_task_event_id: 31,
+          last_successor_task_event_id: 31,
         },
         created_at: '2026-07-27T10:02:00Z',
       })
@@ -528,7 +561,7 @@ describe('MasterStateProvider', () => {
 
     expect(screen.getAllByTestId('jobs')[0]).toHaveTextContent('7:done')
     expect(screen.getAllByTestId('messages')[0]).toHaveTextContent(
-      'Retained 1 earlier checkpoint recovery audit for Task #7 as a legacy ordering gap before Task event #31.',
+      'Retained 1 checkpoint recovery audit for Task #7 as a legacy ordering gap across Task events #30-#30 and successor events #31-#31. It was contained without replaying older history after a later publication.',
     )
     expect(screen.getAllByTestId('cursor')[0]).toHaveTextContent('14')
   })

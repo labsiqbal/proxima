@@ -44,15 +44,16 @@ function fallbackProjection(source: RunSource): RunProjection {
   }
 }
 
+function timezoneAwareOrNull(value?: string | null): boolean {
+  return value == null || timestamp(value) !== null
+}
+
 export function projectRun(source: RunSource): RunProjection {
   const projection = source.run_projection
   if (
     projection
-    && timestamp(projection.started_at) !== null
-    && (
-      projection.finished_at == null
-      || timestamp(projection.finished_at) !== null
-    )
+    && timezoneAwareOrNull(projection.started_at)
+    && timezoneAwareOrNull(projection.finished_at)
   ) {
     return projection
   }
