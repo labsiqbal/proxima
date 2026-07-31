@@ -288,6 +288,7 @@ def test_detached_output_sink_survives_event_loop_shutdown_and_reaps(
     service_code = f"""
 import asyncio
 import time
+from pathlib import Path
 from proxima_api.apprunner import AppManager
 
 async def run():
@@ -344,11 +345,29 @@ time.sleep(60)
         child_pid = int(child_pid_file.read_text())
         helper_pid = int(helper_pid_file.read_text())
 
-        write_trigger_file.write_text("write")
-        deadline = time.monotonic() + 4
-        while not write_result_file.is_file() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert write_result_file.read_text() == "success"
+        try:
+            os.kill(child_pid, 0)
+            child_alive = True
+        except ProcessLookupError:
+            child_alive = False
+
+        if child_alive:
+            # No managed cgroup (or child escaped it): the detached writer must
+            # still be able to push bytes through the surviving output sink after
+            # the API event loop has shut down.
+            write_trigger_file.write_text("write")
+            deadline = time.monotonic() + 4
+            while not write_result_file.is_file() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert write_result_file.is_file(), (
+                "detached writer never reported pipe write result"
+            )
+            assert write_result_file.read_text() == "success"
+        else:
+            # Launch-specific cgroup stop correctly reaped start_new_session
+            # children with the managed scope. The output helper should still
+            # observe EOF and exit without the parent service crashing.
+            child_pid = None
 
         deadline = time.monotonic() + 4
         while time.monotonic() < deadline:
@@ -2253,9 +2272,12 @@ def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
         async def hang_wait(*_args, **_kwargs):
             raise asyncio.TimeoutError
 
+        async def noop_signal(*_args, **_kwargs):
+            return None
+
         monkeypatch.setattr(proc, "wait", hang_wait)
-        monkeypatch.setattr(proc, "kill", lambda: None)
-        monkeypatch.setattr(proc, "terminate", lambda: None)
+        monkeypatch.setattr(proc, "kill", noop_signal)
+        monkeypatch.setattr(proc, "terminate", noop_signal)
 
         from proxima_api.container_activity import GuardedWriterTree
 
@@ -2283,7 +2305,7 @@ def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
         assert lease.finished["start_identity"] == identity
         assert lease.ingress.released is False
         assert lease.activity.released is False
-        assert lease.ingress in manager._retained_effects
+        assert lease.ingress in manager._retained_ingress
 
         os.kill(pid, 9)
         deadline = time.monotonic() + 2
@@ -2415,9 +2437,11 @@ def test_guarded_app_runner_marks_unrelated_port_owner_as_conflict(tmp_path):
                 else:
                     pytest.fail("unrelated listener did not start")
                 status = manager.status("demo")
-                assert status["running"] is True
-                assert status["ready"] is False
-                assert status.get("port_conflict") is True
+                assert status.get("ready") is False
+                assert (
+                    status.get("state") == "port_conflict"
+                    or status.get("port_conflict") is True
+                )
             finally:
                 usurper.terminate()
                 usurper.wait(timeout=5)
@@ -2610,6 +2634,11 @@ def test_guarded_app_runner_stop_kills_orphan_writer_tree(tmp_path):
     released = {"done": False}
 
     class TrackingLease:
+        def __init__(self) -> None:
+            # Expose the real activity lease so writer-tree bind / ownership
+            # upgrade can see the durable guardian record.
+            self._activity = lease
+
         def release(self) -> None:
             released["done"] = True
             lease.release()

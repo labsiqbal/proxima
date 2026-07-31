@@ -19,6 +19,7 @@ the api venv if the bare interpreter can't import ``proxima_api``:
 
     apps/api/.venv/bin/python scripts/gen_docs.py
 """
+
 from __future__ import annotations
 
 import ast
@@ -42,12 +43,13 @@ _GENERATED_FOOTER = re.compile(r"\n---\n_Generated [^\n]+\._\n?$")
 
 # --------------------------------------------------------------------------- API
 
+
 def _collect_endpoints() -> dict[str, list[dict]]:
     """file label -> [ {methods, path, name, doc} ] parsed from decorators."""
     out: dict[str, list[dict]] = {}
     files = sorted(PKG_DIR.glob("routes/*.py")) + [PKG_DIR / "main.py"]
     for f in files:
-        if f.name == "__init__.py":
+        if f.name == "__init__.py" or not f.is_file():
             continue
         rows: list[dict] = []
         tree = ast.parse(f.read_text(encoding="utf-8"), filename=str(f))
@@ -94,12 +96,15 @@ def _collect_endpoints() -> dict[str, list[dict]]:
 
 def _render_api(endpoints: dict[str, list[dict]]) -> str:
     total = sum(len(v) for v in endpoints.values())
-    o = ["# API Reference\n", STAMP,
-         f"\n{total} endpoints across {len(endpoints)} route modules. "
-         "All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). "
-         "Auth: single-user - first run uses `POST /auth/auto` only until the owner "
-         "sets a password; later sessions use `POST /auth/login`. Requests carry the "
-         "HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.\n"]
+    o = [
+        "# API Reference\n",
+        STAMP,
+        f"\n{total} endpoints across {len(endpoints)} route modules. "
+        "All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). "
+        "Auth: single-user - first run uses `POST /auth/auto` only until the owner "
+        "sets a password; later sessions use `POST /auth/login`. Requests carry the "
+        "HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.\n",
+    ]
     # Quick index
     o.append("\n## Modules\n")
     for label in endpoints:
@@ -120,6 +125,7 @@ def _render_api(endpoints: dict[str, list[dict]]) -> str:
 
 # ----------------------------------------------------------------------- DATABASE
 
+
 def _build_temp_db() -> sqlite3.Connection:
     """Build a fresh DB exactly like a real install (SCHEMA + migrate + versioned)."""
     if str(API_PKG) not in sys.path:
@@ -135,16 +141,24 @@ def _build_temp_db() -> sqlite3.Connection:
 
 
 def _render_db(conn: sqlite3.Connection) -> str:
-    tables = [r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-    )]
-    schema_version = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+    tables = [
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+    ]
+    schema_version = conn.execute(
+        "SELECT MAX(version) FROM schema_migrations"
+    ).fetchone()[0]
 
-    o = ["# Database Schema\n", STAMP,
-         f"\nSQLite (WAL mode). {len(tables)} tables. Applied migration version: "
-         f"**{schema_version}**. This is the exact shape a fresh install gets from "
-         "`init_db` + versioned migrations. Per-install data lives at "
-         "`~/.local/share/proxima/proxima.db` (outside the repo).\n"]
+    o = [
+        "# Database Schema\n",
+        STAMP,
+        f"\nSQLite (WAL mode). {len(tables)} tables. Applied migration version: "
+        f"**{schema_version}**. This is the exact shape a fresh install gets from "
+        "`init_db` + versioned migrations. Per-install data lives at "
+        "`~/.local/share/proxima/proxima.db` (outside the repo).\n",
+    ]
     o.append("\n## Tables\n")
     o.append(", ".join(f"[`{t}`](#{t})" for t in tables) + "\n")
 
@@ -152,7 +166,10 @@ def _render_db(conn: sqlite3.Connection) -> str:
         o.append(f"\n### {t}\n")
         cols = conn.execute(f"PRAGMA table_info({t})").fetchall()
         # foreign_key_list row: (id, seq, table, from, to, on_update, on_delete, match)
-        fk_full = {f[3]: (f[2], f[4], f[6]) for f in conn.execute(f"PRAGMA foreign_key_list({t})").fetchall()}
+        fk_full = {
+            f[3]: (f[2], f[4], f[6])
+            for f in conn.execute(f"PRAGMA foreign_key_list({t})").fetchall()
+        }
         o.append("| Column | Type | Null | Default | Key / FK |")
         o.append("| --- | --- | --- | --- | --- |")
         for c in cols:
@@ -168,7 +185,9 @@ def _render_db(conn: sqlite3.Connection) -> str:
                 if on_del and on_del != "NO ACTION":
                     fk += f" (ON DELETE {on_del})"
                 keys.append(fk)
-            o.append(f"| `{name}` | {ctype or ''} | {null} | {default} | {' '.join(keys)} |")
+            o.append(
+                f"| `{name}` | {ctype or ''} | {null} | {default} | {' '.join(keys)} |"
+            )
         # Indexes for this table
         idx = conn.execute(f"PRAGMA index_list({t})").fetchall()
         listed = []
@@ -176,7 +195,9 @@ def _render_db(conn: sqlite3.Connection) -> str:
             iname = row[1]
             if iname.startswith("sqlite_autoindex"):
                 continue
-            icols = [r[2] for r in conn.execute(f"PRAGMA index_info({iname})").fetchall()]
+            icols = [
+                r[2] for r in conn.execute(f"PRAGMA index_info({iname})").fetchall()
+            ]
             uniq = "UNIQUE " if row[2] else ""
             listed.append(f"`{iname}` - {uniq}({', '.join(icols)})")
         if listed:
@@ -193,7 +214,10 @@ def _write_generated(path: Path, body: str, timestamp: str) -> bool:
     the required drift check dirty an otherwise unchanged checkout on every run.
     """
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    if _GENERATED_FOOTER.search(existing) and _GENERATED_FOOTER.sub("", existing) == body:
+    if (
+        _GENERATED_FOOTER.search(existing)
+        and _GENERATED_FOOTER.sub("", existing) == body
+    ):
         return False
     path.write_text(f"{body}\n---\n_Generated {timestamp}._\n", encoding="utf-8")
     return True

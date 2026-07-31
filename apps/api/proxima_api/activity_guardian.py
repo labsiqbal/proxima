@@ -64,6 +64,32 @@ def _windows_lock_file(handle: int) -> None:
 
 
 def _adopt_lock(value: str) -> int:
+    """Adopt the shared activity lock via path re-open or inherited FD/handle.
+
+    Path mode is required when the guardian is launched through a process that
+    does not inherit the owner's lock FD (preview output broker). Separate
+    opens still take independent shared flocks, so exclusive quiescence waits
+    for every holder - owner lease and guardian - to exit.
+    """
+    if value.startswith("path:"):
+        path = Path(value.removeprefix("path:"))
+        flags = os.O_RDWR
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                _windows_lock_file(msvcrt.get_osfhandle(fd))
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_SH)
+        except Exception:
+            os.close(fd)
+            raise
+        return fd
     if os.name == "nt":
         import msvcrt
 

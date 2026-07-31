@@ -906,12 +906,14 @@ class ContainerActivityLease:
         *,
         shared: bool,
         fd: int | None,
+        lock_path: Path | None = None,
         guardian_record: Path | None = None,
         guardian_id: str | None = None,
     ) -> None:
         self._state = state
         self._shared = shared
         self._fd = fd
+        self._lock_path = Path(lock_path) if lock_path is not None else None
         self._guardian_record = guardian_record
         self._guardian_id = guardian_id
         self._released = False
@@ -921,7 +923,7 @@ class ContainerActivityLease:
         self,
         command: list[str],
     ) -> tuple[list[str], dict[str, Any]]:
-        if self._fd is None:
+        if self._fd is None or self._lock_path is None:
             raise ContainerBoundaryError(
                 "durable process activity requires a file-backed database"
             )
@@ -948,15 +950,11 @@ class ContainerActivityLease:
             raise ContainerBoundaryError(
                 "Project process owner identity is unavailable"
             )
-        inherited = str(self._fd)
-        if os.name == "nt":
-            import msvcrt
-
-            handle = msvcrt.get_osfhandle(self._fd)
-            os.set_handle_inheritable(handle, True)
-            inherited = f"handle:{handle}"
-        else:
-            os.set_inheritable(self._fd, True)
+        # Path mode: the guardian re-opens the lock file. This works when the
+        # child is spawned by a broker/supervisor that cannot inherit our FD
+        # (preview output broker). Independent shared flocks still block
+        # exclusive quiescence until every holder exits.
+        inherited = f"path:{self._lock_path}"
         guarded = [
             sys.executable,
             "-I",
@@ -970,9 +968,7 @@ class ContainerActivityLease:
             "--",
             *command,
         ]
-        if os.name == "nt":
-            return guarded, {"close_fds": False}
-        return guarded, {"pass_fds": (self._fd,)}
+        return guarded, {}
 
     def mark_process_started(self) -> None:
         if self._fd is not None:
@@ -1111,14 +1107,19 @@ def acquire_container_activity_lease(
             _ContainerActivityState(),
         )
     state.acquire(shared=shared, timeout=timeout)
+    lock_path = (
+        lock_dir / f"{key.rsplit(':', 1)[-1]}.activity.lock"
+        if lock_dir is not None
+        else None
+    )
     try:
         fd = (
             _acquire_file_lock(
-                lock_dir / f"{key.rsplit(':', 1)[-1]}.activity.lock",
+                lock_path,
                 shared=shared,
                 timeout=timeout,
             )
-            if lock_dir is not None
+            if lock_path is not None
             else None
         )
     except Exception:
@@ -1134,6 +1135,7 @@ def acquire_container_activity_lease(
         state,
         shared=shared,
         fd=fd,
+        lock_path=lock_path,
         guardian_record=guardian_record,
         guardian_id=guardian_id,
     )
