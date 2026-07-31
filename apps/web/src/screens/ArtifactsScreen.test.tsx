@@ -111,6 +111,51 @@ describe('ArtifactsScreen (Archive registry)', () => {
     expect(JSON.parse(markdown.getAttribute('data-file-target') || '{}')).toEqual(target)
   })
 
+  it('keeps Archive HTML resources same-origin inside the isolated preview', async () => {
+    vi.mocked(listArchive).mockResolvedValue(listResponse([
+      rec({
+        name: 'index.html',
+        type: 'page',
+        path: 'site/index.html',
+        target: {
+          project: 'wingoh',
+          area: { kind: 'ops', id: 42 },
+          path: 'site/index.html',
+        },
+      }),
+    ]))
+    render(<ArtifactsScreen {...base} />)
+
+    await userEvent.click(await screen.findByText('index.html'))
+    const frame = screen
+      .getAllByTitle('index.html')
+      .find(node => node.tagName === 'IFRAME')
+    expect(frame).toHaveAttribute(
+      'sandbox',
+      'allow-scripts allow-same-origin',
+    )
+  })
+
+  it('keeps path-only Archive HTML opaque on the Proxima origin', async () => {
+    vi.mocked(listArchive).mockResolvedValue(listResponse([
+      rec({
+        name: 'legacy.html',
+        type: 'page',
+        path: 'legacy.html',
+      }),
+    ]))
+    render(<ArtifactsScreen {...base} />)
+
+    await userEvent.click(await screen.findByText('legacy.html'))
+    const frame = screen
+      .getAllByTitle('legacy.html')
+      .find(node => node.tagName === 'IFRAME')
+    expect(frame).toHaveAttribute(
+      'sandbox',
+      'allow-scripts',
+    )
+  })
+
   it('renders registry records with status, lineage, and facet counts', async () => {
     vi.mocked(listArchive).mockResolvedValue(listResponse([
       rec(),

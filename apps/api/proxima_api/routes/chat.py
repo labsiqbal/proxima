@@ -140,21 +140,72 @@ def register(app, deps):
         project_id: int | None,
         links: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        if not project_id or not links:
-            return links
-        project = conn.execute(
-            "SELECT id, slug, path FROM projects WHERE id = ?",
-            (project_id,),
-        ).fetchone()
-        if project is None:
-            return links
+        context = _artifact_target_context(conn, project_id)
+        return _ops_output_links_in_context(conn, links, context)
+
+    def _artifact_target_context(
+        conn: sqlite3.Connection,
+        project_id: int | None,
+    ) -> file_targets.FileTargetContext | None:
+        if not project_id:
+            return None
         try:
-            return file_targets.add_artifact_targets(conn, project, links)
+            return file_targets.target_context(conn, project_id)
         except (
             container_registry.ContainerBoundaryError,
             file_targets.FileTargetError,
         ):
-            return links
+            return None
+
+    def _ops_output_links_in_context(
+        conn: sqlite3.Connection,
+        links: list[dict[str, Any]],
+        context: file_targets.FileTargetContext | None,
+    ) -> list[dict[str, Any]]:
+        if not links or context is None:
+            return []
+        project = {
+            "id": context.project_id,
+            "slug": context.project,
+            "path": str(context.container_root),
+        }
+        try:
+            return file_targets.add_artifact_targets(
+                conn,
+                project,
+                links,
+                context=context,
+            )
+        except (
+            container_registry.ContainerBoundaryError,
+            file_targets.FileTargetError,
+        ):
+            return []
+
+    def _ops_output_link(
+        conn: sqlite3.Connection,
+        project_id: int | None,
+        link: dict[str, Any],
+    ) -> dict[str, Any]:
+        context = _artifact_target_context(conn, project_id)
+        if context is None:
+            raise file_targets.FileTargetError(
+                "artifact Area identity is unavailable"
+            )
+        project = {
+            "id": context.project_id,
+            "slug": context.project,
+            "path": str(context.container_root),
+        }
+        try:
+            return file_targets.add_artifact_target(
+                conn,
+                project,
+                link,
+                context=context,
+            )
+        except container_registry.ContainerBoundaryError as exc:
+            raise file_targets.FileTargetError(str(exc)) from exc
     session_for_user = deps["session_for_user"]
     require_generic_run_mode = deps["require_generic_run_mode"]
     profile_for_user = deps["profile_for_user"]
@@ -395,6 +446,14 @@ def register(app, deps):
                 (session_id,),
             ).fetchall()
         }
+        artifact_context = (
+            _artifact_target_context(db(), session.get("project_id"))
+            if any(
+                row["output_links"] not in (None, "", "[]")
+                for row in rows
+            )
+            else None
+        )
         out = []
         for row in rows:
             m = dict(row)
@@ -430,10 +489,10 @@ def register(app, deps):
             except Exception:
                 links = []
             if links:
-                m["output_links"] = _ops_output_links(
+                m["output_links"] = _ops_output_links_in_context(
                     db(),
-                    session.get("project_id"),
                     links,
+                    artifact_context,
                 )
             if m.get("role") == "assistant" and m.get("run_id"):
                 if m.get("id") in journal_by_message:
@@ -786,11 +845,14 @@ def register(app, deps):
         return cfg
 
     def _complete_media_run(session: sqlite3.Row | dict[str, Any], payload: ChatSendRequest | RunCreateRequest, user: dict[str, Any], kind: str, artifact: dict[str, Any], text: str) -> dict[str, Any]:
-        artifact = _ops_output_links(
-            db(),
-            session["project_id"],
-            [artifact],
-        )[0]
+        try:
+            artifact = _ops_output_link(
+                db(),
+                session["project_id"],
+                artifact,
+            )
+        except file_targets.FileTargetError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         profile = profile_for_user(payload.profile_id, user)
         cur = db().execute(
             """
@@ -939,7 +1001,7 @@ def register(app, deps):
                     worker._advance_job(dict(run_row), f"BLOCKED: {text}")
                 return
             artifact, text = box["result"]
-            artifact = _ops_output_links(conn, project_id, [artifact])[0]
+            artifact = _ops_output_link(conn, project_id, artifact)
             with app.state.db_lock:
                 updated = conn.execute(
                     "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP "

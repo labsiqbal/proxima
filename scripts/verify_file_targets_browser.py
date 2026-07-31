@@ -143,6 +143,10 @@ def _write_fixture_files(container: Path) -> None:
     (ops / "site").mkdir()
     (ops / "site" / "index.html").write_text(
         """
+<style>
+@font-face { font-family: CanonicalProbe; src: url("font.ttf"); }
+body { font-family: CanonicalProbe, sans-serif; }
+</style>
 <link rel="stylesheet" href="theme.css"
   onload="parent.postMessage({probe:'target-preview-css',value:'loaded'}, '*')"
   onerror="parent.postMessage({probe:'target-preview-css',value:'blocked'}, '*')">
@@ -151,11 +155,92 @@ def _write_fixture_files(container: Path) -> None:
   src="../../../../../../../../../../api/preview/canonical-browser/escape.png"
   onload="parent.postMessage({probe:'target-preview-escape',value:'loaded'}, '*')"
   onerror="parent.postMessage({probe:'target-preview-escape',value:'blocked'}, '*')">
+<script type="module" src="module.js"></script>
+<script>
+fetch("data.json")
+  .then(response => response.json())
+  .then(value => parent.postMessage({
+    probe: "target-preview-fetch",
+    value: value.source === "canonical" ? "loaded" : "wrong"
+  }, "*"))
+  .catch(() => parent.postMessage({
+    probe: "target-preview-fetch",
+    value: "blocked"
+  }, "*"));
+const worker = new Worker("worker.js", {type: "module"});
+worker.onmessage = event => parent.postMessage({
+  probe: "target-preview-worker",
+  value: event.data
+}, "*");
+worker.onerror = () => parent.postMessage({
+  probe: "target-preview-worker",
+  value: "blocked"
+}, "*");
+document.fonts.load("12px CanonicalProbe")
+  .then(fonts => parent.postMessage({
+    probe: "target-preview-font",
+    value: fonts.length ? "loaded" : "blocked"
+  }, "*"));
+const navigation = document.createElement("iframe");
+navigation.addEventListener("load", () => {
+  setTimeout(() => {
+    let value = "isolated";
+    try {
+      const path = navigation.contentWindow?.location?.pathname || "";
+      if (path.endsWith("/navigate.html")) return;
+      const text = navigation.contentDocument?.body?.textContent || "";
+      if (text.includes("WRONG CONTAINER")) value = "legacy";
+    } catch {
+      value = "cross-origin";
+    }
+    parent.postMessage({
+      probe: "target-preview-navigation",
+      value
+    }, "*");
+  }, 50);
+});
+navigation.src = "navigate.html";
+document.body.append(navigation);
+</script>
 """.strip(),
         encoding="utf-8",
     )
     (ops / "site" / "theme.css").write_text(
         "body { color: canonical-ops; }",
+        encoding="utf-8",
+    )
+    (ops / "site" / "module.js").write_text(
+        "parent.postMessage({probe:'target-preview-module',value:'loaded'}, '*');",
+        encoding="utf-8",
+    )
+    (ops / "site" / "worker.js").write_text(
+        "postMessage('loaded');",
+        encoding="utf-8",
+    )
+    font_source = next(
+        (
+            path
+            for path in (
+                Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+                Path("/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf"),
+            )
+            if path.is_file()
+        ),
+        None,
+    )
+    if font_source is None:
+        raise RuntimeError("a system TrueType font is required")
+    (ops / "site" / "font.ttf").write_bytes(font_source.read_bytes())
+    (ops / "site" / "data.json").write_text(
+        '{"source":"canonical"}',
+        encoding="utf-8",
+    )
+    (ops / "site" / "navigate.html").write_text(
+        """
+<script>
+location = "../../../../../../../../../../api/preview/canonical-browser/brief.md";
+</script>
+""".strip(),
         encoding="utf-8",
     )
 
@@ -284,7 +369,7 @@ def _browser_expression() -> str:
   const previewMessages = {};
   window.addEventListener("message", event => {
     const data = event.data;
-    if (data?.probe === "target-preview-css" || data?.probe === "target-preview-escape") {
+    if (typeof data?.probe === "string" && data.probe.startsWith("target-preview-")) {
       previewMessages[data.probe] = data.value;
     }
   });
@@ -341,7 +426,7 @@ def _browser_expression() -> str:
     throw new Error("image target resolved to the Container shadow");
   }
   const pdfBytes = await bytesFetch(
-    previewFor(archivedByName["handout.pdf"].target)
+    `/api/projects/canonical-browser/raw?${queryFor("handout.pdf", archivedByName["handout.pdf"].target)}`
   );
   if (String.fromCharCode(...pdfBytes.slice(0, 5)) !== "%PDF-") {
     throw new Error("PDF target resolved to the Container shadow");
@@ -354,18 +439,16 @@ def _browser_expression() -> str:
   if (!oldCollision.includes("legacy-container")) {
     throw new Error("legacy preview path still collides with the targeted namespace");
   }
-  const escapedPreview = new URL(
-    "../../../../../../../../../../api/preview/canonical-browser/escape.png",
-    location.origin + previewFor({...briefTarget, path: "site/index.html"})
+  const targetOnLegacy = await fetch(
+    `/api/preview/canonical-browser/site/index.html?target=${encodeURIComponent(JSON.stringify({
+      ...briefTarget,
+      path: "site/index.html",
+    }))}`
   );
-  if (escapedPreview.pathname !== "/api/preview/canonical-browser/escape.png") {
-    throw new Error(`adversarial preview URL did not normalize into legacy routing: ${escapedPreview.pathname}`);
+  if (targetOnLegacy.status !== 400) {
+    throw new Error(`legacy preview accepted a canonical target: ${targetOnLegacy.status}`);
   }
-  const escapedResponse = await fetch(escapedPreview);
-  if (!escapedResponse.ok) {
-    throw new Error(`legacy preview compatibility is unavailable: ${escapedResponse.status}`);
-  }
-  checks.push("legacy-preview-compatibility");
+  checks.push("legacy-preview-compatibility-and-target-rejection");
 
   const fromImage = await jsonPost(
     "/api/projects/canonical-browser/designs/from-image",
@@ -386,7 +469,9 @@ def _browser_expression() -> str:
   ) {
     throw new Error("Design scene dropped its source image target");
   }
-  const sceneImageBytes = await bytesFetch(previewFor(sceneImage.target));
+  const sceneImageBytes = await bytesFetch(
+    `/api/projects/canonical-browser/raw?${queryFor(sceneImage.target.path, sceneImage.target)}`
+  );
   if (sceneImageBytes[0] !== 0x89 || sceneImageBytes[1] !== 0x50) {
     throw new Error("Design scene image target resolved to the Container shadow");
   }
@@ -469,12 +554,11 @@ def _browser_expression() -> str:
           && image.naturalWidth === 2;
       });
     } else if (kind === "html") {
-      await until(`${name} nested HTML asset`, async () => {
+      await until(`${name} isolated HTML preview`, () => {
         const frame = overlay.querySelector("iframe.av-frame");
-        if (!frame?.src.includes("/api/target-preview/") || !frame.src.includes("/ops/")) return false;
-        const html = await (await fetch(frame.src)).text();
-        const css = await (await fetch(new URL("theme.css", frame.src))).text();
-        return html.includes("OPS NESTED HTML") && css.includes("canonical-ops");
+        return frame?.src.includes("/api/target-preview/")
+          && frame.src.includes("/ops/")
+          && frame.getAttribute("sandbox") === "allow-scripts allow-same-origin";
       });
       await until(`${name} targeted stylesheet load`, () =>
         previewMessages["target-preview-css"] === "loaded"
@@ -484,6 +568,28 @@ def _browser_expression() -> str:
       );
       if (escapeResult !== "blocked") {
         throw new Error("targeted HTML loaded a legacy Container resource");
+      }
+      for (const probe of [
+        "target-preview-module",
+        "target-preview-worker",
+        "target-preview-font",
+        "target-preview-fetch",
+      ]) {
+        const result = await until(`${name} ${probe}`, () =>
+          previewMessages[probe]
+        );
+        if (result !== "loaded") {
+          throw new Error(`${probe} failed inside the Area-bound origin: ${result}`);
+        }
+      }
+      const navigationResult = await until(
+        `${name} scripted self-navigation`,
+        () => previewMessages["target-preview-navigation"]
+      );
+      if (navigationResult !== "isolated") {
+        throw new Error(
+          `targeted HTML self-navigation escaped its Area origin: ${navigationResult}`
+        );
       }
     } else {
       await until(`${name} PDF preview`, () => {

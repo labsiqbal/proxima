@@ -227,6 +227,51 @@ describe('ArtifactViewer v2 review flow', () => {
     expect(JSON.parse(markdown.getAttribute('data-file-target') || '{}')).toEqual(target)
   })
 
+  it('allows same-origin resources only inside the isolated HTML preview origin', () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'site/index.html',
+    }
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'page', title: 'Site', path: 'site/index.html', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    expect(screen.getByTitle('index.html')).toHaveAttribute(
+      'sandbox',
+      'allow-scripts allow-same-origin',
+    )
+    expect(previewUrl).toHaveBeenCalledWith(
+      'master',
+      'site/index.html',
+      target,
+    )
+  })
+
+  it('keeps path-only HTML opaque on the Proxima origin', () => {
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'page', title: 'Legacy', path: 'legacy.html' }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    const frame = screen
+      .getAllByTitle('legacy.html')
+      .find(node => node.tagName === 'IFRAME')
+    expect(frame).toHaveAttribute(
+      'sandbox',
+      'allow-scripts',
+    )
+  })
+
   it('shows an actionable fallback instead of loading forever for a directory or unknown binary', () => {
     render(<ArtifactViewer
       token="token"

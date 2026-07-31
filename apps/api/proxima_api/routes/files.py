@@ -10,10 +10,9 @@ import logging
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 
 from .. import apprunner, container_registry, file_targets, fsapi
 from .. import app_settings
@@ -635,13 +634,21 @@ def register(app, deps):
             .fetchone()
         )
         items = json.loads((row["produced_artifacts"] if row else None) or "[]")
-        if session.get("project_id"):
-            project = db().execute(
-                "SELECT id, slug, path FROM projects WHERE id = ?",
-                (session["project_id"],),
-            ).fetchone()
-            if project is not None:
-                items = file_targets.add_artifact_targets(db(), project, items)
+        if not session.get("project_id"):
+            return {"artifacts": []}
+        project = db().execute(
+            "SELECT id, slug, path FROM projects WHERE id = ?",
+            (session["project_id"],),
+        ).fetchone()
+        if project is None:
+            return {"artifacts": []}
+        try:
+            items = file_targets.add_artifact_targets(db(), project, items)
+        except (
+            container_registry.ContainerBoundaryError,
+            file_targets.FileTargetError,
+        ):
+            items = []
         return {"artifacts": items}
 
     @app.delete("/api/sessions/{session_id}/artifacts")
@@ -677,12 +684,12 @@ def register(app, deps):
                             raise file_targets.FileTargetError(
                                 "artifact path is required"
                             )
-                        locator = file_targets.add_artifact_targets(
+                        locator = file_targets.add_artifact_target(
                             db(),
                             p,
-                            [{"path": artifact_path}],
+                            {"path": artifact_path},
                             context=context,
-                        )[0]["target"]
+                        )["target"]
                     resolved = file_targets.resolve_locator(
                         db(),
                         p,
@@ -1149,7 +1156,7 @@ def register(app, deps):
         return FileResponse(str(resolved.path), filename=resolved.path.name)
 
     @app.get("/api/target-preview/{slug}/{area_kind}/{area_id}/{file_path:path}")
-    def project_target_preview(
+    async def project_target_preview(
         slug: str,
         area_kind: str,
         area_id: str,
@@ -1179,42 +1186,43 @@ def register(app, deps):
             "area": {"kind": area_kind, "id": parsed_area_id},
             "path": file_path,
         }
-        resolved = _resolved_file(slug, user, target=target)
+        project = visible_project(slug, user)
+        resolved = _resolved_file(
+            slug,
+            user,
+            target=target,
+            project=project,
+        )
         if not resolved.path.is_file():
             raise HTTPException(status_code=404, detail="not a file")
-        headers: dict[str, str] = {}
-        if resolved.path.suffix.lower() in {".html", ".htm"}:
-            scope_path = (
-                f"/api/target-preview/{quote(slug, safe='')}/"
-                f"{quote(area_kind, safe='')}/{quote(area_id, safe='')}/"
+        try:
+            preview_url = await app.state.target_previews.issue_url(
+                request,
+                int(project["id"]),
+                resolved.locator,
             )
-            scope = f"{request.url.scheme}://{request.url.netloc}{scope_path}"
-            headers["Content-Security-Policy"] = "; ".join(
-                (
-                    "sandbox allow-scripts",
-                    "default-src 'none'",
-                    f"img-src data: blob: {scope}",
-                    f"media-src blob: {scope}",
-                    f"style-src 'unsafe-inline' {scope}",
-                    f"script-src 'unsafe-inline' {scope}",
-                    f"font-src data: {scope}",
-                    f"connect-src {scope}",
-                    f"frame-src {scope}",
-                    f"worker-src blob: {scope}",
-                    "object-src 'none'",
-                    "base-uri 'none'",
-                    "form-action 'none'",
-                )
-            )
-        return FileResponse(str(resolved.path), headers=headers)
+        except (OSError, RuntimeError, httpx.HTTPError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="dedicated file preview origin is unavailable",
+            ) from exc
+        response = RedirectResponse(preview_url, status_code=307)
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     @app.get("/api/preview/{slug}/{file_path:path}")
     def project_preview(
         slug: str,
         file_path: str,
-        target: str = "",
+        request: Request,
         user: dict[str, Any] = Depends(current_user),
     ):
+        if "target" in request.query_params:
+            raise HTTPException(
+                status_code=400,
+                detail="legacy preview does not accept file targets",
+            )
         # Serve a project file inline for live preview (rendering a built site in an
         # <iframe>). Auth via the HttpOnly proxima_session cookie, sent same-origin on
         # the iframe AND its relative asset requests — no token in the URL. Path-jailed.
@@ -1222,15 +1230,7 @@ def register(app, deps):
             slug,
             user,
             path=file_path,
-            target=target,
         )
-        if target and resolved.locator.path != file_targets.normalize_relative_path(
-            file_path
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="preview path does not match file target",
-            )
         if not resolved.path.is_file():
             raise HTTPException(status_code=404, detail="not a file")
         return FileResponse(str(resolved.path))  # inline (no attachment) so HTML/CSS/JS render

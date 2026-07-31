@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import parse_qs, urljoin, urlsplit
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
-from proxima_api import artifact_registry, file_targets
+from proxima_api import artifact_registry, container_registry, file_targets
 from proxima_api.main import create_app
 
 
@@ -80,15 +83,30 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         "body { color: canonical-ops; }",
         encoding="utf-8",
     )
+    (ops / "site" / "module.js").write_text(
+        "export const canonical = true",
+        encoding="utf-8",
+    )
+    (ops / "site" / "worker.js").write_text(
+        "self.postMessage('canonical')",
+        encoding="utf-8",
+    )
+    (ops / "site" / "font.woff2").write_bytes(b"canonical-font")
+    (ops / "site" / "data.json").write_text(
+        '{"source":"canonical"}',
+        encoding="utf-8",
+    )
 
     entries = _by_name(api, headers)
     ops_only = entries["ops-only.md"]["target"]
     container_brief = entries["brief.md"]["target"]
-    ops_area_id = api.app.state.db.execute(
-        "SELECT id FROM project_areas "
+    ops_area = api.app.state.db.execute(
+        "SELECT id, project_id FROM project_areas "
         "WHERE project_id = (SELECT id FROM projects WHERE slug = 'identity') "
         "AND kind = 'ops' AND source != 'excluded'"
-    ).fetchone()["id"]
+    ).fetchone()
+    ops_area_id = ops_area["id"]
+    project_id = ops_area["project_id"]
 
     assert ops_only == {
         "project": "identity",
@@ -189,27 +207,81 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert malformed.status_code == 400
     assert malformed.json()["detail"] == "invalid file target"
 
-    page = api.get(
+    preview_entry = api.get(
         f"/api/target-preview/identity/ops/{ops_area_id}/site/index.html",
         headers=headers,
+        params={"cache": "7"},
+        follow_redirects=False,
     )
+    assert preview_entry.status_code == 307
+    assert preview_entry.headers["cache-control"] == "private, no-store"
+    assert preview_entry.headers["referrer-policy"] == "no-referrer"
+    capability_url = preview_entry.headers["location"]
+    capability_host = urlsplit(capability_url).hostname or ""
+    assert capability_host == (
+        f"file-{project_id}-ops-{ops_area_id}.testserver"
+    )
+    capability_query = parse_qs(urlsplit(capability_url).query)
+    assert capability_query["cache"] == ["7"]
+    assert capability_query["__proxima_cap"]
+
+    tampered_url = capability_url.replace(
+        capability_query["__proxima_cap"][0],
+        capability_query["__proxima_cap"][0] + "x",
+    )
+    assert api.get(tampered_url, follow_redirects=False).status_code == 403
+    wrong_area_url = capability_url.replace(
+        f"file-{project_id}-ops-{ops_area_id}.testserver",
+        f"file-{project_id}-container-0.testserver",
+    )
+    assert api.get(wrong_area_url, follow_redirects=False).status_code == 403
+
+    capability_gate = api.get(capability_url, follow_redirects=False)
+    assert capability_gate.status_code == 307
+    assert capability_gate.headers["cache-control"] == "private, no-store"
+    isolated_url = urljoin(capability_url, capability_gate.headers["location"])
+    clean_query = parse_qs(urlsplit(isolated_url).query)
+    assert clean_query == {"cache": ["7"]}
+
+    without_capability = TestClient(api.app)
+    assert without_capability.get(isolated_url).status_code == 403
+    assert without_capability.get(
+        "http://file-invalid.testserver/api/health"
+    ).status_code == 404
+    with pytest.raises(WebSocketDisconnect):
+        with api.websocket_connect(
+            f"ws://{capability_host}/api/sessions/1/ws"
+        ):
+            pass
+
+    page = api.get(isolated_url)
     assert page.status_code == 200, page.text
     assert "Ops page" in page.text
-    preview_scope = (
-        f"http://testserver/api/target-preview/identity/ops/{ops_area_id}/"
-    )
     preview_policy = page.headers["content-security-policy"]
-    assert "sandbox allow-scripts" in preview_policy
-    assert "default-src 'none'" in preview_policy
-    assert f"img-src data: blob: {preview_scope}" in preview_policy
-    assert f"style-src 'unsafe-inline' {preview_scope}" in preview_policy
-    assert "/api/preview/" not in preview_policy
-    nested_asset = api.get(
-        f"/api/target-preview/identity/ops/{ops_area_id}/site/theme.css",
-        headers=headers,
-    )
+    assert "sandbox allow-scripts allow-same-origin" in preview_policy
+    assert "default-src 'self' data: blob:" in preview_policy
+    assert "script-src 'self' 'unsafe-inline' blob:" in preview_policy
+    assert "font-src 'self' data:" in preview_policy
+    assert "connect-src 'self'" in preview_policy
+    assert "worker-src 'self' blob:" in preview_policy
+    assert "navigate-to 'self'" in preview_policy
+    assert page.headers["cross-origin-opener-policy"] == "same-origin"
+    assert page.headers["referrer-policy"] == "no-referrer"
+
+    nested_asset = api.get(urljoin(isolated_url, "theme.css"))
     assert nested_asset.status_code == 200, nested_asset.text
     assert nested_asset.text == "body { color: canonical-ops; }"
+    module = api.get(urljoin(isolated_url, "module.js"))
+    worker = api.get(urljoin(isolated_url, "worker.js"))
+    font = api.get(urljoin(isolated_url, "font.woff2"))
+    fetched = api.get(urljoin(isolated_url, "data.json"))
+    assert module.status_code == 200
+    assert module.headers["content-type"].startswith(
+        ("text/javascript", "application/javascript")
+    )
+    assert worker.status_code == 200
+    assert font.status_code == 200
+    assert fetched.json() == {"source": "canonical"}
 
     legacy_collision = root / "area" / "ops" / str(ops_area_id) / "site"
     legacy_collision.mkdir(parents=True)
@@ -223,6 +295,40 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     )
     assert legacy_preview.status_code == 200, legacy_preview.text
     assert legacy_preview.text == "body { color: legacy-container; }"
+    target_on_legacy = api.get(
+        "/api/preview/identity/site/index.html",
+        headers=headers,
+        params=_target_params(
+            {
+                "project": "identity",
+                "area": {"kind": "ops", "id": ops_area_id},
+                "path": "site/index.html",
+            }
+        ),
+    )
+    assert target_on_legacy.status_code == 400
+    assert target_on_legacy.json()["detail"] == (
+        "legacy preview does not accept file targets"
+    )
+    assert api.get(
+        "/api/preview/identity/site/index.html?target=",
+        headers=headers,
+    ).status_code == 400
+
+    escaped_navigation = urljoin(
+        isolated_url,
+        "../../../../../../api/preview/identity/escape.png",
+    )
+    assert urlsplit(escaped_navigation).hostname == capability_host
+    assert api.get(escaped_navigation).status_code == 404
+    assert api.get(urljoin(isolated_url, "/api/health")).status_code == 404
+
+    invalid_area = api.get(
+        "/api/target-preview/identity/ops/999999/site/index.html",
+        headers=headers,
+        follow_redirects=False,
+    )
+    assert invalid_area.status_code == 400
 
     # Documented path-only callers remain compatible, including an explicit
     # physical ops/ path. Their response is upgraded to the canonical target.
@@ -234,6 +340,43 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert explicit.status_code == 200, explicit.text
     assert explicit.json()["content"] == "# Ops only"
     assert explicit.json()["target"] == ops_only
+
+
+def test_loopback_preview_uses_a_same_host_relay_origin(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers, root = _api(tmp_path)
+    (root / "ops" / "index.html").write_text(
+        "<main>Loopback preview</main>",
+        encoding="utf-8",
+    )
+    area = api.app.state.db.execute(
+        "SELECT pa.id FROM project_areas pa "
+        "JOIN projects p ON p.id = pa.project_id "
+        "WHERE p.slug = 'identity' AND pa.kind = 'ops'"
+    ).fetchone()
+    requested: list[tuple[int | None, str]] = []
+
+    async def relay_port(preview_area, bind_host):
+        requested.append((preview_area.area_id, bind_host))
+        return 43123
+
+    monkeypatch.setattr(
+        api.app.state.target_previews,
+        "_relay_port",
+        relay_port,
+    )
+    loopback = TestClient(api.app, base_url="http://127.0.0.1:8766")
+    response = loopback.get(
+        f"/api/target-preview/identity/ops/{area['id']}/index.html",
+        headers=headers,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 307
+    assert urlsplit(response.headers["location"]).netloc == "127.0.0.1:43123"
+    assert requested == [(area["id"], "127.0.0.1")]
 
 
 def test_archive_targets_resolve_direct_ops_files_without_registering_workspace_scan(
@@ -597,6 +740,138 @@ def test_artifact_enrichment_skips_only_unsafe_entries(tmp_path: Path):
     }
     assert artifacts["reports/safe.md"]["target"]["path"] == "reports/safe.md"
     assert "reports/escape.md" not in artifacts
+
+    project = api.app.state.db.execute(
+        "SELECT id, slug, path FROM projects WHERE slug = 'identity'"
+    ).fetchone()
+    context = file_targets.target_context(api.app.state.db, project)
+    assert file_targets.add_artifact_targets(
+        api.app.state.db,
+        project,
+        [{"path": "reports/escape.md"}],
+        context=context,
+    ) == []
+    with pytest.raises(file_targets.FileTargetError):
+        file_targets.add_artifact_target(
+            api.app.state.db,
+            project,
+            {"path": "reports/escape.md"},
+            context=context,
+        )
+
+    session = api.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": "Unsafe artifact", "project_slug": "identity"},
+    ).json()
+    rejected = api.delete(
+        f"/api/sessions/{session['id']}/artifacts",
+        headers=headers,
+        params={"path": "reports/escape.md"},
+    )
+    assert rejected.status_code == 400
+
+
+def test_message_artifacts_fail_closed_and_reuse_one_target_context(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers, _root = _api(tmp_path)
+    session = api.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": "Artifact links", "project_slug": "identity"},
+    ).json()
+    links = json.dumps(
+        [{"type": "doc", "title": "brief.md", "path": "brief.md"}]
+    )
+    api.app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content, output_links) "
+        "VALUES (?, 'assistant', 'One', ?), (?, 'assistant', 'Two', ?)",
+        (session["id"], links, session["id"], links),
+    )
+    original = file_targets.target_context
+    context_calls = 0
+
+    def counted_context(*args, **kwargs):
+        nonlocal context_calls
+        context_calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(file_targets, "target_context", counted_context)
+    original_get_container = container_registry.get_container
+    project_lookups = 0
+
+    def counted_get_container(conn, container):
+        nonlocal project_lookups
+        if isinstance(container, int):
+            project_lookups += 1
+        return original_get_container(conn, container)
+
+    monkeypatch.setattr(
+        container_registry,
+        "get_container",
+        counted_get_container,
+    )
+    messages = api.get(
+        f"/api/sessions/{session['id']}/messages",
+        headers=headers,
+    )
+    assert messages.status_code == 200
+    assert len(messages.json()["messages"]) == 2
+    assert context_calls == 1
+    assert project_lookups == 1
+
+    ops_area_id = api.app.state.db.execute(
+        "SELECT id FROM project_areas "
+        "WHERE project_id = (SELECT id FROM projects WHERE slug = 'identity') "
+        "AND kind = 'ops'"
+    ).fetchone()["id"]
+    api.app.state.db.execute(
+        "UPDATE project_areas SET rel_path = 'missing' WHERE id = ?",
+        (ops_area_id,),
+    )
+    failed_closed = api.get(
+        f"/api/sessions/{session['id']}/messages",
+        headers=headers,
+    )
+    assert failed_closed.status_code == 200
+    assert all(
+        message["output_links"] == []
+        for message in failed_closed.json()["messages"]
+    )
+
+
+def test_media_artifact_rejects_empty_canonical_enrichment(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers, _root = _api(tmp_path)
+
+    def reject_artifact(*args, **kwargs):
+        raise file_targets.FileTargetError(
+            "artifact Area identity is unavailable"
+        )
+
+    monkeypatch.setattr(
+        file_targets,
+        "add_artifact_target",
+        reject_artifact,
+    )
+    response = api.post(
+        "/api/chat/send",
+        headers=headers,
+        json={
+            "project_slug": "identity",
+            "message": (
+                "/design create a premium launch poster with bold type"
+            ),
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "artifact Area identity is unavailable"
+    )
 
 
 def test_legacy_ops_at_dot_keeps_area_identity_and_does_not_rewrite_ops_prefix(
