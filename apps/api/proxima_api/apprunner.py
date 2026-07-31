@@ -247,11 +247,13 @@ def _socket_ownership(
         for pid in owner_pids
     )
     if not authority.containment_required:
-        if managed_group:
+        # Guardians call setsid() in a sentinel child, so the real app leaves the
+        # launcher process group while remaining under the tracked pid tree.
+        if managed_group or descendants:
             return PortOwnership.VERIFIED
         return (
             PortOwnership.DETACHED
-            if descendants or lineage_matches
+            if lineage_matches
             else PortOwnership.FOREIGN
         )
     if not managed_group and not descendants and not lineage_matches:

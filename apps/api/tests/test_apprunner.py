@@ -21,6 +21,25 @@ from proxima_api.preview_output import (
     OutputBroker,
     OutputBrokerUnavailable,
 )
+from proxima_api.container_activity import acquire_container_activity_lease
+from proxima_api.db import connect, init_db
+
+
+class _FakeStdout:
+    def __init__(self, lines: list[bytes]) -> None:
+        self._lines = lines
+
+    async def readline(self) -> bytes:
+        if self._lines:
+            return self._lines.pop(0)
+        return b""
+
+
+class _FakeProcess:
+    returncode = None
+
+    def __init__(self, lines: list[bytes]) -> None:
+        self.stdout = _FakeStdout(lines)
 
 
 def _free_port() -> int:
@@ -268,7 +287,6 @@ def test_detached_output_sink_survives_event_loop_shutdown_and_reaps(
     command = f"exec {shlex.quote(sys.executable)} -c {shlex.quote(launcher_code)}"
     service_code = f"""
 import asyncio
-from pathlib import Path
 import time
 from proxima_api.apprunner import AppManager
 
@@ -2257,6 +2275,247 @@ def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
             await asyncio.sleep(0.02)
         assert lease.activity.released is True
         assert lease.ingress.released is False
+
+    asyncio.run(run_case())
+
+
+def _activity_lease(tmp_path: Path, slug: str = "preview"):
+    conn = connect(tmp_path / "proxima.db")
+    init_db(conn, [])
+    root = tmp_path / slug
+    root.mkdir(parents=True, exist_ok=True)
+    user_id = conn.execute(
+        "INSERT INTO users(username, os_user) VALUES (?, ?)",
+        (f"owner-{slug}", f"owner-{slug}"),
+    ).lastrowid
+    container_id = conn.execute(
+        "INSERT INTO projects(slug, name, path, owner_user_id) VALUES (?, ?, ?, ?)",
+        (slug, slug.title(), str(root), user_id),
+    ).lastrowid
+    return acquire_container_activity_lease(conn, int(container_id)), root
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="activity guardian setsid + /proc ownership is Linux-only",
+)
+def test_guarded_app_runner_reports_ready_for_process_tree_listener(tmp_path):
+    """Guardian setsid must not hide the owned listener from readiness."""
+    try:
+        port = _free_port()
+    except PermissionError:
+        pytest.skip("environment does not permit localhost sockets")
+
+    lease, root = _activity_lease(tmp_path, "guarded-ready")
+    manager = AppManager()
+
+    async def run_case():
+        try:
+            await manager.start(
+                "demo",
+                str(root),
+                f"python3 -m http.server {port} --bind 127.0.0.1",
+                port,
+                effect_lease=lease,
+            )
+            status = None
+            for _ in range(80):
+                status = manager.status("demo")
+                if status.get("ready"):
+                    break
+                await asyncio.sleep(0.05)
+            assert status is not None
+            assert status["running"] is True
+            assert status["ready"] is True
+            assert status.get("port_conflict") is not True
+            assert status["port"] == port
+        finally:
+            await manager.shutdown()
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="activity guardian setsid + /proc ownership is Linux-only",
+)
+def test_guarded_app_runner_marks_unrelated_port_owner_as_conflict(tmp_path):
+    try:
+        port = _free_port()
+    except PermissionError:
+        pytest.skip("environment does not permit localhost sockets")
+
+    lease, root = _activity_lease(tmp_path, "guarded-conflict")
+    manager = AppManager()
+    foreign = subprocess.Popen(
+        [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    async def run_case():
+        try:
+            for _ in range(40):
+                if manager_port_open(port):
+                    break
+                await asyncio.sleep(0.025)
+            else:
+                pytest.fail("foreign preview did not start")
+            # Occupied port is refused before spawn; free it, start a non-listener
+            # guarded app, then let a foreign server claim the port afterward.
+            foreign.terminate()
+            foreign.wait(timeout=5)
+            for _ in range(40):
+                if not manager_port_open(port):
+                    break
+                await asyncio.sleep(0.025)
+
+            await manager.start(
+                "demo",
+                str(root),
+                "sleep 60",
+                port,
+                effect_lease=lease,
+            )
+            usurper = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "http.server",
+                    str(port),
+                    "--bind",
+                    "127.0.0.1",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            try:
+                for _ in range(40):
+                    if manager_port_open(port):
+                        break
+                    await asyncio.sleep(0.025)
+                else:
+                    pytest.fail("unrelated listener did not start")
+                status = manager.status("demo")
+                assert status["running"] is True
+                assert status["ready"] is False
+                assert status.get("port_conflict") is True
+            finally:
+                usurper.terminate()
+                usurper.wait(timeout=5)
+        finally:
+            await manager.shutdown()
+
+    try:
+        asyncio.run(run_case())
+    finally:
+        if foreign.poll() is None:
+            foreign.terminate()
+            foreign.wait(timeout=5)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="activity guardian setsid + /proc ownership is Linux-only",
+)
+def test_guarded_app_runner_clears_ready_after_guardian_exit(tmp_path):
+    try:
+        port = _free_port()
+    except PermissionError:
+        pytest.skip("environment does not permit localhost sockets")
+
+    lease, root = _activity_lease(tmp_path, "guarded-exit")
+    manager = AppManager()
+
+    async def run_case():
+        try:
+            await manager.start(
+                "demo",
+                str(root),
+                f"python3 -m http.server {port} --bind 127.0.0.1",
+                port,
+                effect_lease=lease,
+            )
+            for _ in range(80):
+                if manager.status("demo").get("ready"):
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("guarded preview never became ready")
+
+            app = manager._apps["demo"]
+            pid = int(app["proc_pid"])
+            os.kill(pid, 9)
+            status = None
+            for _ in range(80):
+                status = manager.status("demo")
+                if not status.get("running"):
+                    break
+                await asyncio.sleep(0.05)
+            assert status is not None
+            assert status.get("running") is False
+            assert status.get("ready") is not True
+        finally:
+            await manager.shutdown()
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="activity guardian setsid + /proc ownership is Linux-only",
+)
+def test_guarded_app_runner_restart_reports_ready_again(tmp_path):
+    try:
+        port = _free_port()
+    except PermissionError:
+        pytest.skip("environment does not permit localhost sockets")
+
+    first_lease, root = _activity_lease(tmp_path, "guarded-restart")
+    manager = AppManager()
+
+    async def run_case():
+        try:
+            command = f"python3 -m http.server {port} --bind 127.0.0.1"
+            await manager.start(
+                "demo",
+                str(root),
+                command,
+                port,
+                effect_lease=first_lease,
+            )
+            for _ in range(80):
+                if manager.status("demo").get("ready"):
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("first guarded preview never became ready")
+
+            await manager.stop("demo")
+            assert manager.status("demo")["running"] is False
+
+            second_lease, _ = _activity_lease(tmp_path, "guarded-restart-2")
+            await manager.start(
+                "demo",
+                str(root),
+                command,
+                port,
+                effect_lease=second_lease,
+            )
+            status = None
+            for _ in range(80):
+                status = manager.status("demo")
+                if status.get("ready"):
+                    break
+                await asyncio.sleep(0.05)
+            assert status is not None
+            assert status["running"] is True
+            assert status["ready"] is True
+            assert status.get("port_conflict") is not True
+        finally:
+            await manager.shutdown()
 
     asyncio.run(run_case())
 
