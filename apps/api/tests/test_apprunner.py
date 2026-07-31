@@ -2842,7 +2842,10 @@ def test_guarded_preview_launcher_sigkill_keeps_lease_until_tree_exits(tmp_path)
                     pass
             except ContainerBoundaryError:
                 blocked = True
-            # Drain/status must notice launcher death and terminate the tree.
+            # status() must stay non-blocking and fail-closed while the tree is
+            # unproven; _drain owns termination of the identity-bound tree.
+            poll = manager.status("demo")
+            assert poll.get("writer_tree_live") is True or poll.get("running") is True
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline and _listener_pids(port):
                 manager.status("demo")
@@ -2852,7 +2855,6 @@ def test_guarded_preview_launcher_sigkill_keeps_lease_until_tree_exits(tmp_path)
             # Activity may release only after tree proof.
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline and not released["activity"]:
-                # Poll status so cleanup can finish.
                 manager.status("demo")
                 await asyncio.sleep(0.05)
             assert released["ingress"] is False or (
@@ -3295,3 +3297,122 @@ def test_writer_tree_exited_seeds_live_descendants(tmp_path):
     while time.monotonic() < deadline and tree.exited() is not True:
         time.sleep(0.05)
     assert tree.exited() is True
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="status latency with live orphan tree uses Linux /proc",
+)
+def test_app_status_stays_non_blocking_when_writer_tree_unproven(tmp_path):
+    """status() must not run tree.terminate on the poll path."""
+    from proxima_api.container_activity import (
+        GuardedWriterTree,
+        process_start_identity,
+    )
+
+    ready = tmp_path / "status-orphan-ready"
+    record = tmp_path / "status-guardian.json"
+    launcher = os.fork()
+    if launcher == 0:
+        sentinel = os.fork()
+        if sentinel == 0:
+            try:
+                os.setsid()
+                writer = os.fork()
+                if writer == 0:
+                    try:
+                        ready.write_text(str(os.getpid()), encoding="utf-8")
+                        while True:
+                            time.sleep(1)
+                    finally:
+                        os._exit(0)
+                while True:
+                    time.sleep(1)
+            finally:
+                os._exit(0)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                os.kill(sentinel, 0)
+                break
+            except OSError:
+                time.sleep(0.01)
+        payload = {
+            "sentinel_pid": sentinel,
+            "sentinel_start": process_start_identity(sentinel) or "",
+            "launcher_pid": os.getpid(),
+            "owner_pid": os.getppid(),
+            "owner_start": "",
+        }
+        record.write_text(json.dumps(payload), encoding="utf-8")
+        (tmp_path / "status-sentinel-pid").write_text(
+            str(sentinel), encoding="utf-8"
+        )
+        os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not (
+        ready.is_file() and (tmp_path / "status-sentinel-pid").is_file()
+    ):
+        time.sleep(0.01)
+    assert ready.is_file()
+    try:
+        os.waitpid(launcher, 0)
+    except ChildProcessError:
+        pass
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    sentinel_pid = int(
+        (tmp_path / "status-sentinel-pid").read_text(encoding="utf-8").strip()
+    )
+    os.kill(sentinel_pid, 9)
+    try:
+        os.waitpid(sentinel_pid, 0)
+    except ChildProcessError:
+        pass
+
+    manager = AppManager()
+    # Synthesize a drained launcher with an unproven writer tree so status
+    # takes the fail-closed branch without attempting termination.
+    class _DeadProc:
+        returncode = 1
+        pid = launcher
+
+    tree = GuardedWriterTree(
+        launcher_pid=launcher,
+        launcher_start=process_start_identity(launcher) or "dead",
+        guardian_record=record,
+        known_identities={},
+    )
+    manager._apps["demo"] = {
+        "proc": _DeadProc(),
+        "port": 8765,
+        "command": "sleep 1",
+        "started_at": time.time(),
+        "log": [],
+        "effect_lease": None,
+        "proc_pid": launcher,
+        "proc_start_identity": "dead",
+        "writer_tree": tree,
+    }
+    try:
+        started = time.monotonic()
+        samples = [manager.status("demo") for _ in range(5)]
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.25, f"status polls blocked for {elapsed:.3f}s"
+        for sample in samples:
+            assert sample.get("running") is True
+            assert sample.get("writer_tree_live") is True
+            assert sample.get("ready") is not True
+        # status must not have reaped/finished the effect while unproven.
+        assert "demo" in manager._apps
+    finally:
+        manager._apps.pop("demo", None)
+        try:
+            os.kill(writer_pid, 9)
+        except OSError:
+            pass
+        try:
+            os.waitpid(writer_pid, 0)
+        except ChildProcessError:
+            pass
+        record.unlink(missing_ok=True)

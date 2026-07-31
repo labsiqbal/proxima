@@ -3547,7 +3547,32 @@ def migrate_container_ops(
     """Migrate one legacy ``.`` Ops Area. Returns True only when complete."""
     with container_mutation_lock(conn, container):
         try:
+            # Exclusive flock is not enough: dead sentinels release the activity
+            # lock while durable guardian records (and reparented writers) remain.
+            # Recover first, then require zero active/unresolved identity-bound
+            # records before mutation under exclusive quiescence.
+            recovery = recover_container_activity_guardians(conn, container)
+            if recovery.active or recovery.unresolved:
+                data = get_container(conn, container)
+                reason = (
+                    "Container has active processes; stop them before retrying"
+                    if recovery.active
+                    else (
+                        "Project process ownership could not be verified; "
+                        "exclusive work is blocked until process identity is reconciled"
+                    )
+                )
+                _attention(conn, data, reason)
+                return False
             with container_quiescence_lock(conn, container):
+                recovery = recover_container_activity_guardians(conn, container)
+                if recovery.active or recovery.unresolved:
+                    raise ContainerBoundaryError(
+                        "Project process ownership could not be verified; "
+                        "exclusive work is blocked until process identity is reconciled"
+                        if recovery.unresolved
+                        else "Container has active processes; stop them before retrying"
+                    )
                 return _migrate_container_ops_locked(conn, container)
         except ContainerBoundaryError as exc:
             data = get_container(conn, container)

@@ -1654,10 +1654,25 @@ def test_windows_orphan_recovery_uses_identity_bound_job(
         / f"{container_id}.activity.{guardian_id}.guardian.json"
     )
     record.write_text(
-        json.dumps({"job_name": job_name}),
+        json.dumps(
+            {
+                "job_name": job_name,
+                "sentinel_pid": 4242,
+                "sentinel_start": "start",
+                "owner_pid": 1,
+                "owner_start": "dead-owner",
+            }
+        ),
         encoding="utf-8",
     )
     terminated: list[str] = []
+
+    def terminate_job(name: str) -> bool:
+        terminated.append(name)
+        # Successful job teardown removes the durable guardian record.
+        record.unlink(missing_ok=True)
+        return True
+
     monkeypatch.setattr(
         container_activity,
         "_verified_guardian",
@@ -1676,12 +1691,12 @@ def test_windows_orphan_recovery_uses_identity_bound_job(
     monkeypatch.setattr(
         container_activity,
         "_terminate_windows_job",
-        lambda name: terminated.append(name) is None,
+        terminate_job,
     )
     monkeypatch.setattr(
         container_activity,
-        "_process_start_identity",
-        lambda _pid: None,
+        "_process_has_identity",
+        lambda _pid, _start: False,
     )
 
     recovery = (
@@ -1695,6 +1710,194 @@ def test_windows_orphan_recovery_uses_identity_bound_job(
     assert recovery.recovered == 1
     assert recovery.active == 0
     assert recovery.unresolved == 0
+    assert not record.exists()
+
+
+def test_stale_guardian_record_blocks_recovery_and_migrate(
+    tmp_path: Path,
+):
+    """Dead-sentinel leftover records must never look quiescent."""
+    conn = _database(tmp_path)
+    root = tmp_path / "stale-guardian-migrate"
+    container_id = _legacy_container(conn, root, "stale-guardian-migrate")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_text("keep", encoding="utf-8")
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "b" * 32
+    record = (
+        record_dir
+        / f"{container_id}.activity.{guardian_id}.guardian.json"
+    )
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": 2_000_000_001,
+                "sentinel_start": "dead-sentinel",
+                "owner_pid": 2_000_000_002,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name(
+                        "activity_guardian.py"
+                    )
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    recovery = container_registry.recover_container_activity_guardians(
+        conn,
+        container_id,
+    )
+    assert recovery.active == 0
+    assert recovery.unresolved == 1
+    assert recovery.recovered == 0
+
+    blocked = False
+    try:
+        with container_registry.container_quiescence_lock(conn, container_id):
+            pass
+    except ContainerBoundaryError as exc:
+        blocked = True
+        assert "ownership could not be verified" in str(exc)
+    assert blocked, "exclusive flock must still fail closed on leftover records"
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "wiki" / "note.md").read_text(encoding="utf-8") == "keep"
+    assert not (root / "ops").exists() or not (root / "ops" / "wiki").exists()
+    detail = container_registry.inspect_ops_migration(conn, container_id)
+    assert "ownership could not be verified" in str(detail["stored_reason"])
+
+
+def test_malformed_guardian_record_blocks_quiescence(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "malformed-guardian"
+    container_id = _legacy_container(conn, root, "malformed-guardian")
+    (root / "wiki").mkdir()
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    # Wrong id length / charset is unparseable identity state.
+    bad = record_dir / f"{container_id}.activity.not-a-valid-id.guardian.json"
+    bad.write_text("{not-json", encoding="utf-8")
+    good_name = record_dir / f"{container_id}.activity.{'c' * 32}.guardian.json"
+    good_name.write_text("not-json-either", encoding="utf-8")
+
+    recovery = container_registry.recover_container_activity_guardians(
+        conn,
+        container_id,
+    )
+    assert recovery.unresolved >= 1
+    assert recovery.active == 0
+    assert migrate_container_ops(conn, container_id) is False
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="dead-sentinel reparented writer proof uses Linux /proc",
+)
+def test_dead_sentinel_live_orphan_blocks_migrate_and_retry(
+    tmp_path: Path,
+):
+    """SIGKILL'd sentinel + live reparented writer must block Ops migration."""
+    conn = _database(tmp_path)
+    root = tmp_path / "dead-sentinel-orphan"
+    container_id = _legacy_container(conn, root, "dead-sentinel-orphan")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_text("owner-bytes", encoding="utf-8")
+    record_dir = tmp_path / ".proxima.db.container-locks"
+    record_dir.mkdir(mode=0o700)
+    guardian_id = "d" * 32
+    record = (
+        record_dir
+        / f"{container_id}.activity.{guardian_id}.guardian.json"
+    )
+    ready = tmp_path / "orphan-writer-ready"
+
+    sentinel = os.fork()
+    if sentinel == 0:
+        try:
+            os.setsid()
+            writer = os.fork()
+            if writer == 0:
+                try:
+                    ready.write_text(str(os.getpid()), encoding="utf-8")
+                    while True:
+                        time.sleep(1)
+                finally:
+                    os._exit(0)
+            while True:
+                time.sleep(1)
+        finally:
+            os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    start = container_activity.process_start_identity(sentinel) or ""
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": sentinel,
+                "sentinel_start": start,
+                "owner_pid": os.getpid(),
+                "owner_start": "",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name(
+                        "activity_guardian.py"
+                    )
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.kill(sentinel, 9)
+    try:
+        os.waitpid(sentinel, 0)
+    except ChildProcessError:
+        pass
+    time.sleep(0.05)
+    assert Path(f"/proc/{writer_pid}").exists()
+    assert record.exists()
+
+    try:
+        recovery = container_registry.recover_container_activity_guardians(
+            conn,
+            container_id,
+        )
+        assert recovery.unresolved >= 1
+        assert recovery.active == 0
+        assert migrate_container_ops(conn, container_id) is False
+        assert (root / "wiki" / "note.md").read_text(
+            encoding="utf-8"
+        ) == "owner-bytes"
+        # Exclusive flock can succeed (sentinel released it) but leftover
+        # record must still fail closed.
+        blocked = False
+        try:
+            with container_registry.container_quiescence_lock(
+                conn,
+                container_id,
+            ):
+                pass
+        except ContainerBoundaryError:
+            blocked = True
+        assert blocked
+    finally:
+        try:
+            os.kill(writer_pid, 9)
+        except OSError:
+            pass
+        try:
+            os.waitpid(writer_pid, 0)
+        except ChildProcessError:
+            pass
 
 
 def test_generated_container_doc_creation_never_clobbers_late_content(

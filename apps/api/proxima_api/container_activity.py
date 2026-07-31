@@ -1110,6 +1110,77 @@ def acquire_container_activity_lease(
     )
 
 
+def _guardian_records_present(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+) -> bool:
+    """True when any durable guardian record remains for the Container.
+
+    Live sentinels hold the shared activity flock. After exclusive quiescence
+    acquisition succeeds, a leftover record is therefore stale or unverifiable
+    and must keep exclusive work blocked (flock alone is not proof).
+    """
+    data, _, lock_dir = _lock_key(conn, container)
+    if (
+        lock_dir is None
+        or not lock_dir.is_dir()
+        or lock_dir.is_symlink()
+    ):
+        return False
+    pattern = f"{int(data['id'])}.activity.*.guardian.json"
+    try:
+        for record in lock_dir.glob(pattern):
+            try:
+                record_stat = record.lstat()
+            except OSError:
+                return True
+            if stat.S_ISLNK(record_stat.st_mode):
+                return True
+            if stat.S_ISREG(record_stat.st_mode):
+                return True
+            return True
+    except OSError:
+        return True
+    return False
+
+
+def _reconcile_recovered_guardian_record(
+    record: Path,
+    *,
+    expected_pid: int,
+    expected_start: str,
+) -> None:
+    """Unlink a record only after its exact verified sentinel identity is dead."""
+    try:
+        record_stat = record.lstat()
+        if stat.S_ISLNK(record_stat.st_mode) or not stat.S_ISREG(
+            record_stat.st_mode
+        ):
+            return
+        payload = json.loads(record.read_text(encoding="utf-8"))
+        pid = int(payload["sentinel_pid"])
+        start = str(payload["sentinel_start"])
+    except (
+        FileNotFoundError,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return
+    if pid != int(expected_pid) or start != str(expected_start):
+        return
+    if _process_has_identity(pid, start) is not False:
+        return
+    try:
+        record.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return
+
+
 @contextmanager
 def container_quiescence_lock(
     conn: sqlite3.Connection,
@@ -1122,6 +1193,14 @@ def container_quiescence_lock(
         timeout=QUIESCENCE_TIMEOUT_SECONDS,
     )
     try:
+        # Exclusive flock is necessary but not sufficient: a dead sentinel
+        # releases the activity lock while leaving a durable record and
+        # possibly live reparented writers. Fail closed on any leftover record.
+        if _guardian_records_present(conn, container):
+            raise ContainerBoundaryError(
+                "Project process ownership could not be verified; "
+                "exclusive work is blocked until process identity is reconciled"
+            )
         yield
     finally:
         lease.release()
@@ -1175,6 +1254,14 @@ def recover_container_activity_guardians(
     *,
     timeout: float = QUIESCENCE_TIMEOUT_SECONDS,
 ) -> ContainerActivityRecovery:
+    """Reconcile durable guardian records for one Container.
+
+    Every unverifiable, malformed, or stale record stays unresolved. Dead
+    launcher/sentinel pids never imply a clear Container - only a verified live
+    owner or exact recovered exit clears the blocker. Callers that mutate under
+    exclusive quiescence must still require ``active == 0`` and
+    ``unresolved == 0``; flock acquisition alone is not proof.
+    """
     data, _, lock_dir = _lock_key(conn, container)
     if (
         lock_dir is None
@@ -1185,14 +1272,91 @@ def recover_container_activity_guardians(
     guardian = Path(__file__).resolve().with_name(
         "activity_guardian.py"
     )
-    active = 0
     recovered = 0
-    unresolved = 0
-    waiting: list[tuple[int, str]] = []
+    waiting: list[tuple[int, str, Path]] = []
     pattern = f"{int(data['id'])}.activity.*.guardian.json"
+    container_id = int(data["id"])
     for record in sorted(lock_dir.glob(pattern)):
         try:
-            record_prefix = f"{int(data['id'])}.activity."
+            record_prefix = f"{container_id}.activity."
+            record_suffix = ".guardian.json"
+            guardian_id = record.name[
+                len(record_prefix) : -len(record_suffix)
+            ]
+            if (
+                len(guardian_id) != 32
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in guardian_id
+                )
+            ):
+                continue
+            record_stat = record.lstat()
+            if stat.S_ISLNK(record_stat.st_mode) or not stat.S_ISREG(
+                record_stat.st_mode
+            ):
+                continue
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            if (
+                _platform_is_windows()
+                and payload.get("job_name")
+                != f"Local\\ProximaActivity-{guardian_id}"
+            ):
+                continue
+            verified = _verified_guardian(payload, guardian)
+            if verified is None:
+                # Unverifiable / stale / dead-sentinel records are counted in
+                # the authoritative final scan below - never inferred clear.
+                continue
+            owner_live = _owner_is_live(payload)
+            if owner_live is not False:
+                continue
+            pid, start = verified
+            if _platform_is_windows():
+                job_name = str(payload.get("job_name") or "")
+                if not _terminate_windows_job(job_name):
+                    continue
+            else:
+                os.kill(pid, signal.SIGTERM)
+            waiting.append((pid, start, record))
+            recovered += 1
+        except (
+            FileNotFoundError,
+            KeyError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            continue
+    deadline = time.monotonic() + timeout
+    while waiting and time.monotonic() < deadline:
+        next_waiting: list[tuple[int, str, Path]] = []
+        for pid, start, record in waiting:
+            alive = _process_has_identity(pid, start)
+            if alive is False:
+                _reconcile_recovered_guardian_record(
+                    record,
+                    expected_pid=pid,
+                    expected_start=start,
+                )
+                continue
+            next_waiting.append((pid, start, record))
+        waiting = next_waiting
+        if waiting:
+            time.sleep(0.02)
+    for pid, start, record in waiting:
+        # Timed out while identity still unproven - leave the record and count
+        # it unresolved in the final scan.
+        del pid, start, record
+
+    # Authoritative recount: any remaining record without a verified live owner
+    # preserves the explicit active-process / ownership blocker.
+    active = 0
+    unresolved = 0
+    for record in sorted(lock_dir.glob(pattern)):
+        try:
+            record_prefix = f"{container_id}.activity."
             record_suffix = ".guardian.json"
             guardian_id = record.name[
                 len(record_prefix) : -len(record_suffix)
@@ -1222,52 +1386,22 @@ def recover_container_activity_guardians(
                 continue
             verified = _verified_guardian(payload, guardian)
             if verified is None:
-                try:
-                    unverified_pid = int(payload["sentinel_pid"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-                if (
-                    unverified_pid > 1
-                    and _process_exists(unverified_pid)
-                ):
-                    unresolved += 1
+                unresolved += 1
                 continue
             owner_live = _owner_is_live(payload)
             if owner_live is True:
                 active += 1
                 continue
-            if owner_live is None:
-                unresolved += 1
-                continue
-            pid, start = verified
-            if _platform_is_windows():
-                job_name = str(payload.get("job_name") or "")
-                if not _terminate_windows_job(job_name):
-                    unresolved += 1
-                    continue
-            else:
-                os.kill(pid, signal.SIGTERM)
-            waiting.append((pid, start))
-            recovered += 1
+            unresolved += 1
         except (
             FileNotFoundError,
             KeyError,
             OSError,
             TypeError,
             ValueError,
+            json.JSONDecodeError,
         ):
             unresolved += 1
-    deadline = time.monotonic() + timeout
-    while waiting and time.monotonic() < deadline:
-        waiting = [
-            item
-            for item in waiting
-            if _process_has_identity(item[0], item[1])
-            is not False
-        ]
-        if waiting:
-            time.sleep(0.02)
-    unresolved += len(waiting)
     return ContainerActivityRecovery(
         active=active,
         recovered=recovered,

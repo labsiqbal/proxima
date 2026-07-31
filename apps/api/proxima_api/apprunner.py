@@ -2381,16 +2381,9 @@ class AppManager:
             return self._last_exit.get(slug) or {"running": False}
         if app["proc"].returncode is not None:
             tree = self._writer_tree(app)
-            # Launcher exit is not writer-tree exit. Keep the effect (and its
-            # leases) until the identity-bound tree is proven clear.
-            if tree.exited() is not True:
-                try:
-                    tree.terminate(
-                        grace_seconds=0.2,
-                        kill_seconds=0.4,
-                    )
-                except Exception:
-                    pass
+            # Launcher exit is not writer-tree exit. Poll path stays non-blocking:
+            # report fail-closed live-tree state and leave termination to
+            # _drain/stop rather than killing on the event-loop status poll.
             if tree.exited() is not True:
                 eff_port = app.get("detected_port") or app["port"]
                 return {
