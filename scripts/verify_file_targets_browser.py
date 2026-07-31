@@ -220,6 +220,7 @@ body { font-family: CanonicalProbe, sans-serif; }
   onerror="parent.postMessage({probe:'target-preview-escape',value:'blocked'}, '*')">
 <script type="module" src="module.js"></script>
 <script>
+globalThis.__proximaPreviewExecuted = true;
 parent.postMessage({
   probe: "target-preview-origin",
   value: location.origin
@@ -228,12 +229,6 @@ parent.postMessage({
   probe: "target-preview-clean-location",
   value: `${location.pathname}${location.search}`
 }, "*");
-if (window.opener) {
-  window.opener.postMessage({
-    probe: "target-preview-top-level",
-    value: "executed"
-  }, "*");
-}
 fetch("data.json")
   .then(response => response.json())
   .then(value => parent.postMessage({
@@ -717,14 +712,17 @@ def _browser_expression() -> str:
           && image.naturalWidth === 2;
       });
     } else if (kind === "image") {
-      await until(`${name} image preview`, () => {
+      const image = await until(`${name} image preview`, () => {
         const image = overlay.querySelector("img.av-img");
         return image?.src.includes("/api/target-preview/")
           && image.src.includes("/ops/")
           && !image.src.includes("target=")
           && image.complete
-          && image.naturalWidth === 2;
+          && image.naturalWidth === 2
+          ? image
+          : null;
       });
+      window.__canonicalCoopSuccessUrl = image.src;
     } else if (kind === "html") {
       await until(`${name} isolated HTML preview`, () => {
         const frame = overlay.querySelector("iframe.av-frame");
@@ -748,6 +746,9 @@ def _browser_expression() -> str:
       ) {
         throw new Error(`targeted HTML used an invalid TLS origin: ${previewOrigin}`);
       }
+      const targetFrame = overlay.querySelector("iframe.av-frame");
+      window.__targetPreviewEntry = targetFrame.src;
+      window.__targetPreviewOrigin = previewOrigin;
       const cleanLocation = await until(
         `${name} capability cleanup`,
         () => previewMessages["target-preview-clean-location"]
@@ -830,17 +831,6 @@ def _browser_expression() -> str:
       if (previewMessages["target-preview-external-frame"] === "loaded") {
         throw new Error("an opaque external ancestor framed the Area preview");
       }
-      delete previewMessages["target-preview-top-level"];
-      const popup = window.open(frame.src, "target-preview-top-level-probe");
-      if (!popup) {
-        throw new Error("top-level preview probe could not open");
-      }
-      await wait(1500);
-      popup.close();
-      if (previewMessages["target-preview-top-level"] === "executed") {
-        throw new Error("capability executed in a top-level Area document");
-      }
-      checks.push("top-level-area-navigation-rejected");
     } else {
       await until(`${name} PDF preview`, () => {
         const frame = overlay.querySelector("iframe.av-frame");
@@ -866,9 +856,10 @@ def _browser_expression() -> str:
 """
 
 
-def _http_preview_expression() -> str:
-    return r"""
+def _http_preview_expression(*, relay: bool = False) -> str:
+    script = r"""
 (async () => {
+  const relay = __RELAY__;
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   const until = async (label, check, timeout = 15000) => {
     const deadline = Date.now() + timeout;
@@ -907,16 +898,21 @@ def _http_preview_expression() -> str:
   frame.src = entry;
   document.body.append(frame);
   const origin = await until(
-    "HTTP named-local Area origin",
+    relay ? "HTTP relay Area origin" : "HTTP named-local Area origin",
     () => messages["target-preview-origin"]
   );
-  if (
-    !origin.startsWith("http://file-")
-    || !origin.includes(".localhost")
-    || origin === location.origin
-  ) {
-    throw new Error(`invalid HTTP named-local Area origin: ${origin}`);
+  const validOrigin = relay
+    ? origin.startsWith("http://127.0.0.1:") && origin !== location.origin
+    : (
+      origin.startsWith("http://file-")
+      && origin.includes(".localhost")
+      && origin !== location.origin
+    );
+  if (!validOrigin) {
+    throw new Error(`invalid HTTP Area origin: ${origin}`);
   }
+  window.__targetPreviewEntry = entry;
+  window.__targetPreviewOrigin = origin;
   const cleanLocation = await until(
     "HTTP capability cleanup",
     () => messages["target-preview-clean-location"]
@@ -931,7 +927,7 @@ def _http_preview_expression() -> str:
   ]) {
     const result = await until(`HTTP ${probe}`, () => messages[probe]);
     if (result !== "loaded") {
-      throw new Error(`${probe} failed on HTTP named-local Area origin: ${result}`);
+      throw new Error(`${probe} failed on HTTP Area origin: ${result}`);
     }
   }
   const sameSiteScript = await new Promise(resolve => {
@@ -953,27 +949,48 @@ def _http_preview_expression() -> str:
       `same-site Area script request was not rejected: ${sameSiteScript}`
     );
   }
-  delete messages["target-preview-top-level"];
-  const popup = window.open(entry, "http-target-preview-top-level-probe");
-  if (!popup) {
-    throw new Error("HTTP top-level preview probe could not open");
-  }
-  await wait(1500);
-  popup.close();
-  if (messages["target-preview-top-level"] === "executed") {
-    throw new Error("HTTP capability executed in a top-level Area document");
-  }
   return {
     ok: true,
-    checks: [
+    checks: relay ? [
+      "http-relay-area-redirect",
+      "http-relay-same-origin-resources",
+      "http-relay-subresource-rejection",
+    ] : [
       "http-localhost-area-bootstrap",
       "http-localhost-same-origin-resources",
       "http-localhost-subresource-rejection",
-      "http-localhost-top-level-rejection",
-    ],
+    ]
   };
 })()
 """
+    return script.replace("__RELAY__", "true" if relay else "false")
+
+
+def _top_level_preview_probe(name: str) -> dict[str, object]:
+    return {
+        "action": "popup_response",
+        "name": name,
+        "timeout": 15,
+        "url_expression": "window.__targetPreviewEntry",
+        "expected_status": 403,
+        "expected_final_origin_expression": "window.__targetPreviewOrigin",
+        "expected_final_path": "/site/index.html",
+        "expected_capability_query": True,
+        "expected_executed": False,
+        "expected_body": "preview request metadata is invalid",
+    }
+
+
+def _coop_success_probe() -> dict[str, object]:
+    return {
+        "action": "popup_response",
+        "name": "COOP success response control",
+        "timeout": 15,
+        "url_expression": "window.__canonicalCoopSuccessUrl",
+        "expected_status": 200,
+        "expected_capability_query": False,
+        "expected_executed": False,
+    }
 
 
 def main() -> None:
@@ -1108,6 +1125,10 @@ def main() -> None:
                             "timeout": 45,
                             "expression": _browser_expression(),
                         },
+                        _top_level_preview_probe(
+                            "HTTPS top-level Area navigation rejection"
+                        ),
+                        _coop_success_probe(),
                         *(
                             [
                                 {
@@ -1213,7 +1234,10 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                                     "name": "HTTP named-local preview flow",
                                     "timeout": 30,
                                     "expression": _http_preview_expression(),
-                                }
+                                },
+                                _top_level_preview_probe(
+                                    "HTTP named-local top-level rejection"
+                                ),
                             ],
                         }
                         http_transcript = run_scenario(
@@ -1235,6 +1259,44 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                                     "ok": True,
                                     "scenario": http_scenario["name"],
                                     "transcript": json.loads(http_transcript),
+                                },
+                                sort_keys=True,
+                            )
+                        )
+                        relay_scenario = {
+                            "name": "canonical-file-targets-http-relay",
+                            "authenticated": True,
+                            "steps": [
+                                {
+                                    "action": "script",
+                                    "name": "HTTP Area relay preview flow",
+                                    "timeout": 30,
+                                    "expression": _http_preview_expression(
+                                        relay=True,
+                                    ),
+                                },
+                                _top_level_preview_probe(
+                                    "HTTP relay top-level rejection"
+                                ),
+                            ],
+                        }
+                        relay_transcript = run_scenario(
+                            executable=browser_executable,
+                            base_url=f"http://127.0.0.1:{http_port}",
+                            scenario=relay_scenario,
+                            profile=fixture / "relay-browser-profile",
+                            auth_token=token,
+                            drop_prefix=[],
+                        )
+                        print(
+                            json.dumps(
+                                {
+                                    "fixture": "disposable",
+                                    "ok": True,
+                                    "scenario": relay_scenario["name"],
+                                    "transcript": json.loads(
+                                        relay_transcript
+                                    ),
                                 },
                                 sort_keys=True,
                             )

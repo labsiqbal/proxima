@@ -282,12 +282,13 @@ remains on the authenticated route. TLS capability exchange uses a Secure,
 host-scoped `SameSite=None` cookie so a Tailscale Proxima origin can embed the
 separate apps-domain Area origin; HTTP same-site relays retain `SameSite=Strict`.
 Host-routed HTTPS and named-local HTTP exchanges use a server-owned bootstrap to
-enter the clean same-origin URL. Cross-origin entry requires a capability-bearing
-iframe or frame navigation; the clean frame may use the validated host-scoped cookie
-and remains bound by the signed frame ancestor. Top-level, malformed-entry,
-missing-entry-metadata, and cross-origin subresource requests are rejected before
-Area dispatch. Named-local HTTP uses a Secure `SameSite=None` cookie under the
-browser's trustworthy-localhost exception.
+enter the clean same-origin URL. One manager-owned dispatch gate covers named hosts,
+plain HTTP relays, TLS hosts, and clean redirects. Cross-origin entry requires a
+capability-bearing iframe or frame navigation; the clean frame may use the validated
+host-scoped cookie and remains bound by the signed frame ancestor. Top-level,
+malformed-entry, missing-entry-metadata, and cross-origin subresource requests are
+rejected before file service. Named-local HTTP uses a Secure `SameSite=None` cookie
+under the browser's trustworthy-localhost exception.
 The token's signed Proxima origin is enforced by the exact `frame-ancestors` policy
 on every document-viewable response. The Area host retains
 same-origin identity only because its router exposes the validated Area and no

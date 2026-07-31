@@ -10,7 +10,7 @@ import struct
 import subprocess
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 from urllib.request import urlopen
 
 
@@ -225,6 +225,185 @@ def _evaluation(connection: _WebSocket, expression: str) -> object:
     return result.get("value")
 
 
+def _debug_pages(debug_port: int) -> list[dict]:
+    with urlopen(
+        f"http://127.0.0.1:{debug_port}/json/list",
+        timeout=1,
+    ) as response:
+        value = json.loads(response.read())
+    if not isinstance(value, list) or not all(
+        isinstance(item, dict)
+        for item in value
+    ):
+        raise BrowserProbeError("browser debugging target list is invalid")
+    return value
+
+
+def _browser_url(connection: _WebSocket, expression: str) -> str:
+    value = _evaluation(
+        connection,
+        f"new URL(({expression}), location.href).href",
+    )
+    if not isinstance(value, str):
+        raise BrowserProbeError("browser popup URL is invalid")
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
+        raise BrowserProbeError("browser popup URL is invalid")
+    return value
+
+
+def _popup_response_step(
+    connection: _WebSocket,
+    step: dict,
+    *,
+    debug_port: int,
+) -> dict:
+    url = _browser_url(connection, step["url_expression"])
+    candidate = urlsplit(url)
+    expected_origin = (
+        _browser_url(
+            connection,
+            step["expected_final_origin_expression"],
+        ).rstrip("/")
+        if "expected_final_origin_expression" in step
+        else f"{candidate.scheme}://{candidate.netloc}"
+    )
+    expected_path = step.get("expected_final_path", candidate.path)
+    before = {
+        item.get("id")
+        for item in _debug_pages(debug_port)
+        if isinstance(item.get("id"), str)
+    }
+    opened = _evaluation(
+        connection,
+        (
+            "(() => {"
+            f"const popup=window.open({json.dumps(url)},'_blank');"
+            "return {ok:Boolean(popup)};"
+            "})()"
+        ),
+    )
+    if not isinstance(opened, dict) or opened.get("ok") is not True:
+        raise BrowserProbeError("browser popup could not open")
+
+    deadline = time.monotonic() + float(step.get("timeout", 10))
+    target: dict | None = None
+    while time.monotonic() < deadline:
+        target = next(
+            (
+                item
+                for item in _debug_pages(debug_port)
+                if item.get("type") == "page"
+                and item.get("id") not in before
+                and isinstance(item.get("webSocketDebuggerUrl"), str)
+            ),
+            None,
+        )
+        if target is not None:
+            break
+        time.sleep(0.025)
+    if target is None:
+        raise BrowserProbeError("browser popup target was not discovered")
+
+    popup = _WebSocket(target["webSocketDebuggerUrl"])
+    result: dict | None = None
+    try:
+        popup.call("Page.enable")
+        popup.call("Runtime.enable")
+        popup.call("Network.enable")
+        marker = json.dumps(
+            step.get("execution_marker", "__proximaPreviewExecuted")
+        )
+        expression = f"""
+(() => {{
+  const navigation = performance.getEntriesByType("navigation")[0];
+  const status = Number(navigation?.responseStatus || 0);
+  return {{
+    ok: document.readyState === "complete" && status > 0,
+    status,
+    finalUrl: location.href,
+    body: (document.body?.textContent || "").slice(0, 1024),
+    executed: Boolean(globalThis[{marker}])
+  }};
+}})()
+"""
+        while time.monotonic() < deadline:
+            try:
+                value = _evaluation(popup, expression)
+            except BrowserProbeError:
+                time.sleep(0.025)
+                continue
+            if isinstance(value, dict) and value.get("ok") is True:
+                result = value
+                break
+            time.sleep(0.025)
+        if result is None:
+            raise BrowserProbeError("browser popup response did not finish")
+    finally:
+        popup.close()
+        target_id = target.get("id")
+        if isinstance(target_id, str):
+            try:
+                with urlopen(
+                    f"http://127.0.0.1:{debug_port}/json/close/{target_id}",
+                    timeout=1,
+                ):
+                    pass
+            except Exception:
+                pass
+
+    final_url = result.get("finalUrl")
+    if not isinstance(final_url, str):
+        raise BrowserProbeError("browser popup final URL is invalid")
+    final = urlsplit(final_url)
+    final_origin = f"{final.scheme}://{final.netloc}"
+    has_capability = any(
+        key == "__proxima_cap"
+        for key, _value in parse_qsl(
+            final.query,
+            keep_blank_values=True,
+        )
+    )
+    summary = {
+        "ok": True,
+        "name": step.get("name", "popup response"),
+        "status": result.get("status"),
+        "final_origin": final_origin,
+        "final_path": final.path,
+        "capability_query": has_capability,
+        "executed": result.get("executed"),
+    }
+    expected = (
+        result.get("status") == step["expected_status"]
+        and final_origin == expected_origin
+        and final.path == expected_path
+        and result.get("executed") is step.get("expected_executed", False)
+    )
+    if "expected_capability_query" in step:
+        expected = expected and (
+            has_capability is step["expected_capability_query"]
+        )
+    expected_body = step.get("expected_body")
+    if expected_body is not None:
+        expected = (
+            expected
+            and isinstance(result.get("body"), str)
+            and expected_body in result["body"]
+        )
+    if not expected:
+        summary["ok"] = False
+        raise BrowserProbeError(
+            "browser popup response assertion failed: "
+            + json.dumps(summary, sort_keys=True)
+        )
+    return summary
+
+
 def _element_expression(step: dict, action: str) -> str:
     selector = json.dumps(step["selector"])
     text = json.dumps(step.get("text"))
@@ -256,8 +435,19 @@ def _element_expression(step: dict, action: str) -> str:
 """
 
 
-def _step(connection: _WebSocket, step: dict) -> dict:
+def _step(
+    connection: _WebSocket,
+    step: dict,
+    *,
+    debug_port: int,
+) -> dict:
     action = step["action"]
+    if action == "popup_response":
+        return _popup_response_step(
+            connection,
+            step,
+            debug_port=debug_port,
+        )
     if action == "screenshot":
         path = Path(step["path"])
         if not path.is_absolute() or not path.parent.is_dir():
@@ -439,7 +629,13 @@ def run_scenario(
             }
         ]
         for step in scenario["steps"]:
-            transcript.append(_step(connection, step))
+            transcript.append(
+                _step(
+                    connection,
+                    step,
+                    debug_port=debug_port,
+                )
+            )
         return json.dumps(
             transcript,
             sort_keys=True,

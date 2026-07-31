@@ -15,7 +15,12 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from proxima_api import artifact_registry, container_registry, file_targets
+from proxima_api import (
+    artifact_registry,
+    container_registry,
+    file_targets,
+    target_preview,
+)
 from proxima_api.main import create_app
 
 
@@ -871,6 +876,87 @@ def test_loopback_preview_uses_a_same_host_relay_origin(
     assert response.status_code == 307
     assert urlsplit(response.headers["location"]).netloc == "127.0.0.1:43123"
     assert requested == [(area["id"], "127.0.0.1")]
+
+
+def test_loopback_relay_uses_shared_frame_only_admission(
+    tmp_path: Path,
+):
+    api, _headers, root = _api(tmp_path)
+    (root / "ops" / "index.html").write_text(
+        "<script>globalThis.__proximaPreviewExecuted = true</script>",
+        encoding="utf-8",
+    )
+    row = api.app.state.db.execute(
+        "SELECT pa.id, pa.project_id FROM project_areas pa "
+        "JOIN projects p ON p.id = pa.project_id "
+        "WHERE p.slug = 'identity' AND pa.kind = 'ops'"
+    ).fetchone()
+    area = target_preview.PreviewArea(
+        project_id=int(row["project_id"]),
+        kind="ops",
+        area_id=int(row["id"]),
+    )
+    manager = api.app.state.target_previews
+    token = target_preview.mint_file_preview_token(
+        manager.secret,
+        area,
+        frame_origin="http://127.0.0.1:8766",
+    )
+    capability_path = f"/index.html?__proxima_cap={token}"
+    frame_metadata = {
+        "Sec-Fetch-Site": "same-site",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "iframe",
+    }
+    top_level_metadata = {
+        **frame_metadata,
+        "Sec-Fetch-Dest": "document",
+    }
+    relay = TestClient(
+        manager._relay_app(area),
+        base_url="http://127.0.0.1:43123",
+    )
+
+    top_level = relay.get(
+        capability_path,
+        headers=top_level_metadata,
+        follow_redirects=False,
+    )
+    assert top_level.status_code == 403
+    assert top_level.text == "preview request metadata is invalid"
+    assert "set-cookie" not in top_level.headers
+
+    gate = relay.get(
+        capability_path,
+        headers=frame_metadata,
+        follow_redirects=False,
+    )
+    assert gate.status_code == 307
+    assert gate.headers["location"] == "/index.html"
+    assert "SameSite=strict" in gate.headers["set-cookie"]
+    assert "Secure" not in gate.headers["set-cookie"]
+
+    clean = relay.get(
+        gate.headers["location"],
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "iframe",
+        },
+    )
+    assert clean.status_code == 200
+    assert "__proximaPreviewExecuted" in clean.text
+
+    cross_site_resource = relay.get(
+        "/index.html",
+        headers={
+            "Sec-Fetch-Site": "cross-site",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Dest": "script",
+        },
+    )
+    assert cross_site_resource.status_code == 403
+    assert cross_site_resource.text == "preview request metadata is invalid"
 
 
 def test_archive_targets_resolve_direct_ops_files_without_registering_workspace_scan(
