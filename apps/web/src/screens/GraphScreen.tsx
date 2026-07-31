@@ -327,8 +327,12 @@ export function GraphScreen({
 
   function beginScheduleRunNowHandoff() {
     scheduleHandoffRef.current = true
-    // Abandon in-flight pending-draft adopt so it cannot steal after selection.
+    // Abandon in-flight pending-draft adopt and any explicit job focus/open so
+    // they cannot steal stage or autosave identity after selection.
     draftSeq.current += 1
+    jobLoadSeq.current += 1
+    wantedJobIdRef.current = focusedJobIdRef.current
+    setSavingTemplate(false)
     setBusy('schedule-run-now')
     onPendingConsumed?.()
     onDraftConsumed?.()
@@ -1372,11 +1376,16 @@ export function GraphScreen({
   }
 
   async function prepareDraftTemplate(item: GraphJob) {
-    if (busy) return
+    if (busy || scheduleHandoffRef.current) return
+    setBusy('prepare-template')
     const focus = beginJobFocus(item.id)
     try {
       const adopted = await adoptJobFocus(item, focus.seq)
-      if (!adopted) {
+      if (
+        !adopted
+        || !jobFocusCurrent(focus.seq, item.id)
+        || scheduleHandoffRef.current
+      ) {
         restoreJobFocusIfCurrent(focus.seq, item.id)
         return
       }
@@ -1384,6 +1393,10 @@ export function GraphScreen({
     } catch (cause) {
       restoreJobFocusIfCurrent(focus.seq, item.id)
       if (mounted.current) setError(String(cause))
+    } finally {
+      if (mounted.current && !scheduleHandoffRef.current) {
+        setBusy(current => current === 'prepare-template' ? null : current)
+      }
     }
   }
 
@@ -1683,19 +1696,21 @@ export function GraphScreen({
               else endScheduleRunNowHandoff()
             }}
             onOpenJob={async spawned => {
-              // Capture owner project before any await - dialog state must not gate selection.
-              const ownerProjectSlug = schedulingTemplate.project_slug
-              if (spawned.engine !== 'graph') {
-                throw new Error(`Schedule returned non-graph job ${spawned.id}.`)
-              }
-              if (
-                spawned.project_slug
-                && ownerProjectSlug
-                && spawned.project_slug !== ownerProjectSlug
-              ) {
-                throw new Error('Schedule returned a job outside the workflow owner project.')
-              }
+              // Entire selection attempt owns cleanup - validation throws before openJob
+              // must release the handoff lock the same way selection failures do.
               try {
+                // Capture owner project before any await - dialog state must not gate selection.
+                const ownerProjectSlug = schedulingTemplate.project_slug
+                if (spawned.engine !== 'graph') {
+                  throw new Error(`Schedule returned non-graph job ${spawned.id}.`)
+                }
+                if (
+                  spawned.project_slug
+                  && ownerProjectSlug
+                  && spawned.project_slug !== ownerProjectSlug
+                ) {
+                  throw new Error('Schedule returned a job outside the workflow owner project.')
+                }
                 const selected = await openJob(spawned.id)
                 if (!selected || selected.id !== spawned.id) {
                   throw new Error(`Could not select spawned graph job ${spawned.id}.`)
@@ -1705,8 +1720,7 @@ export function GraphScreen({
                 }
                 setSchedulingTemplate(null)
               } finally {
-                scheduleHandoffRef.current = false
-                if (mounted.current) setBusy(null)
+                endScheduleRunNowHandoff()
               }
             }}
           />

@@ -1934,4 +1934,198 @@ describe('GraphScreen how-it-runs badges', () => {
     expect(runScheduleNow).toHaveBeenCalledTimes(1)
     expect(createGraphJob).not.toHaveBeenCalled()
   })
+
+  it('clears Run now handoff when selection validation throws before openJob', async () => {
+    const spawned = {
+      ...runningJob(99, 'Nightly publish run'),
+      engine: 'linear',
+    } as never
+    vi.mocked(runScheduleNow).mockResolvedValue(spawned)
+
+    render(<GraphScreen {...screenBase} />)
+    await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
+    const row = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Schedule returned non-graph job 99/)
+    expect(screen.getByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+    expect(getGraphJob).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    })
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+    expect(within(row).getByRole('button', { name: 'Schedules' })).toBeEnabled()
+  })
+
+  it('clears Run now handoff when spawned job is outside the owner project', async () => {
+    const spawned = {
+      ...runningJob(99, 'Nightly publish run'),
+      project_slug: 'other-project',
+    } as never
+    vi.mocked(runScheduleNow).mockResolvedValue(spawned)
+
+    render(<GraphScreen {...screenBase} />)
+    await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
+    const row = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/outside the workflow owner project/)
+    expect(screen.getByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+    expect(getGraphJob).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    })
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancels in-flight Save as template prepare when Run now handoff starts', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = queuedDraft(77, 'Dirty draft')
+    const spawned = runningJob(99, 'Nightly publish run')
+    let finishAutosave: ((value: typeof prior) => void) | undefined
+    let autosaveStarted = false
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [prior] })
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId === 77) return prior
+      if (jobId === 99) return spawned
+      throw new Error(`unexpected job ${jobId}`)
+    })
+    vi.mocked(updateGraphPlan).mockImplementation((_token, jobId, body) => {
+      if (jobId !== 77) return Promise.reject(new Error(`unexpected save ${jobId}`))
+      const saved = {
+        ...prior,
+        title: body.title ?? prior.title,
+        graph: body.graph ?? prior.graph,
+      }
+      if (!autosaveStarted) {
+        autosaveStarted = true
+        return new Promise<typeof prior>(resolve => { finishAutosave = resolve }).then(() => saved)
+      }
+      return Promise.resolve(saved)
+    })
+    vi.mocked(runScheduleNow).mockResolvedValue(spawned)
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={0}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Dirty draft' })).toBeInTheDocument()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Only, Pending' }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Node instruction' }), {
+      target: { value: 'Dirty instruction' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(autosaveStarted).toBe(true))
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: 'Workflows 2' }))
+    const row = (await screen.findByText('Nightly publish')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
+    expect(await screen.findByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+
+    // Prepare can still be invoked while the schedule dialog is mounted; handoff must cancel it.
+    fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 1' }))
+    fireEvent.click(await screen.findByRole('button', { name: '★ Save as template' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+
+    await waitFor(() => expect(runScheduleNow).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 99))
+
+    await act(async () => {
+      finishAutosave?.({
+        ...prior,
+        graph: {
+          ...prior.graph,
+          nodes: prior.graph.nodes.map((node: { id: string }) => (
+            node.id === 'only' ? { ...node, instruction: 'Dirty instruction' } : node
+          )),
+        },
+      })
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Nightly publish run' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Save as Workflow' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={2}
+      />,
+    )
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Workflows 2' })).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { name: 'Save as Workflow' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'Workflows 2' }))
+    expect(screen.getByText('Nightly publish')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Save as Workflow' })).not.toBeInTheDocument()
+  })
+
+  it('cancels in-flight Edit when Run now handoff starts and still selects once', async () => {
+    const edited = queuedDraft(88, 'Edited draft')
+    const spawned = runningJob(99, 'Nightly publish run')
+    let finishEdit: ((value: typeof edited) => void) | undefined
+    let finishSpawn: ((value: typeof spawned) => void) | undefined
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [edited] })
+    vi.mocked(getGraphJob).mockImplementation((_token, jobId) => {
+      if (jobId === 88) return new Promise(resolve => { finishEdit = resolve })
+      if (jobId === 99) return Promise.resolve(spawned)
+      return Promise.reject(new Error(`unexpected job ${jobId}`))
+    })
+    vi.mocked(runScheduleNow).mockImplementation(() => new Promise(resolve => { finishSpawn = resolve }))
+
+    render(<GraphScreen {...screenBase} />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 1' }))
+    const editRow = (await screen.findByText('Edited draft')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(editRow).getByRole('button', { name: 'Edit' }))
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 88))
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Workflows 2' }))
+    const scheduleRow = (await screen.findByText('Nightly publish')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(scheduleRow).getByRole('button', { name: 'Schedules' }))
+    expect(await screen.findByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+    await waitFor(() => expect(runScheduleNow).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      finishEdit?.(edited)
+      await Promise.resolve()
+    })
+    expect(screen.queryByRole('button', { name: 'Rename workflow Edited draft' })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+
+    await act(async () => {
+      finishSpawn?.(spawned)
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Nightly publish run' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Edited draft' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+  })
 })
