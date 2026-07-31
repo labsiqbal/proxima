@@ -290,6 +290,9 @@ export function GraphScreen({
   const wantedJobIdRef = React.useRef<number | null>(null)
   const focusedJobIdRef = React.useRef<number | null>(null)
   const draftSeq = React.useRef(0)
+  // Parent-owned Schedule Run now lock: set before spawn, cleared after exact
+  // selection or a surfaced failure. Sync ref so mid-await gates see it immediately.
+  const scheduleHandoffRef = React.useRef(false)
 
   // Intentional navigation / create / start paths retarget focus.
   const focusJob = React.useCallback((next: GraphJob | null) => {
@@ -320,6 +323,25 @@ export function GraphScreen({
     if (jobFocusCurrent(seq, jobId)) {
       wantedJobIdRef.current = focusedJobIdRef.current
     }
+  }
+
+  function beginScheduleRunNowHandoff() {
+    scheduleHandoffRef.current = true
+    // Abandon in-flight pending-draft adopt so it cannot steal after selection.
+    draftSeq.current += 1
+    setBusy('schedule-run-now')
+    onPendingConsumed?.()
+    onDraftConsumed?.()
+  }
+
+  function endScheduleRunNowHandoff() {
+    scheduleHandoffRef.current = false
+    setBusy(current => current === 'schedule-run-now' ? null : current)
+  }
+
+  function dismissScheduleManager() {
+    if (scheduleHandoffRef.current || busy === 'schedule-run-now') return
+    setSchedulingTemplate(null)
   }
 
   /** Flush/prime + publish job/plan only while this explicit navigation generation is current. */
@@ -691,12 +713,22 @@ export function GraphScreen({
     // Opening is idempotent (GET + set state). Do not once-claim at module scope:
     // Strict Mode discards the first loadJob via jobLoadSeq, so the re-run must open again.
     if (!pendingJobId) return
+    // Schedule Run now owns focus until exact selection finishes. Drop competing
+    // deep-links so they cannot steal the spawned job after handoff completes.
+    if (scheduleHandoffRef.current || busy === 'schedule-run-now') {
+      onPendingConsumed?.()
+      return
+    }
     void openJob(pendingJobId)
     onPendingConsumed?.()
-  }, [pendingJobId, openJob, onPendingConsumed])
+  }, [pendingJobId, openJob, onPendingConsumed, busy])
 
   React.useEffect(() => {
     if (!pendingDraft) return
+    if (scheduleHandoffRef.current || busy === 'schedule-run-now') {
+      onDraftConsumed?.()
+      return
+    }
     const draft = pendingDraft
     const seq = ++draftSeq.current
     setBusy('create')
@@ -710,7 +742,7 @@ export function GraphScreen({
       project_slug: activeProject?.slug,
       profile_id: profileId,
     })).then(async created => {
-      if (!mounted.current || seq !== draftSeq.current) return
+      if (!mounted.current || seq !== draftSeq.current || scheduleHandoffRef.current) return
       onDraftConsumed?.()
       const focus = beginJobFocus(created.id)
       try {
@@ -719,7 +751,7 @@ export function GraphScreen({
           description: draft.description,
           category: draft.category,
         })
-        if (!adopted || seq !== draftSeq.current) {
+        if (!adopted || seq !== draftSeq.current || scheduleHandoffRef.current) {
           restoreJobFocusIfCurrent(focus.seq, created.id)
           return
         }
@@ -742,9 +774,9 @@ export function GraphScreen({
         setError(String(cause))
       }
     }).finally(() => {
-      if (mounted.current && seq === draftSeq.current) setBusy(null)
+      if (mounted.current && seq === draftSeq.current && !scheduleHandoffRef.current) setBusy(null)
     })
-  }, [pendingDraft, token, activeProject?.slug, profileId, onDraftConsumed])
+  }, [pendingDraft, token, activeProject?.slug, profileId, onDraftConsumed, busy])
 
   // Every external Task mutation publishes one durable job.update event to
   // this Task's session. Running/review polling remains a liveness fallback.
@@ -1630,44 +1662,50 @@ export function GraphScreen({
           else await runDraft(runTarget.job, input)
         }}
       />}
-      {schedulingTemplate && <div className="modal-scrim" onClick={() => setSchedulingTemplate(null)}>
+      {schedulingTemplate && <div className="modal-scrim" onClick={dismissScheduleManager}>
         <div
           className="modal-card schedule-modal-card"
           role="dialog"
           aria-modal="true"
           aria-label={`Schedule ${schedulingTemplate.name}`}
           onClick={event => event.stopPropagation()}
-          onKeyDown={event => { if (event.key === 'Escape') setSchedulingTemplate(null) }}
+          onKeyDown={event => { if (event.key === 'Escape') dismissScheduleManager() }}
         >
           <ScheduleManager
             token={token}
             workflows={[schedulingTemplate]}
             workflowId={schedulingTemplate.id}
             compact
-            onClose={() => setSchedulingTemplate(null)}
+            onClose={dismissScheduleManager}
             onChanged={() => void refreshList()}
+            onRunNowHandoffChange={active => {
+              if (active) beginScheduleRunNowHandoff()
+              else endScheduleRunNowHandoff()
+            }}
             onOpenJob={async spawned => {
+              // Capture owner project before any await - dialog state must not gate selection.
+              const ownerProjectSlug = schedulingTemplate.project_slug
               if (spawned.engine !== 'graph') {
                 throw new Error(`Schedule returned non-graph job ${spawned.id}.`)
               }
               if (
                 spawned.project_slug
-                && schedulingTemplate.project_slug
-                && spawned.project_slug !== schedulingTemplate.project_slug
+                && ownerProjectSlug
+                && spawned.project_slug !== ownerProjectSlug
               ) {
                 throw new Error('Schedule returned a job outside the workflow owner project.')
               }
-              setBusy('open-scheduled')
               try {
                 const selected = await openJob(spawned.id)
                 if (!selected || selected.id !== spawned.id) {
                   throw new Error(`Could not select spawned graph job ${spawned.id}.`)
                 }
-                if (selected.project_slug !== schedulingTemplate.project_slug) {
+                if (ownerProjectSlug && selected.project_slug !== ownerProjectSlug) {
                   throw new Error('Selected job does not belong to this workflow project.')
                 }
                 setSchedulingTemplate(null)
               } finally {
+                scheduleHandoffRef.current = false
                 if (mounted.current) setBusy(null)
               }
             }}

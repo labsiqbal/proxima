@@ -1731,22 +1731,27 @@ describe('GraphScreen how-it-runs badges', () => {
     vi.mocked(createGraphJob).mockResolvedValue(drafted)
     vi.mocked(runScheduleNow).mockResolvedValue(spawned)
 
-    const onPendingConsumed = vi.fn()
-    const onDraftConsumed = vi.fn()
     const draft = {
       name: 'Architect draft',
       description: 'from architect',
       category: 'other',
       graph: drafted.graph,
     }
-    const { rerender } = render(
+    let pendingJobId: number | null = 77
+    let pendingDraft: typeof draft | null = null
+    const onPendingConsumed = vi.fn(() => { pendingJobId = null })
+    const onDraftConsumed = vi.fn(() => { pendingDraft = null })
+    const view = () => (
       <GraphScreen
         {...screenBase}
-        pendingJobId={77}
+        pendingJobId={pendingJobId}
+        pendingDraft={pendingDraft}
         onPendingConsumed={onPendingConsumed}
-        backNonce={0}
-      />,
+        onDraftConsumed={onDraftConsumed}
+        backNonce={pendingJobId ? 0 : 1}
+      />
     )
+    const { rerender } = render(view())
     expect(await screen.findByRole('button', { name: 'Rename workflow Dirty draft' })).toBeInTheDocument()
 
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Only, Pending' }))
@@ -1759,32 +1764,21 @@ describe('GraphScreen how-it-runs badges', () => {
     await waitFor(() => expect(autosaveStarted).toBe(true))
 
     // Open Schedules before the draft create claims busy so Run now stays reachable.
-    rerender(
-      <GraphScreen
-        {...screenBase}
-        pendingJobId={null}
-        onPendingConsumed={onPendingConsumed}
-        backNonce={1}
-      />,
-    )
+    pendingJobId = null
+    rerender(view())
     fireEvent.click(await screen.findByRole('tab', { name: 'Workflows 2' }))
     const row = (await screen.findByText('Nightly publish')).closest('[role="row"]') as HTMLElement
     fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
     expect(await screen.findByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
 
-    rerender(
-      <GraphScreen
-        {...screenBase}
-        pendingJobId={null}
-        pendingDraft={draft}
-        onPendingConsumed={onPendingConsumed}
-        onDraftConsumed={onDraftConsumed}
-        backNonce={1}
-      />,
-    )
+    pendingDraft = draft
+    rerender(view())
     await waitFor(() => expect(createGraphJob).toHaveBeenCalled())
     // Draft has begun focus and is blocked on the prior flush; Run now must still win.
     fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+    // Parent clears deferred draft when handoff starts (same as App).
+    await waitFor(() => expect(onDraftConsumed).toHaveBeenCalled())
+    rerender(view())
 
     await waitFor(() => expect(runScheduleNow).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 99))
@@ -1830,5 +1824,114 @@ describe('GraphScreen how-it-runs badges', () => {
       await Promise.resolve()
     })
     expect(await screen.findByRole('button', { name: 'Rename workflow Publish on demand' })).toBeInTheDocument()
+  })
+
+  it('ignores scrim and Escape during Run now spawn and still selects the exact job once', async () => {
+    const spawned = runningJob(99, 'Nightly publish run')
+    let finishSpawn: ((value: typeof spawned) => void) | undefined
+    vi.mocked(runScheduleNow).mockImplementation(() => new Promise(resolve => { finishSpawn = resolve }))
+    vi.mocked(getGraphJob).mockResolvedValue(spawned)
+
+    render(<GraphScreen {...screenBase} />)
+    await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
+    const row = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Schedule Nightly publish' })
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }))
+    await waitFor(() => expect(runScheduleNow).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(dialog.parentElement as HTMLElement)
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Opening run...' })).toBeDisabled()
+
+    await act(async () => {
+      finishSpawn?.(spawned)
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Nightly publish run' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+    expect(getGraphJob).toHaveBeenCalledWith('t', 99)
+  })
+
+  it('blocks pendingJobId and pendingDraft stage changes during Run now spawn/selection', async () => {
+    const spawned = runningJob(99, 'Nightly publish run')
+    const drafted = queuedDraft(55, 'Architect draft')
+    const pending = runningJob(41, 'Deep link run')
+    let finishSpawn: ((value: typeof spawned) => void) | undefined
+    let finishLoad: ((value: typeof spawned) => void) | undefined
+    vi.mocked(runScheduleNow).mockImplementation(() => new Promise(resolve => { finishSpawn = resolve }))
+    vi.mocked(getGraphJob).mockImplementation((_token, jobId) => {
+      if (jobId === 99) return new Promise(resolve => { finishLoad = resolve })
+      if (jobId === 41) return Promise.resolve(pending)
+      return Promise.reject(new Error(`unexpected job ${jobId}`))
+    })
+    vi.mocked(createGraphJob).mockResolvedValue(drafted)
+
+    const draft = {
+      name: 'Architect draft',
+      description: 'from architect',
+      category: 'other',
+      graph: drafted.graph,
+    }
+    let pendingJobId: number | null = null
+    let pendingDraft: typeof draft | null = null
+    const onPendingConsumed = vi.fn(() => { pendingJobId = null })
+    const onDraftConsumed = vi.fn(() => { pendingDraft = null })
+    const view = () => (
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={pendingJobId}
+        pendingDraft={pendingDraft}
+        onPendingConsumed={onPendingConsumed}
+        onDraftConsumed={onDraftConsumed}
+      />
+    )
+    const { rerender } = render(view())
+    await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
+    const row = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+    await waitFor(() => expect(runScheduleNow).toHaveBeenCalledTimes(1))
+
+    // Competing navigation arrives mid-spawn and must be dropped, not applied.
+    onPendingConsumed.mockClear()
+    onDraftConsumed.mockClear()
+    pendingJobId = 41
+    pendingDraft = draft
+    rerender(view())
+    await waitFor(() => expect(onPendingConsumed).toHaveBeenCalled())
+    await waitFor(() => expect(onDraftConsumed).toHaveBeenCalled())
+    expect(pendingJobId).toBeNull()
+    expect(pendingDraft).toBeNull()
+    rerender(view())
+
+    expect(createGraphJob).not.toHaveBeenCalled()
+    expect(getGraphJob).not.toHaveBeenCalledWith('t', 41)
+    expect(screen.getByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+
+    await act(async () => {
+      finishSpawn?.(spawned)
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 99))
+
+    // Competing navigation stays blocked through selection, not only spawn.
+    expect(createGraphJob).not.toHaveBeenCalled()
+    expect(getGraphJob).not.toHaveBeenCalledWith('t', 41)
+
+    await act(async () => {
+      finishLoad?.(spawned)
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Nightly publish run' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Architect draft' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Deep link run' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+    expect(createGraphJob).not.toHaveBeenCalled()
   })
 })

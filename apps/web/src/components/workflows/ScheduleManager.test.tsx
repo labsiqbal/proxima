@@ -191,4 +191,99 @@ describe('ScheduleManager', () => {
     await act(async () => { confirmSelection?.() })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled())
   })
+
+  it('still hands off the spawned job after unmount between spawn and selection', async () => {
+    const user = userEvent.setup()
+    const job = { id: 99, engine: 'graph', title: 'Release', project_slug: 'owner' } as never
+    vi.mocked(listSchedules).mockResolvedValue([{
+      id: 3,
+      workflow_id: 7,
+      project_id: 1,
+      cron: '0 9 * * *',
+      timezone: 'UTC',
+      bindings: {},
+      input: {},
+      overlap_policy: 'allow',
+      enabled: true,
+      ready: true,
+      unresolved_inputs: [],
+      last_run_minute: null,
+      last_tick_at: null,
+      created_by: 1,
+      created_at: '',
+      updated_at: '',
+    }])
+    let finishSpawn: ((value: typeof job) => void) | undefined
+    vi.mocked(runScheduleNow).mockImplementation(() => new Promise(resolve => { finishSpawn = resolve }))
+    const onOpenJob = vi.fn().mockResolvedValue(undefined)
+    const onRunNowHandoffChange = vi.fn()
+    const { unmount } = render(
+      <ScheduleManager
+        token="token"
+        workflows={[workflow]}
+        workflowId={7}
+        defaultTimezone="UTC"
+        onOpenJob={onOpenJob}
+        onRunNowHandoffChange={onRunNowHandoffChange}
+      />,
+    )
+    await screen.findByText('Release')
+
+    await user.click(screen.getByRole('button', { name: 'Run now' }))
+    expect(onRunNowHandoffChange).toHaveBeenCalledWith(true)
+    await waitFor(() => expect(runScheduleNow).toHaveBeenCalledWith('token', 3))
+
+    unmount()
+    await act(async () => {
+      finishSpawn?.(job)
+      await Promise.resolve()
+    })
+
+    expect(onOpenJob).toHaveBeenCalledWith(job)
+    expect(onOpenJob).toHaveBeenCalledTimes(1)
+    // Parent owns clearing the handoff after selection; unmount must not end it early.
+    expect(onRunNowHandoffChange).not.toHaveBeenCalledWith(false)
+  })
+
+  it('signals handoff end when spawn fails before selection', async () => {
+    const user = userEvent.setup()
+    vi.mocked(listSchedules).mockResolvedValue([{
+      id: 3,
+      workflow_id: 7,
+      project_id: 1,
+      cron: '0 9 * * *',
+      timezone: 'UTC',
+      bindings: {},
+      input: {},
+      overlap_policy: 'allow',
+      enabled: true,
+      ready: true,
+      unresolved_inputs: [],
+      last_run_minute: null,
+      last_tick_at: null,
+      created_by: 1,
+      created_at: '',
+      updated_at: '',
+    }])
+    vi.mocked(runScheduleNow).mockRejectedValue(new Error('spawn failed'))
+    const onOpenJob = vi.fn()
+    const onRunNowHandoffChange = vi.fn()
+    render(
+      <ScheduleManager
+        token="token"
+        workflows={[workflow]}
+        workflowId={7}
+        defaultTimezone="UTC"
+        onOpenJob={onOpenJob}
+        onRunNowHandoffChange={onRunNowHandoffChange}
+      />,
+    )
+    await screen.findByText('Release')
+
+    await user.click(screen.getByRole('button', { name: 'Run now' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/spawn failed/)
+    expect(onOpenJob).not.toHaveBeenCalled()
+    expect(onRunNowHandoffChange).toHaveBeenCalledWith(true)
+    expect(onRunNowHandoffChange).toHaveBeenCalledWith(false)
+  })
 })

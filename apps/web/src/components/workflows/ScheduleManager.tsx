@@ -139,7 +139,7 @@ const nonblankBindings = (values: Record<string, string>) => Object.fromEntries(
     .filter(([, value]) => value),
 )
 
-export function ScheduleManager({ token, workflows, workflowId, compact = false, onClose, onChanged, onOpenJob, defaultTimezone = browserTimezone() }: {
+export function ScheduleManager({ token, workflows, workflowId, compact = false, onClose, onChanged, onOpenJob, onRunNowHandoffChange, defaultTimezone = browserTimezone() }: {
   token: string
   workflows: SchedulableWorkflow[]
   workflowId?: number
@@ -150,6 +150,8 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
   onChanged?: () => void
   /** Resolve only after the owning project has selected the exact returned job. */
   onOpenJob?: (job: Job) => Promise<void> | void
+  /** Parent-owned Run now lock from before spawn through selection or surfaced failure. */
+  onRunNowHandoffChange?: (active: boolean) => void
 }) {
   const available = workflowId ? workflows.filter(w => w.id === workflowId) : workflows
   const [selectedId, setSelectedId] = React.useState(workflowId || available[0]?.id || 0)
@@ -252,15 +254,28 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
   const runNow = async (schedule: Schedule) => {
     if (busy || schedule.ready === false) return
     const seq = ++actionSeq.current
+    // Capture handoff before any await so unmount cannot drop the required callback.
+    const selectSpawnedJob = onOpenJob
+    const handoffChange = onRunNowHandoffChange
+    let handedOff = false
     setBusy(true)
     setOpeningId(schedule.id)
     setError('')
+    handoffChange?.(true)
     try {
       const job = await runScheduleNow(token, schedule.id)
-      if (!mounted.current || seq !== actionSeq.current) return
-      await onOpenJob?.(job)
+      if (selectSpawnedJob) {
+        handedOff = true
+        // Always select the spawned job - dismiss/unmount must not orphan it.
+        await selectSpawnedJob(job)
+      } else {
+        handoffChange?.(false)
+      }
     } catch (cause) {
       if (mounted.current && seq === actionSeq.current) setError(String(cause))
+      // Parent clears handoff busy after selectSpawnedJob; only end it here when
+      // spawn failed or there was no parent handoff to own the lock.
+      if (!handedOff) handoffChange?.(false)
     } finally {
       if (mounted.current && seq === actionSeq.current) {
         setBusy(false)
