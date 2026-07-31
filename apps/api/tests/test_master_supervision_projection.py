@@ -980,7 +980,7 @@ def test_legacy_recovery_gap_corrects_after_current_task_projection(
             successor["id"],
         ),
     ).lastrowid
-    app.state.db.execute(
+    gap_audit_id = app.state.db.execute(
         "INSERT INTO task_recovery_ordering_gaps("
         "job_id, predecessor_outbox_id, successor_outbox_id, kind, "
         "predecessor_task_event_id, successor_task_event_id, "
@@ -994,7 +994,7 @@ def test_legacy_recovery_gap_corrects_after_current_task_projection(
             successor["task_event_id"],
             successor["event_id"],
         ),
-    )
+    ).lastrowid
     correction_id = app.state.db.execute(
         "INSERT INTO task_recovery_corrections("
         "job_id, successor_outbox_id, gap_count, first_task_event_id, "
@@ -1011,6 +1011,12 @@ def test_legacy_recovery_gap_corrects_after_current_task_projection(
             desk["session"]["id"],
         ),
     ).lastrowid
+    app.state.db.execute(
+        "INSERT INTO task_recovery_correction_gaps("
+        "correction_id, gap_id"
+        ") VALUES (?, ?)",
+        (correction_id, gap_audit_id),
+    )
     assert client.get(f"/api/jobs/{job_id}").json()["projection_repair"] == {
         "kind": "recovery_history",
         "state": "pending",

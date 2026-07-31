@@ -627,9 +627,11 @@ remains append-only. New and still-orderable recovery audits publish exactly onc
 that order. An upgrade from the older superseding recovery model records both
 unpublished predecessors and already-projected publication reversals in an immutable
 per-Task ordering-gap ledger without replaying or rewriting original recovery rows.
-At most one bounded correction marker per Task summarizes gap counts and Task-event
-ranges after the current Task projection, while predecessors without a published
-successor return to normal ordered delivery. SSE
+Already-delivered legacy correction messages, events, and durable marker rows remain
+immutable partial history, with exact links to the gaps each marker covered. Any
+still-uncovered gaps are combined into at most one new bounded aggregate correction
+marker per Task after the current Task projection, while predecessors without a
+published successor return to normal ordered delivery. SSE
 reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).

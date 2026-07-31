@@ -130,13 +130,15 @@ only obsolete unpublished status projections as superseded, linked to the recove
 Task event. Recovery audit intents are append-only and each publishes exactly once
 in Task-event order as `master.task.recovered` when it remains normally orderable.
 Legacy upgrade gaps are retained in an immutable causal ledger instead of replayed
-after a later publication or rewriting an already-projected reversal. At most one
-bounded `master.task.recovery_history_corrected` marker per Task summarizes all
-known gap counts and Task-event ranges after current-state projection. Each normal
-entry records actor, checkpoint, prior/new status, discarded progress, and conflicts
-through bounded server-owned summaries rather than arbitrary graph identifiers. A
-legacy Task with unavailable Focus still restores and exposes every
-failed-attribution repair intent, but publishes no unattributed Master history.
+after a later publication or rewriting an already-projected reversal. Delivered
+legacy partial correction markers, messages, and events remain immutable and retain
+exact links to their covered gaps. At most one new bounded
+`master.task.recovery_history_corrected` aggregate per Task summarizes the remaining
+uncovered gaps after current-state projection. Each normal entry records actor,
+checkpoint, prior/new status, discarded progress, and conflicts through bounded
+server-owned summaries rather than arbitrary graph identifiers. A legacy Task with
+unavailable Focus still restores and exposes every failed-attribution repair intent,
+but publishes no unattributed Master history.
 Git preflight completes before the immediate write transaction, then
 the restore rereads checkpoint, conflict, job, run, and node state under that lock.
 All validation and durable writes complete before a job worktree reset. A post-reset

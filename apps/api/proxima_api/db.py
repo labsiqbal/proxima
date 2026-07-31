@@ -826,6 +826,9 @@ END;
 CREATE TABLE IF NOT EXISTS task_recovery_corrections (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  marker_kind TEXT NOT NULL DEFAULT 'aggregate' CHECK (
+    marker_kind IN ('aggregate', 'legacy_partial')
+  ),
   successor_outbox_id INTEGER NOT NULL
     REFERENCES task_recovery_outbox(id) ON DELETE CASCADE,
   gap_count INTEGER NOT NULL CHECK (gap_count > 0),
@@ -856,22 +859,45 @@ CREATE TABLE IF NOT EXISTS task_recovery_corrections (
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(job_id),
   CHECK (
-    (state = 'pending' AND message_id IS NULL AND event_id IS NULL
-      AND (failure_code IS NULL OR failure_code = 'projection_failed'))
-    OR
-    (state = 'projected' AND message_id IS NOT NULL AND event_id IS NOT NULL
+    (marker_kind = 'legacy_partial'
+      AND state = 'projected'
+      AND message_id IS NOT NULL
+      AND event_id IS NOT NULL
       AND failure_code IS NULL)
     OR
-    (state = 'failed_attribution' AND message_id IS NULL AND event_id IS NULL
-      AND failure_code IN (
-        'focus_attribution_unavailable', 'projection_scope_unavailable'
-      ))
+    (marker_kind = 'aggregate' AND (
+      (state = 'pending' AND message_id IS NULL AND event_id IS NULL
+        AND (failure_code IS NULL OR failure_code = 'projection_failed'))
+      OR
+      (state = 'projected' AND message_id IS NOT NULL
+        AND event_id IS NOT NULL AND failure_code IS NULL)
+      OR
+      (state = 'failed_attribution' AND message_id IS NULL
+        AND event_id IS NULL AND failure_code IN (
+          'focus_attribution_unavailable', 'projection_scope_unavailable'
+        ))
+    ))
   )
 );
 CREATE INDEX IF NOT EXISTS idx_task_recovery_corrections_state
   ON task_recovery_corrections(state, id);
+CREATE TRIGGER IF NOT EXISTS task_recovery_correction_projected_immutable
+BEFORE UPDATE ON task_recovery_corrections
+WHEN OLD.state = 'projected'
+BEGIN
+  SELECT RAISE(ABORT, 'delivered recovery correction is immutable');
+END;
+CREATE TABLE IF NOT EXISTS task_recovery_correction_gaps (
+  correction_id INTEGER NOT NULL
+    REFERENCES task_recovery_corrections(id) ON DELETE CASCADE,
+  gap_id INTEGER NOT NULL
+    REFERENCES task_recovery_ordering_gaps(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (correction_id, gap_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_recovery_correction_gaps_gap
+  ON task_recovery_correction_gaps(gap_id, correction_id);
 -- Cross-Area outcomes are represented as several one-Area Tasks joined by
 -- these edges. The recursive trigger makes cycle safety a database invariant,
 -- including for writers that do not use TaskDelegationService.
@@ -1421,6 +1447,69 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "message_reviews", "merge_transcript", "merge_transcript TEXT")
     _add_column(conn, "message_reviews", "source_original_content", "source_original_content TEXT")
     _add_column(conn, "message_reviews", "applied_at", "applied_at TEXT")
+    if "task_recovery_corrections" in {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }:
+        _add_column(
+            conn,
+            "task_recovery_corrections",
+            "marker_kind",
+            "marker_kind TEXT NOT NULL DEFAULT 'aggregate' CHECK ("
+            "marker_kind IN ('aggregate', 'legacy_partial'))",
+        )
+        _add_column(
+            conn,
+            "task_recovery_corrections",
+            "first_successor_task_event_id",
+            "first_successor_task_event_id INTEGER NOT NULL DEFAULT 1 "
+            "CHECK (first_successor_task_event_id > 0)",
+        )
+        _add_column(
+            conn,
+            "task_recovery_corrections",
+            "last_successor_task_event_id",
+            "last_successor_task_event_id INTEGER NOT NULL DEFAULT 1 "
+            "CHECK (last_successor_task_event_id "
+            ">= first_successor_task_event_id)",
+        )
+        correction_schema = " ".join(
+            str(
+                conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'task_recovery_corrections'"
+                ).fetchone()[0]
+            )
+            .lower()
+            .split()
+        )
+        if (
+            "(marker_kind = 'legacy_partial' and state = 'projected'"
+            not in correction_schema
+        ):
+            conn.execute(
+                "DELETE FROM task_recovery_corrections AS pending "
+                "WHERE pending.state != 'projected' AND EXISTS ("
+                "SELECT 1 FROM task_recovery_corrections AS delivered "
+                "WHERE delivered.job_id = pending.job_id "
+                "AND delivered.state = 'projected'"
+                ")"
+            )
+        if conn.execute(
+            "SELECT 1 FROM task_recovery_corrections "
+            "WHERE marker_kind = 'aggregate' "
+            "AND state IN ('pending', 'failed_attribution') "
+            "GROUP BY job_id HAVING COUNT(*) > 1 LIMIT 1"
+        ).fetchone() is None:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_task_recovery_corrections_active_job "
+                "ON task_recovery_corrections(job_id) "
+                "WHERE marker_kind = 'aggregate' "
+                "AND state IN ('pending', 'failed_attribution')"
+            )
     # Pinned push target (audit F3) - pre-existing opt-ins have no pin, so the
     # push refuses until the owner re-enables the toggle (which pins the URL).
     _add_column(conn, "project_areas", "push_remote_url", "push_remote_url TEXT")

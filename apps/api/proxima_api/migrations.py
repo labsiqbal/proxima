@@ -3468,6 +3468,539 @@ def _aggregate_legacy_recovery_ordering_gaps(
     )
 
 
+def _preserve_delivered_recovery_corrections(
+    conn: sqlite3.Connection,
+) -> None:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if not {
+        "events",
+        "jobs",
+        "messages",
+        "task_recovery_corrections",
+        "task_recovery_ordering_gaps",
+        "task_recovery_outbox",
+    }.issubset(tables):
+        return
+    correction_table = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'task_recovery_corrections'"
+    ).fetchone()
+    correction_schema = " ".join(
+        str(correction_table["sql"] or "").lower().split()
+    )
+    coverage_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'task_recovery_correction_gaps'"
+    ).fetchone()
+    final_schema = (
+        "(marker_kind = 'legacy_partial' and state = 'projected'"
+        in correction_schema
+        and coverage_table is not None
+    )
+    if final_schema:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "uq_task_recovery_corrections_active_job "
+            "ON task_recovery_corrections(job_id) "
+            "WHERE marker_kind = 'aggregate' "
+            "AND state IN ('pending', 'failed_attribution')"
+        )
+        from .master_projection import assert_task_projection_outbox
+
+        assert_task_projection_outbox(
+            conn,
+            require_ordered=True,
+            require_state_generation=True,
+            require_legacy_ordering=True,
+            require_aggregated_recovery_corrections=True,
+            require_recovery_correction_coverage=True,
+        )
+        return
+
+    old_rows = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM task_recovery_corrections ORDER BY id"
+        ).fetchall()
+    ]
+    gaps = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM task_recovery_ordering_gaps ORDER BY id"
+        ).fetchall()
+    ]
+    gaps_by_job: dict[int, list[dict[str, Any]]] = {}
+    for gap in gaps:
+        gaps_by_job.setdefault(int(gap["job_id"]), []).append(gap)
+    old_by_event = {
+        int(row["event_id"]): row
+        for row in old_rows
+        if row["state"] == "projected" and row["event_id"] is not None
+    }
+    delivered: list[dict[str, Any]] = []
+    delivered_gap_ids: set[int] = set()
+    for event in conn.execute(
+        "SELECT id, session_id, payload, created_at FROM events "
+        "WHERE type = 'master.task.recovery_history_corrected' "
+        "ORDER BY id"
+    ).fetchall():
+        try:
+            payload = json.loads(str(event["payload"]))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "Delivered recovery correction payload is invalid"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError(
+                "Delivered recovery correction payload is invalid"
+            )
+        try:
+            job_id = int(payload["task_id"])
+            message_id = int(payload["message_id"])
+            gap_count = int(payload["gap_count"])
+            first_task_event_id = int(payload["first_task_event_id"])
+            last_task_event_id = int(payload["last_task_event_id"])
+            successor_task_event_id = int(
+                payload["successor_task_event_id"]
+            )
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError(
+                "Delivered recovery correction payload is incomplete"
+            ) from exc
+        job_gaps = gaps_by_job.get(job_id, [])
+        if not job_gaps:
+            continue
+        message = conn.execute(
+            "SELECT session_id FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+        if (
+            message is None
+            or event["session_id"] is None
+            or int(message["session_id"]) != int(event["session_id"])
+        ):
+            raise RuntimeError(
+                "Delivered recovery correction message link is invalid"
+            )
+        successor = conn.execute(
+            "SELECT id, master_session_id FROM task_recovery_outbox "
+            "WHERE job_id = ? AND task_event_id = ? "
+            "AND state = 'projected'",
+            (job_id, successor_task_event_id),
+        ).fetchone()
+        if successor is None:
+            raise RuntimeError(
+                "Delivered recovery correction successor is invalid"
+            )
+        marker_kind = (
+            "aggregate"
+            if "first_successor_task_event_id" in payload
+            and "last_successor_task_event_id" in payload
+            else "legacy_partial"
+        )
+        if marker_kind == "aggregate":
+            try:
+                first_successor_task_event_id = int(
+                    payload["first_successor_task_event_id"]
+                )
+                last_successor_task_event_id = int(
+                    payload["last_successor_task_event_id"]
+                )
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                OverflowError,
+            ) as exc:
+                raise RuntimeError(
+                    "Delivered recovery correction range is invalid"
+                ) from exc
+            covered = [
+                gap
+                for gap in job_gaps
+                if first_task_event_id
+                <= int(gap["predecessor_task_event_id"])
+                <= last_task_event_id
+                and first_successor_task_event_id
+                <= int(gap["successor_task_event_id"])
+                <= last_successor_task_event_id
+            ]
+        else:
+            first_successor_task_event_id = successor_task_event_id
+            last_successor_task_event_id = successor_task_event_id
+            covered = [
+                gap
+                for gap in job_gaps
+                if int(gap["successor_task_event_id"])
+                == successor_task_event_id
+                and first_task_event_id
+                <= int(gap["predecessor_task_event_id"])
+                <= last_task_event_id
+            ]
+        if (
+            gap_count <= 0
+            or len(covered) != gap_count
+            or not covered
+        ):
+            raise RuntimeError(
+                "Delivered recovery correction coverage is invalid"
+            )
+        source = old_by_event.get(int(event["id"]))
+        delivered.append(
+            {
+                "id": int(source["id"]) if source is not None else None,
+                "job_id": job_id,
+                "marker_kind": marker_kind,
+                "successor_outbox_id": int(successor["id"]),
+                "gap_count": gap_count,
+                "first_task_event_id": first_task_event_id,
+                "last_task_event_id": last_task_event_id,
+                "first_successor_task_event_id": (
+                    first_successor_task_event_id
+                ),
+                "last_successor_task_event_id": (
+                    last_successor_task_event_id
+                ),
+                "state": "projected",
+                "master_session_id": int(event["session_id"]),
+                "message_id": message_id,
+                "event_id": int(event["id"]),
+                "failure_code": None,
+                "attempt_count": (
+                    int(source["attempt_count"])
+                    if source is not None
+                    else 1
+                ),
+                "created_at": (
+                    str(source["created_at"])
+                    if source is not None
+                    else str(event["created_at"])
+                ),
+                "updated_at": (
+                    str(source["updated_at"])
+                    if source is not None
+                    else str(event["created_at"])
+                ),
+                "gap_ids": [int(gap["id"]) for gap in covered],
+            }
+        )
+        delivered_gap_ids.update(
+            int(gap["id"]) for gap in covered
+        )
+
+    old_active_by_job: dict[int, list[dict[str, Any]]] = {}
+    for row in old_rows:
+        if row["state"] != "projected":
+            old_active_by_job.setdefault(
+                int(row["job_id"]), []
+            ).append(row)
+    used_ids = {
+        int(marker["id"])
+        for marker in delivered
+        if marker["id"] is not None
+    }
+    next_id = max(
+        [int(row["id"]) for row in old_rows] + [0]
+    ) + 1
+    for marker in delivered:
+        if marker["id"] is None:
+            marker["id"] = next_id
+            used_ids.add(next_id)
+            next_id += 1
+
+    aggregates: list[dict[str, Any]] = []
+    for job_id, job_gaps in gaps_by_job.items():
+        uncovered = [
+            gap
+            for gap in job_gaps
+            if int(gap["id"]) not in delivered_gap_ids
+        ]
+        if not uncovered:
+            continue
+        candidates = old_active_by_job.get(job_id, [])
+        selected = candidates[0] if candidates else None
+        selected_id = (
+            int(selected["id"])
+            if selected is not None
+            and int(selected["id"]) not in used_ids
+            else next_id
+        )
+        if selected_id == next_id:
+            next_id += 1
+        used_ids.add(selected_id)
+        anchor_gap = max(
+            uncovered,
+            key=lambda gap: (
+                int(gap["successor_task_event_id"]),
+                int(gap["id"]),
+            ),
+        )
+        anchor = conn.execute(
+            "SELECT master_session_id FROM task_recovery_outbox "
+            "WHERE id = ? AND state = 'projected'",
+            (int(anchor_gap["successor_outbox_id"]),),
+        ).fetchone()
+        if anchor is None:
+            raise RuntimeError(
+                "Recovery correction aggregate successor is invalid"
+            )
+        predecessor_events = [
+            int(gap["predecessor_task_event_id"]) for gap in uncovered
+        ]
+        successor_events = [
+            int(gap["successor_task_event_id"]) for gap in uncovered
+        ]
+        aggregate = {
+            "id": selected_id,
+            "job_id": job_id,
+            "marker_kind": "aggregate",
+            "successor_outbox_id": int(
+                anchor_gap["successor_outbox_id"]
+            ),
+            "gap_count": len(uncovered),
+            "first_task_event_id": min(predecessor_events),
+            "last_task_event_id": max(predecessor_events),
+            "first_successor_task_event_id": min(successor_events),
+            "last_successor_task_event_id": max(successor_events),
+            "state": (
+                str(selected["state"])
+                if selected is not None
+                else "pending"
+            ),
+            "master_session_id": (
+                selected["master_session_id"]
+                if selected is not None
+                else anchor["master_session_id"]
+            ),
+            "message_id": None,
+            "event_id": None,
+            "failure_code": (
+                selected["failure_code"]
+                if selected is not None
+                else None
+            ),
+            "attempt_count": (
+                max(
+                    int(candidate["attempt_count"])
+                    for candidate in candidates
+                )
+                if candidates
+                else 0
+            ),
+            "created_at": (
+                min(
+                    str(candidate["created_at"])
+                    for candidate in candidates
+                )
+                if candidates
+                else None
+            ),
+            "updated_at": (
+                max(
+                    str(candidate["updated_at"])
+                    for candidate in candidates
+                )
+                if candidates
+                else None
+            ),
+            "gap_ids": [int(gap["id"]) for gap in uncovered],
+        }
+        if aggregate["state"] not in (
+            "pending",
+            "failed_attribution",
+        ):
+            aggregate["state"] = "pending"
+            aggregate["failure_code"] = None
+        aggregates.append(aggregate)
+
+    conn.execute(
+        "DROP TRIGGER IF EXISTS "
+        "task_recovery_correction_projected_immutable"
+    )
+    conn.execute(
+        "DROP INDEX IF EXISTS idx_task_recovery_corrections_state"
+    )
+    conn.execute(
+        "DROP INDEX IF EXISTS uq_task_recovery_corrections_active_job"
+    )
+    if coverage_table is not None:
+        conn.execute("DROP TABLE task_recovery_correction_gaps")
+    conn.execute(
+        "ALTER TABLE task_recovery_corrections "
+        "RENAME TO task_recovery_corrections_v48"
+    )
+    conn.execute(
+        """
+        CREATE TABLE task_recovery_corrections (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+          marker_kind TEXT NOT NULL DEFAULT 'aggregate' CHECK (
+            marker_kind IN ('aggregate', 'legacy_partial')
+          ),
+          successor_outbox_id INTEGER NOT NULL
+            REFERENCES task_recovery_outbox(id) ON DELETE CASCADE,
+          gap_count INTEGER NOT NULL CHECK (gap_count > 0),
+          first_task_event_id INTEGER NOT NULL
+            CHECK (first_task_event_id > 0),
+          last_task_event_id INTEGER NOT NULL CHECK (
+            last_task_event_id >= first_task_event_id
+          ),
+          first_successor_task_event_id INTEGER NOT NULL DEFAULT 1 CHECK (
+            first_successor_task_event_id > 0
+          ),
+          last_successor_task_event_id INTEGER NOT NULL DEFAULT 1 CHECK (
+            last_successor_task_event_id
+              >= first_successor_task_event_id
+          ),
+          state TEXT NOT NULL DEFAULT 'pending' CHECK (
+            state IN ('pending', 'projected', 'failed_attribution')
+          ),
+          master_session_id INTEGER
+            REFERENCES sessions(id) ON DELETE SET NULL,
+          message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
+          event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
+          failure_code TEXT CHECK (
+            failure_code IS NULL OR failure_code IN (
+              'focus_attribution_unavailable',
+              'projection_scope_unavailable',
+              'projection_failed'
+            )
+          ),
+          attempt_count INTEGER NOT NULL DEFAULT 0
+            CHECK (attempt_count >= 0),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CHECK (
+            (marker_kind = 'legacy_partial'
+              AND state = 'projected'
+              AND message_id IS NOT NULL
+              AND event_id IS NOT NULL
+              AND failure_code IS NULL)
+            OR
+            (marker_kind = 'aggregate' AND (
+              (state = 'pending' AND message_id IS NULL
+                AND event_id IS NULL AND (
+                  failure_code IS NULL
+                  OR failure_code = 'projection_failed'
+                ))
+              OR
+              (state = 'projected' AND message_id IS NOT NULL
+                AND event_id IS NOT NULL AND failure_code IS NULL)
+              OR
+              (state = 'failed_attribution' AND message_id IS NULL
+                AND event_id IS NULL AND failure_code IN (
+                  'focus_attribution_unavailable',
+                  'projection_scope_unavailable'
+                ))
+            ))
+          )
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX idx_task_recovery_corrections_state "
+        "ON task_recovery_corrections(state, id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX uq_task_recovery_corrections_active_job "
+        "ON task_recovery_corrections(job_id) "
+        "WHERE marker_kind = 'aggregate' "
+        "AND state IN ('pending', 'failed_attribution')"
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER task_recovery_correction_projected_immutable
+        BEFORE UPDATE ON task_recovery_corrections
+        WHEN OLD.state = 'projected'
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'delivered recovery correction is immutable'
+          );
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE task_recovery_correction_gaps (
+          correction_id INTEGER NOT NULL
+            REFERENCES task_recovery_corrections(id) ON DELETE CASCADE,
+          gap_id INTEGER NOT NULL
+            REFERENCES task_recovery_ordering_gaps(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (correction_id, gap_id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX idx_task_recovery_correction_gaps_gap "
+        "ON task_recovery_correction_gaps(gap_id, correction_id)"
+    )
+    marker_columns = (
+        "id, job_id, marker_kind, successor_outbox_id, gap_count, "
+        "first_task_event_id, last_task_event_id, "
+        "first_successor_task_event_id, "
+        "last_successor_task_event_id, state, master_session_id, "
+        "message_id, event_id, failure_code, attempt_count, "
+        "created_at, updated_at"
+    )
+    marker_values = (
+        "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+        "COALESCE(?, CURRENT_TIMESTAMP), "
+        "COALESCE(?, CURRENT_TIMESTAMP)"
+    )
+    for marker in delivered + aggregates:
+        conn.execute(
+            f"INSERT INTO task_recovery_corrections({marker_columns}) "
+            f"VALUES ({marker_values})",
+            (
+                marker["id"],
+                marker["job_id"],
+                marker["marker_kind"],
+                marker["successor_outbox_id"],
+                marker["gap_count"],
+                marker["first_task_event_id"],
+                marker["last_task_event_id"],
+                marker["first_successor_task_event_id"],
+                marker["last_successor_task_event_id"],
+                marker["state"],
+                marker["master_session_id"],
+                marker["message_id"],
+                marker["event_id"],
+                marker["failure_code"],
+                marker["attempt_count"],
+                marker["created_at"],
+                marker["updated_at"],
+            ),
+        )
+        conn.executemany(
+            "INSERT INTO task_recovery_correction_gaps("
+            "correction_id, gap_id"
+            ") VALUES (?, ?)",
+            [
+                (int(marker["id"]), int(gap_id))
+                for gap_id in marker["gap_ids"]
+            ],
+        )
+    conn.execute("DROP TABLE task_recovery_corrections_v48")
+
+    from .master_projection import assert_task_projection_outbox
+
+    assert_task_projection_outbox(
+        conn,
+        require_ordered=True,
+        require_state_generation=True,
+        require_legacy_ordering=True,
+        require_aggregated_recovery_corrections=True,
+        require_recovery_correction_coverage=True,
+    )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -3592,6 +4125,11 @@ MIGRATIONS: list[Migration] = [
         49,
         "aggregate legacy recovery gaps per Task",
         _aggregate_legacy_recovery_ordering_gaps,
+    ),
+    (
+        49,
+        "preserve delivered recovery markers and exact gap coverage",
+        _preserve_delivered_recovery_corrections,
     ),
 ]
 

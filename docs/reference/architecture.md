@@ -655,11 +655,13 @@ exactly once in Task-event order. Missing legacy Focus leaves each restore as a
 failed-attribution repair row without rolling back Task restoration or publishing
 unattributed history. Projection schema upgrades retain unpublished predecessors and
 already-projected publication reversals in an immutable per-Task ordering-gap ledger
-without replaying or rewriting original recovery rows. One per-Task correction
-intent summarizes bounded gap counts and predecessor/successor Task-event ranges,
-and emits at most one history marker only after ordered outboxes and the canonical
-current Task projection are settled. Still-orderable predecessors remain on the
-normal recovery path.
+without replaying or rewriting original recovery rows. Delivered legacy partial
+correction markers, messages, and events remain immutable, and an exact coverage
+ledger links them to their causal gaps. One active per-Task aggregate intent
+summarizes only still-uncovered bounded gap counts and predecessor/successor
+Task-event ranges, and emits at most one new history marker after ordered outboxes
+and the canonical current Task projection are settled. Still-orderable predecessors
+remain on the normal recovery path.
 Projection message, event, and ledger rows then commit together. Startup validates
 their strict owner, source/type, foreign-key, index, complete-link, and bounded payload
 contract.

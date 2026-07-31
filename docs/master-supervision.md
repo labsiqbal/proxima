@@ -89,9 +89,11 @@ preventing delayed Failed or Done delivery from overwriting restored Queued stat
 Recovery audit rows are never superseded. New and still-orderable restores remain
 durable and publish exactly once in Task-event order. Legacy upgrades retain
 unpublished predecessors and already-projected publication reversals as immutable
-causal gap rows without replaying or rewriting original recovery history. At most
-one bounded `master.task.recovery_history_corrected` marker per Task summarizes all
-known gap counts and event ranges after the current Task projection settles.
+causal gap rows without replaying or rewriting original recovery history. At most one
+new bounded `master.task.recovery_history_corrected` aggregate per Task summarizes
+still-uncovered gap counts and event ranges after the current Task projection
+settles. Previously delivered legacy partial markers and their messages and events
+remain immutable, and an exact coverage ledger links each marker to its causal gaps.
 Unavailable legacy Focus is recorded as failed attribution and can be replayed only
 after attribution becomes provable; the Task restore remains committed and no
 unattributed history is published. Each reconciliation candidate has its own
