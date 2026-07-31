@@ -308,6 +308,11 @@ remain unchanged, and model-supplied targets are otherwise removed. See
 extended by [ADR-0035](../adr/0035-frame-bound-area-preview-admission.md) and the
 explicit trust transition recorded in
 [ADR-0036](../adr/0036-active-file-preview-is-explicit-trusted-mode.md).
+`container_activity.py` owns cross-process mutation and process-lifetime leases,
+`ops_filesystem.py` owns native no-follow identity primitives, and
+`ops_publication.py` owns descriptor-relative migration publication. Those deep
+ownership modules do not depend on registry projection; `container_registry.py`
+orchestrates them while remaining the canonical root resolver.
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
@@ -348,9 +353,11 @@ dry-run manifest with content hashes. It includes an existing owner-authored
 that legacy document is absent. It rejects collisions or ambiguous types before
 publication. Regular files are linked into authoritative names from opened,
 manifest-bound descriptors. Directories are published entry by entry relative to
-stable no-follow descriptors. The legacy name is moved only into a manifest-bound
-retained namespace, so a pathname swap can preserve unknown owner bytes but cannot
-select them as authoritative. Generated documents require anonymous same-filesystem
+stable no-follow descriptors. Manifest version 6 records each Proxima-created
+destination directory identity before any child is published, and rejects every
+unbound existing directory even when it is empty. The legacy name is moved only
+after its complete source snapshot is revalidated; a changed name remains untouched
+for owner intervention. Generated documents require anonymous same-filesystem
 storage and persist device, inode, and expected hash before the first visible
 no-clobber recovery link. The exact recovery link remains as a durable anchor; no
 cleanup unlinks a re-resolved name. Every manifest entry binds the opened top-level
@@ -381,15 +388,20 @@ a standalone script selected by verified absolute path, launched with isolated
 Python import behavior, and changes to a trusted working directory before it adopts
 the lease. A detached Linux subreaper sentinel or Windows Job object owns the writer
 tree. If a platform cannot prove complete tree exit, Proxima fails closed by
-refusing to start the guarded writer. Guarded cached runners recycle after
-their turn. Migration and complete
+refusing to start the guarded writer. The record binds both the guardian and its
+owning API process by PID and process-start identity. A matching live owner is an
+active-process conflict and is never signaled. Proven API orphans can be recovered
+through the Linux sentinel or the exact unpredictable named Windows Job.
+Activity-guarded ACP processes use per-run cache scopes, so one concurrent run
+cannot recycle another run's process. Migration and complete
 Project purge require bounded exclusive quiescence and return an active-process
-reason instead of waiting forever. On Linux, explicit owner retry signals only
-project-scoped guardians whose trusted record and live process identity still match.
+reason instead of waiting forever. Explicit owner retry recovers only project-scoped
+guardians whose trusted owner, guardian, interpreter, script, and platform control
+identities still match.
 Upload request bodies are staged before synchronous publication. Virtual roots are
 resolved only after acquiring the appropriate boundary, and late destinations fail
 without replacement. See
-[ADR-0029](../adr/0029-container-activity-and-migration-publication.md).
+[ADR-0038](../adr/0038-owner-safe-container-activity-boundaries.md).
 Root-repository exclusion traverses `.git/info/exclude` relative to the already-open
 Container descriptor. Fresh Windows Container creation opens and identity-binds the
 Container handle before creating `ops/`, creates every starter path component

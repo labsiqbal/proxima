@@ -372,7 +372,10 @@ Migration creation and rename use stable no-follow directory handles with identi
 revalidation, and one cross-process Container lock covers migration, Area changes,
 Files mutations, and Project purge before any virtual root is selected. Generated
 document fallback bytes are manifest-name and hash bound; ambiguous bytes are never
-removed.
+removed. Destination directories are filled only after their platform identities
+are durable in the migration manifest. Process guardians bind both their live API
+owner and guardian identities; retry reports live work as a conflict and can recover
+only a proven orphan through its Linux sentinel or exact named Windows Job.
 
 Never allow:
 

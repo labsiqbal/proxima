@@ -301,6 +301,7 @@ class RunPrompting:
         *,
         master_dynamic_tools: list[dict[str, Any]] | None = None,
         activity_lease: Any = None,
+        activity_scope: str | None = None,
     ) -> tuple[Any, str, bool]:
         """Get an ACP process and a per-home ACP session for this Proxima session."""
         db = self.app.state.worker_db
@@ -315,8 +316,23 @@ class RunPrompting:
                     "DELETE FROM agent_sessions WHERE session_id = ? AND hermes_home = ?",
                     (session_id, hermes_home),
                 )
+            recycle_options: dict[str, Any] = {
+                "master_chat_only": True,
+            }
+            if (
+                activity_lease is not None
+                and getattr(
+                    self.app.state.acp_manager,
+                    "supports_activity_guardian",
+                    False,
+                )
+            ):
+                recycle_options["cache_scope"] = activity_scope
             await self.app.state.acp_manager.recycle(
-                spec, hermes_home, cwd, master_chat_only=True
+                spec,
+                hermes_home,
+                cwd,
+                **recycle_options,
             )
         manager_options: dict[str, Any] = {}
         if restricted:
@@ -330,6 +346,7 @@ class RunPrompting:
             )
         ):
             manager_options["activity_lease"] = activity_lease
+            manager_options["cache_scope"] = activity_scope
         proc = await self.app.state.acp_manager.get(
             spec,
             hermes_home,
@@ -622,23 +639,31 @@ class RunPrompting:
         *,
         master_dynamic_tools: list[dict[str, Any]] | None = None,
         activity_lease: Any = None,
+        activity_scope: str | None = None,
     ) -> tuple[Any, str]:
         db = self.app.state.worker_db
         logging.getLogger("proxima.worker").warning("resetting ACP session %s for chat %s: %s", acp_sid, session_id, reason[-240:])
         with self.app.state.db_lock:
             db.execute("DELETE FROM agent_sessions WHERE session_id = ? AND hermes_home = ?", (session_id, hermes_home))
+        recycle_options: dict[str, Any] = {}
+        if master_dynamic_tools is not None:
+            recycle_options["master_chat_only"] = True
+        if (
+            activity_lease is not None
+            and getattr(
+                self.app.state.acp_manager,
+                "supports_activity_guardian",
+                False,
+            )
+        ):
+            recycle_options["cache_scope"] = activity_scope
         try:
-            if master_dynamic_tools is not None:
-                await self.app.state.acp_manager.recycle(
-                    spec,
-                    hermes_home,
-                    cwd,
-                    master_chat_only=True,
-                )
-            else:
-                await self.app.state.acp_manager.recycle(
-                    spec, hermes_home, cwd
-                )
+            await self.app.state.acp_manager.recycle(
+                spec,
+                hermes_home,
+                cwd,
+                **recycle_options,
+            )
         except Exception:
             logging.getLogger("proxima.worker").exception("failed to recycle agent process after ACP history error")
         manager_options: dict[str, Any] = {}
@@ -653,6 +678,7 @@ class RunPrompting:
             )
         ):
             manager_options["activity_lease"] = activity_lease
+            manager_options["cache_scope"] = activity_scope
         proc2 = await self.app.state.acp_manager.get(
             spec,
             hermes_home,

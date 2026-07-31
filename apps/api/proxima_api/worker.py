@@ -1604,12 +1604,20 @@ class RunWorker:
             return result
 
         try:
-            if project_activity_lease is not None:
+            if (
+                project_activity_lease is not None
+                and getattr(
+                    self.app.state.acp_manager,
+                    "supports_activity_guardian",
+                    False,
+                )
+            ):
                 guarded_runner_key = (
                     spec,
                     hermes_home,
                     cwd,
                     codex_master,
+                    str(run_id),
                 )
             await self.prompting.refresh_credentials_if_needed(
                 cfg,
@@ -1673,6 +1681,11 @@ class RunWorker:
                 self.active_runs,
                 master_dynamic_tools=master_tool_specs,
                 activity_lease=project_activity_lease,
+                activity_scope=(
+                    str(run_id)
+                    if project_activity_lease is not None
+                    else None
+                ),
             )
             hb_task = asyncio.create_task(self._heartbeat(run_id, float(cfg.get("run_heartbeat_seconds") or 10)))
             # Per-turn quota: the in-app setting wins (DB-backed, so it applies on
@@ -1764,6 +1777,11 @@ class RunWorker:
                     str(exc),
                     master_dynamic_tools=master_tool_specs,
                     activity_lease=project_activity_lease,
+                    activity_scope=(
+                        str(run_id)
+                        if project_activity_lease is not None
+                        else None
+                    ),
                 )
                 fresh_session = True
                 prompt_text = self.prompting.build_prompt_text(
@@ -2023,18 +2041,23 @@ class RunWorker:
             self._fail_run_exception(run, detail)
         finally:
             if guarded_runner_key is not None:
-                guarded_spec, guarded_home, guarded_cwd, guarded_master = (
-                    guarded_runner_key
-                )
+                (
+                    guarded_spec,
+                    guarded_home,
+                    guarded_cwd,
+                    guarded_master,
+                    guarded_scope,
+                ) = guarded_runner_key
                 try:
                     await self.app.state.acp_manager.recycle(
                         guarded_spec,
                         guarded_home,
                         guarded_cwd,
                         master_chat_only=guarded_master,
+                        cache_scope=guarded_scope,
                     )
                 except Exception:
-                    logger.exception(
+                    logging.getLogger("proxima.worker").exception(
                         "failed to recycle activity-guarded runner for %s",
                         guarded_cwd,
                     )

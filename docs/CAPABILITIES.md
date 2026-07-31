@@ -1281,14 +1281,22 @@ lists and Home O(1) while per-access realpath jailing still blocks symlink escap
 A repo at `.` is the one intentional containment case; its local git exclude keeps
 `/ops/` out of that repo.
 
+`container_activity.py`, `ops_filesystem.py`, and `ops_publication.py` own the
+cross-process lease, native identity, and descriptor publication boundaries. They
+do not depend on registry projection; `container_registry.py` orchestrates them.
+
 Existing Containers whose Ops row is `.` migrate at startup. The migration first
 builds and hashes a dry-run manifest. An owner-authored legacy `container.md` is
 hash-bound and moved byte-for-byte; a generated document is planned only when the
 legacy document is absent. Atomic no-clobber publication through stable no-follow
 directory handles publishes only manifest-bound inodes for known Ops-owned paths.
 Regular files are linked from opened descriptors; directories are published entry
-by entry, and the original legacy name is retained under a manifest-bound recovery
-name rather than deleted. Generated documents require anonymous same-filesystem
+by entry. Manifest version 6 persists every Proxima-created destination directory
+identity before publishing a child and rejects all unbound existing destinations,
+including empty directories. The original legacy name is retained under a
+manifest-bound recovery name only after its complete source snapshot is revalidated;
+a changed source remains untouched for owner intervention. Generated documents
+require anonymous same-filesystem
 storage and persist the anonymous inode identity and expected hash before the first
 visible recovery link. The exact recovery hardlink remains as a durable anchor, so
 retry never infers ownership from a name and cleanup never unlinks a re-resolved
@@ -1300,11 +1308,13 @@ absolute path runs in isolated Python mode from a trusted working directory. A
 detached Linux subreaper sentinel or a Windows Job object inherits the lease before
 the writer starts and retains it until the complete process tree exits, including
 after API shutdown or cancellation. Platforms without a complete tree-proof
-primitive refuse guarded Project writers. Guarded cached runners recycle after
-their turn, and exclusive migration acquisition is bounded; migration and complete
-Project deletion require that exclusive quiescent lease. On Linux, explicit owner
-retry can stop only a project-scoped guardian whose trusted process identity record
-still matches.
+primitive refuse guarded Project writers. Guardian records bind both the owning API
+process and guardian by PID and process-start identity. Retry reports a matching
+live owner as an active-process conflict and never signals it; only an identity-proven
+orphan can be recovered through its Linux sentinel or exact named Windows Job.
+Activity-guarded ACP processes use per-run cache scopes, so concurrent runs cannot
+recycle each other's process. Exclusive migration acquisition is bounded, and
+migration and complete Project deletion require that exclusive quiescent lease.
 Async uploads finish staging before they acquire the synchronous publication
 boundary. The durable marker resumes safely after
 interruption. Older markers upgrade only when
@@ -1322,7 +1332,7 @@ no-follow Container descriptor. Fresh Windows Containers open and identity-bind 
 Container before creating `ops/` and every starter component relative to
 no-reparse handles, then use relative no-clobber document creation instead of POSIX
 descriptor APIs. See
-[ADR-0029](adr/0029-container-activity-and-migration-publication.md).
+[ADR-0038](adr/0038-owner-safe-container-activity-boundaries.md).
 The Attention item links to a durable Project settings detail route. That surface
 shows the affected Project, exact stored owner-safe reason, migration phase, legacy
 and physical path states, exact physical-root entries, conflicts, and which Ops paths

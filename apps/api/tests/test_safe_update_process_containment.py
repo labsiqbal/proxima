@@ -292,6 +292,55 @@ class _FailingStopProcess(_ManagedProcess):
         raise RuntimeError("still alive")
 
 
+def test_guarded_process_scopes_recycle_independently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    manager = AcpManager()
+    monkeypatch.setattr(
+        acp_module,
+        "_process_class",
+        lambda _spec: _ManagedProcess,
+    )
+    _ManagedProcess.instances.clear()
+    spec = SimpleNamespace(id="fake", protocol="acp")
+
+    async def run_case() -> None:
+        first = await manager.get(
+            spec,
+            str(tmp_path / "home"),
+            str(tmp_path),
+            cache_scope="run-1",
+        )
+        second = await manager.get(
+            spec,
+            str(tmp_path / "home"),
+            str(tmp_path),
+            cache_scope="run-2",
+        )
+        assert first is not second
+
+        await manager.recycle(
+            spec,
+            str(tmp_path / "home"),
+            str(tmp_path),
+            cache_scope="run-1",
+        )
+
+        assert first.stopped.is_set()
+        assert second.stopped.is_set() is False
+
+        await manager.recycle(
+            spec,
+            str(tmp_path / "home"),
+            str(tmp_path),
+            cache_scope="run-2",
+        )
+        assert second.stopped.is_set()
+
+    asyncio.run(run_case())
+
+
 def test_failed_runner_shutdown_retains_lifetime_admission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

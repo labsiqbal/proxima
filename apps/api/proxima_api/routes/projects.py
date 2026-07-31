@@ -378,10 +378,25 @@ def register(app, deps):
                     "migration": before,
                 },
             )
-        container_registry.recover_container_activity_guardians(
+        recovery = container_registry.recover_container_activity_guardians(
             db(),
             project,
         )
+        if recovery.active or recovery.unresolved:
+            message = (
+                "Project processes are still active; stop them before retrying."
+                if recovery.active
+                else "Project process ownership could not be verified; retry is blocked."
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": message,
+                    "active_processes": recovery.active,
+                    "unresolved_processes": recovery.unresolved,
+                    "migration": before,
+                },
+            )
         if not container_registry.migrate_container_ops(db(), project):
             after = container_registry.inspect_ops_migration(db(), project)
             raise HTTPException(

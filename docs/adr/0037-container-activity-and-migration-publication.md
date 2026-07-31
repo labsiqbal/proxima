@@ -1,6 +1,6 @@
 # ADR-0037: Container activity and migration publication
 
-- Status: Accepted
+- Status: Superseded by ADR-0038
 - Date: 2026-07-31
 
 ## Context
@@ -91,6 +91,7 @@ Negative and accepted trade-offs:
 
 ## Related
 
+- Superseded by [ADR-0038](0038-owner-safe-container-activity-boundaries.md)
 - [Container Areas and physical Ops storage](../CAPABILITIES.md#container-areas-and-physical-ops-storage)
 - [Architecture](../reference/architecture.md)
 - [Security boundaries](../security-boundaries.md)

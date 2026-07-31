@@ -516,10 +516,10 @@ def _process_class(spec):
 
 
 class AcpManager:
-    """Owns one agent process per (runner_id, home, cwd), started on demand.
+    """Owns one agent process per cache scope, started on demand.
 
-    Keyed by cwd because the agent writes files relative to the agent process's
-    working directory — so each project needs its own process rooted there.
+    The working directory isolates projects. An optional cache scope isolates
+    process lifetime authority for guarded concurrent runs.
     """
 
     supports_activity_guardian = True
@@ -532,9 +532,12 @@ class AcpManager:
     ) -> None:
         self.contained = contained
         self.maintenance = maintenance
-        self._procs: dict[tuple[str, str, str, bool], Any] = {}
+        self._procs: dict[
+            tuple[str, str, str, bool, str | None],
+            Any,
+        ] = {}
         self._effect_leases: dict[
-            tuple[str, str, str, bool],
+            tuple[str, str, str, bool, str | None],
             IngressLease,
         ] = {}
         self._lock = asyncio.Lock()
@@ -578,8 +581,15 @@ class AcpManager:
         *,
         master_chat_only: bool = False,
         activity_lease: Any = None,
+        cache_scope: str | None = None,
     ) -> Any:
-        key = (spec.id, home, cwd, master_chat_only)
+        key = (
+            spec.id,
+            home,
+            cwd,
+            master_chat_only,
+            cache_scope,
+        )
         async with self._lock:
             proc = self._procs.get(key)
             if proc is not None:
@@ -660,8 +670,9 @@ class AcpManager:
         cwd: str,
         *,
         master_chat_only: bool = False,
+        cache_scope: str | None = None,
     ) -> None:
-        """Kill and evict the cached process for (spec.id, home, cwd).
+        """Kill and evict one cached process scope.
 
         Used when a run times out: `session/cancel` is fire-and-forget and a
         runner turn wedged inside a blocking tool call can't process it, so the
@@ -669,7 +680,13 @@ class AcpManager:
         later message returns "Queued for the next turn"). Terminating the
         process guarantees the next run spawns a fresh agent.
         """
-        key = (spec.id, home, cwd, master_chat_only)
+        key = (
+            spec.id,
+            home,
+            cwd,
+            master_chat_only,
+            cache_scope,
+        )
         async with self._lock:
             proc = self._procs.pop(key, None)
             lease = self._effect_leases.pop(key, None)

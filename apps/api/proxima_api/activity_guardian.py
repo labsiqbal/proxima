@@ -193,7 +193,15 @@ def _process_start_identity(pid: int) -> str | None:
     return fields[21] if len(fields) > 21 else None
 
 
-def _write_record(path: str, *, sentinel_pid: int, launcher_pid: int) -> None:
+def _write_record(
+    path: str,
+    *,
+    sentinel_pid: int,
+    launcher_pid: int,
+    owner_pid: int,
+    owner_start: str,
+    job_name: str | None,
+) -> None:
     if not path:
         return
     record = Path(path)
@@ -203,6 +211,9 @@ def _write_record(path: str, *, sentinel_pid: int, launcher_pid: int) -> None:
         "sentinel_pid": sentinel_pid,
         "launcher_pid": launcher_pid,
         "sentinel_start": _process_start_identity(sentinel_pid),
+        "owner_pid": owner_pid,
+        "owner_start": owner_start,
+        "job_name": job_name,
     }
     flags = (
         os.O_CREAT
@@ -248,7 +259,9 @@ def _remove_record(path: str) -> None:
                 os.close(parent_fd)
 
 
-def _windows_job() -> tuple[int, Callable[[], int]]:
+def _windows_job(
+    name: str,
+) -> tuple[int, Callable[[], int]]:
     from ctypes import wintypes
 
     class BasicLimitInformation(ctypes.Structure):
@@ -325,7 +338,7 @@ def _windows_job() -> tuple[int, Callable[[], int]]:
     close_handle = kernel32.CloseHandle
     close_handle.argtypes = [wintypes.HANDLE]
     close_handle.restype = wintypes.BOOL
-    job = create_job(None, None)
+    job = create_job(None, name)
     if not job:
         raise OSError(ctypes.get_last_error(), "cannot create activity job")
     limits = ExtendedLimitInformation()
@@ -370,12 +383,11 @@ def _run_writer(
     command: list[str],
     target_cwd: str,
     target_env: dict[str, str],
+    *,
+    job: int | None = None,
+    active_processes: Callable[[], int] | None = None,
 ) -> int:
     _enable_subreaper()
-    job: int | None = None
-    active_processes = None
-    if os.name == "nt":
-        job, active_processes = _windows_job()
     requested_signal: int | None = None
 
     def forward_signal(value: int) -> None:
@@ -440,6 +452,8 @@ def _run_linux_sentinel(
     target_cwd: str,
     target_env: dict[str, str],
     record_path: str,
+    owner_pid: int,
+    owner_start: str,
 ) -> int:
     status_read, status_write = os.pipe()
     sentinel = os.fork()
@@ -455,6 +469,9 @@ def _run_linux_sentinel(
                 record_path,
                 sentinel_pid=os.getpid(),
                 launcher_pid=os.getppid(),
+                owner_pid=owner_pid,
+                owner_start=owner_start,
+                job_name=None,
             )
             record_created = True
             result = _run_writer(
@@ -505,7 +522,7 @@ def _run_linux_sentinel(
 
 
 def main() -> int:
-    if len(sys.argv) < 5 or sys.argv[3] != "--":
+    if len(sys.argv) < 8 or sys.argv[6] != "--":
         return 64
     trusted_cwd = str(Path(__file__).resolve().parent)
     target_cwd = os.getcwd()
@@ -515,7 +532,10 @@ def main() -> int:
     os.chdir(trusted_cwd)
     activity_fd = _adopt_lock(sys.argv[1])
     record_path = sys.argv[2]
-    command = sys.argv[4:]
+    guardian_id = sys.argv[3]
+    owner_pid = int(sys.argv[4])
+    owner_start = sys.argv[5]
+    command = sys.argv[7:]
     if sys.platform.startswith("linux"):
         return _run_linux_sentinel(
             activity_fd,
@@ -523,13 +543,20 @@ def main() -> int:
             target_cwd,
             target_env,
             record_path,
+            owner_pid,
+            owner_start,
         )
+    job_name = f"Local\\ProximaActivity-{guardian_id}"
+    job, active_processes = _windows_job(job_name)
     record_created = False
     try:
         _write_record(
             record_path,
             sentinel_pid=os.getpid(),
             launcher_pid=os.getpid(),
+            owner_pid=owner_pid,
+            owner_start=owner_start,
+            job_name=job_name,
         )
         record_created = True
         return _run_writer(
@@ -537,6 +564,8 @@ def main() -> int:
             command,
             target_cwd,
             target_env,
+            job=job,
+            active_processes=active_processes,
         )
     finally:
         if record_created:

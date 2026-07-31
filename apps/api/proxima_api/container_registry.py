@@ -1,8 +1,8 @@
-"""Container filesystem boundaries, Ops migration, and registry projection.
+"""Container root resolution, Ops migration orchestration, and projection.
 
 The existing ``projects`` and ``project_areas`` tables remain the persistence
-backbone. This module is the one place that turns those rows into physical
-Container and Area roots.
+backbone. Activity leases, platform primitives, and publication are delegated
+to their ownership modules.
 """
 from __future__ import annotations
 
@@ -13,26 +13,56 @@ import json
 import logging
 import os
 import secrets
-import signal
 import sqlite3
 import stat
 import sys
-import threading
-import time
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator
 
+from . import ops_publication
 from .auth import iso_now
 from .directory_handles import directory_backend
+from .container_activity import (
+    ContainerBoundaryError,
+    acquire_container_activity_lease,
+    container_mutation_lock,
+    container_quiescence_lock,
+    recover_container_activity_guardians,
+)
+from .ops_filesystem import (
+    OpsMigrationCollision,
+    directory_fd_path as _directory_fd_path,
+    directory_open_flags as _directory_open_flags,
+    identity_matches as _identity_matches,
+    publish_open_regular_file as _publish_open_regular_file,
+    rename_noreplace as _rename_noreplace,
+    same_identity as _same_identity,
+    stat_identity as _stat_identity,
+    valid_identity as _valid_identity,
+    windows_close_handle as _windows_close_handle,
+    windows_create_directory_at as _windows_create_directory_at,
+    windows_create_file_at as _windows_create_file_at,
+    windows_open_directory as _windows_open_directory,
+    windows_read_file_at as _windows_read_file_at,
+)
 
 logger = logging.getLogger("proxima.container_registry")
 _directory_backend = directory_backend()
 
+__all__ = (
+    "ContainerBoundaryError",
+    "OpsMigrationCollision",
+    "acquire_container_activity_lease",
+    "container_mutation_lock",
+    "container_quiescence_lock",
+    "recover_container_activity_guardians",
+)
+
 OPS_RELPATH = "ops"
 CONTAINER_DOC = "container.md"
-OPS_MIGRATION_VERSION = 5
+OPS_MIGRATION_VERSION = 6
 KNOWN_OPS_DIRS = (
     "wiki",
     "artifacts",
@@ -50,489 +80,10 @@ MAX_IDENTITY_LABEL_CHARS = 120
 MAX_SUMMARY_CHARS = 500
 RECOVERY_TEMP_PREFIX = ".proxima-ops-migration-container-"
 RETAINED_SOURCE_PREFIX = ".proxima-ops-migration-retained-"
-QUIESCENCE_TIMEOUT_SECONDS = 5.0
-
-_CONTAINER_LOCKS_GUARD = threading.Lock()
-_CONTAINER_LOCKS: dict[str, Any] = {}
-_CONTAINER_LOCK_DEPTH = threading.local()
-_CONTAINER_ACTIVITY_STATES: dict[str, "_ContainerActivityState"] = {}
-
-
-class ContainerBoundaryError(ValueError):
-    """A Container or Area root is missing, ambiguous, or unsafe."""
-
-
-class OpsMigrationCollision(ContainerBoundaryError):
-    """A legacy Ops layout cannot be moved without owner intervention."""
 
 
 def _platform_is_windows() -> bool:
     return os.name == "nt"
-
-
-def _database_path(conn: sqlite3.Connection) -> Path | None:
-    for row in conn.execute("PRAGMA database_list").fetchall():
-        name = row["name"] if isinstance(row, sqlite3.Row) else row[1]
-        raw = row["file"] if isinstance(row, sqlite3.Row) else row[2]
-        if name == "main" and raw:
-            return Path(str(raw)).resolve()
-    return None
-
-
-def _acquire_file_lock(
-    path: Path,
-    *,
-    shared: bool = False,
-    timeout: float | None = None,
-) -> int:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if path.parent.is_symlink() or not path.parent.is_dir():
-        raise ContainerBoundaryError("Container mutation lock directory is unsafe")
-    flags = os.O_CREAT | os.O_RDWR
-    flags |= getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags, 0o600)
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            if os.fstat(fd).st_size == 0:
-                os.write(fd, b"\0")
-                os.fsync(fd)
-            os.lseek(fd, 0, os.SEEK_SET)
-            handle = msvcrt.get_osfhandle(fd)
-            if timeout is None:
-                _windows_lock_file(handle, shared=shared)
-            else:
-                deadline = time.monotonic() + timeout
-                while True:
-                    try:
-                        _windows_lock_file(
-                            handle,
-                            shared=shared,
-                            fail_immediately=True,
-                        )
-                        break
-                    except OSError:
-                        if time.monotonic() >= deadline:
-                            raise ContainerBoundaryError(
-                                "Container has active processes; stop them before retrying"
-                            )
-                        time.sleep(0.02)
-        else:
-            import fcntl
-
-            operation = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
-            if timeout is None:
-                fcntl.flock(fd, operation)
-            else:
-                deadline = time.monotonic() + timeout
-                while True:
-                    try:
-                        fcntl.flock(fd, operation | fcntl.LOCK_NB)
-                        break
-                    except BlockingIOError:
-                        if time.monotonic() >= deadline:
-                            raise ContainerBoundaryError(
-                                "Container has active processes; stop them before retrying"
-                            )
-                        time.sleep(0.02)
-    except Exception:
-        os.close(fd)
-        raise
-    return fd
-
-
-class _ContainerActivityState:
-    def __init__(self) -> None:
-        self.condition = threading.Condition()
-        self.readers = 0
-        self.writer = False
-
-    def acquire(
-        self,
-        *,
-        shared: bool,
-        timeout: float | None = None,
-    ) -> None:
-        with self.condition:
-            deadline = None if timeout is None else time.monotonic() + timeout
-
-            def wait() -> None:
-                remaining = (
-                    None
-                    if deadline is None
-                    else max(0.0, deadline - time.monotonic())
-                )
-                if remaining == 0.0 or not self.condition.wait(remaining):
-                    raise ContainerBoundaryError(
-                        "Container has active processes; stop them before retrying"
-                    )
-
-            if shared:
-                while self.writer:
-                    wait()
-                self.readers += 1
-                return
-            while self.writer or self.readers:
-                wait()
-            self.writer = True
-
-    def release(self, *, shared: bool) -> None:
-        with self.condition:
-            if shared:
-                self.readers -= 1
-            else:
-                self.writer = False
-            self.condition.notify_all()
-
-
-class ContainerActivityLease:
-    def __init__(
-        self,
-        state: _ContainerActivityState,
-        *,
-        shared: bool,
-        fd: int | None,
-        guardian_record: Path | None = None,
-    ) -> None:
-        self._state = state
-        self._shared = shared
-        self._fd = fd
-        self._guardian_record = guardian_record
-        self._released = False
-        self._transferred = False
-
-    def guard_process(
-        self,
-        command: list[str],
-    ) -> tuple[list[str], dict[str, Any]]:
-        if self._fd is None:
-            raise ContainerBoundaryError(
-                "durable process activity requires a file-backed database"
-            )
-        if not sys.platform.startswith("linux") and os.name != "nt":
-            raise ContainerBoundaryError(
-                "this platform cannot prove complete Project process-tree exit"
-            )
-        package_root = Path(__file__).resolve().parent
-        guardian = package_root / "activity_guardian.py"
-        try:
-            guardian_stat = guardian.lstat()
-        except OSError as exc:
-            raise ContainerBoundaryError(
-                "trusted activity guardian is unavailable"
-            ) from exc
-        if (
-            guardian.is_symlink()
-            or not stat.S_ISREG(guardian_stat.st_mode)
-            or guardian.resolve().parent != package_root
-        ):
-            raise ContainerBoundaryError("trusted activity guardian is unsafe")
-        inherited = str(self._fd)
-        if os.name == "nt":
-            import msvcrt
-
-            handle = msvcrt.get_osfhandle(self._fd)
-            os.set_handle_inheritable(handle, True)
-            inherited = f"handle:{handle}"
-        else:
-            os.set_inheritable(self._fd, True)
-        guarded = [
-            sys.executable,
-            "-I",
-            "-S",
-            str(guardian),
-            inherited,
-            str(self._guardian_record or ""),
-            "--",
-            *command,
-        ]
-        if os.name == "nt":
-            return guarded, {"close_fds": False}
-        return guarded, {"pass_fds": (self._fd,)}
-
-    def mark_process_started(self) -> None:
-        if self._fd is not None:
-            if os.name == "nt":
-                import msvcrt
-
-                os.set_handle_inheritable(
-                    msvcrt.get_osfhandle(self._fd),
-                    False,
-                )
-            else:
-                os.set_inheritable(self._fd, False)
-            self._transferred = True
-
-    def release(self) -> None:
-        if self._released:
-            return
-        self._released = True
-        try:
-            if self._fd is not None:
-                if self._transferred:
-                    os.close(self._fd)
-                else:
-                    _release_file_lock(self._fd)
-        finally:
-            self._state.release(shared=self._shared)
-
-
-def _container_lock_key(
-    conn: sqlite3.Connection,
-    container: int | sqlite3.Row | Mapping[str, Any],
-) -> tuple[dict[str, Any], str, Path | None]:
-    data = get_container(conn, container)
-    database = _database_path(conn)
-    if database is None:
-        return data, f"memory:{data['id']}:{data['path']}", None
-    key = f"{database}:{data['id']}"
-    lock_dir = database.parent / f".{database.name}.container-locks"
-    return data, key, lock_dir
-
-
-def acquire_container_activity_lease(
-    conn: sqlite3.Connection,
-    container: int | sqlite3.Row | Mapping[str, Any],
-    *,
-    shared: bool = True,
-    timeout: float | None = None,
-) -> ContainerActivityLease:
-    data, key, lock_dir = _container_lock_key(conn, container)
-    with _CONTAINER_LOCKS_GUARD:
-        state = _CONTAINER_ACTIVITY_STATES.setdefault(
-            key,
-            _ContainerActivityState(),
-        )
-    state.acquire(shared=shared, timeout=timeout)
-    try:
-        fd = (
-            _acquire_file_lock(
-                lock_dir / f"{key.rsplit(':', 1)[-1]}.activity.lock",
-                shared=shared,
-                timeout=timeout,
-            )
-            if lock_dir is not None
-            else None
-        )
-    except Exception:
-        state.release(shared=shared)
-        raise
-    guardian_record = (
-        lock_dir
-        / (
-            f"{int(data['id'])}.activity."
-            f"{secrets.token_hex(16)}.guardian.json"
-        )
-        if shared and lock_dir is not None
-        else None
-    )
-    return ContainerActivityLease(
-        state,
-        shared=shared,
-        fd=fd,
-        guardian_record=guardian_record,
-    )
-
-
-@contextmanager
-def container_quiescence_lock(
-    conn: sqlite3.Connection,
-    container: int | sqlite3.Row | Mapping[str, Any],
-) -> Iterator[None]:
-    lease = acquire_container_activity_lease(
-        conn,
-        container,
-        shared=False,
-        timeout=QUIESCENCE_TIMEOUT_SECONDS,
-    )
-    try:
-        yield
-    finally:
-        lease.release()
-
-
-def recover_container_activity_guardians(
-    conn: sqlite3.Connection,
-    container: int | sqlite3.Row | Mapping[str, Any],
-    *,
-    timeout: float = QUIESCENCE_TIMEOUT_SECONDS,
-) -> int:
-    data, _, lock_dir = _container_lock_key(conn, container)
-    if lock_dir is None or not lock_dir.is_dir() or lock_dir.is_symlink():
-        return 0
-    if not sys.platform.startswith("linux"):
-        return 0
-    guardian = Path(__file__).resolve().with_name("activity_guardian.py")
-    stopped = 0
-    records: list[Path] = []
-    pattern = f"{int(data['id'])}.activity.*.guardian.json"
-    for record in sorted(lock_dir.glob(pattern)):
-        try:
-            record_stat = record.lstat()
-            if stat.S_ISLNK(record_stat.st_mode) or not stat.S_ISREG(
-                record_stat.st_mode
-            ):
-                continue
-            payload = json.loads(record.read_text(encoding="utf-8"))
-            pid = int(payload["sentinel_pid"])
-            if (
-                Path(str(payload["guardian"])).resolve() != guardian
-                or pid <= 1
-            ):
-                continue
-            if sys.platform.startswith("linux"):
-                current_start = Path(f"/proc/{pid}/stat").read_text(
-                    encoding="utf-8"
-                ).split()[21]
-                command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-                executable = Path(f"/proc/{pid}/exe").resolve()
-                if (
-                    current_start != payload.get("sentinel_start")
-                    or os.fsencode(str(guardian)) not in command
-                    or executable
-                    != Path(str(payload.get("python") or "")).resolve()
-                ):
-                    continue
-            os.kill(pid, signal.SIGTERM)
-            records.append(record)
-            stopped += 1
-        except (
-            FileNotFoundError,
-            KeyError,
-            OSError,
-            TypeError,
-            ValueError,
-        ):
-            continue
-    deadline = time.monotonic() + timeout
-    while records and time.monotonic() < deadline:
-        records = [record for record in records if record.exists()]
-        if records:
-            time.sleep(0.02)
-    return stopped
-
-
-def _release_file_lock(fd: int) -> None:
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            os.lseek(fd, 0, os.SEEK_SET)
-            _windows_unlock_file(msvcrt.get_osfhandle(fd))
-        else:
-            import fcntl
-
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
-
-
-def _windows_overlapped_type():
-    from ctypes import wintypes
-
-    class Overlapped(ctypes.Structure):
-        _fields_ = [
-            ("internal", ctypes.c_size_t),
-            ("internal_high", ctypes.c_size_t),
-            ("offset", wintypes.DWORD),
-            ("offset_high", wintypes.DWORD),
-            ("event", wintypes.HANDLE),
-        ]
-
-    return Overlapped
-
-
-def _windows_lock_file(
-    handle: int,
-    *,
-    shared: bool,
-    fail_immediately: bool = False,
-) -> None:
-    from ctypes import wintypes
-
-    overlapped = _windows_overlapped_type()()
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    lock_file = kernel32.LockFileEx
-    lock_file.argtypes = [
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.POINTER(type(overlapped)),
-    ]
-    lock_file.restype = wintypes.BOOL
-    flags = 0 if shared else 0x00000002
-    if fail_immediately:
-        flags |= 0x00000001
-    if not lock_file(
-        ctypes.c_void_p(handle),
-        flags,
-        0,
-        1,
-        0,
-        ctypes.byref(overlapped),
-    ):
-        error = ctypes.get_last_error()
-        raise OSError(error, os.strerror(error))
-
-
-def _windows_unlock_file(handle: int) -> None:
-    from ctypes import wintypes
-
-    overlapped = _windows_overlapped_type()()
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    unlock_file = kernel32.UnlockFileEx
-    unlock_file.argtypes = [
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.POINTER(type(overlapped)),
-    ]
-    unlock_file.restype = wintypes.BOOL
-    if not unlock_file(
-        ctypes.c_void_p(handle),
-        0,
-        1,
-        0,
-        ctypes.byref(overlapped),
-    ):
-        error = ctypes.get_last_error()
-        raise OSError(error, os.strerror(error))
-
-
-@contextmanager
-def container_mutation_lock(
-    conn: sqlite3.Connection,
-    container: int | sqlite3.Row | Mapping[str, Any],
-) -> Iterator[None]:
-    data, key, lock_dir = _container_lock_key(conn, container)
-    lock_path = lock_dir / f"{int(data['id'])}.lock" if lock_dir is not None else None
-    with _CONTAINER_LOCKS_GUARD:
-        local_lock = _CONTAINER_LOCKS.setdefault(key, threading.RLock())
-    with local_lock:
-        depths = getattr(_CONTAINER_LOCK_DEPTH, "values", None)
-        if depths is None:
-            depths = {}
-            _CONTAINER_LOCK_DEPTH.values = depths
-        if depths.get(key, 0):
-            depths[key] += 1
-            try:
-                yield
-            finally:
-                depths[key] -= 1
-            return
-        fd = _acquire_file_lock(lock_path) if lock_path is not None else None
-        depths[key] = 1
-        try:
-            yield
-        finally:
-            depths.pop(key, None)
-            if fd is not None:
-                _release_file_lock(fd)
 
 
 def _as_dict(row: sqlite3.Row | Mapping[str, Any]) -> dict[str, Any]:
@@ -790,409 +341,6 @@ def _planned_recovery_temp(
         "phase": "planned",
         "identity": None,
     }
-
-
-def _directory_open_flags() -> int:
-    required = ("O_DIRECTORY", "O_NOFOLLOW")
-    if any(not hasattr(os, name) for name in required):
-        raise OpsMigrationCollision(
-            "this platform cannot guarantee stable no-follow directory access"
-        )
-    return (
-        os.O_RDONLY
-        | os.O_DIRECTORY
-        | os.O_NOFOLLOW
-        | getattr(os, "O_CLOEXEC", 0)
-    )
-
-
-def _directory_fd_path(fd: int) -> Path:
-    for prefix in ("/proc/self/fd", "/dev/fd"):
-        candidate = Path(prefix) / str(fd)
-        if candidate.exists():
-            return candidate
-    raise OpsMigrationCollision(
-        "this platform cannot address an opened migration directory"
-    )
-
-
-def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
-    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
-
-
-def _stat_identity(value: os.stat_result) -> dict[str, int]:
-    return {
-        "device": int(value.st_dev),
-        "inode": int(value.st_ino),
-    }
-
-
-def _valid_identity(value: Any) -> bool:
-    return (
-        isinstance(value, Mapping)
-        and isinstance(value.get("device"), int)
-        and isinstance(value.get("inode"), int)
-    )
-
-
-def _identity_matches(value: Any, current: os.stat_result) -> bool:
-    return (
-        _valid_identity(value)
-        and int(value["device"]) == int(current.st_dev)
-        and int(value["inode"]) == int(current.st_ino)
-    )
-
-
-def _windows_directory_identity(
-    handle: int,
-    display: str,
-) -> tuple[int, int]:
-    from ctypes import wintypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    class ByHandleFileInformation(ctypes.Structure):
-        _fields_ = [
-            ("attributes", wintypes.DWORD),
-            ("creation_time_low", wintypes.DWORD),
-            ("creation_time_high", wintypes.DWORD),
-            ("access_time_low", wintypes.DWORD),
-            ("access_time_high", wintypes.DWORD),
-            ("write_time_low", wintypes.DWORD),
-            ("write_time_high", wintypes.DWORD),
-            ("volume_serial", wintypes.DWORD),
-            ("size_high", wintypes.DWORD),
-            ("size_low", wintypes.DWORD),
-            ("links", wintypes.DWORD),
-            ("file_index_high", wintypes.DWORD),
-            ("file_index_low", wintypes.DWORD),
-        ]
-
-    information = ByHandleFileInformation()
-    get_information = kernel32.GetFileInformationByHandle
-    get_information.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(ByHandleFileInformation),
-    ]
-    get_information.restype = wintypes.BOOL
-    if not get_information(ctypes.c_void_p(handle), ctypes.byref(information)):
-        raise OSError(
-            ctypes.get_last_error(),
-            f"cannot inspect directory: {display}",
-        )
-    if not information.attributes & 0x00000010 or information.attributes & 0x00000400:
-        raise ContainerBoundaryError(
-            f"directory is missing or is a reparse point: {display}"
-        )
-    return (
-        int(information.volume_serial),
-        (int(information.file_index_high) << 32) | int(information.file_index_low),
-    )
-
-
-def _windows_open_directory(path: Path) -> tuple[int, tuple[int, int]]:
-    from ctypes import wintypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    create_file = kernel32.CreateFileW
-    create_file.argtypes = [
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.HANDLE,
-    ]
-    create_file.restype = wintypes.HANDLE
-    handle = create_file(
-        str(path),
-        0x0080,
-        0x00000001 | 0x00000002 | 0x00000004,
-        None,
-        3,
-        0x02000000 | 0x00200000,
-        None,
-    )
-    invalid = ctypes.c_void_p(-1).value
-    if handle == invalid:
-        raise OSError(ctypes.get_last_error(), f"cannot open directory: {path}")
-    try:
-        identity = _windows_directory_identity(int(handle), str(path))
-    except Exception:
-        kernel32.CloseHandle(handle)
-        raise
-    return int(handle), identity
-
-
-def _windows_create_directory_at(
-    parent_handle: int,
-    name: str,
-) -> tuple[int, tuple[int, int]]:
-    from ctypes import wintypes
-
-    class UnicodeString(ctypes.Structure):
-        _fields_ = [
-            ("length", wintypes.USHORT),
-            ("maximum_length", wintypes.USHORT),
-            ("buffer", wintypes.LPWSTR),
-        ]
-
-    class ObjectAttributes(ctypes.Structure):
-        _fields_ = [
-            ("length", wintypes.ULONG),
-            ("root_directory", wintypes.HANDLE),
-            ("object_name", ctypes.POINTER(UnicodeString)),
-            ("attributes", wintypes.ULONG),
-            ("security_descriptor", wintypes.LPVOID),
-            ("security_qos", wintypes.LPVOID),
-        ]
-
-    class IoStatusBlock(ctypes.Structure):
-        _fields_ = [
-            ("status", wintypes.LPVOID),
-            ("information", ctypes.c_size_t),
-        ]
-
-    buffer = ctypes.create_unicode_buffer(name)
-    encoded = name.encode("utf-16-le")
-    unicode_name = UnicodeString(
-        len(encoded),
-        len(encoded) + 2,
-        ctypes.cast(buffer, wintypes.LPWSTR),
-    )
-    attributes = ObjectAttributes(
-        ctypes.sizeof(ObjectAttributes),
-        ctypes.c_void_p(parent_handle),
-        ctypes.pointer(unicode_name),
-        0x00000040,
-        None,
-        None,
-    )
-    status_block = IoStatusBlock()
-    handle = wintypes.HANDLE()
-    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
-    create_file = ntdll.NtCreateFile
-    create_file.restype = ctypes.c_long
-    status = create_file(
-        ctypes.byref(handle),
-        0x00100000 | 0x00000001 | 0x00000002 | 0x00000004 | 0x00000080,
-        ctypes.byref(attributes),
-        ctypes.byref(status_block),
-        None,
-        0x00000010,
-        0x00000001 | 0x00000002 | 0x00000004,
-        3,
-        0x00000001 | 0x00000020 | 0x00200000,
-        None,
-        0,
-    )
-    if status < 0:
-        raise OSError(int(status), f"cannot create directory: {name}")
-    value = int(handle.value)
-    try:
-        identity = _windows_directory_identity(value, name)
-    except Exception:
-        _windows_close_handle(value)
-        raise
-    return value, identity
-
-
-def _windows_close_handle(handle: int) -> None:
-    ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(ctypes.c_void_p(handle))
-
-
-def _windows_create_file_at(
-    parent_handle: int,
-    name: str,
-    content: bytes,
-) -> None:
-    from ctypes import wintypes
-    import msvcrt
-
-    class UnicodeString(ctypes.Structure):
-        _fields_ = [
-            ("length", wintypes.USHORT),
-            ("maximum_length", wintypes.USHORT),
-            ("buffer", wintypes.LPWSTR),
-        ]
-
-    class ObjectAttributes(ctypes.Structure):
-        _fields_ = [
-            ("length", wintypes.ULONG),
-            ("root_directory", wintypes.HANDLE),
-            ("object_name", ctypes.POINTER(UnicodeString)),
-            ("attributes", wintypes.ULONG),
-            ("security_descriptor", wintypes.LPVOID),
-            ("security_qos", wintypes.LPVOID),
-        ]
-
-    class IoStatusBlock(ctypes.Structure):
-        _fields_ = [
-            ("status", wintypes.LPVOID),
-            ("information", ctypes.c_size_t),
-        ]
-
-    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
-    buffer = ctypes.create_unicode_buffer(name)
-    unicode_name = UnicodeString(
-        len(name.encode("utf-16-le")),
-        len(name.encode("utf-16-le")) + 2,
-        ctypes.cast(buffer, wintypes.LPWSTR),
-    )
-    attributes = ObjectAttributes(
-        ctypes.sizeof(ObjectAttributes),
-        ctypes.c_void_p(parent_handle),
-        ctypes.pointer(unicode_name),
-        0x00000040,
-        None,
-        None,
-    )
-    status_block = IoStatusBlock()
-    handle = wintypes.HANDLE()
-    status = ntdll.NtCreateFile(
-        ctypes.byref(handle),
-        0x40000000 | 0x00100000 | 0x00000080,
-        ctypes.byref(attributes),
-        ctypes.byref(status_block),
-        None,
-        0x00000080,
-        0x00000001 | 0x00000002 | 0x00000004,
-        2,
-        0x00000020 | 0x00000040 | 0x00200000,
-        None,
-        0,
-    )
-    if status < 0:
-        raise FileExistsError(name)
-    fd = msvcrt.open_osfhandle(int(handle.value), os.O_WRONLY)
-    try:
-        _write_all(fd, content)
-    finally:
-        os.close(fd)
-
-
-def _windows_read_file_at(
-    parent_handle: int,
-    name: str,
-    *,
-    max_bytes: int,
-) -> bytes:
-    from ctypes import wintypes
-    import msvcrt
-
-    class UnicodeString(ctypes.Structure):
-        _fields_ = [
-            ("length", wintypes.USHORT),
-            ("maximum_length", wintypes.USHORT),
-            ("buffer", wintypes.LPWSTR),
-        ]
-
-    class ObjectAttributes(ctypes.Structure):
-        _fields_ = [
-            ("length", wintypes.ULONG),
-            ("root_directory", wintypes.HANDLE),
-            ("object_name", ctypes.POINTER(UnicodeString)),
-            ("attributes", wintypes.ULONG),
-            ("security_descriptor", wintypes.LPVOID),
-            ("security_qos", wintypes.LPVOID),
-        ]
-
-    class IoStatusBlock(ctypes.Structure):
-        _fields_ = [
-            ("status", wintypes.LPVOID),
-            ("information", ctypes.c_size_t),
-        ]
-
-    buffer = ctypes.create_unicode_buffer(name)
-    encoded = name.encode("utf-16-le")
-    unicode_name = UnicodeString(
-        len(encoded),
-        len(encoded) + 2,
-        ctypes.cast(buffer, wintypes.LPWSTR),
-    )
-    attributes = ObjectAttributes(
-        ctypes.sizeof(ObjectAttributes),
-        ctypes.c_void_p(parent_handle),
-        ctypes.pointer(unicode_name),
-        0x00000040,
-        None,
-        None,
-    )
-    status_block = IoStatusBlock()
-    handle = wintypes.HANDLE()
-    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
-    create_file = ntdll.NtCreateFile
-    create_file.restype = ctypes.c_long
-    status = create_file(
-        ctypes.byref(handle),
-        0x80000000 | 0x00100000 | 0x00000080,
-        ctypes.byref(attributes),
-        ctypes.byref(status_block),
-        None,
-        0,
-        0x00000001 | 0x00000002 | 0x00000004,
-        1,
-        0x00000020 | 0x00000040 | 0x00200000,
-        None,
-        0,
-    )
-    if status < 0:
-        raise OSError(int(status), f"cannot open file: {name}")
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-    class ByHandleFileInformation(ctypes.Structure):
-        _fields_ = [
-            ("attributes", wintypes.DWORD),
-            ("creation_time_low", wintypes.DWORD),
-            ("creation_time_high", wintypes.DWORD),
-            ("access_time_low", wintypes.DWORD),
-            ("access_time_high", wintypes.DWORD),
-            ("write_time_low", wintypes.DWORD),
-            ("write_time_high", wintypes.DWORD),
-            ("volume_serial", wintypes.DWORD),
-            ("size_high", wintypes.DWORD),
-            ("size_low", wintypes.DWORD),
-            ("links", wintypes.DWORD),
-            ("file_index_high", wintypes.DWORD),
-            ("file_index_low", wintypes.DWORD),
-        ]
-
-    information = ByHandleFileInformation()
-    get_information = kernel32.GetFileInformationByHandle
-    get_information.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(ByHandleFileInformation),
-    ]
-    get_information.restype = wintypes.BOOL
-    if not get_information(
-        ctypes.c_void_p(handle.value),
-        ctypes.byref(information),
-    ):
-        error = ctypes.get_last_error()
-        _windows_close_handle(int(handle.value))
-        raise OSError(error, f"cannot inspect file: {name}")
-    if (
-        information.attributes & 0x00000010
-        or information.attributes & 0x00000400
-    ):
-        _windows_close_handle(int(handle.value))
-        raise ContainerBoundaryError(
-            f"file is missing or is a reparse point: {name}"
-        )
-    size = (int(information.size_high) << 32) | int(information.size_low)
-    if size > max_bytes:
-        _windows_close_handle(int(handle.value))
-        raise ContainerBoundaryError(f"file is too large: {name}")
-    fd = msvcrt.open_osfhandle(int(handle.value), os.O_RDONLY)
-    try:
-        content = bytearray()
-        while chunk := os.read(fd, min(64 * 1024, max_bytes + 1 - len(content))):
-            content.extend(chunk)
-            if len(content) > max_bytes:
-                raise ContainerBoundaryError(f"file is too large: {name}")
-        return bytes(content)
-    finally:
-        os.close(fd)
 
 
 def _create_physical_ops_root_windows(
@@ -1641,96 +789,6 @@ def _atomic_write_if_missing(
     finally:
         if owns_parent_fd:
             os.close(parent_fd)
-
-
-def _rename_noreplace(
-    source: Path,
-    destination: Path,
-    *,
-    source_dir_fd: int | None = None,
-    destination_dir_fd: int | None = None,
-    expected_identity: Mapping[str, Any] | None = None,
-) -> None:
-    if expected_identity is not None:
-        raise OpsMigrationCollision(
-            "authoritative content cannot be published by pathname rename"
-        )
-    source_bytes = os.fsencode(source.name if source_dir_fd is not None else source)
-    destination_bytes = os.fsencode(
-        destination.name if destination_dir_fd is not None else destination
-    )
-    source_at = source_dir_fd if source_dir_fd is not None else -100
-    destination_at = (
-        destination_dir_fd if destination_dir_fd is not None else -100
-    )
-    if sys.platform.startswith("linux"):
-        libc = ctypes.CDLL(None, use_errno=True)
-        renameat2 = getattr(libc, "renameat2", None)
-        if renameat2 is None:
-            raise OpsMigrationCollision(
-                "this platform cannot guarantee a no-clobber Ops migration"
-            )
-        renameat2.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        ]
-        renameat2.restype = ctypes.c_int
-        result = renameat2(
-            source_at,
-            source_bytes,
-            destination_at,
-            destination_bytes,
-            1,
-        )
-    elif sys.platform == "darwin":
-        libc = ctypes.CDLL(None, use_errno=True)
-        renameatx_np = getattr(libc, "renameatx_np", None)
-        if renameatx_np is None:
-            raise OpsMigrationCollision(
-                "this platform cannot guarantee a no-clobber Ops migration"
-            )
-        renameatx_np.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        ]
-        renameatx_np.restype = ctypes.c_int
-        result = renameatx_np(
-            source_at,
-            source_bytes,
-            destination_at,
-            destination_bytes,
-            4,
-        )
-    elif os.name == "nt":
-        if source_dir_fd is not None or destination_dir_fd is not None:
-            raise OpsMigrationCollision(
-                "this platform cannot guarantee stable no-clobber migration"
-            )
-        try:
-            os.rename(source, destination)
-        except FileExistsError as exc:
-            raise OpsMigrationCollision(
-                f"destination already exists: {destination.name}"
-            ) from exc
-        return
-    else:
-        raise OpsMigrationCollision(
-            "this platform cannot guarantee a no-clobber Ops migration"
-        )
-    if result == 0:
-        return
-    error_number = ctypes.get_errno()
-    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
-        raise OpsMigrationCollision(
-            f"destination already exists: {destination.name}"
-        )
-    raise OSError(error_number, os.strerror(error_number), str(source))
 
 
 def create_physical_ops_root(
@@ -2308,6 +1366,7 @@ def _build_manifest(
                         f"{RETAINED_SOURCE_PREFIX}{secrets.token_hex(16)}-{name}"
                     ),
                     "destination_snapshot": None,
+                    "destination_directories": {},
                 },
             }
         )
@@ -2425,61 +1484,7 @@ def _resolve_attention(conn: sqlite3.Connection, container_id: int) -> None:
     )
 
 
-def _hash_open_regular_file(fd: int) -> str:
-    before = os.fstat(fd)
-    if not stat.S_ISREG(before.st_mode):
-        raise OpsMigrationCollision("migration source is not a regular file")
-    os.lseek(fd, 0, os.SEEK_SET)
-    digest = hashlib.sha256()
-    while chunk := os.read(fd, 1024 * 1024):
-        digest.update(chunk)
-    after = os.fstat(fd)
-    if (
-        not _same_identity(before, after)
-        or before.st_size != after.st_size
-        or before.st_mtime_ns != after.st_mtime_ns
-        or before.st_ctime_ns != after.st_ctime_ns
-    ):
-        raise OpsMigrationCollision("migration source changed while being read")
-    return digest.hexdigest()
-
-
-def _publish_open_regular_file(
-    source_fd: int,
-    destination_fd: int,
-    name: str,
-) -> None:
-    if not sys.platform.startswith("linux"):
-        raise OpsMigrationCollision(
-            "this platform cannot publish an opened migration file"
-        )
-    libc = ctypes.CDLL(None, use_errno=True)
-    linkat = getattr(libc, "linkat", None)
-    if linkat is None:
-        raise OpsMigrationCollision(
-            "this platform cannot publish an opened migration file"
-        )
-    linkat.argtypes = [
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-    ]
-    linkat.restype = ctypes.c_int
-    source_path = os.fsencode(f"/proc/self/fd/{source_fd}")
-    if linkat(
-        -100,
-        source_path,
-        destination_fd,
-        os.fsencode(name),
-        0x400,
-    ) == 0:
-        return
-    error_number = ctypes.get_errno()
-    if error_number == errno.EEXIST:
-        raise FileExistsError(name)
-    raise OSError(error_number, os.strerror(error_number), name)
+_hash_open_regular_file = ops_publication.hash_open_regular_file
 
 
 def _publish_bound_file_at(
@@ -2490,42 +1495,15 @@ def _publish_bound_file_at(
     expected_identity: Mapping[str, Any],
     expected_hash: str,
 ) -> None:
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    source_fd = os.open(source_name, flags, dir_fd=source_parent_fd)
-    try:
-        source_stat = os.fstat(source_fd)
-        if (
-            not _identity_matches(expected_identity, source_stat)
-            or _hash_open_regular_file(source_fd) != expected_hash
-        ):
-            raise OpsMigrationCollision(
-                f"migration source changed: {source_name}"
-            )
-        try:
-            _publish_open_regular_file(
-                source_fd,
-                destination_parent_fd,
-                destination_name,
-            )
-        except FileExistsError:
-            destination_fd = os.open(
-                destination_name,
-                flags,
-                dir_fd=destination_parent_fd,
-            )
-            try:
-                destination_stat = os.fstat(destination_fd)
-                if (
-                    not _same_identity(source_stat, destination_stat)
-                    or _hash_open_regular_file(destination_fd) != expected_hash
-                ):
-                    raise OpsMigrationCollision(
-                        f"destination already exists: {destination_name}"
-                    )
-            finally:
-                os.close(destination_fd)
-    finally:
-        os.close(source_fd)
+    ops_publication.publish_bound_file_at(
+        source_parent_fd,
+        source_name,
+        destination_parent_fd,
+        destination_name,
+        expected_identity,
+        expected_hash,
+        publish_open_file=_publish_open_regular_file,
+    )
 
 
 def _publish_bound_directory_at(
@@ -2534,138 +1512,20 @@ def _publish_bound_directory_at(
     destination_parent_fd: int,
     destination_name: str,
     entry: Mapping[str, Any],
+    publication: dict[str, Any],
+    *,
+    persist_manifest: Callable[[], None],
 ) -> None:
-    source_fd = os.open(
+    ops_publication.publish_bound_directory_at(
+        source_parent_fd,
         source_name,
-        _directory_open_flags(),
-        dir_fd=source_parent_fd,
+        destination_parent_fd,
+        destination_name,
+        entry,
+        publication,
+        persist_manifest=persist_manifest,
+        publish_open_file=_publish_open_regular_file,
     )
-    destination_fd: int | None = None
-    try:
-        if not _identity_matches(entry["identity"], os.fstat(source_fd)):
-            raise OpsMigrationCollision(
-                f"migration source changed: {source_name}"
-            )
-        try:
-            os.mkdir(destination_name, mode=0o700, dir_fd=destination_parent_fd)
-            os.fsync(destination_parent_fd)
-        except FileExistsError:
-            pass
-        destination_fd = os.open(
-            destination_name,
-            _directory_open_flags(),
-            dir_fd=destination_parent_fd,
-        )
-        expected_nodes = {
-            str(node["path"]): node
-            for node in entry["nodes"]
-            if isinstance(node, Mapping)
-        }
-        expected_files = {
-            str(file_entry["path"]): file_entry
-            for file_entry in entry["files"]
-            if isinstance(file_entry, Mapping)
-        }
-
-        def publish_directory(
-            current_source_fd: int,
-            current_destination_fd: int,
-            prefix: str,
-        ) -> None:
-            source_names = sorted(os.listdir(current_source_fd))
-            destination_names = set(os.listdir(current_destination_fd))
-            expected_names = set(source_names)
-            unexpected = destination_names - expected_names
-            if unexpected:
-                raise OpsMigrationCollision(
-                    f"destination contains unplanned content: {sorted(unexpected)[0]}"
-                )
-            for child_name in source_names:
-                rel = f"{prefix}/{child_name}" if prefix else child_name
-                expected_node = expected_nodes.get(rel)
-                if expected_node is None:
-                    raise OpsMigrationCollision(
-                        f"migration source contains unplanned content: {rel}"
-                    )
-                source_stat = os.stat(
-                    child_name,
-                    dir_fd=current_source_fd,
-                    follow_symlinks=False,
-                )
-                if (
-                    not _identity_matches(
-                        expected_node["identity"],
-                        source_stat,
-                    )
-                    or stat.S_ISLNK(source_stat.st_mode)
-                ):
-                    raise OpsMigrationCollision(
-                        f"migration source changed: {rel}"
-                    )
-                if expected_node["kind"] == "directory":
-                    if not stat.S_ISDIR(source_stat.st_mode):
-                        raise OpsMigrationCollision(
-                            f"migration source changed type: {rel}"
-                        )
-                    child_source_fd = os.open(
-                        child_name,
-                        _directory_open_flags(),
-                        dir_fd=current_source_fd,
-                    )
-                    try:
-                        if not _identity_matches(
-                            expected_node["identity"],
-                            os.fstat(child_source_fd),
-                        ):
-                            raise OpsMigrationCollision(
-                                f"migration source changed: {rel}"
-                            )
-                        try:
-                            os.mkdir(
-                                child_name,
-                                mode=0o700,
-                                dir_fd=current_destination_fd,
-                            )
-                            os.fsync(current_destination_fd)
-                        except FileExistsError:
-                            pass
-                        child_destination_fd = os.open(
-                            child_name,
-                            _directory_open_flags(),
-                            dir_fd=current_destination_fd,
-                        )
-                        try:
-                            publish_directory(
-                                child_source_fd,
-                                child_destination_fd,
-                                rel,
-                            )
-                        finally:
-                            os.close(child_destination_fd)
-                    finally:
-                        os.close(child_source_fd)
-                    continue
-                expected_file = expected_files.get(rel)
-                if expected_file is None:
-                    raise OpsMigrationCollision(
-                        f"migration source file is unplanned: {rel}"
-                    )
-                _publish_bound_file_at(
-                    current_source_fd,
-                    child_name,
-                    current_destination_fd,
-                    child_name,
-                    expected_file["identity"],
-                    str(expected_file["sha256"]),
-                )
-
-        publish_directory(source_fd, destination_fd, "")
-        os.fsync(destination_fd)
-        os.fsync(destination_parent_fd)
-    finally:
-        if destination_fd is not None:
-            os.close(destination_fd)
-        os.close(source_fd)
 
 
 def _apply_manifest(
@@ -2683,7 +1543,6 @@ def _apply_manifest(
     for entry in manifest["entries"]:
         name = str(entry["name"])
         source = root / name
-        destination = physical / name
         publication = entry["publication"]
         retained_name = str(publication["retained_name"])
         source_state = _path_state_at(root_fd, name)
@@ -2764,6 +1623,8 @@ def _apply_manifest(
                     physical_fd,
                     name,
                     entry,
+                    publication,
+                    persist_manifest=persist_manifest,
                 )
             os.fsync(physical_fd)
             _revalidate_root_identity(root, root_fd)
@@ -2791,6 +1652,13 @@ def _apply_manifest(
         if _path_state_at(physical_fd, retained_name) != "missing":
             raise OpsMigrationCollision(
                 f"retained migration source already exists: {retained_name}"
+            )
+        if not _snapshot_matches(
+            _entry_snapshot_at(root_fd, name),
+            entry,
+        ):
+            raise OpsMigrationCollision(
+                f"migration source changed before retention: {name}"
             )
         try:
             _rename_noreplace(
@@ -3327,6 +2195,70 @@ def _validate_manifest_area_ownership(
                 )
 
 
+def _snapshot_directory_identities(
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    if snapshot.get("kind") != "directory":
+        return {}
+    identities: dict[str, Any] = {
+        ".": snapshot.get("identity"),
+    }
+    for node in snapshot.get("nodes") or []:
+        if (
+            isinstance(node, Mapping)
+            and node.get("kind") == "directory"
+            and isinstance(node.get("path"), str)
+        ):
+            identities[str(node["path"])] = node.get("identity")
+    return identities
+
+
+def _upgrade_publication_directory_identities(
+    manifest: dict[str, Any],
+    physical: Path,
+) -> None:
+    for entry in manifest.get("entries") or []:
+        if not isinstance(entry, dict):
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest has an invalid entry"
+            )
+        publication = entry.get("publication")
+        if not isinstance(publication, dict):
+            continue
+        if entry.get("kind") != "directory":
+            publication["destination_directories"] = {}
+            continue
+        phase = publication.get("phase")
+        destination = physical / str(entry.get("name") or "")
+        if phase == "planned":
+            if _path_state(destination) != "missing":
+                raise OpsMigrationCollision(
+                    "legacy directory publication has ambiguous ownership"
+                )
+            publication["destination_directories"] = {}
+            continue
+        if phase == "publishing":
+            if _path_state(destination) != "missing":
+                raise OpsMigrationCollision(
+                    "legacy directory publication has ambiguous ownership"
+                )
+            publication["destination_directories"] = {}
+            continue
+        if phase in {"ready", "complete"}:
+            snapshot = publication.get("destination_snapshot")
+            if not isinstance(snapshot, Mapping):
+                raise OpsMigrationCollision(
+                    "legacy directory publication has no destination identity"
+                )
+            publication["destination_directories"] = (
+                _snapshot_directory_identities(snapshot)
+            )
+            continue
+        raise OpsMigrationCollision(
+            "stored Ops migration manifest has an invalid publication"
+        )
+
+
 def _upgrade_manifest(
     container: Mapping[str, Any],
     manifest: Mapping[str, Any],
@@ -3334,7 +2266,7 @@ def _upgrade_manifest(
     version = manifest.get("version")
     if version == OPS_MIGRATION_VERSION:
         return dict(manifest)
-    if version not in {1, 2, 3, 4}:
+    if version not in {1, 2, 3, 4, 5}:
         raise OpsMigrationCollision(
             "stored Ops migration manifest has an unsupported version"
         )
@@ -3345,13 +2277,13 @@ def _upgrade_manifest(
     if not isinstance(entries, list):
         raise OpsMigrationCollision("stored Ops migration manifest has invalid entries")
 
-    if version == 4:
+    if version in {4, 5}:
         planned = upgraded.get("container_doc")
         if not isinstance(planned, dict):
             raise OpsMigrationCollision(
                 "stored Ops migration manifest has no planned container.md"
             )
-        if planned.get("strategy") == "generate":
+        if version == 4 and planned.get("strategy") == "generate":
             expected_hash = planned.get("sha256")
             recovery = planned.get("recovery_temp")
             if (
@@ -3394,10 +2326,14 @@ def _upgrade_manifest(
                     raise OpsMigrationCollision(
                         "legacy recovery artifact has ambiguous ownership"
                     )
-        elif planned.get("strategy") != "move":
+        elif planned.get("strategy") not in {"generate", "move"}:
             raise OpsMigrationCollision(
                 "stored Ops migration manifest has an invalid planned container.md"
             )
+        _upgrade_publication_directory_identities(
+            upgraded,
+            physical,
+        )
         upgraded["version"] = OPS_MIGRATION_VERSION
         return upgraded
 
@@ -3581,6 +2517,10 @@ def _upgrade_manifest(
         entry["nodes"] = snapshot["nodes"]
         entry["identity"] = snapshot["identity"]
 
+    _upgrade_publication_directory_identities(
+        upgraded,
+        physical,
+    )
     upgraded["version"] = OPS_MIGRATION_VERSION
     return upgraded
 
@@ -3748,6 +2688,11 @@ def _ensure_publication_plans(
                 f"{RETAINED_SOURCE_PREFIX}{secrets.token_hex(16)}-{name}"
             ),
             "destination_snapshot": destination_snapshot,
+            "destination_directories": (
+                _snapshot_directory_identities(destination_snapshot)
+                if isinstance(destination_snapshot, Mapping)
+                else {}
+            ),
         }
 
 
@@ -3866,6 +2811,53 @@ def _validate_manifest_entries(manifest: Mapping[str, Any]) -> None:
             raise OpsMigrationCollision(
                 "stored Ops migration manifest has an invalid entry"
             )
+        directory_identities = publication.get(
+            "destination_directories"
+        )
+        if (
+            not isinstance(directory_identities, Mapping)
+            or any(
+                not _valid_snapshot_path(path)
+                or not _valid_identity(identity)
+                for path, identity in directory_identities.items()
+            )
+            or (
+                entry.get("kind") == "file"
+                and bool(directory_identities)
+            )
+            or (
+                publication.get("phase") == "planned"
+                and bool(directory_identities)
+            )
+        ):
+            raise OpsMigrationCollision(
+                "stored Ops migration has invalid directory ownership"
+            )
+        if entry.get("kind") == "directory":
+            expected_paths = set(
+                _snapshot_directory_identities(entry)
+            )
+            if not set(directory_identities).issubset(
+                expected_paths
+            ):
+                raise OpsMigrationCollision(
+                    "stored Ops migration has unplanned directory ownership"
+                )
+            if publication.get("phase") in {"ready", "complete"}:
+                expected_destination = (
+                    _snapshot_directory_identities(
+                        destination_snapshot
+                    )
+                    if isinstance(
+                        destination_snapshot,
+                        Mapping,
+                    )
+                    else {}
+                )
+                if dict(directory_identities) != expected_destination:
+                    raise OpsMigrationCollision(
+                        "stored Ops migration has incomplete directory ownership"
+                    )
         seen.add(name)
         retained_seen.add(retained_name)
 
@@ -4048,7 +3040,11 @@ def _validated_retry_manifest(
                 f"both source and destination are missing for {name}"
             )
         expected_kind = "directory" if entry.get("kind") == "directory" else "file"
-        if source_exists and publication_phase in {"planned", "publishing"}:
+        if source_exists and publication_phase in {
+            "planned",
+            "publishing",
+            "ready",
+        }:
             if source_state == "symlink":
                 raise OpsMigrationCollision(
                     f"Ops migration path is a symlink: {name}"
@@ -4070,6 +3066,33 @@ def _validated_retry_manifest(
                 raise OpsMigrationCollision(
                     f"published Ops content changed: {name}"
                 )
+        if (
+            destination_exists
+            and publication_phase == "publishing"
+            and entry.get("kind") == "directory"
+        ):
+            if destination_state != "directory":
+                raise OpsMigrationCollision(
+                    f"published Ops path changed type: {name}"
+                )
+            actual_directories = _snapshot_directory_identities(
+                _entry_snapshot(destination)
+            )
+            if actual_directories != dict(
+                publication["destination_directories"]
+            ):
+                raise OpsMigrationCollision(
+                    f"destination directory ownership changed: {name}"
+                )
+        if (
+            not destination_exists
+            and publication_phase == "publishing"
+            and entry.get("kind") == "directory"
+            and publication["destination_directories"]
+        ):
+            raise OpsMigrationCollision(
+                f"migration-owned destination directory is missing: {name}"
+            )
         if publication_phase == "complete" and source_exists:
             raise OpsMigrationCollision(
                 f"legacy Ops path reappeared after publication: {name}"
