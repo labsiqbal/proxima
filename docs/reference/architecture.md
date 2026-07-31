@@ -1009,15 +1009,10 @@ topological columns as a *fallback*: a node's hand-placed `x`/`y` wins, and the 
 reports a real bounding box because the canvas is infinite and positions may be
 negative. Node positions are part of the graph and are persisted by the same explicit
 autosave as every other queued plan edit. Pending debounce work is flushed on editor
-exit so switching views cannot restore a stale graph. `GraphCanvas` observes the SVG
-viewport because Plan Chat, workflow metadata, the selected-node inspector, panel
-dragging, and browser resizing can all change its usable dimensions. Resize and graph
-geometry notifications share one animation-frame-coalesced refit. Fit mode frames the
-complete graph; manual mode retains the preferred zoom and graph point under the
-viewport centre, constraining them only when required for full visibility and
-restoring the preference when space returns. Refit updates only the SVG transform, so
-selection and DOM focus remain stable, and no motion transition runs under either
-normal or reduced-motion preferences.
+exit so switching views cannot restore a stale graph. `GraphCanvas` measures its SVG
+viewport and refits when side panels, metadata, browser size, or graph geometry change
+the usable area, without remounting nodes; fit vs manual pan/zoom intent is specified
+in [workflow-graph.md](../workflow-graph.md).
 The intake editor stages incomplete row edits locally under the last accepted stable
 ID and reports dirty/valid state to `GraphScreen`. Polling cannot overwrite or bless a
 local graph while an autosave is queued or in flight. The header therefore shows Not
