@@ -40,8 +40,10 @@ import {
   resolveWorkProject,
 } from './lib/workProjectPreference'
 import {
+  nextPreserveWorkTaskContext,
   taskHashPreservesWorkProject,
   withInAppTaskPolicy,
+  withResolvedTaskOwnership,
   withoutTaskPolicy,
 } from './lib/taskHashRoute'
 import {
@@ -570,11 +572,7 @@ export function App() {
         const preserveWork = taskHashPreservesWorkProject(initial, historyState)
         if (preserveWork) {
           setTaskPermalinkResolving(false)
-          setTaskProjectContext({
-            jobId,
-            projectSlug: null,
-            initialJob: null,
-          })
+          setTaskProjectContext(current => nextPreserveWorkTaskContext(current, jobId))
           setActiveTaskId(jobId)
           setNavStack(stack => stack.some(e => e.kind === 'task') ? stack : pushDeep(stack, {
             kind: 'task',
@@ -641,7 +639,6 @@ export function App() {
       }
       taskPermalinkSeq.current += 1
       setTaskPermalinkResolving(false)
-      setTaskProjectContext(null)
       const archiveMatch = window.location.hash.match(/^#archive\/([^/]+)\/([^/]+)$/)
       if (archiveMatch) {
         const project = decodeURIComponent(archiveMatch[1])
@@ -1073,11 +1070,7 @@ export function App() {
     && taskProjectContext.projectSlug === activeProject?.slug
   )
   const handleTaskResolved = (job: import('./types').Job) => {
-    setTaskProjectContext(current => {
-      if (!current || current.jobId !== job.id) return current
-      if (current.projectSlug === (job.project_slug || null)) return current
-      return { ...current, projectSlug: job.project_slug || null, initialJob: job }
-    })
+    setTaskProjectContext(current => withResolvedTaskOwnership(current, job))
   }
 
   return (

@@ -36,3 +36,35 @@ export function withInAppTaskPolicy(historyState: unknown): Record<string, unkno
     proximaTaskPolicy: 'preserve-work',
   }
 }
+
+export type TaskRouteContext<TJob = unknown> = {
+  jobId: number
+  projectSlug: string | null
+  initialJob: TJob | null
+}
+
+/** Reuse resolved ownership when history restores the same in-app Task. */
+export function nextPreserveWorkTaskContext<TJob>(
+  current: TaskRouteContext<TJob> | null,
+  jobId: number,
+): TaskRouteContext<TJob> {
+  if (current?.jobId === jobId) return current
+  return { jobId, projectSlug: null, initialJob: null }
+}
+
+/** Fill ownership fields once a Task payload resolves; never drop an existing seed. */
+export function withResolvedTaskOwnership<
+  TJob extends { id: number; project_slug?: string | null },
+>(
+  current: TaskRouteContext<TJob> | null,
+  job: TJob,
+): TaskRouteContext<TJob> | null {
+  if (!current || current.jobId !== job.id) return current
+  const projectSlug = job.project_slug || null
+  if (current.projectSlug === projectSlug && current.initialJob != null) return current
+  return {
+    ...current,
+    projectSlug,
+    initialJob: current.initialJob ?? job,
+  }
+}

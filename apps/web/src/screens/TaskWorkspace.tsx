@@ -106,7 +106,8 @@ export function TaskWorkspace({
     setError('')
     setBusyAction(null)
     seeded.current = null
-  }, [initialJob, jobId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId])
   React.useEffect(() => { void load() }, [load])
   React.useEffect(() => {
     if (job) onResolved?.(job)

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  nextPreserveWorkTaskContext,
   taskHashPreservesWorkProject,
   withInAppTaskPolicy,
+  withResolvedTaskOwnership,
   withoutTaskPolicy,
 } from './taskHashRoute'
 
@@ -45,5 +47,36 @@ describe('task hash Work Project policy', () => {
     })
     expect(taskHashPreservesWorkProject(false, restored)).toBe(true)
     expect(taskHashPreservesWorkProject(false, withInAppTaskPolicy(null))).toBe(true)
+  })
+
+  it('keeps resolved ownership when the same preserve-work Task is restored', () => {
+    const job = { id: 7, project_slug: 'beacon' }
+    const resolved = withResolvedTaskOwnership(
+      { jobId: 7, projectSlug: null, initialJob: null },
+      job,
+    )
+    expect(resolved).toEqual({
+      jobId: 7,
+      projectSlug: 'beacon',
+      initialJob: job,
+    })
+
+    const restored = nextPreserveWorkTaskContext(resolved, 7)
+    expect(restored).toBe(resolved)
+    expect(withResolvedTaskOwnership(restored, { ...job, title: 'later' })).toBe(restored)
+  })
+
+  it('re-resolves when preserve-work lands on a different Task', () => {
+    const prior = {
+      jobId: 7,
+      projectSlug: 'beacon',
+      initialJob: { id: 7, project_slug: 'beacon' },
+    }
+    expect(nextPreserveWorkTaskContext(prior, 8)).toEqual({
+      jobId: 8,
+      projectSlug: null,
+      initialJob: null,
+    })
+    expect(withResolvedTaskOwnership(prior, { id: 8, project_slug: 'atlas' })).toBe(prior)
   })
 })
