@@ -1378,51 +1378,87 @@ class RunWorker:
                     synth_parent_id = _as_int(crow["parent_run_id"])
         except Exception as exc:
             self._fail_run_exception(run, format_rpc_error(str(exc)[-2000:]))
-            return
+        else:
+            master_output_bytes = 0
+            master_output_limit_exceeded = False
+            master_native_tool_violation = False
+            master_dynamic_call_count = 0
+            master_dynamic_result_bytes = 0
 
-        master_output_bytes = 0
-        master_output_limit_exceeded = False
-        master_native_tool_violation = False
-        master_dynamic_call_count = 0
-        master_dynamic_result_bytes = 0
-
-        def on_update(u: dict[str, Any]) -> None:
-            nonlocal tool_write_event_seen
-            nonlocal master_output_bytes
-            nonlocal master_output_limit_exceeded
-            nonlocal master_native_tool_violation
-            kind = u.get("sessionUpdate")
-            if kind == "agent_message_chunk":
-                text = (u.get("content") or {}).get("text", "")
-                if text:
+            def on_update(u: dict[str, Any]) -> None:
+                nonlocal tool_write_event_seen
+                nonlocal master_output_bytes
+                nonlocal master_output_limit_exceeded
+                nonlocal master_native_tool_violation
+                kind = u.get("sessionUpdate")
+                if kind == "agent_message_chunk":
+                    text = (u.get("content") or {}).get("text", "")
+                    if text:
+                        if session_mode == "master":
+                            master_output_bytes += len(text.encode("utf-8"))
+                            if (
+                                master_output_bytes
+                                > master_runtime.MASTER_MAX_TURN_OUTPUT_BYTES
+                            ):
+                                master_output_limit_exceeded = True
+                                entry = self.active_runs.get(run_id)
+                                if entry:
+                                    entry[0].cancel(entry[1])
+                                return
+                        chunks.append(text)
+                        with self.app.state.db_lock:
+                            self.add_event(run_id, session_id, project_id, "message.delta", {"text": text})
+                            self._emit_collaboration_child_event("delta", run, "running", text)
+                            if synth_parent_id:
+                                self.add_event(synth_parent_id, session_id, project_id, "message.delta", {"text": text})
+                elif kind == "agent_thought_chunk":
+                    text = (u.get("content") or {}).get("text", "")
+                    if text:
+                        with self.app.state.db_lock:
+                            self.add_event(run_id, session_id, project_id, "reasoning.delta", {"text": text})
+                elif kind == "tool_call":
                     if session_mode == "master":
-                        master_output_bytes += len(text.encode("utf-8"))
-                        if (
-                            master_output_bytes
-                            > master_runtime.MASTER_MAX_TURN_OUTPUT_BYTES
-                        ):
-                            master_output_limit_exceeded = True
-                            entry = self.active_runs.get(run_id)
-                            if entry:
-                                entry[0].cancel(entry[1])
-                            return
-                    chunks.append(text)
+                        master_native_tool_violation = True
+                        entry = self.active_runs.get(run_id)
+                        if entry:
+                            entry[0].cancel(entry[1])
+                        with self.app.state.db_lock:
+                            self.add_event(
+                                run_id,
+                                session_id,
+                                None,
+                                "approval.denied",
+                                {
+                                    "title": (
+                                        u.get("title")
+                                        or u.get("kind")
+                                        or "native tool"
+                                    ),
+                                    "reason": "Master is chat-only",
+                                },
+                            )
+                        return
+                    # The ACP tool event is the write-journal trigger. The bounded
+                    # before-snapshot lets us recover exact bytes even when a runner's
+                    # event only names the tool rather than every path it will touch.
+                    tool_write_event_seen = True
                     with self.app.state.db_lock:
-                        self.add_event(run_id, session_id, project_id, "message.delta", {"text": text})
-                        self._emit_collaboration_child_event("delta", run, "running", text)
-                        if synth_parent_id:
-                            self.add_event(synth_parent_id, session_id, project_id, "message.delta", {"text": text})
-            elif kind == "agent_thought_chunk":
-                text = (u.get("content") or {}).get("text", "")
-                if text:
+                        self.add_event(run_id, session_id, project_id, "tool.start", {"id": u.get("toolCallId"), "title": u.get("title") or u.get("kind") or "tool"})
+                elif kind == "tool_call_update" and u.get("status") in ("completed", "failed"):
                     with self.app.state.db_lock:
-                        self.add_event(run_id, session_id, project_id, "reasoning.delta", {"text": text})
-            elif kind == "tool_call":
+                        self.add_event(run_id, session_id, project_id, "tool.complete", {"id": u.get("toolCallId"), "status": u.get("status")})
+
+            def on_permission(_acp_session_id: str, request_id: str, options: list, params: dict[str, Any]) -> None:
+                # Agent asked permission for a tool (run a command, edit files, …).
+                tc = params.get("toolCall") or {}
+                title = tc.get("title") or params.get("title") or "Permission required"
                 if session_mode == "master":
-                    master_native_tool_violation = True
                     entry = self.active_runs.get(run_id)
-                    if entry:
-                        entry[0].cancel(entry[1])
+                    denied = bool(
+                        entry
+                        and hasattr(entry[0], "deny_permission")
+                        and entry[0].deny_permission(request_id, options)
+                    )
                     with self.app.state.db_lock:
                         self.add_event(
                             run_id,
@@ -1430,148 +1466,81 @@ class RunWorker:
                             None,
                             "approval.denied",
                             {
-                                "title": (
-                                    u.get("title")
-                                    or u.get("kind")
-                                    or "native tool"
-                                ),
-                                "reason": "Master is chat-only",
+                                "title": title,
+                                "reason": "Master rejects every runner-native permission",
+                                "delivered": denied,
                             },
                         )
                     return
-                # The ACP tool event is the write-journal trigger. The bounded
-                # before-snapshot lets us recover exact bytes even when a runner's
-                # event only names the tool rather than every path it will touch.
-                tool_write_event_seen = True
+                # Auto-approve (explicit opt-in): pick the allow option and resolve immediately,
+                # logging an approval.auto event so the activity feed still shows what ran.
+                if self._auto_approve_on(run_id):
+                    allow = next((o for o in options if o.get("kind") in ("allow_always", "allow_once")), None)
+                    allow = allow or (options[0] if options else None)
+                    if allow and allow.get("optionId"):
+                        with self.app.state.db_lock:
+                            self.add_event(run_id, session_id, project_id, "approval.auto", {"title": title})
+                        self.resolve_permission(run_id, request_id, allow["optionId"])
+                        return
+                # Otherwise surface an interactive card; the user's pick comes back via
+                # POST /api/runs/{id}/permission.
                 with self.app.state.db_lock:
-                    self.add_event(run_id, session_id, project_id, "tool.start", {"id": u.get("toolCallId"), "title": u.get("title") or u.get("kind") or "tool"})
-            elif kind == "tool_call_update" and u.get("status") in ("completed", "failed"):
-                with self.app.state.db_lock:
-                    self.add_event(run_id, session_id, project_id, "tool.complete", {"id": u.get("toolCallId"), "status": u.get("status")})
-
-        def on_permission(_acp_session_id: str, request_id: str, options: list, params: dict[str, Any]) -> None:
-            # Agent asked permission for a tool (run a command, edit files, …).
-            tc = params.get("toolCall") or {}
-            title = tc.get("title") or params.get("title") or "Permission required"
-            if session_mode == "master":
-                entry = self.active_runs.get(run_id)
-                denied = bool(
-                    entry
-                    and hasattr(entry[0], "deny_permission")
-                    and entry[0].deny_permission(request_id, options)
-                )
-                with self.app.state.db_lock:
-                    self.add_event(
-                        run_id,
-                        session_id,
-                        None,
-                        "approval.denied",
-                        {
-                            "title": title,
-                            "reason": "Master rejects every runner-native permission",
-                            "delivered": denied,
-                        },
-                    )
-                return
-            # Auto-approve (explicit opt-in): pick the allow option and resolve immediately,
-            # logging an approval.auto event so the activity feed still shows what ran.
-            if self._auto_approve_on(run_id):
-                allow = next((o for o in options if o.get("kind") in ("allow_always", "allow_once")), None)
-                allow = allow or (options[0] if options else None)
-                if allow and allow.get("optionId"):
-                    with self.app.state.db_lock:
-                        self.add_event(run_id, session_id, project_id, "approval.auto", {"title": title})
-                    self.resolve_permission(run_id, request_id, allow["optionId"])
-                    return
-            # Otherwise surface an interactive card; the user's pick comes back via
-            # POST /api/runs/{id}/permission.
-            with self.app.state.db_lock:
-                safe_options = [{"optionId": o.get("optionId"), "name": o.get("name"), "kind": o.get("kind")} for o in options]
-                self.add_event(run_id, session_id, project_id, "approval.request", {
-                    "request_id": request_id,
-                    "title": title,
-                    "options": safe_options,
-                })
-                job = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
-                if job and job["job_id"]:
-                    source_key = f"permission:{run_id}:{request_id}"
-                    db.execute(
-                        "INSERT INTO attention_items(kind, title, target_json, inline_ok, actions_json, status, source_key) "
-                        "VALUES ('permission_job', ?, ?, 1, '[\"approve\",\"reject\"]', 'open', ?) "
-                        "ON CONFLICT(source_key) DO UPDATE SET "
-                        "title = excluded.title, target_json = excluded.target_json, "
-                        "actions_json = excluded.actions_json, status = 'open', "
-                        "resolved_at = NULL",
-                        (
-                            title,
-                            json.dumps({"view": "task", "job_id": job["job_id"], "run_id": run_id, "request_id": request_id, "options": safe_options}),
-                            source_key,
-                        ),
-                    )
-                    attention = db.execute(
-                        "SELECT id FROM attention_items WHERE source_key = ?",
-                        (source_key,),
-                    ).fetchone()
-                    projection = getattr(
-                        self.app.state, "master_projection", None
-                    )
-                    if projection is not None and attention is not None:
-                        projection.safe_project_attention(
-                            int(attention["id"])
+                    safe_options = [{"optionId": o.get("optionId"), "name": o.get("name"), "kind": o.get("kind")} for o in options]
+                    self.add_event(run_id, session_id, project_id, "approval.request", {
+                        "request_id": request_id,
+                        "title": title,
+                        "options": safe_options,
+                    })
+                    job = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+                    if job and job["job_id"]:
+                        source_key = f"permission:{run_id}:{request_id}"
+                        db.execute(
+                            "INSERT INTO attention_items(kind, title, target_json, inline_ok, actions_json, status, source_key) "
+                            "VALUES ('permission_job', ?, ?, 1, '[\"approve\",\"reject\"]', 'open', ?) "
+                            "ON CONFLICT(source_key) DO UPDATE SET "
+                            "title = excluded.title, target_json = excluded.target_json, "
+                            "actions_json = excluded.actions_json, status = 'open', "
+                            "resolved_at = NULL",
+                            (
+                                title,
+                                json.dumps({"view": "task", "job_id": job["job_id"], "run_id": run_id, "request_id": request_id, "options": safe_options}),
+                                source_key,
+                            ),
                         )
+                        attention = db.execute(
+                            "SELECT id FROM attention_items WHERE source_key = ?",
+                            (source_key,),
+                        ).fetchone()
+                        projection = getattr(
+                            self.app.state, "master_projection", None
+                        )
+                        if projection is not None and attention is not None:
+                            projection.safe_project_attention(
+                                int(attention["id"])
+                            )
 
-        def on_dynamic_tool(name: str, arguments: Any) -> dict[str, Any]:
-            nonlocal master_dynamic_call_count
-            nonlocal master_dynamic_result_bytes
-            master_dynamic_call_count += 1
-            if master_dynamic_call_count > master_runtime.MASTER_MAX_CALLS_PER_ROUND:
-                result = {
-                    "ok": False,
-                    "tool": name or None,
-                    "error": {
-                        "code": "too_many_tool_calls",
-                        "message": (
-                            "Master emitted more than "
-                            f"{master_runtime.MASTER_MAX_CALLS_PER_ROUND} "
-                            "tool calls in one round"
-                        ),
-                    },
-                }
-            elif (
-                name
-                in {"delegate_tasks", "start_tasks", "create_attention"}
-                and master_dynamic_result_bytes
-                + MASTER_TOOL_RESULT_BYTES
-                > master_runtime.MASTER_MAX_ROUND_RESULT_BYTES
-            ):
-                result = {
-                    "ok": False,
-                    "tool": name or None,
-                    "error": {
-                        "code": "round_result_too_large",
-                        "message": (
-                            "Master tool results exceed the "
-                            f"{master_runtime.MASTER_MAX_ROUND_RESULT_BYTES}"
-                            "-byte round limit"
-                        ),
-                    },
-                }
-            else:
-                with self.app.state.db_lock:
-                    result = master_runtime.execute_master_tool_call(
-                        self.app,
-                        db,
-                        run,
-                        name,
-                        arguments,
-                    )
-                encoded = json.dumps(
-                    result,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-                if (
-                    master_dynamic_result_bytes + len(encoded)
+            def on_dynamic_tool(name: str, arguments: Any) -> dict[str, Any]:
+                nonlocal master_dynamic_call_count
+                nonlocal master_dynamic_result_bytes
+                master_dynamic_call_count += 1
+                if master_dynamic_call_count > master_runtime.MASTER_MAX_CALLS_PER_ROUND:
+                    result = {
+                        "ok": False,
+                        "tool": name or None,
+                        "error": {
+                            "code": "too_many_tool_calls",
+                            "message": (
+                                "Master emitted more than "
+                                f"{master_runtime.MASTER_MAX_CALLS_PER_ROUND} "
+                                "tool calls in one round"
+                            ),
+                        },
+                    }
+                elif (
+                    name
+                    in {"delegate_tasks", "start_tasks", "create_attention"}
+                    and master_dynamic_result_bytes
+                    + MASTER_TOOL_RESULT_BYTES
                     > master_runtime.MASTER_MAX_ROUND_RESULT_BYTES
                 ):
                     result = {
@@ -1587,208 +1556,142 @@ class RunWorker:
                         },
                     }
                 else:
-                    master_dynamic_result_bytes += len(encoded)
-            result_json = json.dumps(
-                result,
-                ensure_ascii=False,
-                indent=2,
-            )
-            with self.app.state.db_lock:
-                db.execute(
-                    "INSERT INTO messages("
-                    "session_id, role, content, author, run_id"
-                    ") VALUES (?, 'system', ?, 'Proxima', ?)",
-                    (
-                        session_id,
-                        "Master tool result:\n```json\n"
-                        + result_json
-                        + "\n```",
-                        run_id,
-                    ),
+                    with self.app.state.db_lock:
+                        result = master_runtime.execute_master_tool_call(
+                            self.app,
+                            db,
+                            run,
+                            name,
+                            arguments,
+                        )
+                    encoded = json.dumps(
+                        result,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                    if (
+                        master_dynamic_result_bytes + len(encoded)
+                        > master_runtime.MASTER_MAX_ROUND_RESULT_BYTES
+                    ):
+                        result = {
+                            "ok": False,
+                            "tool": name or None,
+                            "error": {
+                                "code": "round_result_too_large",
+                                "message": (
+                                    "Master tool results exceed the "
+                                    f"{master_runtime.MASTER_MAX_ROUND_RESULT_BYTES}"
+                                    "-byte round limit"
+                                ),
+                            },
+                        }
+                    else:
+                        master_dynamic_result_bytes += len(encoded)
+                result_json = json.dumps(
+                    result,
+                    ensure_ascii=False,
+                    indent=2,
                 )
-                message_id = _as_int(db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
-                master_focus.stamp_message_for_run(
-                    db, message_id=message_id, run_id=run_id
-                )
-                db.execute(
-                    "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP "
-                    "WHERE id = ?",
-                    (session_id,),
-                )
-            return result
+                with self.app.state.db_lock:
+                    db.execute(
+                        "INSERT INTO messages("
+                        "session_id, role, content, author, run_id"
+                        ") VALUES (?, 'system', ?, 'Proxima', ?)",
+                        (
+                            session_id,
+                            "Master tool result:\n```json\n"
+                            + result_json
+                            + "\n```",
+                            run_id,
+                        ),
+                    )
+                    message_id = _as_int(db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+                    master_focus.stamp_message_for_run(
+                        db, message_id=message_id, run_id=run_id
+                    )
+                    db.execute(
+                        "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ?",
+                        (session_id,),
+                    )
+                return result
 
-        try:
-            if (
-                project_activity_lease is not None
-                and getattr(
-                    self.app.state.acp_manager,
-                    "supports_activity_guardian",
-                    False,
-                )
-            ):
-                guarded_runner_key = (
+            try:
+                if (
+                    project_activity_lease is not None
+                    and getattr(
+                        self.app.state.acp_manager,
+                        "supports_activity_guardian",
+                        False,
+                    )
+                ):
+                    guarded_runner_key = (
+                        spec,
+                        hermes_home,
+                        cwd,
+                        codex_master,
+                        str(run_id),
+                    )
+                await self.prompting.refresh_credentials_if_needed(
+                    cfg,
                     spec,
                     hermes_home,
                     cwd,
-                    codex_master,
-                    str(run_id),
+                    master_chat_only=codex_master,
                 )
-            await self.prompting.refresh_credentials_if_needed(
-                cfg,
-                spec,
-                hermes_home,
-                cwd,
-                master_chat_only=codex_master,
-            )
-            required_skills = (
-                ()
-                if session_mode == "master"
-                else required_skills_for_run(
-                    db,
-                    session_id,
-                    run if isinstance(run, dict) else None,
+                required_skills = (
+                    ()
+                    if session_mode == "master"
+                    else required_skills_for_run(
+                        db,
+                        session_id,
+                        run if isinstance(run, dict) else None,
+                    )
                 )
-            )
-            fixed_code_graph_path = None
-            if (
-                session_mode != "master"
-                and is_job
-                and jrow
-                and jrow["target_kind"] == "code"
-                and features.enabled(cfg, features.MASTER_ORCHESTRATOR)
-            ):
-                try:
-                    area_row = db.execute(
-                        "SELECT j.target_area_id, p.slug, p.owner_user_id "
-                        "FROM jobs j JOIN projects p ON p.id = j.project_id "
-                        "WHERE j.id = ?",
-                        (jrow["job_id"],),
-                    ).fetchone()
-                    if area_row and area_row["target_area_id"] is not None:
-                        scope = self.app.state.graph_context.resolve_scope(
-                            owner_user_id=int(area_row["owner_user_id"]),
-                            container_slug=str(area_row["slug"]),
-                            kind="code",
-                            area_id=int(area_row["target_area_id"]),
-                            create_output=True,
+                fixed_code_graph_path = None
+                if (
+                    session_mode != "master"
+                    and is_job
+                    and jrow
+                    and jrow["target_kind"] == "code"
+                    and features.enabled(cfg, features.MASTER_ORCHESTRATOR)
+                ):
+                    try:
+                        area_row = db.execute(
+                            "SELECT j.target_area_id, p.slug, p.owner_user_id "
+                            "FROM jobs j JOIN projects p ON p.id = j.project_id "
+                            "WHERE j.id = ?",
+                            (jrow["job_id"],),
+                        ).fetchone()
+                        if area_row and area_row["target_area_id"] is not None:
+                            scope = self.app.state.graph_context.resolve_scope(
+                                owner_user_id=int(area_row["owner_user_id"]),
+                                container_slug=str(area_row["slug"]),
+                                kind="code",
+                                area_id=int(area_row["target_area_id"]),
+                                create_output=True,
+                            )
+                            fixed_code_graph_path = str(scope.graph_path)
+                    except Exception:
+                        logging.getLogger("proxima.worker").exception(
+                            "Code graph MCP scope resolve failed (non-fatal)"
                         )
-                        fixed_code_graph_path = str(scope.graph_path)
-                except Exception:
-                    logging.getLogger("proxima.worker").exception(
-                        "Code graph MCP scope resolve failed (non-fatal)"
-                    )
-            self.prompting.reapply_capabilities(
-                cfg,
-                spec,
-                hermes_home,
-                run.get("profile_id"),
-                required_skill_ids=required_skills,
-                require_explicit_empty=session_mode == "master",
-                fixed_code_graph_path=fixed_code_graph_path,
-            )
-            proc, acp_sid, fresh_session = await self.prompting.load_or_create_agent_session(
-                run_id,
-                session_id,
-                spec,
-                hermes_home,
-                cwd,
-                self.active_runs,
-                master_dynamic_tools=master_tool_specs,
-                activity_lease=project_activity_lease,
-                activity_scope=(
-                    str(run_id)
-                    if project_activity_lease is not None
-                    else None
-                ),
-            )
-            hb_task = asyncio.create_task(self._heartbeat(run_id, float(cfg.get("run_heartbeat_seconds") or 10)))
-            # Per-turn quota: the in-app setting wins (DB-backed, so it applies on
-            # every entrypoint), config/env is the fallback. Read per run so a
-            # settings change takes effect without a restart.
-            timeout = app_settings.get_run_timeout_seconds(db, cfg)
-            # Session kind is authoritative: a design session's runs are always framed as
-            # design server-side, so a message that reaches it by any path is handled as a
-            # design edit — never misread as a generic request (defense behind the UI gating).
-            # Cancel-during-setup guard: a cancel that arrived while we were spawning /
-            # loading the agent already flipped runs.status='cancelled'. The post-prompt
-            # check below would only catch it AFTER the agent ran a full turn of real
-            # work — bail here so the cancel actually short-circuits before the prompt.
-            if db.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()["status"] == "cancelled":
-                return
-            if str(run.get("kind", "")).startswith("collab_"):
-                with self.app.state.db_lock:
-                    self._emit_collaboration_child_event("started", run, "running")
-            if str(run.get("kind", "")).startswith("message_review"):
-                with self.app.state.db_lock:
-                    db.execute("UPDATE message_reviews SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE run_id = ?", (run_id,))
-                    row = db.execute("SELECT * FROM message_reviews WHERE run_id = ?", (run_id,)).fetchone()
-                    if row:
-                        self.add_event(run_id, session_id, project_id, "message_review.started", {"review": review_payload(row)})
-            prompt_text = self.prompting.build_prompt_text(
-                run,
-                session_id,
-                project_name,
-                project_slug,
-                project_wiki,
-                is_job,
-                is_build,
-                jrow,
-                session_mode,
-                fresh_session,
-            )
-            if codex_master:
-                prompt_text += (
-                    "\n\n# Master tool protocol\n\n"
-                    "Use only the native Proxima product tools exposed to this "
-                    "turn. Do not emit XML or proxima-tool tags. You have no "
-                    "shell, files, browser, skills, MCP, plugins, subagents, "
-                    "execution environment, or permission escalation."
+                self.prompting.reapply_capabilities(
+                    cfg,
+                    spec,
+                    hermes_home,
+                    run.get("profile_id"),
+                    required_skill_ids=required_skills,
+                    require_explicit_empty=session_mode == "master",
+                    fixed_code_graph_path=fixed_code_graph_path,
                 )
-            vision_fallback = project_ops
-            if (
-                project_container is not None
-                and project_ops is not None
-                and Path(cwd).resolve() == project_ops
-            ):
-                vision_fallback = project_container
-            prompt_text, vision_images = extract_vision_images(
-                prompt_text,
-                cwd,
-                vision_fallback,
-            )
-            run_start_ts = time.time()
-            try:
-                if codex_master:
-                    stop_reason = await proc.prompt(
-                        acp_sid,
-                        prompt_text,
-                        on_update,
-                        on_permission=on_permission,
-                        timeout=timeout,
-                        images=vision_images,
-                        on_dynamic_tool=on_dynamic_tool,
-                    )
-                else:
-                    stop_reason = await proc.prompt(
-                        acp_sid,
-                        prompt_text,
-                        on_update,
-                        on_permission=on_permission,
-                        timeout=timeout,
-                        images=vision_images,
-                    )
-            except Exception as exc:
-                if not self._is_recoverable_agent_history_error(exc):
-                    raise
-                proc, acp_sid = await self.prompting.reset_agent_session(
+                proc, acp_sid, fresh_session = await self.prompting.load_or_create_agent_session(
                     run_id,
                     session_id,
                     spec,
                     hermes_home,
                     cwd,
-                    acp_sid,
                     self.active_runs,
-                    str(exc),
                     master_dynamic_tools=master_tool_specs,
                     activity_lease=project_activity_lease,
                     activity_scope=(
@@ -1797,7 +1700,29 @@ class RunWorker:
                         else None
                     ),
                 )
-                fresh_session = True
+                hb_task = asyncio.create_task(self._heartbeat(run_id, float(cfg.get("run_heartbeat_seconds") or 10)))
+                # Per-turn quota: the in-app setting wins (DB-backed, so it applies on
+                # every entrypoint), config/env is the fallback. Read per run so a
+                # settings change takes effect without a restart.
+                timeout = app_settings.get_run_timeout_seconds(db, cfg)
+                # Session kind is authoritative: a design session's runs are always framed as
+                # design server-side, so a message that reaches it by any path is handled as a
+                # design edit — never misread as a generic request (defense behind the UI gating).
+                # Cancel-during-setup guard: a cancel that arrived while we were spawning /
+                # loading the agent already flipped runs.status='cancelled'. The post-prompt
+                # check below would only catch it AFTER the agent ran a full turn of real
+                # work — bail here so the cancel actually short-circuits before the prompt.
+                if db.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()["status"] == "cancelled":
+                    return
+                if str(run.get("kind", "")).startswith("collab_"):
+                    with self.app.state.db_lock:
+                        self._emit_collaboration_child_event("started", run, "running")
+                if str(run.get("kind", "")).startswith("message_review"):
+                    with self.app.state.db_lock:
+                        db.execute("UPDATE message_reviews SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE run_id = ?", (run_id,))
+                        row = db.execute("SELECT * FROM message_reviews WHERE run_id = ?", (run_id,)).fetchone()
+                        if row:
+                            self.add_event(run_id, session_id, project_id, "message_review.started", {"review": review_payload(row)})
                 prompt_text = self.prompting.build_prompt_text(
                     run,
                     session_id,
@@ -1808,251 +1733,325 @@ class RunWorker:
                     is_build,
                     jrow,
                     session_mode,
-                    True,
+                    fresh_session,
                 )
                 if codex_master:
                     prompt_text += (
                         "\n\n# Master tool protocol\n\n"
-                        "Use only the native Proxima product tools exposed to "
-                        "this turn. Do not emit XML or proxima-tool tags."
+                        "Use only the native Proxima product tools exposed to this "
+                        "turn. Do not emit XML or proxima-tool tags. You have no "
+                        "shell, files, browser, skills, MCP, plugins, subagents, "
+                        "execution environment, or permission escalation."
                     )
+                vision_fallback = project_ops
+                if (
+                    project_container is not None
+                    and project_ops is not None
+                    and Path(cwd).resolve() == project_ops
+                ):
+                    vision_fallback = project_container
                 prompt_text, vision_images = extract_vision_images(
                     prompt_text,
                     cwd,
                     vision_fallback,
                 )
-                chunks.clear()
-                if codex_master:
-                    stop_reason = await proc.prompt(
-                        acp_sid,
-                        prompt_text,
-                        on_update,
-                        on_permission=on_permission,
-                        timeout=timeout,
-                        images=vision_images,
-                        on_dynamic_tool=on_dynamic_tool,
-                    )
-                else:
-                    stop_reason = await proc.prompt(
-                        acp_sid,
-                        prompt_text,
-                        on_update,
-                        on_permission=on_permission,
-                        timeout=timeout,
-                        images=vision_images,
-                    )
-
-            if master_output_limit_exceeded:
-                raise RuntimeError(
-                    "master_output_too_large: Master turn exceeded the "
-                    f"{master_runtime.MASTER_MAX_TURN_OUTPUT_BYTES}-byte output limit"
-                )
-            if master_native_tool_violation:
-                raise RuntimeError(
-                    "master_native_tool_denied: Master runner attempted a native tool"
-                )
-
-            status_row = db.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
-            if status_row and status_row["status"] == "cancelled":
-                return
-            answer = "".join(chunks).strip()
-            if not answer:
-                # Empty output usually means the agent hit an error (auth, rate
-                # limit, refusal) — surface the real reason instead of a blank
-                # "no output" so it's diagnosable.
-                detail = proc.recent_stderr() if hasattr(proc, "recent_stderr") else ""
-                answer = f"Agent produced no output (stop reason: {stop_reason})."
-                if detail:
-                    answer += f"\n\nAgent error log:\n```\n{detail}\n```"
-            if self._complete_message_review(run, answer, stop_reason):
-                return
-            if self._complete_collaboration_run(run, answer, stop_reason):
-                return
-            if self.drafts.handle_draft_run(run, answer, stop_reason, self.add_event):
-                return
-            # Strip before save + auto-title so main chat and sidebar titles keep
-            # the real answer, not Pi's version/skills banner.
-            answer = strip_runner_preamble(answer)
-            output_links = self.outputs.output_links_for_project(project_id, run_start_ts)
-            trow = self.outputs.save_assistant_message(
-                run_id,
-                session_id,
-                project_id,
-                answer,
-                self._agent_name(run_id),
-                output_links,
-                self.add_event,
-            )
-            if tool_write_event_seen and turn_before is not None and turn_root is not None:
+                run_start_ts = time.time()
                 try:
-                    message = db.execute(
-                        "SELECT id FROM messages WHERE run_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
-                        (run_id,),
-                    ).fetchone()
-                    if message:
-                        turn_restore.record_journal(
-                            db,
-                            message_id=_as_int(message["id"]),
-                            session_id=session_id,
-                            root=turn_root,
-                            before=turn_before,
-                            root_semantics=turn_restore.ROOT_CONTAINER_VIRTUAL_V2,
+                    if codex_master:
+                        stop_reason = await proc.prompt(
+                            acp_sid,
+                            prompt_text,
+                            on_update,
+                            on_permission=on_permission,
+                            timeout=timeout,
+                            images=vision_images,
+                            on_dynamic_tool=on_dynamic_tool,
                         )
-                except Exception:
-                    logging.getLogger("proxima.worker").exception("turn restore journal failed (non-fatal)")
-            try:
-                if not codex_master:
-                    master_runtime.handle_master_response(
-                        self.app, db, run, answer
-                    )
-            except Exception:
-                logging.getLogger("proxima.worker").exception("Master product tool handling failed (non-fatal)")
-            # Auto-name the chat from a ≤3-word recap on the first exchange (chats
-            # only). Done BEFORE run.completed so the sidebar shows the recap as soon
-            # as the run leaves the active set. Best-effort; never fails the run.
-            try:
-                is_task = bool(trow and trow["job_id"])
-                trow_title = db.execute("SELECT title, manual_title FROM sessions WHERE id = ?", (session_id,)).fetchone()
-                is_design = bool(trow_title and (trow_title["title"] or "").startswith("Design: "))
-                account = db.execute("SELECT COUNT(*) AS c FROM messages WHERE session_id = ? AND role = 'assistant'", (session_id,)).fetchone()["c"]
-                # Skip iterate/test chats (is_build): their '⚙ <workflow>' title is
-                # their identity in the Workflows panel — auto-titling would erase it.
-                if not is_task and not is_design and not is_build and not (trow_title and trow_title["manual_title"]) and account == 1:
-                    title_before = trow_title["title"] if trow_title else ""
-                    title = await self._generate_title(proc, cwd, run["prompt"], answer)
-                    if title:
-                        with self.app.state.db_lock:
-                            db.execute(
-                                "UPDATE sessions SET title = ?, updated_at = CURRENT_TIMESTAMP "
-                                "WHERE id = ? AND title = ? AND manual_title = 0",
-                                (title, session_id, title_before),
-                            )
-            except Exception:
-                logging.getLogger("proxima.worker").exception("auto-title failed (non-fatal)")
-            # Re-catalog the wiki in case the agent wrote/updated notes this run, so
-            # the next session's preamble reflects the new knowledge.
-            try:
-                if project_wiki is not None and project_wiki.is_dir():
-                    wiki_memory.rebuild_index(project_wiki)
-            except Exception:
-                logging.getLogger("proxima.worker").exception("wiki index rebuild failed (non-fatal)")
-            # Finalize atomically: only complete a run that's still 'running'. If the
-            # user cancelled during the post-prompt awaits (auto-title can take ~30s),
-            # the cancel set status='cancelled' — don't resurrect it to 'completed',
-            # and crucially don't advance the goal/job loop (which would keep the agent
-            # working after the user pressed Cancel).
-            with self.app.state.db_lock:
-                completed = db.execute(
-                    "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
-                    (run_id,),
-                ).rowcount > 0
-                if completed:
-                    self.add_event(run_id, session_id, project_id, "run.completed", {"stop_reason": stop_reason})
-            if not completed:
-                return  # cancelled mid-window — stop here; do not advance goal/job
-            # Autonomous goal loop: enqueue the next turn or finish the goal. Best-effort.
-            try:
-                self._advance_goal(run, answer)
-            except Exception:
-                logging.getLogger("proxima.worker").exception("goal advance failed (non-fatal)")
-            # Workflow job: record this step's output and enqueue the next (or finish). Best-effort.
-            try:
-                self._advance_job(run, answer)
-            except Exception:
-                logging.getLogger("proxima.worker").exception("job advance failed (non-fatal)")
-            # Layer 1: append a one-line memory-log entry for this turn. Best-effort —
-            # a logging failure must never fail the user's actual run.
-            if answer and not answer.startswith("Agent produced no output"):
-                try:
-                    await self._write_auto_log(run, proc, acp_sid)
-                except Exception:
-                    logging.getLogger("proxima.worker").exception("auto-log failed (non-fatal)")
-        except asyncio.CancelledError as _exc:
-            # Graceful shutdown: close the run cleanly (salvaging streamed text)
-            # instead of leaving it orphaned in 'running'.
-            self._fail_interrupted(run_id, session_id, project_id, "Interrupted by server shutdown")
-            raise
-        except asyncio.TimeoutError as _exc:
-            # Abort the agent's turn so it stops working in the background and the
-            # next message isn't "queued for the next turn" against a busy session.
-            # session/cancel is best-effort and a turn wedged inside a blocking
-            # tool call can't process it, so also recycle (kill) the cached agent
-            # process — otherwise the wedged session is reused and every later
-            # message in this project returns "Queued for the next turn".
-            entry = self.active_runs.get(run_id)
-            if entry:
-                try: entry[0].cancel(entry[1])
-                except Exception: pass
-            try:
-                if codex_master:
-                    await self.app.state.acp_manager.recycle(
+                    else:
+                        stop_reason = await proc.prompt(
+                            acp_sid,
+                            prompt_text,
+                            on_update,
+                            on_permission=on_permission,
+                            timeout=timeout,
+                            images=vision_images,
+                        )
+                except Exception as exc:
+                    if not self._is_recoverable_agent_history_error(exc):
+                        raise
+                    proc, acp_sid = await self.prompting.reset_agent_session(
+                        run_id,
+                        session_id,
                         spec,
                         hermes_home,
                         cwd,
-                        master_chat_only=True,
+                        acp_sid,
+                        self.active_runs,
+                        str(exc),
+                        master_dynamic_tools=master_tool_specs,
+                        activity_lease=project_activity_lease,
+                        activity_scope=(
+                            str(run_id)
+                            if project_activity_lease is not None
+                            else None
+                        ),
                     )
-                else:
-                    await self.app.state.acp_manager.recycle(
-                        spec, hermes_home, cwd
+                    fresh_session = True
+                    prompt_text = self.prompting.build_prompt_text(
+                        run,
+                        session_id,
+                        project_name,
+                        project_slug,
+                        project_wiki,
+                        is_job,
+                        is_build,
+                        jrow,
+                        session_mode,
+                        True,
                     )
-            except Exception:
-                logging.getLogger("proxima.worker").exception("failed to recycle agent process after timeout")
-            reason = "Hermes runner timed out"
-            with self.app.state.db_lock:
-                failed = db.execute(
-                    "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
-                    (reason, run_id),
-                ).rowcount > 0
-                if not failed:
-                    return
-                if str(run.get("kind", "")).startswith("message_review"):
-                    self._fail_message_review(run_id, session_id, project_id, reason)
-                    return
-                if str(run.get("kind", "")).startswith("collab_"):
-                    self._fail_collaboration_run(run_id, session_id, project_id, reason)
-                    return
-                salvaged = strip_runner_preamble(self._reconstruct_text(run_id))
-                if salvaged:
-                    db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
-                # Phase-1 slice 5 (T5): a job turn that hits the quota is resumed,
-                # not abandoned - a continuation run is enqueued in the SAME
-                # session (context carries via the persistent ACP session) and,
-                # for repo jobs, the same worktree (cwd binds to the job). At the
-                # cap: honest stop - the job fails loudly with a plain-language
-                # reason and the plan pauses for review, never a silent stall.
-                outcome = self._continue_after_timeout(run)
-                if outcome.get("run_id"):
-                    reason = (
-                        f"Hermes runner timed out after {timeout}s - "
-                        f"auto-continuing ({outcome['continuation']}/{outcome['limit']})"
+                    if codex_master:
+                        prompt_text += (
+                            "\n\n# Master tool protocol\n\n"
+                            "Use only the native Proxima product tools exposed to "
+                            "this turn. Do not emit XML or proxima-tool tags."
+                        )
+                    prompt_text, vision_images = extract_vision_images(
+                        prompt_text,
+                        cwd,
+                        vision_fallback,
                     )
-                    db.execute("UPDATE runs SET error = ? WHERE id = ?", (reason, run_id))
-                    self.add_event(run_id, session_id, project_id, "run.failed", {
-                        "error": reason,
-                        "continued_by_run_id": outcome["run_id"],
-                        "continuation": outcome["continuation"],
-                        "continuation_limit": outcome["limit"],
-                    })
-                    return  # the job stays running; the continuation picks the work up
+                    chunks.clear()
+                    if codex_master:
+                        stop_reason = await proc.prompt(
+                            acp_sid,
+                            prompt_text,
+                            on_update,
+                            on_permission=on_permission,
+                            timeout=timeout,
+                            images=vision_images,
+                            on_dynamic_tool=on_dynamic_tool,
+                        )
+                    else:
+                        stop_reason = await proc.prompt(
+                            acp_sid,
+                            prompt_text,
+                            on_update,
+                            on_permission=on_permission,
+                            timeout=timeout,
+                            images=vision_images,
+                        )
+
+                if master_output_limit_exceeded:
+                    raise RuntimeError(
+                        "master_output_too_large: Master turn exceeded the "
+                        f"{master_runtime.MASTER_MAX_TURN_OUTPUT_BYTES}-byte output limit"
+                    )
+                if master_native_tool_violation:
+                    raise RuntimeError(
+                        "master_native_tool_denied: Master runner attempted a native tool"
+                    )
+
+                status_row = db.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+                if status_row and status_row["status"] == "cancelled":
+                    return
+                answer = "".join(chunks).strip()
+                if not answer:
+                    # Empty output usually means the agent hit an error (auth, rate
+                    # limit, refusal) — surface the real reason instead of a blank
+                    # "no output" so it's diagnosable.
+                    detail = proc.recent_stderr() if hasattr(proc, "recent_stderr") else ""
+                    answer = f"Agent produced no output (stop reason: {stop_reason})."
+                    if detail:
+                        answer += f"\n\nAgent error log:\n```\n{detail}\n```"
+                if self._complete_message_review(run, answer, stop_reason):
+                    return
+                if self._complete_collaboration_run(run, answer, stop_reason):
+                    return
+                if self.drafts.handle_draft_run(run, answer, stop_reason, self.add_event):
+                    return
+                # Strip before save + auto-title so main chat and sidebar titles keep
+                # the real answer, not Pi's version/skills banner.
+                answer = strip_runner_preamble(answer)
+                output_links = self.outputs.output_links_for_project(project_id, run_start_ts)
+                trow = self.outputs.save_assistant_message(
+                    run_id,
+                    session_id,
+                    project_id,
+                    answer,
+                    self._agent_name(run_id),
+                    output_links,
+                    self.add_event,
+                )
+                if tool_write_event_seen and turn_before is not None and turn_root is not None:
+                    try:
+                        message = db.execute(
+                            "SELECT id FROM messages WHERE run_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+                            (run_id,),
+                        ).fetchone()
+                        if message:
+                            turn_restore.record_journal(
+                                db,
+                                message_id=_as_int(message["id"]),
+                                session_id=session_id,
+                                root=turn_root,
+                                before=turn_before,
+                                root_semantics=turn_restore.ROOT_CONTAINER_VIRTUAL_V2,
+                            )
+                    except Exception:
+                        logging.getLogger("proxima.worker").exception("turn restore journal failed (non-fatal)")
+                try:
+                    if not codex_master:
+                        master_runtime.handle_master_response(
+                            self.app, db, run, answer
+                        )
+                except Exception:
+                    logging.getLogger("proxima.worker").exception("Master product tool handling failed (non-fatal)")
+                # Auto-name the chat from a ≤3-word recap on the first exchange (chats
+                # only). Done BEFORE run.completed so the sidebar shows the recap as soon
+                # as the run leaves the active set. Best-effort; never fails the run.
+                try:
+                    is_task = bool(trow and trow["job_id"])
+                    trow_title = db.execute("SELECT title, manual_title FROM sessions WHERE id = ?", (session_id,)).fetchone()
+                    is_design = bool(trow_title and (trow_title["title"] or "").startswith("Design: "))
+                    account = db.execute("SELECT COUNT(*) AS c FROM messages WHERE session_id = ? AND role = 'assistant'", (session_id,)).fetchone()["c"]
+                    # Skip iterate/test chats (is_build): their '⚙ <workflow>' title is
+                    # their identity in the Workflows panel — auto-titling would erase it.
+                    if not is_task and not is_design and not is_build and not (trow_title and trow_title["manual_title"]) and account == 1:
+                        title_before = trow_title["title"] if trow_title else ""
+                        title = await self._generate_title(proc, cwd, run["prompt"], answer)
+                        if title:
+                            with self.app.state.db_lock:
+                                db.execute(
+                                    "UPDATE sessions SET title = ?, updated_at = CURRENT_TIMESTAMP "
+                                    "WHERE id = ? AND title = ? AND manual_title = 0",
+                                    (title, session_id, title_before),
+                                )
+                except Exception:
+                    logging.getLogger("proxima.worker").exception("auto-title failed (non-fatal)")
+                # Re-catalog the wiki in case the agent wrote/updated notes this run, so
+                # the next session's preamble reflects the new knowledge.
+                try:
+                    if project_wiki is not None and project_wiki.is_dir():
+                        wiki_memory.rebuild_index(project_wiki)
+                except Exception:
+                    logging.getLogger("proxima.worker").exception("wiki index rebuild failed (non-fatal)")
+                # Finalize atomically: only complete a run that's still 'running'. If the
+                # user cancelled during the post-prompt awaits (auto-title can take ~30s),
+                # the cancel set status='cancelled' — don't resurrect it to 'completed',
+                # and crucially don't advance the goal/job loop (which would keep the agent
+                # working after the user pressed Cancel).
+                with self.app.state.db_lock:
+                    completed = db.execute(
+                        "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
+                        (run_id,),
+                    ).rowcount > 0
+                    if completed:
+                        self.add_event(run_id, session_id, project_id, "run.completed", {"stop_reason": stop_reason})
+                if not completed:
+                    return  # cancelled mid-window — stop here; do not advance goal/job
+                # Autonomous goal loop: enqueue the next turn or finish the goal. Best-effort.
+                try:
+                    self._advance_goal(run, answer)
+                except Exception:
+                    logging.getLogger("proxima.worker").exception("goal advance failed (non-fatal)")
+                # Workflow job: record this step's output and enqueue the next (or finish). Best-effort.
+                try:
+                    self._advance_job(run, answer)
+                except Exception:
+                    logging.getLogger("proxima.worker").exception("job advance failed (non-fatal)")
+                # Layer 1: append a one-line memory-log entry for this turn. Best-effort —
+                # a logging failure must never fail the user's actual run.
+                if answer and not answer.startswith("Agent produced no output"):
+                    try:
+                        await self._write_auto_log(run, proc, acp_sid)
+                    except Exception:
+                        logging.getLogger("proxima.worker").exception("auto-log failed (non-fatal)")
+            except asyncio.CancelledError as _exc:
+                # Graceful shutdown: close the run cleanly (salvaging streamed text)
+                # instead of leaving it orphaned in 'running'.
+                self._fail_interrupted(run_id, session_id, project_id, "Interrupted by server shutdown")
+                raise
+            except asyncio.TimeoutError as _exc:
+                # Abort the agent's turn so it stops working in the background and the
+                # next message isn't "queued for the next turn" against a busy session.
+                # session/cancel is best-effort and a turn wedged inside a blocking
+                # tool call can't process it, so also recycle (kill) the cached agent
+                # process — otherwise the wedged session is reused and every later
+                # message in this project returns "Queued for the next turn".
+                entry = self.active_runs.get(run_id)
+                if entry:
+                    try: entry[0].cancel(entry[1])
+                    except Exception: pass
+                try:
+                    if codex_master:
+                        await self.app.state.acp_manager.recycle(
+                            spec,
+                            hermes_home,
+                            cwd,
+                            master_chat_only=True,
+                        )
+                    else:
+                        await self.app.state.acp_manager.recycle(
+                            spec, hermes_home, cwd
+                        )
+                except Exception:
+                    logging.getLogger("proxima.worker").exception("failed to recycle agent process after timeout")
+                reason = "Hermes runner timed out"
+                with self.app.state.db_lock:
+                    failed = db.execute(
+                        "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
+                        (reason, run_id),
+                    ).rowcount > 0
+                    if not failed:
+                        return
+                    if str(run.get("kind", "")).startswith("message_review"):
+                        self._fail_message_review(run_id, session_id, project_id, reason)
+                        return
+                    if str(run.get("kind", "")).startswith("collab_"):
+                        self._fail_collaboration_run(run_id, session_id, project_id, reason)
+                        return
+                    salvaged = strip_runner_preamble(self._reconstruct_text(run_id))
+                    if salvaged:
+                        db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
+                    # Phase-1 slice 5 (T5): a job turn that hits the quota is resumed,
+                    # not abandoned - a continuation run is enqueued in the SAME
+                    # session (context carries via the persistent ACP session) and,
+                    # for repo jobs, the same worktree (cwd binds to the job). At the
+                    # cap: honest stop - the job fails loudly with a plain-language
+                    # reason and the plan pauses for review, never a silent stall.
+                    outcome = self._continue_after_timeout(run)
+                    if outcome.get("run_id"):
+                        reason = (
+                            f"Hermes runner timed out after {timeout}s - "
+                            f"auto-continuing ({outcome['continuation']}/{outcome['limit']})"
+                        )
+                        db.execute("UPDATE runs SET error = ? WHERE id = ?", (reason, run_id))
+                        self.add_event(run_id, session_id, project_id, "run.failed", {
+                            "error": reason,
+                            "continued_by_run_id": outcome["run_id"],
+                            "continuation": outcome["continuation"],
+                            "continuation_limit": outcome["limit"],
+                        })
+                        return  # the job stays running; the continuation picks the work up
+                    if outcome.get("capped"):
+                        reason = (
+                            f"Stopped: this job kept hitting the {timeout}s turn limit and has used "
+                            f"all {outcome['limit']} automatic continuations. The work done so far is "
+                            "saved (conversation context and file changes persist). Review the job, "
+                            "then split it into smaller jobs or raise the turn quota in Settings "
+                            "and restart it."
+                        )
+                        db.execute("UPDATE runs SET error = ? WHERE id = ?", (reason, run_id))
+                    self.add_event(run_id, session_id, project_id, "run.failed", {"error": reason})
+                self._fail_job(session_id, reason, run_id)
                 if outcome.get("capped"):
-                    reason = (
-                        f"Stopped: this job kept hitting the {timeout}s turn limit and has used "
-                        f"all {outcome['limit']} automatic continuations. The work done so far is "
-                        "saved (conversation context and file changes persist). Review the job, "
-                        "then split it into smaller jobs or raise the turn quota in Settings "
-                        "and restart it."
-                    )
-                    db.execute("UPDATE runs SET error = ? WHERE id = ?", (reason, run_id))
-                self.add_event(run_id, session_id, project_id, "run.failed", {"error": reason})
-            self._fail_job(session_id, reason, run_id)
-            if outcome.get("capped"):
-                # Slice 12 (T10 'confused' rung): the honest stop above is also a
-                # satpam escalation record, so the cap surfaces as an owner-facing
-                # card, not just a failed run. Fail-quiet inside.
-                self.satpam.record_cap_escalation(run, _as_int(outcome["limit"]), _as_int(timeout))
-        except Exception as exc:
-            detail = format_rpc_error(str(exc)[-2000:])
-            self._fail_run_exception(run, detail)
+                    # Slice 12 (T10 'confused' rung): the honest stop above is also a
+                    # satpam escalation record, so the cap surfaces as an owner-facing
+                    # card, not just a failed run. Fail-quiet inside.
+                    self.satpam.record_cap_escalation(run, _as_int(outcome["limit"]), _as_int(timeout))
+            except Exception as exc:
+                detail = format_rpc_error(str(exc)[-2000:])
+                self._fail_run_exception(run, detail)
         finally:
             recycle_verified = True
             recycle_tree = None

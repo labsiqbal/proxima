@@ -4,6 +4,10 @@ import asyncio
 
 from fastapi.testclient import TestClient
 
+from proxima_api.container_activity import (
+    ContainerBoundaryError,
+    acquire_container_activity_lease,
+)
 from proxima_api.main import create_app
 
 
@@ -39,10 +43,10 @@ class FakeAcpManager:
         self.behavior = behavior
         self.recycled: list[tuple] = []
 
-    async def get(self, spec=None, home=None, cwd=None):
+    async def get(self, spec=None, home=None, cwd=None, **_kwargs):
         return FakeAcpProcess(self.behavior)
 
-    async def recycle(self, spec=None, home=None, cwd=None):
+    async def recycle(self, spec=None, home=None, cwd=None, **_kwargs):
         self.recycled.append((home, cwd))
 
     async def shutdown(self):
@@ -181,6 +185,334 @@ def test_setup_failure_immediately_fails_claimed_run(tmp_path):
     assert persisted["error"]
     events = c.get(f"/api/sessions/{session['id']}/events", headers=headers).json()["events"]
     assert any(e["type"] == "run.failed" and e["run_id"] == run_id for e in events)
+
+
+def _assert_exclusive_quiescence_available(app, project_id: int) -> None:
+    """Setup failures must not leave a stuck shared activity lease."""
+    lease = acquire_container_activity_lease(
+        app.state.db,
+        int(project_id),
+        shared=False,
+        timeout=0.5,
+    )
+    try:
+        assert lease is not None
+    finally:
+        lease.release()
+
+
+def _project_session_run(
+    tmp_path,
+    *,
+    slug: str = "lease-setup",
+    message: str = "hi",
+):
+    app = create_app({
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "ws"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+        "feature_repo_worktrees": True,
+    })
+    app.state.acp_manager = FakeAcpManager("stream")
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    created = client.post(
+        "/api/projects",
+        headers=headers,
+        json={"slug": slug, "name": slug.title()},
+    )
+    assert created.status_code == 201, created.text
+    project_id = int(
+        app.state.db.execute(
+            "SELECT id FROM projects WHERE slug = ?",
+            (slug,),
+        ).fetchone()["id"]
+    )
+    session = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": slug, "project_slug": slug},
+    ).json()
+    run_id = client.post(
+        f"/api/sessions/{session['id']}/runs",
+        headers=headers,
+        json={"message": message},
+    ).json()["run_id"]
+    run = app.state.worker.claim_run()
+    assert run and run["id"] == run_id
+    return app, client, headers, project_id, run
+
+
+def test_setup_failure_releases_project_activity_lease(tmp_path):
+    """Broken project path after lease acquire must not block quiescence."""
+    app = create_app({
+        "database_path": str(tmp_path / "proxima.db"),
+        "workspace_root": str(tmp_path / "ws"),
+        "projectctl_path": "/usr/bin/true",
+        "start_worker": False,
+    })
+    c = TestClient(app)
+    token = c.post("/auth/auto").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    created = c.post(
+        "/api/projects",
+        headers=headers,
+        json={"slug": "lease-broken", "name": "Lease Broken"},
+    )
+    assert created.status_code == 201, created.text
+    project_id = int(
+        app.state.db.execute(
+            "SELECT id FROM projects WHERE slug = 'lease-broken'"
+        ).fetchone()["id"]
+    )
+    not_a_directory = tmp_path / "project-is-a-file"
+    not_a_directory.write_text("not a directory", encoding="utf-8")
+    app.state.db.execute(
+        "UPDATE projects SET path = ? WHERE id = ?",
+        (str(not_a_directory), project_id),
+    )
+    session = c.post(
+        "/api/sessions",
+        headers=headers,
+        json={"title": "lease setup", "project_slug": "lease-broken"},
+    ).json()
+    run_id = c.post(
+        f"/api/sessions/{session['id']}/runs",
+        headers=headers,
+        json={"message": "hi"},
+    ).json()["run_id"]
+    run = app.state.worker.claim_run()
+    assert run and run["id"] == run_id
+
+    asyncio.run(app.state.worker.execute_run(run))
+
+    persisted = c.get(f"/api/runs/{run_id}", headers=headers).json()
+    assert persisted["status"] == "failed"
+    _assert_exclusive_quiescence_available(app, project_id)
+
+
+def test_missing_worktree_setup_releases_activity_lease(tmp_path):
+    app, client, headers, project_id, run = _project_session_run(
+        tmp_path,
+        slug="missing-wt",
+    )
+    db = app.state.db
+    owner = db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
+    job_id = db.execute(
+        "INSERT INTO jobs(project_id, session_id, title, status, input, steps_state, "
+        "engine, created_by) VALUES (?, ?, 'wt job', 'running', '{}', '[]', 'linear', ?)",
+        (project_id, run["session_id"], owner),
+    ).lastrowid
+    db.execute(
+        "UPDATE sessions SET job_id = ? WHERE id = ?",
+        (job_id, run["session_id"]),
+    )
+    missing = tmp_path / "gone-worktree"
+    db.execute(
+        "INSERT INTO job_worktrees(job_id, repo_path, worktree_path, branch, "
+        "base_branch, base_commit, status) VALUES (?, ?, ?, 'b', 'main', 'abc', 'active')",
+        (job_id, str(tmp_path / "repo"), str(missing)),
+    )
+
+    asyncio.run(app.state.worker.execute_run(run))
+
+    persisted = client.get(f"/api/runs/{run['id']}", headers=headers).json()
+    assert persisted["status"] == "failed"
+    assert "worktree missing" in (persisted.get("error") or "")
+    _assert_exclusive_quiescence_available(app, project_id)
+
+
+def test_ops_root_setup_failure_releases_activity_lease(tmp_path, monkeypatch):
+    import proxima_api.worker as worker_mod
+
+    def boom_ops_root(*_args, **_kwargs):
+        raise RuntimeError("ops_root exploded")
+
+    monkeypatch.setattr(worker_mod, "ops_root", boom_ops_root)
+    app, client, headers, project_id, run = _project_session_run(
+        tmp_path,
+        slug="ops-boom",
+    )
+
+    asyncio.run(app.state.worker.execute_run(run))
+
+    persisted = client.get(f"/api/runs/{run['id']}", headers=headers).json()
+    assert persisted["status"] == "failed"
+    assert "ops_root exploded" in (persisted.get("error") or "")
+    _assert_exclusive_quiescence_available(app, project_id)
+
+
+def test_mkdir_setup_failure_releases_activity_lease(tmp_path, monkeypatch):
+    import proxima_api.worker as worker_mod
+
+    app, client, headers, project_id, run = _project_session_run(
+        tmp_path,
+        slug="mkdir-boom",
+    )
+    original_mkdir = worker_mod.Path.mkdir
+
+    def boom_mkdir(self, *args, **kwargs):
+        raise OSError("mkdir refused")
+
+    monkeypatch.setattr(worker_mod.Path, "mkdir", boom_mkdir)
+    try:
+        asyncio.run(app.state.worker.execute_run(run))
+    finally:
+        monkeypatch.setattr(worker_mod.Path, "mkdir", original_mkdir)
+
+    persisted = client.get(f"/api/runs/{run['id']}", headers=headers).json()
+    assert persisted["status"] == "failed"
+    assert "mkdir refused" in (persisted.get("error") or "")
+    _assert_exclusive_quiescence_available(app, project_id)
+
+
+def test_snapshot_setup_failure_releases_activity_lease(tmp_path, monkeypatch):
+    import proxima_api.worker as worker_mod
+
+    def boom_snapshot(*_args, **_kwargs):
+        raise RuntimeError("snapshot refused")
+
+    monkeypatch.setattr(
+        worker_mod.turn_restore,
+        "capture_snapshot",
+        boom_snapshot,
+    )
+    app, client, headers, project_id, run = _project_session_run(
+        tmp_path,
+        slug="snap-boom",
+    )
+
+    asyncio.run(app.state.worker.execute_run(run))
+
+    persisted = client.get(f"/api/runs/{run['id']}", headers=headers).json()
+    assert persisted["status"] == "failed"
+    assert "snapshot refused" in (persisted.get("error") or "")
+    _assert_exclusive_quiescence_available(app, project_id)
+
+
+def test_pre_start_exception_releases_activity_lease(tmp_path, monkeypatch):
+    """Exceptions after setup but before writer start still release the lease."""
+    app, client, headers, project_id, run = _project_session_run(
+        tmp_path,
+        slug="pre-start",
+    )
+
+    async def boom_refresh(*_args, **_kwargs):
+        raise RuntimeError("credentials refresh failed")
+
+    monkeypatch.setattr(
+        app.state.worker.prompting,
+        "refresh_credentials_if_needed",
+        boom_refresh,
+    )
+
+    asyncio.run(app.state.worker.execute_run(run))
+
+    persisted = client.get(f"/api/runs/{run['id']}", headers=headers).json()
+    assert persisted["status"] == "failed"
+    assert "credentials refresh failed" in (persisted.get("error") or "")
+    _assert_exclusive_quiescence_available(app, project_id)
+
+
+def test_post_start_exception_releases_when_not_retained(tmp_path):
+    app, client, headers, project_id, run = _project_session_run(
+        tmp_path,
+        slug="post-start",
+    )
+    app.state.acp_manager = FakeAcpManager("fail")
+
+    asyncio.run(app.state.worker.execute_run(run))
+
+    persisted = client.get(f"/api/runs/{run['id']}", headers=headers).json()
+    assert persisted["status"] == "failed"
+    _assert_exclusive_quiescence_available(app, project_id)
+
+
+def test_ownership_transfer_keeps_activity_lease_blocker(tmp_path, monkeypatch):
+    """When the lease is transferred to a writer-tree monitor, do not release."""
+    app, client, headers, project_id, run = _project_session_run(
+        tmp_path,
+        slug="transfer",
+    )
+
+    class RetainingManager(FakeAcpManager):
+        def __init__(self):
+            super().__init__("fail")
+            self.lease = None
+            self.supports_activity_guardian = True
+
+        async def get(self, spec=None, home=None, cwd=None, **kwargs):
+            lease = kwargs.get("activity_lease")
+            self.lease = lease
+            if lease is not None:
+                lease._retained_for_writer_tree = True
+            raise RuntimeError("start failed after transfer")
+
+    mgr = RetainingManager()
+    app.state.acp_manager = mgr
+
+    asyncio.run(app.state.worker.execute_run(run))
+
+    assert mgr.lease is not None
+    assert getattr(mgr.lease, "_retained_for_writer_tree", False) is True
+    assert getattr(mgr.lease, "_released", False) is False
+
+    blocked = False
+    try:
+        exclusive = acquire_container_activity_lease(
+            app.state.db,
+            int(project_id),
+            shared=False,
+            timeout=0.2,
+        )
+    except ContainerBoundaryError:
+        blocked = True
+    else:
+        exclusive.release()
+    assert blocked, "transferred lease must keep exclusive quiescence blocked"
+
+
+def test_activity_lease_cleanup_is_idempotent_after_setup_failure(
+    tmp_path,
+    monkeypatch,
+):
+    import proxima_api.worker as worker_mod
+
+    releases: list[str] = []
+    real_acquire = worker_mod.acquire_container_activity_lease
+
+    def tracking_acquire(*args, **kwargs):
+        lease = real_acquire(*args, **kwargs)
+        original_release = lease.release
+
+        def tracked_release():
+            releases.append("release")
+            return original_release()
+
+        lease.release = tracked_release  # type: ignore[method-assign]
+        return lease
+
+    monkeypatch.setattr(
+        worker_mod,
+        "acquire_container_activity_lease",
+        tracking_acquire,
+    )
+    monkeypatch.setattr(
+        worker_mod.turn_restore,
+        "capture_snapshot",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("snap")),
+    )
+    app, client, headers, project_id, run = _project_session_run(
+        tmp_path,
+        slug="idempotent",
+    )
+
+    asyncio.run(app.state.worker.execute_run(run))
+    # A second execute_run on a fresh claim must not find a stuck lease.
+    _assert_exclusive_quiescence_available(app, project_id)
+    assert releases == ["release"]
 
 
 def test_timed_out_run_recycles_agent_process(tmp_path):
