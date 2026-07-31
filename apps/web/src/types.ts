@@ -436,6 +436,7 @@ export type GraphJob = {
 	id: number;
 	project_id?: number | null;
 	project_slug?: string | null;
+	project_name?: string | null;
 	workflow_id?: number | null;
 	session_id: number;
 	title: string;
@@ -495,6 +496,7 @@ export type Job = {
 	id: number;
 	project_id: number | null;
 	project_slug?: string | null;
+	project_name?: string | null;
 	workflow_id: number | null;
 	session_id: number;
 	origin_master_session_id?: number | null;

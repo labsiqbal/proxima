@@ -1,11 +1,10 @@
 import React from 'react'
 import { useMasterState } from '../../master/MasterStateProvider'
-
-function containerLabel(name: string, identityLabel: string | null): string {
-  return identityLabel && identityLabel !== name
-    ? `${identityLabel} (${name})`
-    : name
-}
+import {
+  areaDisplayLabel,
+  projectOptionLabel,
+  projectSecondaryContext,
+} from './projectContext'
 
 export function MasterFocusPicker() {
   const { focus, fleet, actions } = useMasterState()
@@ -31,7 +30,7 @@ export function MasterFocusPicker() {
           <option value="">Fleet</option>
           {fleet.containers.map(container => (
             <option value={container.id} key={container.id}>
-              {containerLabel(container.name, container.identity_label)}
+              {projectOptionLabel(container)}
             </option>
           ))}
         </select>
@@ -50,8 +49,8 @@ export function MasterPendingFocus() {
   return (
     <small className="master-focus-pending" role="status">
       Pending Focus: {pendingContainer
-        ? containerLabel(pendingContainer.name, pendingContainer.identity_label)
-        : desk.focus.pending_container_id == null ? 'Fleet' : 'another Container'}
+        ? projectOptionLabel(pendingContainer)
+        : desk.focus.pending_container_id == null ? 'Fleet' : 'another Project'}
       . Applies after this turn.
     </small>
   )
@@ -113,12 +112,12 @@ export function MasterHistoryPicker() {
         <option value="fleet">Fleet history</option>
         {fleet.containers.map(container => (
           <option value={`container:${container.id}`} key={container.id}>
-            {containerLabel(container.name, container.identity_label)}
+            {projectOptionLabel(container)}
           </option>
         ))}
         {unavailableIds.map(containerId => (
           <option value={`container:${containerId}`} key={`unavailable:${containerId}`}>
-            Unavailable Container #{containerId}
+            Unavailable Project #{containerId}
           </option>
         ))}
       </select>
@@ -171,7 +170,7 @@ export function MasterTargetPicker() {
           <option value="">Let Master route</option>
           {fleet.containers.map(container => (
             <option value={container.id} key={container.id}>
-              {containerLabel(container.name, container.identity_label)}
+              {projectOptionLabel(container)}
             </option>
           ))}
         </select>
@@ -211,7 +210,13 @@ export function MasterTargetPicker() {
       )}
       {changesFocus && selectedContainer && (
         <p className="master-target-warning" role="status">
-          Sending will Focus Master on {selectedContainer.identity_label || selectedContainer.name}
+          <strong>Sending will Focus Master on {selectedContainer.name}</strong>
+          <span>
+            {projectSecondaryContext(
+              selectedContainer,
+              areaDisplayLabel(areas, target.areaId),
+            )}
+          </span>
         </p>
       )}
       {fleet.error && (

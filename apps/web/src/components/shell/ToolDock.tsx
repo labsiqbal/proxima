@@ -22,9 +22,10 @@ function PaneFallback({ label }: { label: string }) {
   return <p className="muted tool-pane-hint">{label}</p>
 }
 
-export function ToolDock({ token, project, onOpenSettings, onOpenChange }: {
+export function ToolDock({ token, project, available = true, onOpenSettings, onOpenChange }: {
   token: string
   project: Project | null
+  available?: boolean
   onOpenSettings: () => void
   onOpenChange?: (open: boolean) => void
 }) {
@@ -43,6 +44,9 @@ export function ToolDock({ token, project, onOpenSettings, onOpenChange }: {
     window.addEventListener('keydown', dismiss)
     return () => window.removeEventListener('keydown', dismiss)
   }, [open])
+  React.useEffect(() => {
+    if (!available) setOpen(null)
+  }, [available])
 
   // Tell the shell a tool panel is open so main content can reserve space for
   // it. Without this the overlay covers right-edge primary actions (e.g.
@@ -64,12 +68,13 @@ export function ToolDock({ token, project, onOpenSettings, onOpenChange }: {
   const [revealPath, setRevealPath] = React.useState<string | null>(null)
   React.useEffect(() => {
     const onReveal = (event: Event) => {
+      if (!available) return
       const path = (event as CustomEvent).detail?.path
       if (typeof path === 'string') { setRevealPath(path); setOpen('files') }
     }
     window.addEventListener('proxima:reveal-file', onReveal)
     return () => window.removeEventListener('proxima:reveal-file', onReveal)
-  }, [])
+  }, [available])
 
   const slug = project?.slug
   const fs = React.useMemo(() => (slug ? projectFs(token, slug) : null), [token, slug])
@@ -92,12 +97,12 @@ export function ToolDock({ token, project, onOpenSettings, onOpenChange }: {
   )
 
   return <>
-    <aside className="tool-rail" aria-label="Tools">
+    <aside className="tool-rail" aria-label="Tools" hidden={!available}>
       {TOOLS.map(tool => toolButton(tool, 'rail'))}
       <span className="tool-rail-sep" aria-hidden="true" />
       <button className="tool-rail-btn tool-rail-gear" title="Settings" aria-label="Settings" onClick={onOpenSettings}><IconGear size={17} /></button>
     </aside>
-    <div className={`tool-panel ${open ? 'open' : ''}`} aria-label="Tool panel" aria-hidden={!open}>
+    <div className={`tool-panel ${open ? 'open' : ''}`} aria-label="Tool panel" aria-hidden={!open || !available} hidden={!available}>
       <div className="tool-panel-head">
         <div className="tool-panel-tabs">{TOOLS.map(tool => toolButton(tool, 'tab'))}</div>
         <button className="icon-button" onClick={() => setOpen(null)} aria-label="Close tool panel"><IconClose size={16} /></button>

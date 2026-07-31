@@ -46,7 +46,8 @@ the shared, persisted sidebar panel but replaces Work navigation with **Master**
 **Tasks**, and **Archive**. Those destinations are global: they do not show a project
 switcher, recent chat history, project filter menu, account controls, ordinary Work Chat,
 Workflows, Design, search, tool rail, or popup. Tasks and Archive query across projects;
-their task and record deep links remain usable without leaving Delegate. Switching back
+their rows and cards visibly and accessibly name the owning Project, and their task
+and record deep links remain usable without leaving Delegate. Switching back
 restores the prior Work surface. Its header identifies
 the built-in system orchestrator and lets the owner choose a server-qualified backing runner; the desk
 itself keeps the counterpart label **Master** and does not expose a fake worker profile.
@@ -95,6 +96,10 @@ available Fleet or Container folder explicitly requests that Focus; Roving and
 unavailable historical folders are read-only. **Focus Master here** is the only
 bridge from the shell Container into Master Focus.
 
+Owner-facing target copy says **Project**. Picker options, the send warning, sent
+message metadata, and popup chrome lead with the unique Project name; identity and
+Area remain secondary context.
+
 Master product-tool outcomes appear as concise, collapsed **Master update**
 disclosures. The visible line is a human-readable success, failure, or in-progress
 summary; opening it exposes linked Tasks, error context, and the bounded raw payload
@@ -118,6 +123,18 @@ remain readable on the desk. Satpam, not Master, owns stuck-job steer/restart.
 ## Tasks
 
 Tasks is the durable execution/review index for queued, running, review, done, failed, and archived work — plans and one-off tasks together. Plan rows expand into their ordered job list; branching plans also offer the List↔Graph projection toggle. A repo job (one that worked in an isolated copy of a code area) reviews its **Changes** in place — inside a plan row's expanding body, or on the full-width task page — with approve-and-merge and reject-with-reason as the two verdict doors; per T4 there is no right panel and no popup, and the copy stays jargon-free.
+
+Delegate's global List, Board, and Review modes show **Project: name** on every Task
+and plan and include it in each row or card's accessible name. Work's scoped Tasks
+view does not repeat the active Project. Opening a cross-Project Task from Attention or another in-app deep link
+keeps the current Work selection, shows and locks the Task Project and Area in a
+prominent banner, states which Project Work remains on, and gives desktop chrome a
+visible **Back to Tasks** (or matching origin) label.
+
+Reloading a `#task/<id>` permalink first resolves the Task and its owning Project
+behind a dedicated loading state, then atomically selects and locks that Project.
+The shell does not expose Terminal, Files, or Preview until Task ownership and the
+active Project are synchronized. The Task banner always names the Project and Area.
 
 The **New task** launcher lives behind the Tasks screen's `+ New task` button (it is no longer a nav destination of its own). It is a focused launcher with no destination dashboard grid. Its integrated Task Composer splits into two rows by kind. The prompt row carries only *actions*: the Add menu for attachments/image/design, and the start action. A context bar underneath groups the three controls that describe a task's **execution context** — a searchable Project/folder picker (where it runs), Agent (who runs it), and Guarded or Autonomous execution policy (how it is governed). Each context control carries a leading icon inside its own click target and all three share one type scale, so the bar reads as one row of peers rather than three unrelated widgets. `/image` and feature-gated `/design` create real media runs that are linked back to the durable task lifecycle. A created task opens `#task/<id>` with live progress, review, approval, and deliverables. Ordinary start failures clean up the queued task; media link failures preserve and identify the task for inspection.
 
@@ -159,7 +176,11 @@ Every schedule row offers **Run now**, which fires it immediately and opens the 
 
 ## Right tool rail — Terminal, Files, Preview
 
-Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, in any context, scoped to the active project:
+Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, scoped to the active project when Project context is available:
+
+During Task permalink resolution and any cross-Project Task mismatch, the entire rail
+and panel are suppressed. They return only after the Task owning Project and active
+Project agree, preventing Files or Preview from presenting stale Work context.
 
 - **Terminal** — the multi-tab PTY terminal. Once opened it stays mounted (hidden when
   the panel closes) so shells survive closing the panel and navigating anywhere.
@@ -186,6 +207,7 @@ chrome owns the action.
 **Deep = project lock:** while a deep surface is open, the header/mobile **Project**
 switcher is disabled (locked). On top-level surfaces the switcher stays enabled and
 changing project **stays on the current view** (refilters content; does not force Chat).
+The enabled desktop Back control includes the origin text, not only an icon.
 
 **Multitask foundation:** primary surfaces must not destroy in-flight UI on leave.
 Once visited, **Chat, Master, Tasks, Workflows, Archive, and Design** stay mounted in
@@ -222,7 +244,12 @@ Attention stays a separate `!` control and remains hidden when empty.
 
 Agents and Settings live in the Work profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The Work top bar owns the brand mark, mode switch, sidebar collapse toggle, search, Running + Attention, and account menu; its sidebar owns the active-project switcher. On mobile that switcher stays in the Work drawer and the mode control remains in the compact header. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 
-Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Archive, Design) keep that contract. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Archive records and Designs remain owned by their Project. Delegate has no project selector or project filter: its Tasks and Archive indices are global, while Master Focus and explicit target controls remain its own bounded context.
+Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Archive, and ordinary Design entry) keep that contract. Opening Design from a Task binds the studio to that Task's owning Project without adopting it as the Work selection, and returning to the Task restamps the in-app preserve-work policy. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Archive records and Designs remain owned by their Project. Delegate has no project selector or project filter: its Tasks and Archive indices are global, while Master Focus and explicit target controls remain its own bounded context.
+
+The Work selection persists per owner across a full browser refresh. Boot validates
+the saved Project before applying it. A missing saved Project falls back to an
+existing private Project and raises a dismissible notice that names the missing and
+replacement Projects instead of silently resetting context.
 
 ## Projects
 

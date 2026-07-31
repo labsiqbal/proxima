@@ -1,5 +1,12 @@
 import React from 'react'
-import type { Job, JobStatus, JobStep } from '../types'
+import type {
+  Container,
+  ContainerAreas,
+  Job,
+  JobStatus,
+  JobStep,
+  Project,
+} from '../types'
 import { getJob, approveJob, deleteJob } from '../api/jobs'
 import { ChangesReview } from '../components/tasks/ChangesReview'
 import { SatpamCard } from '../components/tasks/SatpamCard'
@@ -12,12 +19,57 @@ import { stripQuestionForms } from '../components/chat/questionForm'
 import { usePolling } from '../hooks/usePolling'
 import { useEventStream } from '../hooks/useEventStream'
 import { projectRun } from '../lib/runProjection'
+import {
+  areaDisplayLabel,
+  projectIdentityLabel,
+} from '../components/master/projectContext'
 
 const ART_ICON: Record<string, string> = { design: '🎨', image: '🖼', app: '▶', page: '🌐', doc: '📄', file: '📎' }
 const StatusPill = ({ status }: { status: JobStatus | JobStep['status'] }) => <span className={`job-pill ${status}`}>{status}</span>
 
-export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEnabled = false, onOpenDesign, onOpenFile }: { token: string; jobId: number; onBack: () => void; onChanged?: () => void; designStudioEnabled?: boolean; onOpenDesign?: (id: string) => void; onOpenFile?: (slug: string, path: string) => void }) {
-  const [job, setJob] = React.useState<Job | null>(null)
+type TaskOwningProject = {
+  id?: number
+  slug: string
+  name: string
+  identity_label?: string | null
+}
+
+export function TaskWorkspace({
+  token,
+  jobId,
+  onBack,
+  onChanged,
+  designStudioEnabled = false,
+  onOpenDesign,
+  onOpenFile,
+  projects = [],
+  containers = [],
+  areasByContainer = {},
+  owningProject: owningProjectOverride,
+  selectedWorkProject = null,
+  owningAreaLabel: owningAreaLabelOverride,
+  initialJob = null,
+  onResolved,
+}: {
+  token: string
+  jobId: number
+  onBack: () => void
+  onChanged?: () => void
+  designStudioEnabled?: boolean
+  onOpenDesign?: (id: string, projectSlug?: string | null) => void
+  onOpenFile?: (slug: string, path: string) => void
+  projects?: Project[]
+  containers?: Container[]
+  areasByContainer?: Record<number, ContainerAreas>
+  owningProject?: TaskOwningProject | null
+  selectedWorkProject?: Project | null
+  owningAreaLabel?: string | null
+  initialJob?: Job | null
+  onResolved?: (job: Job) => void
+}) {
+  const [job, setJob] = React.useState<Job | null>(
+    initialJob?.id === jobId ? initialJob : null,
+  )
   const [sel, setSel] = React.useState(0)        // which step node is selected (shown on the right)
   const [edited, setEdited] = React.useState('')
   const [error, setError] = React.useState('')
@@ -48,14 +100,18 @@ export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEna
   React.useEffect(() => {
     loadSeq.current += 1
     actionSeq.current += 1
-    setJob(null)
+    setJob(initialJob?.id === jobId ? initialJob : null)
     setSel(0)
     setEdited('')
     setError('')
     setBusyAction(null)
     seeded.current = null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId])
   React.useEffect(() => { void load() }, [load])
+  React.useEffect(() => {
+    if (job) onResolved?.(job)
+  }, [job, onResolved])
 
   // Every external Task mutation publishes one durable job.update event to
   // this Task's session. Running polling remains a liveness fallback for
@@ -118,13 +174,64 @@ export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEna
   // Chrome Back in the shell owns return-to-origin; no in-page Back control here.
   if (!job) return <div className="job-detail"><div className="task-detail-head"><span className="muted">Task</span></div>{error ? <div className="error-bar">{error}</div> : <p className="muted task-workspace-state">Loading…</p>}</div>
 
+  const projectFromList = projects.find(project => project.slug === job.project_slug)
+  const owningProject = owningProjectOverride || projectFromList || (
+    job.project_slug
+      ? { slug: job.project_slug, name: job.project_name || job.project_slug }
+      : null
+  )
+  const owningContainer = containers.find(container =>
+    container.id === job.delegation?.container_id
+    || container.slug === job.project_slug)
+  const owningAreaLabel = owningAreaLabelOverride || (
+    job.delegation
+      ? areaDisplayLabel(
+          areasByContainer[job.delegation.container_id],
+          job.delegation.target_area_id,
+        )
+      : 'Project default'
+  )
+  const owningIdentityLabel = owningProject && 'identity_label' in owningProject
+    ? owningProject.identity_label
+    : null
+  const identityLabel = projectIdentityLabel(
+    owningContainer || (
+      owningIdentityLabel
+        ? {
+            name: owningProject?.name || 'Project unavailable',
+            identity_label: owningIdentityLabel,
+          }
+        : null
+    ),
+  )
+  const workSelectionDiffers = !!selectedWorkProject
+    && selectedWorkProject.slug !== owningProject?.slug
+  const ownershipContext = (
+    <section className="task-project-context" role="region" aria-label="Task Project">
+      <div>
+        <span className="eyebrow">Task Project</span>
+        <strong>{owningProject?.name || 'Project unavailable'}</strong>
+        <small>
+          {[identityLabel, `Area: ${owningAreaLabel}`].filter(Boolean).join(' · ')}
+        </small>
+      </div>
+      <div className="task-project-lock">
+        <strong>Project locked to this Task</strong>
+        {workSelectionDiffers && (
+          <small>Work remains {selectedWorkProject.name}</small>
+        )}
+      </div>
+    </section>
+  )
+
   const steps = job.steps_state
   const projectedStatus = projectRun(job).status
-  if (!steps.length) return <div className="job-detail"><div className="task-detail-head"><strong className="task-title">{job.title}</strong><StatusPill status={projectedStatus} /></div><p className="muted task-workspace-state">This task has no steps.</p></div>
+  if (!steps.length) return <div className="job-detail">{ownershipContext}<div className="task-detail-head"><strong className="task-title">{job.title}</strong><StatusPill status={projectedStatus} /></div><p className="muted task-workspace-state">This task has no steps.</p></div>
   const cur = steps[Math.min(sel, steps.length - 1)]
   const onReviewStep = isMidGate && sel === job.current_step_idx
 
   return <div className="job-detail">
+    {ownershipContext}
     <div className="task-detail-head">
       <strong className="task-title" title={job.title}>{job.title}</strong>
       <StatusPill status={projectedStatus} />
@@ -193,7 +300,7 @@ export function TaskWorkspace({ token, jobId, onBack, onChanged, designStudioEna
             : (cur.produced_designs || []).map(d => ({ type: 'design' as const, id: d.id, title: d.title, path: '' }))
           if (!list.length) return null
           const open = (a: Artifact) => a.type === 'design' && designStudioEnabled
-            ? onOpenDesign?.(a.id || '')
+            ? onOpenDesign?.(a.id || '', job?.project_slug)
             : (job?.project_slug && a.path && onOpenFile?.(job.project_slug, a.type === 'design' ? `${a.path.replace(/\/$/, '')}/scene.json` : a.path))
           return <div className="jfd-artifacts">
             {list.map(a => <button key={a.path || a.id} className="artifact-chip" onClick={() => open(a)} disabled={a.type === 'design' && !designStudioEnabled && !a.path} title={`Open ${a.title}`}>

@@ -238,7 +238,7 @@ export function MasterWorkPanel({
                         <span>
                           <strong>{job.title}</strong>
                           <small>
-                            {job.project_name || job.project_slug || 'Container unavailable'}
+                            {job.project_name || job.project_slug || 'Project unavailable'}
                             {' · '}
                             {displayStatus(job.desk_status)}
                           </small>

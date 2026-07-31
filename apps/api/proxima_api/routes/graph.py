@@ -196,9 +196,10 @@ def register(app, deps):
             payload["satpam"] = satpam_rows
         if payload.get("project_id"):
             project = db().execute(
-                "SELECT slug FROM projects WHERE id = ?", (payload["project_id"],)
+                "SELECT slug, name FROM projects WHERE id = ?", (payload["project_id"],)
             ).fetchone()
             payload["project_slug"] = project["slug"] if project else None
+            payload["project_name"] = project["name"] if project else None
         return canonical_job_payload(payload, connection=db())
 
     def graph_template_payload(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:

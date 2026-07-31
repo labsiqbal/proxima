@@ -38,11 +38,11 @@ describe('Master empty surface', () => {
     const chip = screen.getByRole('button', { name: 'Audit and fix' })
     expect(chip).toHaveAttribute(
       'title',
-      'Audit this Container and delegate independent fixes.',
+      'Audit this Project and delegate independent fixes.',
     )
     await userEvent.setup().click(chip)
     expect(seedDraft).toHaveBeenCalledWith(
-      'Audit this Container and delegate independent fixes.',
+      'Audit this Project and delegate independent fixes.',
     )
   })
 

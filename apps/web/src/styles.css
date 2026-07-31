@@ -270,6 +270,9 @@ button:disabled {
 .app-shell.delegate-mode > .main-pane {
 	grid-column: 2;
 }
+.app-shell.project-tools-suppressed {
+	grid-template-columns: var(--left-w) minmax(0, 1fr);
+}
 .sidebar {
 	min-width: 0;
 	border-right: 1px solid var(--ui-stroke-secondary);
@@ -3480,6 +3483,16 @@ button:disabled {
 .chrome-back-btn:disabled {
 	opacity: 0.3;
 }
+.top-bar > .chrome-back-btn:not(:disabled) {
+	display: inline-flex;
+	gap: var(--space-1);
+	width: auto;
+	padding-inline: var(--space-2);
+}
+.chrome-back-label {
+	font-size: var(--text-xs);
+	white-space: nowrap;
+}
 /* Multitask keep-alive panes: stay mounted, leave the layout when inactive. */
 .surface-pane {
 	display: flex;
@@ -3527,6 +3540,10 @@ button:disabled {
 	padding: var(--space-3) 0;
 	border-left: 1px solid var(--ui-stroke-secondary);
 	background: var(--ui-bg-sidebar);
+}
+.tool-rail[hidden],
+.tool-panel[hidden] {
+	display: none !important;
 }
 .tool-rail-btn {
 	display: inline-grid;
@@ -14051,11 +14068,52 @@ button.moodboard-add-method:hover {
 .task-composer-error { margin: var(--space-2) 0 0; color: var(--ui-danger); font-size: var(--text-sm); }
 .task-workspace-view { min-height: 0; }
 .task-workspace-state { padding: var(--space-4); }
+.task-project-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--ui-stroke-primary);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  background: var(--ui-warning-bg);
+}
+.task-project-context > div { display: grid; gap: var(--space-1); min-width: 0; }
+.task-project-context strong { color: var(--ui-text-primary); }
+.task-project-context small { color: var(--ui-text-secondary); font-size: var(--text-xs); }
+.task-project-lock { text-align: right; }
+.task-project-lock strong { font-size: var(--text-xs); }
+.project-fallback-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: var(--space-3) var(--space-4) 0;
+  border: 1px solid var(--ui-stroke-primary);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  background: var(--ui-warning-bg);
+  color: var(--ui-warning-text);
+  font-size: var(--text-sm);
+}
+.project-fallback-notice .text-button { color: inherit; }
+.task-project-tag {
+  display: block;
+  overflow: hidden;
+  margin-top: var(--space-1);
+  color: var(--ui-text-secondary);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 @media (max-width: 767px) {
   .ops-view { padding: var(--space-4); }
   .ops-launcher-inner { padding-top: var(--space-6); }
   .task-context-bar { align-items: stretch; flex-direction: column; }
   .task-project-picker, .task-context-trigger, .task-policy-control { width: 100%; max-width: none; }
+  .task-project-context { align-items: flex-start; flex-direction: column; }
+  .task-project-lock { text-align: left; }
   .ops-attention-all { display: none; }
 }
 
@@ -14392,6 +14450,9 @@ button.moodboard-add-method:hover {
 	line-height: 1.45;
 }
 .master-target-warning { color: var(--ui-warning-text); }
+.master-target-warning strong,
+.master-target-warning span { display: block; }
+.master-target-warning span { color: var(--ui-text-secondary); }
 .master-target-error { color: var(--ui-danger-text); }
 .master-focus-control { display: grid; gap: var(--space-1); }
 .master-focus-pending {
@@ -14640,6 +14701,14 @@ button.moodboard-add-method:hover {
 .master-popup-head strong,
 .master-popup-head small { display: block; }
 .master-popup-head strong { font-size: var(--text-sm); }
+.master-popup-head .master-popup-project {
+	display: block;
+	overflow: hidden;
+	color: var(--ui-text-primary);
+	font-size: var(--text-xs);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 .master-popup-head small {
 	overflow: hidden;
 	color: var(--ui-text-secondary);
@@ -14909,6 +14978,7 @@ button.moodboard-add-method:hover {
 	.mobile-context .shell-mode-switch { max-width: 100%; }
 	.delegate-mobile-topbar { justify-content: center; }
 	.app-shell.delegate-mode .main-pane { padding-right: 0; }
+	.app-shell.project-tools-suppressed .main-pane { padding-right: 0; }
 	.master-body { padding: var(--space-3); }
 	.master-head.master-head {
 		position: relative;

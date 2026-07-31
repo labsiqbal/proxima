@@ -2,6 +2,10 @@ import React from 'react'
 import { MessageContent } from '../chat/MessageContent'
 import { CompactTeachingEmpty } from '../ui/CompactTeachingEmpty'
 import { useMasterState, type MasterViewMessage } from '../../master/MasterStateProvider'
+import {
+  areaDisplayLabel,
+  projectIdentityLabel,
+} from './projectContext'
 
 const cleanMaster = (text: string) =>
   text.replace(/<proxima-tool>\s*\{[\s\S]*?\}\s*<\/proxima-tool>/g, '').trim()
@@ -58,14 +62,14 @@ function toolResultLabel(tool: MasterToolResult, jobs: MasterJobResult[]) {
     return `Started ${jobs.length} Task${jobs.length === 1 ? '' : 's'}`
   }
   return ({
-    list_containers: 'Containers loaded',
-    get_container: 'Container checked',
+    list_containers: 'Projects loaded',
+    get_container: 'Project checked',
     get_live_state: 'Live state checked',
     list_tasks: 'Work queue checked',
     list_task_agents: 'Task agents loaded',
     list_recipes: 'Recipes loaded',
     create_attention: 'Decision added to Attention',
-    list_projects: 'Containers loaded',
+    list_projects: 'Projects loaded',
     list_jobs: 'Work queue checked',
     list_worker_agents: 'Task agents loaded',
     list_plans: 'Recipes loaded',
@@ -143,7 +147,7 @@ export function MasterEmpty() {
   const examples = [
     {
       label: 'Audit and fix',
-      prompt: 'Audit this Container and delegate independent fixes.',
+      prompt: 'Audit this Project and delegate independent fixes.',
     },
     {
       label: 'Split the release',
@@ -313,32 +317,37 @@ export function MasterConversation({
         const focusContainer = fleet.containers.find(
           container => container.id === metadata?.focus_container_id,
         )
+        const targetAreaLabel = areaDisplayLabel(
+          targetContainer
+            ? fleet.areasByContainer[targetContainer.id]
+            : null,
+          metadata?.target_area_id,
+        )
         const targetLabel = metadata?.target_mode === 'explicit'
           ? [
               'Explicit target',
-              targetContainer?.identity_label
-                || targetContainer?.name
+              targetContainer?.name
                 || (
                   metadata.target_container_id == null
-                    ? 'Unavailable Container'
-                    : `Container #${metadata.target_container_id}`
+                    ? 'Unavailable Project'
+                    : `Project #${metadata.target_container_id}`
                 ),
-              metadata.target_area_id == null
-                ? 'Master chooses Area'
-                : `Area #${metadata.target_area_id}`,
-            ].join(' · ')
+              projectIdentityLabel(targetContainer),
+              `Area: ${targetAreaLabel}`,
+            ].filter(Boolean).join(' · ')
           : metadata?.focus_mode === 'container'
-            ? `Let Master route · within ${
-              focusContainer?.identity_label
-              || focusContainer?.name
-              || (
-                metadata.focus_container_id == null
-                  ? 'Unavailable Container'
-                  : `Container #${metadata.focus_container_id}`
-              )
-            }`
+            ? [
+                'Let Master route',
+                `within ${focusContainer?.name || (
+                  metadata.focus_container_id == null
+                    ? 'Unavailable Project'
+                    : `Project #${metadata.focus_container_id}`
+                )}`,
+                projectIdentityLabel(focusContainer),
+                'Area: Master chooses',
+              ].filter(Boolean).join(' · ')
             : metadata
-              ? 'Let Master route · Fleet'
+              ? 'Let Master route · Fleet · Project and Area chosen by Master'
               : null
         return (
           <article

@@ -25,9 +25,11 @@ vi.mock('./MasterComposer', () => ({
 function PopupHarness({
   pending = false,
   busy = false,
+  targeted = false,
 }: {
   pending?: boolean
   busy?: boolean
+  targeted?: boolean
 }) {
   popupTestState.composerDisabled = busy
   const [popup, setPopup] = React.useState({
@@ -54,11 +56,30 @@ function PopupHarness({
     connection: { state: 'connected' },
     unread: { count: 2 },
     popup,
-    focus: { mode: 'fleet', containerId: null },
+    focus: targeted
+      ? { mode: 'container', containerId: 21 }
+      : { mode: 'fleet', containerId: null },
+    target: targeted
+      ? { mode: 'explicit', containerId: 21, areaId: 210 }
+      : { mode: 'auto', containerId: null, areaId: null },
     fleet: {
-      containers: pending
-        ? [{ id: 21, name: 'Acme', identity_label: 'Acme' }]
+      containers: pending || targeted
+        ? [{
+            id: 21,
+            name: targeted ? 'Beacon release' : 'Acme',
+            identity_label: targeted ? 'General' : 'Acme',
+          }]
         : [],
+      areasByContainer: targeted
+        ? {
+            21: {
+              container_id: 21,
+              container_slug: 'beacon',
+              ops_area: { id: 210, kind: 'ops', rel_path: '.proxima/ops' },
+              code_areas: [],
+            },
+          }
+        : {},
     },
     actions,
   } as never)
@@ -121,6 +142,19 @@ describe('MasterPopup', () => {
 
     expect(screen.getByText('Pending Focus: Acme. Applies after this turn.'))
       .toBeInTheDocument()
+  })
+
+  it('shows the unique target Project first with identity and Area secondary', async () => {
+    const user = userEvent.setup()
+    render(<PopupHarness targeted />)
+
+    await user.click(screen.getByRole('button', { name: 'Open Master popup' }))
+
+    const header = document.querySelector('.master-popup-head')
+    expect(header).toHaveTextContent('Beacon release')
+    expect(header).toHaveTextContent('Identity: General')
+    expect(header).toHaveTextContent('Area: Operations')
+    expect(header?.querySelector('.master-popup-project')).toHaveTextContent('Beacon release')
   })
 
   it('focuses a usable popup action while the composer is disabled', async () => {

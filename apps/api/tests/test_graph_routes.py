@@ -160,6 +160,33 @@ def test_graph_job_api_returns_one_timezone_aware_failed_run_projection(tmp_path
     }
 
 
+def test_graph_job_payload_includes_owning_project_name(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    assert (
+        client.post(
+            "/api/projects", json={"slug": "beacon", "name": "Beacon release"}
+        ).status_code
+        == 201
+    )
+
+    response = client.post(
+        "/api/graph/jobs",
+        json={
+            "title": "Beacon graph",
+            "graph": _chain_graph(),
+            "project_slug": "beacon",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["project_name"] == "Beacon release"
+    listed = client.get("/api/graph/jobs").json()["items"]
+    assert next(item for item in listed if item["id"] == response.json()["id"])[
+        "project_name"
+    ] == "Beacon release"
+
+
 def test_plan_patch_autosaves_graph_and_title_then_keeps_title_renameable(tmp_path):
     app = _app(tmp_path, enabled=True)
     client = _client(app)

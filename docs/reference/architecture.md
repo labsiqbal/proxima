@@ -1025,11 +1025,22 @@ branch-less plans read as a plain list, and branching plans offer the read-only
 dependency canvas as a toggle (the same `GraphCanvas` component the editor uses —
 extracted, not duplicated). Plan rows also carry **Open plan** (to the canvas, where
 review actions live) and **Save as Workflow** (the same save-template mechanics).
+Delegate requests the cross-Project projection and renders each Task or plan with its
+owning Project in both visible metadata and its accessible name. Work requests the
+active Project only and omits that redundant ownership label.
 
 Ad-hoc single-step work is just a 1-step job (old kanban `tasks` were migrated this
 way). Jobs live-poll while running and auto-archive after 30 days. A dependency-blocked
 Task remains queued but carries its durable reason in list/detail payloads and renders
 that reason in `TaskWorkspace`.
+Every Task detail renders the owning Project as the primary identity, with identity
+label and Area as secondary context. In-app Task opens (Attention and other preserve-work
+hash stamps) keep the selected Work Project and lock the deep surface. A full-page
+`#task/<id>` reload instead resolves the Task and Project list before mounting
+`AppShell`, selects the owner in one state transition, and only then exposes the
+Project-bound tool dock. Any mismatch keeps Terminal, Files, and Preview unavailable.
+Task-linked Design resolves through the Task owning Project without rewriting Work
+selection, and the return path restamps preserve-work so ownership stays coherent.
 
 Before a Master worker run is enqueued, `job_checkpoints.create_checkpoint` records
 only that job's restorable columns, node states, existing run ids, and target repository
@@ -1495,7 +1506,7 @@ ProjectSwitcher uses `setActiveProjectOnly` (active project + recent chat sessio
 for coherence) and **stays on the current view**; only intentional open paths
 (Search project pick, etc.) call `selectProject` to open Chat.
 
-`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Master, Tasks, Workflows, Archive, gated Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Master's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
+`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Master, Tasks, Workflows, Archive, gated Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Master's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. The dock accepts an availability boundary from `App`; unavailable Project context closes and hides the entire dock while retaining any already-visited panes for a safe return. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
 
 Design Studio owns a Canvas / Brand Guide / Moodboard section menu. Moodboard reads and
 writes a project-local `artifacts/moodboard/items.json` store through gated routes in

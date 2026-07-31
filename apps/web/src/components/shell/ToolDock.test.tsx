@@ -97,4 +97,31 @@ describe('ToolDock', () => {
     const filesTab = panel.querySelector('.tool-panel-tab.active')
     expect(filesTab?.textContent).toMatch(/Files/)
   })
+
+  it('suppresses Project tools during Task synchronization without unmounting terminals', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(
+      <ToolDock token="t" project={project} available onOpenSettings={vi.fn()} />,
+    )
+    const rail = screen.getByRole('complementary', { name: 'Tools' })
+    await user.click(rail.querySelector('[aria-label="Terminal"]') as HTMLElement)
+    expect(await screen.findByTestId('terminal-stub')).toBeVisible()
+
+    rerender(
+      <ToolDock token="t" project={project} available={false} onOpenSettings={vi.fn()} />,
+    )
+
+    expect(screen.queryByRole('complementary', { name: 'Tools' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('terminal-stub')).not.toBeVisible()
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('proxima:reveal-file', { detail: { path: 'wrong-project.md' } }))
+    })
+    expect(screen.getByLabelText('Tool panel')).toHaveAttribute('aria-hidden', 'true')
+
+    rerender(
+      <ToolDock token="t" project={project} available onOpenSettings={vi.fn()} />,
+    )
+    expect(screen.getByRole('complementary', { name: 'Tools' })).toBeVisible()
+    expect(screen.getByTestId('terminal-stub')).toBeInTheDocument()
+  })
 })
