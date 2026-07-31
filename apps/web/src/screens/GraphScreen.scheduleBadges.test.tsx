@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getGraphJob, listGraphTemplates } from '../api/graph'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getGraphJob, listGraphJobs, listGraphTemplates } from '../api/graph'
 import { listSchedules, runScheduleNow } from '../api/schedules'
 import { GraphScreen } from './GraphScreen'
 
@@ -53,9 +53,44 @@ const project = {
   visibility: 'private' as const,
 }
 
+const screenBase = {
+  token: 't',
+  projects: [project],
+  activeProject: project,
+  onActiveProject: vi.fn(),
+  profiles: [] as never[],
+  profileId: null as number | null,
+  features: { designStudio: false, workflowGraph: true, masterOrchestrator: false },
+  activeProfile: null,
+}
+
+function runningJob(id: number, title: string) {
+  return {
+    id,
+    project_id: 1,
+    project_slug: 'owner-personal',
+    workflow_id: 10,
+    session_id: id,
+    title,
+    status: 'running',
+    input: {},
+    engine: 'graph',
+    graph: {
+      nodes: [{ id: 'only', type: 'agent', name: 'Only', instruction: 'Work', output_kind: 'text' }],
+      edges: [],
+    },
+    node_states: [],
+  } as never
+}
+
 describe('GraphScreen how-it-runs badges', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [] })
     vi.mocked(listGraphTemplates).mockResolvedValue({
       items: [
         {
@@ -301,21 +336,12 @@ describe('GraphScreen how-it-runs badges', () => {
     }
     window.addEventListener('unhandledrejection', handleRejection)
     const onPendingConsumed = vi.fn()
-    const screenProps = {
-      token: 't',
-      projects: [project],
-      activeProject: project,
-      onActiveProject: vi.fn(),
-      profiles: [] as never[],
-      profileId: null as number | null,
-      features: { designStudio: false, workflowGraph: true, masterOrchestrator: false },
-      activeProfile: null,
-      onPendingConsumed,
-    }
-    const { rerender } = render(<GraphScreen {...screenProps} pendingJobId={41} />)
+    const { rerender } = render(
+      <GraphScreen {...screenBase} pendingJobId={41} onPendingConsumed={onPendingConsumed} />,
+    )
     await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 41))
 
-    rerender(<GraphScreen {...screenProps} pendingJobId={42} />)
+    rerender(<GraphScreen {...screenBase} pendingJobId={42} onPendingConsumed={onPendingConsumed} />)
     await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 42))
     finishA?.(jobA)
 
@@ -323,5 +349,120 @@ describe('GraphScreen how-it-runs badges', () => {
     expect(screen.queryByRole('button', { name: 'Rename workflow First plan' })).not.toBeInTheDocument()
     expect(onUnhandled).not.toHaveBeenCalled()
     window.removeEventListener('unhandledrejection', handleRejection)
+  })
+
+  it('does not poll a prior running job after returning home, so Run now can select the spawned job once', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = runningJob(77, 'Prior live run')
+    const spawned = runningJob(99, 'Nightly publish run')
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId === 77) return prior
+      if (jobId === 99) return spawned
+      throw new Error(`unexpected job ${jobId}`)
+    })
+    vi.mocked(runScheduleNow).mockResolvedValue(spawned)
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={0}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Prior live run' })).toBeInTheDocument()
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
+
+    const callsAfterHome = vi.mocked(getGraphJob).mock.calls.length
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+    expect(vi.mocked(getGraphJob).mock.calls.slice(callsAfterHome)).toEqual([])
+
+    const row = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Nightly publish run' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(getGraphJob).mock.calls.filter(call => call[1] === 99)).toHaveLength(1)
+    expect(vi.mocked(getGraphJob).mock.calls.filter(call => call[1] === 77).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('keeps an in-flight prior-job refresh from cancelling Run now selection', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = runningJob(77, 'Prior live run')
+    const spawned = runningJob(99, 'Nightly publish run')
+    let finishPriorRefresh: ((value: typeof prior) => void) | undefined
+    let priorGets = 0
+    let spawnedGets = 0
+    vi.mocked(getGraphJob).mockImplementation((_token, jobId) => {
+      if (jobId === 77) {
+        priorGets += 1
+        if (priorGets === 1) return Promise.resolve(prior)
+        return new Promise(resolve => { finishPriorRefresh = resolve })
+      }
+      if (jobId === 99) {
+        spawnedGets += 1
+        return Promise.resolve(spawned)
+      }
+      return Promise.reject(new Error(`unexpected job ${jobId}`))
+    })
+    vi.mocked(runScheduleNow).mockResolvedValue(spawned)
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={0}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Prior live run' })).toBeInTheDocument()
+    expect(priorGets).toBe(1)
+
+    // Live editor poll starts a hanging refresh for the prior job.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    await waitFor(() => expect(priorGets).toBe(2))
+    expect(finishPriorRefresh).toBeTypeOf('function')
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
+
+    const row = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+
+    await waitFor(() => expect(spawnedGets).toBe(1))
+    await act(async () => {
+      finishPriorRefresh?.(prior)
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Nightly publish run' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

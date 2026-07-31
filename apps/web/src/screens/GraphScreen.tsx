@@ -287,6 +287,7 @@ export function GraphScreen({
   const mounted = React.useRef(true)
   const listLoadSeq = React.useRef(0)
   const jobLoadSeq = React.useRef(0)
+  const wantedJobIdRef = React.useRef<number | null>(null)
   const draftSeq = React.useRef(0)
   const saveTimer = React.useRef<number | undefined>(undefined)
   const saveInFlight = React.useRef<Promise<void> | null>(null)
@@ -460,11 +461,22 @@ export function GraphScreen({
     }
   }, [token, activeProject?.slug])
 
-  const loadJob = React.useCallback(async (jobId: number) => {
-    const seq = ++jobLoadSeq.current
+  const loadJob = React.useCallback(async (jobId: number, options?: { background?: boolean }) => {
+    const background = options?.background === true
+    // Background refreshes must not bump jobLoadSeq: a live poll for a prior job
+    // would otherwise cancel View / Edit / pending / Run-now navigation loads.
+    let seq: number
+    if (background) {
+      if (wantedJobIdRef.current !== jobId) return null
+      seq = jobLoadSeq.current
+    } else {
+      wantedJobIdRef.current = jobId
+      seq = ++jobLoadSeq.current
+    }
     try {
       const next = await getGraphJob(token, jobId)
       if (!mounted.current || seq !== jobLoadSeq.current) return null
+      if (wantedJobIdRef.current !== jobId) return null
       const latest = latestDraft.current
       const titleHasLocalEdit = autosaveJobId.current === next.id
         && latest?.jobId === next.id
@@ -493,6 +505,7 @@ export function GraphScreen({
       } else {
         await primeAutosave(next)
         if (!mounted.current || seq !== jobLoadSeq.current) return null
+        if (wantedJobIdRef.current !== jobId) return null
       }
       setJob(next)
       setPlan(next.graph)
@@ -523,7 +536,9 @@ export function GraphScreen({
       }
       return next
     } catch (cause) {
-      if (mounted.current && seq === jobLoadSeq.current) setError(String(cause))
+      if (!background && mounted.current && seq === jobLoadSeq.current && wantedJobIdRef.current === jobId) {
+        setError(String(cause))
+      }
       return null
     }
   }, [token])
@@ -675,10 +690,15 @@ export function GraphScreen({
   })
   usePolling(
     async () => {
-      if (job) await loadJob(job.id)
+      if (job) await loadJob(job.id, { background: true })
     },
     1500,
-    { enabled: !!job && stage === 'editor' && ['running', 'review'].includes(job.status), immediate: false },
+    {
+      // Home keeps the last job mounted for return trips, but must not keep
+      // polling it - those GETs share cancellation with explicit opens.
+      enabled: stage === 'editor' && !!job && ['running', 'review'].includes(job.status),
+      immediate: false,
+    },
   )
   usePolling(
     () => refreshList(),
@@ -1666,7 +1686,7 @@ export function GraphScreen({
         {job.worktree.push_web_url && <> <a href={job.worktree.push_web_url} target="_blank" rel="noreferrer">Open the repo</a>.</>}
       </p>
     </div>}
-    {job && <SatpamCard token={token} jobId={job.id} interventions={job.satpam} jobStatus={job.status} onChanged={() => void loadJob(job.id)} />}
+    {job && <SatpamCard token={token} jobId={job.id} interventions={job.satpam} jobStatus={job.status} onChanged={() => void loadJob(job.id, { background: true })} />}
     {busy === 'create' && <p className="graph-loading">Materializing architect draft…</p>}
 
     <div className="graph-workspace" style={{
