@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { useState } from 'react'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { WorkflowInputsEditor } from './SaveTemplateModal'
@@ -130,5 +130,68 @@ describe('WorkflowInputsEditor', () => {
         default: '12',
       },
     ])
+  })
+
+  it('keeps staged label and ID text across parent plan identity refresh', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const onEditStateChange = vi.fn()
+    let refreshPlanIdentity: (() => void) | undefined
+    function Harness() {
+      const [inputs, setInputs] = useState([
+        { id: 'campaign', label: 'Campaign', kind: 'text' as const, required: true },
+      ])
+      refreshPlanIdentity = () => setInputs(current => current.map(item => ({ ...item })))
+      return <WorkflowInputsEditor
+        inputs={inputs}
+        onChange={next => {
+          setInputs(next)
+          onChange(next)
+        }}
+        onEditStateChange={onEditStateChange}
+      />
+    }
+    render(<Harness />)
+
+    const label = screen.getByRole('textbox', { name: 'Input 1 label' })
+    await user.clear(label)
+    await user.type(label, 'Campaign renamed')
+    expect(onEditStateChange).toHaveBeenLastCalledWith({
+      dirty: true,
+      valid: true,
+    })
+
+    act(() => {
+      refreshPlanIdentity?.()
+    })
+    expect(label).toHaveValue('Campaign renamed')
+    expect(onEditStateChange).toHaveBeenLastCalledWith({
+      dirty: true,
+      valid: true,
+    })
+
+    await user.tab()
+    expect(onChange).toHaveBeenLastCalledWith([
+      { id: 'campaign', label: 'Campaign renamed', kind: 'text', required: true },
+    ])
+
+    const id = screen.getByRole('textbox', { name: 'Input 1 ID' })
+    await user.clear(id)
+    await user.type(id, 'campaign_v2')
+    expect(onEditStateChange).toHaveBeenLastCalledWith({
+      dirty: true,
+      valid: true,
+    })
+
+    act(() => {
+      refreshPlanIdentity?.()
+    })
+
+    expect(label).toHaveValue('Campaign renamed')
+    expect(id).toHaveValue('campaign_v2')
+    expect(onEditStateChange).toHaveBeenLastCalledWith({
+      dirty: true,
+      valid: true,
+    })
   })
 })

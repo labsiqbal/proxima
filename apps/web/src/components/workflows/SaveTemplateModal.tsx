@@ -31,7 +31,8 @@ function WorkflowInputRow({ item, index, inputs, disabled, onPatch, onRemove, on
   onEditState: (state: EditState) => void
 }) {
   const [draft, setDraft] = React.useState(item)
-  React.useEffect(() => setDraft(item), [item])
+  const itemSignature = JSON.stringify(item)
+  const dirtyRef = React.useRef(false)
   const trimmedId = draft.id.trim()
   const trimmedLabel = draft.label.trim()
   const idError = !trimmedId
@@ -51,7 +52,12 @@ function WorkflowInputRow({ item, index, inputs, disabled, onPatch, onRemove, on
     required: draft.required,
     ...(draft.default?.trim() ? { default: draft.default.trim() } : {}),
   }
-  const dirty = JSON.stringify(normalized) !== JSON.stringify(item)
+  const dirty = JSON.stringify(normalized) !== itemSignature
+  dirtyRef.current = dirty
+  React.useEffect(() => {
+    if (dirtyRef.current) return
+    setDraft(JSON.parse(itemSignature) as WorkflowInput)
+  }, [itemSignature])
 
   React.useEffect(() => {
     onEditState({ dirty, valid })
