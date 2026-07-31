@@ -308,7 +308,13 @@ export function GraphScreen({
     return true
   }, [])
 
-  function beginJobFocus(jobId: number): { seq: number; jobId: number } {
+  function beginJobFocus(
+    jobId: number,
+    opts?: { allowDuringHandoff?: boolean },
+  ): { seq: number; jobId: number } | null {
+    // Schedule Run-now owns focus until exact selection finishes. Ordinary
+    // create/edit/start paths must not advance jobLoadSeq during that window.
+    if (scheduleHandoffRef.current && !opts?.allowDuringHandoff) return null
     wantedJobIdRef.current = jobId
     return { seq: ++jobLoadSeq.current, jobId }
   }
@@ -567,7 +573,11 @@ export function GraphScreen({
       if (wantedJobIdRef.current !== jobId) return null
       seq = jobLoadSeq.current
     } else {
-      seq = beginJobFocus(jobId).seq
+      // Handoff selection calls openJob/loadJob under the parent lock; allow that
+      // path only. Competing create/start paths use beginJobFocus without allow.
+      const focus = beginJobFocus(jobId, { allowDuringHandoff: true })
+      if (!focus) return null
+      seq = focus.seq
     }
     try {
       const next = await getGraphJob(token, jobId)
@@ -755,13 +765,14 @@ export function GraphScreen({
       if (!mounted.current || seq !== draftSeq.current || scheduleHandoffRef.current) return
       onDraftConsumed?.()
       const focus = beginJobFocus(created.id)
+      if (!focus) return
       try {
         const adopted = await adoptJobFocus(created, focus.seq, {
           name: draft.name,
           description: draft.description,
           category: draft.category,
         })
-        if (!adopted || seq !== draftSeq.current || scheduleHandoffRef.current) {
+        if (!adopted || seq !== draftSeq.current || scheduleHandoffRef.current || !jobFocusCurrent(focus.seq, created.id)) {
           restoreJobFocusIfCurrent(focus.seq, created.id)
           return
         }
@@ -1052,10 +1063,11 @@ export function GraphScreen({
         project_slug: resolveOwnedProjectSlug(job, activeProject?.slug) ?? undefined,
         profile_id: profileId,
       })
-      if (!mounted.current) return
+      if (!mounted.current || scheduleHandoffRef.current) return
       focus = beginJobFocus(created.id)
+      if (!focus) return
       const adopted = await adoptJobFocus(created, focus.seq, { ...draftMeta, name: draftTitle })
-      if (!adopted) {
+      if (!adopted || scheduleHandoffRef.current || !jobFocusCurrent(focus.seq, created.id)) {
         restoreJobFocusIfCurrent(focus.seq, created.id)
         return
       }
@@ -1091,10 +1103,11 @@ export function GraphScreen({
         project_slug: activeProject?.slug,
         profile_id: profileId,
       })
-      if (!mounted.current) return
+      if (!mounted.current || scheduleHandoffRef.current) return
       focus = beginJobFocus(created.id)
+      if (!focus) return
       const adopted = await adoptJobFocus(created, focus.seq, {})
-      if (!adopted) {
+      if (!adopted || scheduleHandoffRef.current || !jobFocusCurrent(focus.seq, created.id)) {
         restoreJobFocusIfCurrent(focus.seq, created.id)
         return
       }
@@ -1267,12 +1280,12 @@ export function GraphScreen({
           title: template.name,
           graph: template.graph,
           workflow_id: template.id,
-          // Template ownership wins — shell active project is only a fallback for
+          // Template ownership wins - shell active project is only a fallback for
           // legacy rows that never stored a project (1 workflow = 1 project).
           project_slug: resolveOwnedProjectSlug(template, activeProject?.slug) ?? undefined,
           profile_id: profileId,
         })
-        if (!mounted.current) return
+        if (!mounted.current || scheduleHandoffRef.current) return
         jobId = created.id
         setRunTarget(current => (
           current?.kind === 'template' && current.template.id === template.id
@@ -1281,15 +1294,17 @@ export function GraphScreen({
         ))
         setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
       }
+      if (scheduleHandoffRef.current) return
       const next = await startGraphJob(token, jobId, input)
-      if (!mounted.current) return
-      const focus = beginJobFocus(next.id)
+      if (!mounted.current || scheduleHandoffRef.current) return
+      focus = beginJobFocus(next.id)
+      if (!focus) return
       const adopted = await adoptJobFocus(next, focus.seq, {
         name: template.name,
         description: template.description,
         category: template.category,
       })
-      if (!adopted) {
+      if (!adopted || scheduleHandoffRef.current || !jobFocusCurrent(focus.seq, next.id)) {
         restoreJobFocusIfCurrent(focus.seq, next.id)
         return
       }
@@ -1321,14 +1336,15 @@ export function GraphScreen({
         project_slug: resolveOwnedProjectSlug(template, activeProject?.slug) ?? undefined,
         profile_id: profileId,
       })
-      if (!mounted.current) return
+      if (!mounted.current || scheduleHandoffRef.current) return
       focus = beginJobFocus(created.id)
+      if (!focus) return
       const adopted = await adoptJobFocus(created, focus.seq, {
         name: template.name,
         description: template.description,
         category: template.category,
       })
-      if (!adopted) {
+      if (!adopted || scheduleHandoffRef.current || !jobFocusCurrent(focus.seq, created.id)) {
         restoreJobFocusIfCurrent(focus.seq, created.id)
         return
       }
@@ -1350,19 +1366,23 @@ export function GraphScreen({
     setBusy('start')
     setError('')
     const focus = beginJobFocus(item.id)
+    if (!focus) {
+      releaseOwnedBusy('start')
+      return
+    }
     try {
       await flushAutosave()
-      if (!jobFocusCurrent(focus.seq, item.id)) {
+      if (!jobFocusCurrent(focus.seq, item.id) || scheduleHandoffRef.current) {
         restoreJobFocusIfCurrent(focus.seq, item.id)
         return
       }
       const next = await startGraphJob(token, item.id, input)
-      if (!jobFocusCurrent(focus.seq, next.id)) {
+      if (!jobFocusCurrent(focus.seq, next.id) || scheduleHandoffRef.current) {
         restoreJobFocusIfCurrent(focus.seq, item.id)
         return
       }
       const adopted = await adoptJobFocus(next, focus.seq)
-      if (!adopted) {
+      if (!adopted || scheduleHandoffRef.current || !jobFocusCurrent(focus.seq, next.id)) {
         restoreJobFocusIfCurrent(focus.seq, next.id)
         return
       }
@@ -1385,6 +1405,10 @@ export function GraphScreen({
     if (busy || scheduleHandoffRef.current) return
     setBusy('prepare-template')
     const focus = beginJobFocus(item.id)
+    if (!focus) {
+      releaseOwnedBusy('prepare-template')
+      return
+    }
     try {
       const adopted = await adoptJobFocus(item, focus.seq)
       if (

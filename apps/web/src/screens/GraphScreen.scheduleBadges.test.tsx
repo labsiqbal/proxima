@@ -2179,4 +2179,87 @@ describe('GraphScreen how-it-runs badges', () => {
     expect(runScheduleNow).toHaveBeenCalledTimes(1)
     expect(startGraphJob).toHaveBeenCalledTimes(1)
   })
+
+  async function raceCreatePathUnderScheduleDialog(opts: {
+    startCreate: () => void
+    created: ReturnType<typeof queuedDraft>
+    createdTitle: string
+  }) {
+    const spawned = runningJob(99, 'Nightly publish run')
+    let finishCreate: ((value: typeof opts.created) => void) | undefined
+    let finishSpawn: ((value: typeof spawned) => void) | undefined
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId === 99) return spawned
+      if (jobId === opts.created.id) return opts.created
+      throw new Error(`unexpected job ${jobId}`)
+    })
+    vi.mocked(createGraphJob).mockImplementation(() => new Promise(resolve => { finishCreate = resolve }))
+    vi.mocked(runScheduleNow).mockImplementation(() => new Promise(resolve => { finishSpawn = resolve }))
+
+    render(<GraphScreen {...screenBase} />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Workflows 2' }))
+    const scheduleRow = (await screen.findByText('Nightly publish')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(scheduleRow).getByRole('button', { name: 'Schedules' }))
+    expect(await screen.findByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+
+    opts.startCreate()
+    await waitFor(() => expect(createGraphJob).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+    await waitFor(() => expect(runScheduleNow).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      finishCreate?.(opts.created)
+      await Promise.resolve()
+    })
+    // Create must not steal focus/stage while handoff owns selection.
+    expect(screen.queryByRole('button', { name: `Rename workflow ${opts.createdTitle}` })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+
+    await act(async () => {
+      finishSpawn?.(spawned)
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Nightly publish run' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: `Rename workflow ${opts.createdTitle}` })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+    expect(createGraphJob).toHaveBeenCalledTimes(1)
+  }
+
+  it('keeps Run now selection when editTemplate create finishes under the schedule dialog', async () => {
+    const created = queuedDraft(88, 'Publish on demand')
+    await raceCreatePathUnderScheduleDialog({
+      created,
+      createdTitle: 'Publish on demand',
+      startCreate: () => {
+        const editRow = screen.getByText('Publish on demand').closest('[role="row"]') as HTMLElement
+        fireEvent.click(within(editRow).getByRole('button', { name: 'Edit' }))
+      },
+    })
+  })
+
+  it('keeps Run now selection when createFromTemplate finishes under the schedule dialog', async () => {
+    const created = queuedDraft(88, 'Publish on demand')
+    await raceCreatePathUnderScheduleDialog({
+      created,
+      createdTitle: 'Publish on demand',
+      startCreate: () => {
+        const runRow = screen.getByText('Publish on demand').closest('[role="row"]') as HTMLElement
+        fireEvent.click(within(runRow).getByRole('button', { name: 'Run' }))
+      },
+    })
+  })
+
+  it('keeps Run now selection when newPlan create finishes under the schedule dialog', async () => {
+    const created = queuedDraft(88, 'Untitled plan')
+    await raceCreatePathUnderScheduleDialog({
+      created,
+      createdTitle: 'Untitled plan',
+      startCreate: () => {
+        fireEvent.click(screen.getByRole('button', { name: /New/ }))
+      },
+    })
+  })
 })
