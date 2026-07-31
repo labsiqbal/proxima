@@ -161,10 +161,10 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
   const [savingBusy, setSavingBusy] = React.useState(false)
   const [notice, setNotice] = React.useState('')
   const [total, setTotal] = React.useState(0)
-  const [offset, setOffset] = React.useState(0)
   const [error, setError] = React.useState('')
   const loadSeq = React.useRef(0)
   const mountedRef = React.useRef(true)
+  const loadedCountRef = React.useRef(0)
 
   React.useEffect(() => {
     mountedRef.current = true
@@ -175,8 +175,13 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
   const load = React.useCallback(async (nextOffset: number, append: boolean) => {
     const seq = ++loadSeq.current
     try {
+      const limit = mode === 'board'
+        ? 100
+        : append
+          ? PAGE
+          : Math.max(PAGE, loadedCountRef.current)
       const [page, planBody] = await Promise.all([
-        listJobs(token, { status: effectiveStatus, project_slug: activeProject?.slug, include_archived: mode === 'list' ? includeArchived : false, limit: mode === 'board' ? 100 : PAGE, offset: nextOffset }),
+        listJobs(token, { status: effectiveStatus, project_slug: activeProject?.slug, include_archived: mode === 'list' ? includeArchived : false, limit, offset: nextOffset }),
         // Plans live on the graph engine; with the feature off the endpoint is
         // gated, so this screen simply shows classic tasks — exactly as before.
         features.workflowGraph ? listGraphJobs(token, activeProject?.slug) : Promise.resolve({ items: [] as GraphJob[] }),
@@ -184,14 +189,18 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
       if (!mountedRef.current || seq !== loadSeq.current) return
       setError('')
       setTotal(page.total)
-      setItems(current => append ? [...current, ...page.items] : page.items)
+      setItems(current => {
+        const next = append ? [...current, ...page.items] : page.items
+        loadedCountRef.current = next.length
+        return next
+      })
       setPlans(planBody.items)
     } catch (reason) {
       if (mountedRef.current && seq === loadSeq.current) setError(String(reason))
     }
   }, [token, effectiveStatus, activeProject?.slug, includeArchived, mode, features.workflowGraph])
 
-  React.useEffect(() => { setOffset(0); void load(0, false) }, [load])
+  React.useEffect(() => { loadedCountRef.current = 0; void load(0, false) }, [load])
   usePolling(() => load(0, false), 2500, { enabled: true, immediate: false })
 
   const toggleExpanded = (planId: number) => setExpanded(current => {
@@ -361,7 +370,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
                       </div>
                     </div>}
                   </div>)}
-              {mode === 'list' && items.length < total && <div className="job-more"><button className="ghost-button" onClick={() => { const next = offset + PAGE; setOffset(next); void load(next, true) }}>Load more ({items.length}/{total})</button></div>}
+              {mode === 'list' && items.length < total && <div className="job-more"><button className="ghost-button" onClick={() => { void load(items.length, true) }}>Load more ({items.length}/{total})</button></div>}
             </>}
         </div>}
 

@@ -18,6 +18,7 @@ vi.mock('../hooks/usePolling', () => ({ usePolling: vi.fn() }))
 describe('ActivityScreen authoritative run projection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-31T05:00:30Z'))
     vi.mocked(listJobs).mockResolvedValue({
       items: [],
       total: 0,
@@ -27,6 +28,10 @@ describe('ActivityScreen authoritative run projection', () => {
     vi.mocked(listGraphJobs).mockResolvedValue({
       items: [FRESH_FAILED_REVIEW_RUN],
     })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('shows the same failed status and fresh start while expanded', async () => {
