@@ -27,7 +27,7 @@ vi.mock("../../api/files", () => ({
 	previewUrl: vi.fn(() => "/stable-preview"),
 }));
 vi.mock("../../hooks/useRawBlobUrl", () => ({
-	useRawBlobUrl: vi.fn(() => null),
+	useRawBlobUrl: vi.fn(() => ({ url: null, status: "idle", retry: () => undefined })),
 }));
 vi.mock("../ui/Dialog", () => ({
 	confirmDialog: vi.fn(async () => true),

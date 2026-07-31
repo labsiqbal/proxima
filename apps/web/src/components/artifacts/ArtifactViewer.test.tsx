@@ -480,4 +480,30 @@ describe('ArtifactViewer v2 review flow', () => {
     )
     expect(download).toHaveAttribute('download', 'logo.svg')
   })
+
+  it('surfaces a retryable error when SVG raw bytes fail to load', async () => {
+    fetchRawBlobMock.mockRejectedValue(new Error('missing'))
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'brand/logo.svg',
+    }
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'image', title: 'Logo', path: 'brand/logo.svg', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    expect(await screen.findByText(/Could not load this image/i)).toBeInTheDocument()
+    expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
+
+    fetchRawBlobMock.mockResolvedValueOnce('blob:svg-retry')
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    const image = await screen.findByRole('img', { name: 'logo.svg' })
+    expect(image).toHaveAttribute('src', 'blob:svg-retry')
+    expect(fetchRawBlobMock).toHaveBeenCalledTimes(2)
+  })
 })

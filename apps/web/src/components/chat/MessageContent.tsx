@@ -33,9 +33,12 @@ function ProjectSvgImage({
   alt: string
   className?: string
 }) {
-  const src = useRawBlobUrl(token, slug, path, target)
-  if (!src) return null
-  return <img className={className} src={src} alt={alt} />
+  const blob = useRawBlobUrl(token, slug, path, target)
+  if (blob.status === 'error') {
+    return <span className={className ? `${className} md-img-error` : 'md-img-error'} role="img" aria-label={alt || 'Image failed to load'}>Could not load image</span>
+  }
+  if (blob.status !== 'ready' || !blob.url) return null
+  return <img className={className} src={blob.url} alt={alt} />
 }
 
 // A fenced code block with a copy button. The copy reads the rendered text

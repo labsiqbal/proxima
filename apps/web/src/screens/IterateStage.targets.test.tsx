@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   fsRead: vi.fn(),
   fileUrl: vi.fn(),
   rawUrl: vi.fn(),
+  fetchRawBlob: vi.fn(),
   listArtifacts: vi.fn(),
   listMessages: vi.fn(),
   polling: new Map<number, () => Promise<unknown>>(),
@@ -22,6 +23,7 @@ vi.mock('../api/files', () => ({
   deleteSessionArtifact: vi.fn(),
   fileUrl: (...args: unknown[]) => mocks.fileUrl(...args),
   rawUrl: (...args: unknown[]) => mocks.rawUrl(...args),
+  fetchRawBlob: (...args: unknown[]) => mocks.fetchRawBlob(...args),
   isSvgPath: (path: string) => /\.svg$/i.test(path),
   listSessionArtifacts: (...args: unknown[]) => mocks.listArtifacts(...args),
   retargetFile: (target: object, path: string) => ({ ...target, path }),
@@ -104,6 +106,10 @@ describe('IterateStage canonical artifact targets', () => {
         target
           ? `/api/projects/${slug}/raw?target=${encodeURIComponent(JSON.stringify(target))}`
           : `/api/projects/${slug}/raw?path=${encodeURIComponent(path)}`,
+    )
+    mocks.fetchRawBlob.mockImplementation(
+      async (_token: string, _slug: string, path: string, target?: { path?: string }) =>
+        `blob:${target?.path || path}`,
     )
     mocks.fsRead.mockResolvedValue({
       content: '![Chart](images/chart.png)',
@@ -212,11 +218,89 @@ describe('IterateStage canonical artifact targets', () => {
     await userEvent.click(screen.getByRole('button', { name: /Result/ }))
 
     expect(await screen.findByRole('img', { name: 'Design result thumbnail' }))
-      .toHaveAttribute('src', '/file/ops/42/visual.png')
-    expect(mocks.fileUrl).toHaveBeenCalledWith(
+      .toHaveAttribute('src', 'blob:visual.png')
+    expect(mocks.fetchRawBlob).toHaveBeenCalledWith(
+      'token',
       'identity',
       'visual.png',
       imageTarget,
+    )
+    expect(mocks.fileUrl).not.toHaveBeenCalledWith(
+      'identity',
+      'visual.png',
+      imageTarget,
+    )
+  })
+
+  it('renders path-only SVG design thumbs from authenticated raw bytes', async () => {
+    const designTarget = {
+      project: 'identity',
+      area: { kind: 'ops', id: 42 },
+      path: 'artifacts/design/legacy',
+    }
+    mocks.listArtifacts.mockResolvedValue({
+      artifacts: [
+        {
+          id: 'legacy',
+          type: 'design',
+          title: 'Legacy design',
+          path: 'artifacts/design/legacy',
+          target: designTarget,
+        },
+      ],
+    })
+    mocks.fsRead.mockResolvedValue({
+      content: JSON.stringify({
+        id: 'legacy',
+        type: 'graphic',
+        title: 'Legacy design',
+        artboards: [
+          {
+            id: 'artboard',
+            width: 100,
+            height: 100,
+            background: '#fff',
+            layers: [
+              {
+                id: 'image',
+                type: 'image',
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+                src: 'legacy/mark.svg',
+              },
+            ],
+          },
+        ],
+      }),
+    })
+    render(
+      <IterateStage
+        token="token"
+        workflowId={3}
+        sessionId={7}
+        projectSlug="identity"
+      />,
+    )
+
+    await act(async () => {
+      await mocks.polling.get(4000)?.()
+    })
+    await userEvent.click(screen.getByRole('button', { name: /Result/ }))
+
+    expect(await screen.findByRole('img', { name: 'Design result thumbnail' }))
+      .toHaveAttribute('src', 'blob:legacy/mark.svg')
+    expect(mocks.fetchRawBlob).toHaveBeenCalledWith(
+      'token',
+      'identity',
+      'legacy/mark.svg',
+      undefined,
+    )
+    expect(mocks.fileUrl).not.toHaveBeenCalledWith(
+      'identity',
+      'legacy/mark.svg',
+      undefined,
     )
   })
 

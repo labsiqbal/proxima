@@ -1,7 +1,9 @@
 import React from 'react'
 import type { ArchiveRecord, ArchiveStatus } from '../../api/archive'
-import { previewUrl, fetchRawBlob, fileUrl, retargetFile } from '../../api/files'
+import { previewUrl, fetchRawBlob, retargetFile } from '../../api/files'
+import { collectArtboardMediaRefs, resolveProjectMediaSrc } from '../../api/projectMedia'
 import { projectFs } from '../../api/fsAdapter'
+import { useProjectMediaUrls } from '../../hooks/useProjectMediaUrls'
 import { MessageContent } from '../chat/MessageContent'
 import { MiniPreview } from '../design/MiniPreview'
 import type { Artboard } from '../design/scene'
@@ -104,6 +106,15 @@ export function RecordPreview({ token, record, compact = false }: {
   const isHtml = type === 'page' || HTML.test(path)
   const isMd = MD.test(path)
   const isDesign = type === 'design'
+  const designMediaRefs = React.useMemo(
+    () => collectArtboardMediaRefs(designArt || undefined),
+    [designArt],
+  )
+  const designMediaUrls = useProjectMediaUrls(token, slug, designMediaRefs)
+  const resolveDesignSrc = React.useCallback(
+    (src: string, target?: FileTarget) => resolveProjectMediaSrc(src, target, slug, designMediaUrls),
+    [slug, designMediaUrls],
+  )
   React.useEffect(() => {
     let alive = true
     let objectUrl: string | null = null
@@ -151,9 +162,8 @@ export function RecordPreview({ token, record, compact = false }: {
       return <div className={`archive-preview-box empty ${compact ? 'compact' : ''}`}><p className="muted">Loading design…</p></div>
     }
     if (designArt) {
-      const resolveSrc = (src: string, target?: FileTarget) => /^(https?:|data:|blob:)/.test(src) ? src : fileUrl(slug, src, target)
       return <div className={`archive-preview-box design ${compact ? 'compact' : ''}`} aria-label={`Preview of ${record.name}`}>
-        <div className="archive-design-thumb"><MiniPreview art={designArt} resolveSrc={resolveSrc} /></div>
+        <div className="archive-design-thumb"><MiniPreview art={designArt} resolveSrc={resolveDesignSrc} /></div>
       </div>
     }
     // scene.json missing or unreadable - fall through to the generic open hint

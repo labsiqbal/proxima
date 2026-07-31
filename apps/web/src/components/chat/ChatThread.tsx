@@ -459,14 +459,14 @@ function ResultImage({
 	path: string;
 	target?: OutputLink["target"];
 }) {
-	const blobSrc = useRawBlobUrl(
+	const blob = useRawBlobUrl(
 		isSvgPath(path) ? token : undefined,
 		isSvgPath(path) ? slug : undefined,
 		path,
 		target,
 	);
 	const src = isSvgPath(path)
-		? blobSrc || ""
+		? blob.url || ""
 		: previewUrl(slug, path, target);
 	if (!src) return null;
 	return <img src={src} alt="" loading="lazy" />;

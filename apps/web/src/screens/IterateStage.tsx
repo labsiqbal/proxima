@@ -1,6 +1,12 @@
 import React from 'react'
 import { projectFs } from '../api/fsAdapter'
 import { deleteSessionArtifact, fileUrl, isSvgPath, listSessionArtifacts, rawUrl, retargetFile, type Artifact } from '../api/files'
+import {
+  collectArtboardMediaRefs,
+  mergeProjectMediaRefs,
+  resolveProjectMediaSrc,
+} from '../api/projectMedia'
+import { useProjectMediaUrls } from '../hooks/useProjectMediaUrls'
 import { listMessages } from '../api/sessions'
 import { cancelRun, deleteRun } from '../api/runs'
 import { getWorkflow, updateWorkflow, type StepInput } from '../api/workflows'
@@ -62,7 +68,15 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
   const [deletingArtifact, setDeletingArtifact] = React.useState<string | null>(null)
   const mountedRef = React.useRef(true)
   const projFs = React.useMemo(() => projectSlug ? projectFs(token, projectSlug, '') : null, [token, projectSlug])
-  const resolveSrc = React.useCallback((s: string, target?: FileTarget) => /^(https?:|data:|blob:)/.test(s) ? s : (projectSlug ? fileUrl(projectSlug, s, target) : s), [projectSlug])
+  const designMediaRefs = React.useMemo(
+    () => mergeProjectMediaRefs(...designs.map(design => collectArtboardMediaRefs(design.art))),
+    [designs],
+  )
+  const designMediaUrls = useProjectMediaUrls(token, projectSlug || undefined, designMediaRefs)
+  const resolveSrc = React.useCallback(
+    (s: string, target?: FileTarget) => resolveProjectMediaSrc(s, target, projectSlug, designMediaUrls),
+    [projectSlug, designMediaUrls],
+  )
 
   React.useEffect(() => {
     mountedRef.current = true

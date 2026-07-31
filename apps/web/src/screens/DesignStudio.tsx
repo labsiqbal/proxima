@@ -11,7 +11,15 @@ import { BackButton } from '../components/ui/BackButton'
 import { CompactTeachingEmpty } from '../components/ui/CompactTeachingEmpty'
 import { SURFACES, surfaceTemplates, sceneFromTemplate, type Surface, type Template } from '../components/design/templates'
 import { projectFs } from '../api/fsAdapter'
-import { fetchRawBlob, fetchRawFile, fileUrl, uploadFile, genDesignImage, deletePath, generateBrandGuide, readFile } from '../api/files'
+import { fetchRawFile, isSvgPath, uploadFile, genDesignImage, deletePath, generateBrandGuide, readFile } from '../api/files'
+import {
+  collectArtboardMediaRefs,
+  mergeProjectMediaRefs,
+  projectMediaKey,
+  resolveProjectMediaSrc,
+  type ProjectMediaRef,
+} from '../api/projectMedia'
+import { useProjectMediaUrls } from '../hooks/useProjectMediaUrls'
 import { MessageContent } from '../components/chat/MessageContent'
 import { Composer } from '../components/chat/Composer'
 import { MentionTextarea, type MentionItem } from '../components/ui/MentionTextarea'
@@ -72,39 +80,20 @@ function useImg(src: string): HTMLImageElement | undefined {
   return img
 }
 
-type TargetMediaReference = {
-  src: string
-  target: FileTarget
-}
-
-export const designTargetMediaKey = (src: string, target: FileTarget): string =>
-  JSON.stringify([src, target])
+export const designTargetMediaKey = (src: string, target?: FileTarget): string =>
+  projectMediaKey(src, target)
 
 export function collectDesignTargetMedia(
   scene: Scene | null,
   designs: { art?: Artboard }[],
-): TargetMediaReference[] {
-  const references = new Map<string, TargetMediaReference>()
-  const addArtboard = (artboard: Artboard) => {
-    for (const layer of artboard.layers) {
-      if (layer.type === 'image' && layer.target) {
-        references.set(
-          designTargetMediaKey(layer.src, layer.target),
-          { src: layer.src, target: layer.target },
-        )
-      } else if (isImageFrame(layer) && layer.imageSrc && layer.imageTarget) {
-        references.set(
-          designTargetMediaKey(layer.imageSrc, layer.imageTarget),
-          { src: layer.imageSrc, target: layer.imageTarget },
-        )
-      }
-    }
-  }
-  scene?.artboards.forEach(addArtboard)
-  designs.forEach(design => {
-    if (design.art) addArtboard(design.art)
-  })
-  return [...references.values()]
+  extraPaths: string[] = [],
+): ProjectMediaRef[] {
+  const fromScene = scene?.artboards.flatMap(artboard => collectArtboardMediaRefs(artboard)) || []
+  const fromDesigns = designs.flatMap(design => collectArtboardMediaRefs(design.art))
+  const fromPaths = extraPaths
+    .filter(path => isSvgPath(path))
+    .map(src => ({ src }))
+  return mergeProjectMediaRefs(fromScene, fromDesigns, fromPaths)
 }
 
 const BLOB_BASE = 320 // coordinate space blobPath() is generated in
@@ -777,46 +766,10 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const removeRefImage = React.useCallback((path: string) => setRefImages(prev => prev.filter(p => p !== path)), [])
   const [designs, setDesigns] = React.useState<{ id: string; title: string; type: string; w: number; h: number; artboards: number; sessionId?: number; art?: Artboard }[]>([])
   const targetMedia = React.useMemo(
-    () => collectDesignTargetMedia(scene, designs),
-    [scene, designs],
+    () => collectDesignTargetMedia(scene, designs, assets),
+    [scene, designs, assets],
   )
-  const targetMediaSignature = JSON.stringify(targetMedia)
-  const [targetMediaUrls, setTargetMediaUrls] = React.useState<Record<string, string>>({})
-  React.useEffect(() => {
-    let active = true
-    const created: string[] = []
-    setTargetMediaUrls({})
-    if (!project || !targetMedia.length) {
-      return () => { active = false }
-    }
-    void Promise.all(targetMedia.map(async reference => {
-      try {
-        const url = await fetchRawBlob(
-          token,
-          project.slug,
-          reference.src,
-          reference.target,
-        )
-        if (!active) {
-          URL.revokeObjectURL(url)
-          return null
-        }
-        created.push(url)
-        return [designTargetMediaKey(reference.src, reference.target), url] as const
-      } catch {
-        return null
-      }
-    })).then(entries => {
-      if (!active) return
-      setTargetMediaUrls(Object.fromEntries(
-        entries.filter((entry): entry is readonly [string, string] => entry != null),
-      ))
-    })
-    return () => {
-      active = false
-      created.forEach(url => URL.revokeObjectURL(url))
-    }
-  }, [token, project?.slug, targetMediaSignature])
+  const targetMediaUrls = useProjectMediaUrls(token, project?.slug, targetMedia)
   const [projectComponents, setProjectComponents] = React.useState<ProjectComponent[]>([])
   const designFs = React.useMemo(() => project ? projectFs(token, project.slug, 'artifacts/design') : null, [token, project?.slug])
   const saveTimer = React.useRef<number | undefined>(undefined)
@@ -1520,12 +1473,8 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }
   const onTouchEnd = (e: Konva.KonvaEventObject<TouchEvent>) => { if (e.evt.touches.length < 2) { pinchRef.current = null; stageRef.current?.draggable(panMode) } }
 
-  const resolveSrc = (s: string, target?: FileTarget) => {
-    if (/^gen:/i.test(s)) return ''
-    if (/^(https?:|data:|blob:)/.test(s)) return s
-    if (target) return targetMediaUrls[designTargetMediaKey(s, target)] || ''
-    return project ? fileUrl(project.slug, s) : s
-  }
+  const resolveSrc = (s: string, target?: FileTarget) =>
+    resolveProjectMediaSrc(s, target, project?.slug, targetMediaUrls)
   const openDesign = async (id: string) => {
     if (!designFs) return
     studioFrom.current = stage === 'gallery' ? 'gallery' : 'start'

@@ -166,7 +166,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     ? activePreview
     : null
   const svgImage = kind === 'image' && isSvgPath(path)
-  const svgBlobUrl = useRawBlobUrl(
+  const svgBlob = useRawBlobUrl(
     svgImage ? token : undefined,
     svgImage ? slug : undefined,
     path,
@@ -281,9 +281,16 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
 
   const stage = () => {
     if (kind === 'image') {
-      const src = svgImage ? (svgBlobUrl || '') : previewUrl(slug, path, item.target)
-      if (svgImage && !svgBlobUrl) return <div className="av-msg muted">Loading...</div>
-      return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={src} alt={name} onClick={() => { if (!annotating) setZoom(current => !current) }} title={zoom ? 'Fit to screen' : 'Actual size'} />
+      if (svgImage) {
+        if (svgBlob.status === 'error') {
+          return <div className="av-msg muted">Could not load this image. <button type="button" className="ghost-button sm" onClick={svgBlob.retry}>Retry</button></div>
+        }
+        if (svgBlob.status !== 'ready' || !svgBlob.url) {
+          return <div className="av-msg muted">Loading...</div>
+        }
+        return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={svgBlob.url} alt={name} onClick={() => { if (!annotating) setZoom(current => !current) }} title={zoom ? 'Fit to screen' : 'Actual size'} />
+      }
+      return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={previewUrl(slug, path, item.target)} alt={name} onClick={() => { if (!annotating) setZoom(current => !current) }} title={zoom ? 'Fit to screen' : 'Actual size'} />
     }
     if (kind === 'video') return <video className="av-video" src={previewUrl(slug, path, item.target)} controls autoPlay playsInline />
     if (kind === 'pdf') return <iframe className="av-frame" title={name} src={previewUrl(slug, path, item.target)} />

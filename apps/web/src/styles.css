@@ -2929,6 +2929,10 @@ button:disabled {
 	display: block;
 	border: 1px solid var(--ui-stroke-tertiary);
 }
+.md-img-error {
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+}
 .file-chip {
 	display: inline-flex;
 	align-items: center;
