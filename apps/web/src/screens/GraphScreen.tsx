@@ -339,8 +339,7 @@ export function GraphScreen({
     latestDraft.current = null
   }
 
-  async function primeAutosave(next: GraphJob, meta: DraftTemplateMeta = readDraftMeta(next.id)) {
-    await flushAutosave()
+  function adoptAutosave(next: GraphJob, meta: DraftTemplateMeta = readDraftMeta(next.id)) {
     if (saveTimer.current) window.clearTimeout(saveTimer.current)
     pendingSave.current = null
     autosaveJobId.current = next.id
@@ -349,6 +348,19 @@ export function GraphScreen({
     setDraftTitle(next.title || 'Untitled plan')
     setDraftMeta(meta)
     setSaveState('saved')
+  }
+
+  async function primeAutosave(
+    next: GraphJob,
+    meta: DraftTemplateMeta = readDraftMeta(next.id),
+    opts?: { seq?: number; requireWantedId?: number },
+  ): Promise<boolean> {
+    await flushAutosave()
+    if (!mounted.current) return false
+    if (opts?.seq != null && opts.seq !== jobLoadSeq.current) return false
+    if (opts?.requireWantedId != null && wantedJobIdRef.current !== opts.requireWantedId) return false
+    adoptAutosave(next, meta)
+    return true
   }
 
   const drainAutosave = React.useCallback((): Promise<void> => {
@@ -384,8 +396,8 @@ export function GraphScreen({
           if (applyFocusedJob(next)) {
             if (snapshot.graph) setPlan(next.graph)
             setDraftTitle(next.title)
-            if (!pendingSave.current) setSaveState('saved')
           }
+          if (!pendingSave.current) setSaveState('saved')
         }
       }
     })()
@@ -522,9 +534,11 @@ export function GraphScreen({
           setDraftTitle(next.title)
         }
       } else {
-        await primeAutosave(next)
-        if (!mounted.current || seq !== jobLoadSeq.current) return null
-        if (wantedJobIdRef.current !== jobId) return null
+        const primed = await primeAutosave(next, readDraftMeta(next.id), {
+          seq,
+          requireWantedId: jobId,
+        })
+        if (!primed) return null
       }
       if (!applyFocusedJob(next)) return null
       setPlan(next.graph)
@@ -669,12 +683,12 @@ export function GraphScreen({
     })).then(async created => {
       if (!mounted.current || seq !== draftSeq.current) return
       onDraftConsumed?.()
-      await primeAutosave(created, {
+      const primed = await primeAutosave(created, {
         name: draft.name,
         description: draft.description,
         category: draft.category,
       })
-      if (!mounted.current || seq !== draftSeq.current) return
+      if (!primed || seq !== draftSeq.current) return
       setOpeningJobId(null)
       setStage('editor')
       focusJob(created)
@@ -960,8 +974,7 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
-      await primeAutosave(created, { ...draftMeta, name: draftTitle })
-      if (!mounted.current) return
+      if (!await primeAutosave(created, { ...draftMeta, name: draftTitle })) return
       focusJob(created)
       setPlan(created.graph)
       setSelectedId(null)
@@ -995,8 +1008,7 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
-      await primeAutosave(created, {})
-      if (!mounted.current) return
+      if (!await primeAutosave(created, {})) return
       focusJob(created)
       setPlan(created.graph)
       setSelectedId(null)
@@ -1070,8 +1082,7 @@ export function GraphScreen({
       const next = await action()
       if (!mounted.current) return
       if (wantedJobIdRef.current !== next.id) return
-      await primeAutosave(next)
-      if (!mounted.current) return
+      if (!await primeAutosave(next, readDraftMeta(next.id), { requireWantedId: next.id })) return
       if (!applyFocusedJob(next)) return
       setPlan(next.graph)
       setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
@@ -1140,8 +1151,7 @@ export function GraphScreen({
       const next = await startGraphJob(token, job.id)
       if (!mounted.current) return
       if (wantedJobIdRef.current !== next.id) return
-      await primeAutosave(next)
-      if (!mounted.current) return
+      if (!await primeAutosave(next, readDraftMeta(next.id), { requireWantedId: next.id })) return
       if (!applyFocusedJob(next)) return
       setPlan(next.graph)
       setJobs(current => [next, ...current.filter(item => item.id !== next.id)])
@@ -1184,12 +1194,11 @@ export function GraphScreen({
       }
       const next = await startGraphJob(token, jobId, input)
       if (!mounted.current) return
-      await primeAutosave(next, {
+      if (!await primeAutosave(next, {
         name: template.name,
         description: template.description,
         category: template.category,
-      })
-      if (!mounted.current) return
+      }, { requireWantedId: next.id })) return
       setRunTarget(null)
       setOpeningJobId(null)
       setStage('editor')
@@ -1219,12 +1228,11 @@ export function GraphScreen({
         profile_id: profileId,
       })
       if (!mounted.current) return
-      await primeAutosave(created, {
+      if (!await primeAutosave(created, {
         name: template.name,
         description: template.description,
         category: template.category,
-      })
-      if (!mounted.current) return
+      })) return
       setOpeningJobId(null)
       setStage('editor')
       focusJob(created)
@@ -1250,8 +1258,7 @@ export function GraphScreen({
       setOpeningJobId(null)
       setStage('editor')
       focusJob(next)
-      await primeAutosave(next)
-      if (!mounted.current || wantedJobIdRef.current !== next.id) return
+      if (!await primeAutosave(next, readDraftMeta(next.id), { requireWantedId: next.id })) return
       if (!applyFocusedJob(next)) return
       setPlan(next.graph)
       setSelectedId(null)
@@ -1267,8 +1274,7 @@ export function GraphScreen({
   }
 
   async function prepareDraftTemplate(item: GraphJob) {
-    await primeAutosave(item)
-    if (!mounted.current) return
+    if (!await primeAutosave(item)) return
     focusJob(item)
     setPlan(item.graph)
     setSavingTemplate(true)

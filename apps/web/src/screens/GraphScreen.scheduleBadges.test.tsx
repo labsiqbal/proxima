@@ -898,6 +898,420 @@ describe('GraphScreen how-it-runs badges', () => {
     expect(runScheduleNow).toHaveBeenCalledTimes(1)
   })
 
+  it('does not let a slow abandoned open adopt autosave over a newer successful open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = queuedDraft(77, 'Dirty draft')
+    const abandoned = queuedDraft(88, 'Abandoned draft')
+    const winner = queuedDraft(99, 'Winner draft')
+    let finishAutosave: ((value: typeof prior) => void) | undefined
+    let autosaveStarted = false
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId === 77) return prior
+      if (jobId === 88) return abandoned
+      if (jobId === 99) return winner
+      throw new Error(`unexpected job ${jobId}`)
+    })
+    vi.mocked(updateGraphPlan).mockImplementation((_token, jobId, body) => {
+      if (jobId === 77) {
+        const saved = {
+          ...prior,
+          title: body.title ?? prior.title,
+          graph: body.graph ?? prior.graph,
+        }
+        if (!autosaveStarted) {
+          autosaveStarted = true
+          return new Promise<typeof prior>(resolve => { finishAutosave = resolve }).then(() => saved)
+        }
+        return Promise.resolve(saved)
+      }
+      if (jobId === 99) {
+        return Promise.resolve({
+          ...winner,
+          title: body.title ?? winner.title,
+          graph: body.graph ?? winner.graph,
+        })
+      }
+      return Promise.reject(new Error(`unexpected save ${jobId}`))
+    })
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Dirty draft' })).toBeInTheDocument()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Only, Pending' }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Node instruction' }), {
+      target: { value: 'Dirty instruction' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(autosaveStarted).toBe(true))
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={88}
+        onPendingConsumed={onPendingConsumed}
+      />,
+    )
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 88))
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={99}
+        onPendingConsumed={onPendingConsumed}
+      />,
+    )
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 99))
+
+    await act(async () => {
+      finishAutosave?.({
+        ...prior,
+        graph: {
+          ...prior.graph,
+          nodes: prior.graph.nodes.map((node: { id: string }) => (
+            node.id === 'only' ? { ...node, instruction: 'Dirty instruction' } : node
+          )),
+        },
+      })
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Winner draft' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Abandoned draft' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Dirty draft' })).not.toBeInTheDocument()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Only, Pending' }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Node instruction' }), {
+      target: { value: 'Winner edit' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(updateGraphPlan).toHaveBeenCalledWith(
+      't',
+      99,
+      expect.objectContaining({ graph: expect.anything() }),
+    ))
+    expect(updateGraphPlan).not.toHaveBeenCalledWith('t', 88, expect.anything())
+  })
+
+  it('restores prior focus after a newer open fails without keeping abandoned autosave bindings', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = queuedDraft(77, 'Prior draft')
+    const abandoned = queuedDraft(88, 'Abandoned draft')
+    let finishAutosave: ((value: typeof prior) => void) | undefined
+    let autosaveStarted = false
+    let rejectNewer: ((reason?: unknown) => void) | undefined
+    let savedGraph = prior.graph
+    vi.mocked(getGraphJob).mockImplementation((_token, jobId) => {
+      if (jobId === 77) return Promise.resolve({ ...prior, graph: savedGraph })
+      if (jobId === 88) return Promise.resolve(abandoned)
+      if (jobId === 99) {
+        return new Promise((_resolve, reject) => { rejectNewer = reject })
+      }
+      return Promise.reject(new Error(`unexpected job ${jobId}`))
+    })
+    vi.mocked(updateGraphPlan).mockImplementation((_token, jobId, body) => {
+      if (jobId !== 77) return Promise.reject(new Error(`unexpected save ${jobId}`))
+      if (body.graph) savedGraph = body.graph
+      const saved = {
+        ...prior,
+        title: body.title ?? prior.title,
+        graph: body.graph ?? savedGraph,
+      }
+      if (!autosaveStarted) {
+        autosaveStarted = true
+        return new Promise<typeof prior>(resolve => { finishAutosave = resolve }).then(() => saved)
+      }
+      return Promise.resolve(saved)
+    })
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Prior draft' })).toBeInTheDocument()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Only, Pending' }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Node instruction' }), {
+      target: { value: 'Keep prior' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(autosaveStarted).toBe(true))
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={88}
+        onPendingConsumed={onPendingConsumed}
+      />,
+    )
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 88))
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={99}
+        onPendingConsumed={onPendingConsumed}
+      />,
+    )
+    await waitFor(() => expect(rejectNewer).toBeTypeOf('function'))
+
+    await act(async () => {
+      finishAutosave?.({
+        ...prior,
+        graph: {
+          ...prior.graph,
+          nodes: prior.graph.nodes.map((node: { id: string }) => (
+            node.id === 'only' ? { ...node, instruction: 'Keep prior' } : node
+          )),
+        },
+      })
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      rejectNewer?.(new Error('newer open failed'))
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByText('Error: newer open failed')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Rename workflow Prior draft' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Abandoned draft' })).not.toBeInTheDocument()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Only, Pending' }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Node instruction' }), {
+      target: { value: 'Prior still editable' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(updateGraphPlan).toHaveBeenCalledWith(
+      't',
+      77,
+      expect.objectContaining({
+        graph: expect.objectContaining({
+          nodes: expect.arrayContaining([
+            expect.objectContaining({ instruction: 'Prior still editable' }),
+          ]),
+        }),
+      }),
+    ))
+    await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument())
+  })
+
+  it('clears Saving when an in-flight prior save finishes while a failed ordinary open holds focus', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = queuedDraft(77, 'Prior draft')
+    let finishAutosave: ((value: typeof prior) => void) | undefined
+    let autosaveStarted = false
+    let rejectOpen: ((reason?: unknown) => void) | undefined
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [prior, queuedDraft(88, 'Missing draft')] })
+    vi.mocked(getGraphJob).mockImplementation((_token, jobId) => {
+      if (jobId === 77) return Promise.resolve(prior)
+      if (jobId === 88) {
+        return new Promise((_resolve, reject) => { rejectOpen = reject })
+      }
+      return Promise.reject(new Error(`unexpected job ${jobId}`))
+    })
+    vi.mocked(updateGraphPlan).mockImplementation((_token, jobId, body) => {
+      if (jobId !== 77) return Promise.reject(new Error(`unexpected save ${jobId}`))
+      const saved = {
+        ...prior,
+        title: body.title ?? prior.title,
+        graph: body.graph ?? prior.graph,
+      }
+      if (!autosaveStarted) {
+        autosaveStarted = true
+        return new Promise<typeof prior>(resolve => { finishAutosave = resolve }).then(() => saved)
+      }
+      return Promise.resolve(saved)
+    })
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Prior draft' })).toBeInTheDocument()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Only, Pending' }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Node instruction' }), {
+      target: { value: 'In flight edit' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(autosaveStarted).toBe(true))
+    expect(screen.getByText('Saving…')).toBeInTheDocument()
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={88}
+        onPendingConsumed={onPendingConsumed}
+      />,
+    )
+    await waitFor(() => expect(rejectOpen).toBeTypeOf('function'))
+    expect(screen.getByText('Saving…')).toBeInTheDocument()
+
+    await act(async () => {
+      finishAutosave?.({
+        ...prior,
+        graph: {
+          ...prior.graph,
+          nodes: prior.graph.nodes.map((node: { id: string }) => (
+            node.id === 'only' ? { ...node, instruction: 'In flight edit' } : node
+          )),
+        },
+      })
+      await Promise.resolve()
+    })
+
+    await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Rename workflow Prior draft' })).toBeInTheDocument()
+
+    await act(async () => {
+      rejectOpen?.(new Error('job gone'))
+      await Promise.resolve()
+    })
+    expect(await screen.findByText('Error: job gone')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Rename workflow Prior draft' })).toBeInTheDocument()
+    expect(screen.getByText('Saved ✓')).toBeInTheDocument()
+  })
+
+  it('keeps prior draft healthy when an in-flight save finishes during a failed Run now open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const prior = queuedDraft(77, 'Prior draft')
+    const started = runningJob(77, 'Prior draft')
+    let finishAutosave: ((value: typeof prior) => void) | undefined
+    let autosaveStarted = false
+    let rejectSpawned: ((reason?: unknown) => void) | undefined
+    let launched = false
+    let savedGraph = prior.graph
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [prior] })
+    vi.mocked(getGraphJob).mockImplementation((_token, jobId) => {
+      if (jobId === 77) {
+        return Promise.resolve(launched ? { ...started, graph: savedGraph } : { ...prior, graph: savedGraph })
+      }
+      if (jobId === 99) {
+        return new Promise((_resolve, reject) => { rejectSpawned = reject })
+      }
+      return Promise.reject(new Error(`unexpected job ${jobId}`))
+    })
+    vi.mocked(updateGraphPlan).mockImplementation((_token, jobId, body) => {
+      if (jobId !== 77) return Promise.reject(new Error(`unexpected save ${jobId}`))
+      if (body.graph) savedGraph = body.graph
+      const saved = {
+        ...prior,
+        title: body.title ?? prior.title,
+        graph: body.graph ?? savedGraph,
+      }
+      if (!autosaveStarted) {
+        autosaveStarted = true
+        return new Promise<typeof prior>(resolve => { finishAutosave = resolve }).then(() => saved)
+      }
+      return Promise.resolve(saved)
+    })
+    vi.mocked(runScheduleNow).mockResolvedValue(runningJob(99, 'Nightly publish run'))
+    vi.mocked(startGraphJob).mockImplementation(async () => {
+      launched = true
+      return { ...started, graph: savedGraph }
+    })
+
+    const onPendingConsumed = vi.fn()
+    const { rerender } = render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={0}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Prior draft' })).toBeInTheDocument()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Only, Pending' }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Node instruction' }), {
+      target: { value: 'In flight edit' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800)
+    })
+    await waitFor(() => expect(autosaveStarted).toBe(true))
+    expect(screen.getByText('Saving…')).toBeInTheDocument()
+
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={null}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
+    const row = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+
+    await waitFor(() => expect(rejectSpawned).toBeTypeOf('function'))
+
+    await act(async () => {
+      finishAutosave?.({
+        ...prior,
+        graph: {
+          ...prior.graph,
+          nodes: prior.graph.nodes.map((node: { id: string }) => (
+            node.id === 'only' ? { ...node, instruction: 'In flight edit' } : node
+          )),
+        },
+      })
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      rejectSpawned?.(new Error('network down'))
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not select spawned graph job 99/)
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    rerender(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={77}
+        onPendingConsumed={onPendingConsumed}
+        backNonce={1}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: 'Rename workflow Prior draft' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('Saved ✓')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: '▶ Run' }))
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 77))
+    expect(await screen.findByText('Execution started.')).toBeInTheDocument()
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+  })
+
   it('does not let an older failed open override a newer navigation focus', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const first = queuedDraft(77, 'First plan')

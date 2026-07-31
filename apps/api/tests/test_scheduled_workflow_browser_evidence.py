@@ -110,6 +110,10 @@ def test_docs_describe_single_reusable_workflow_table_not_manual_scheduled_split
         "owns **Manual / Scheduled** mode",
         "Scheduled triggers own cron, overlap, and enabled settings instead",
         "start with no human intake prompt",
+        "Manual trigger only",
+        "Scheduled trigger only",
+        "exposes cron, overlap, and enabled settings instead",
+        "with an empty input payload, so cadence execution does not prompt",
     )
     for path in docs:
         text = path.read_text(encoding="utf-8")
@@ -121,6 +125,10 @@ def test_docs_describe_single_reusable_workflow_table_not_manual_scheduled_split
     assert "shared **intake contract**" in capabilities
     assert "schedule seed" in capabilities
     assert "durable schedule" in capabilities and "bindings" in capabilities
+    workflow_graph = (REPO / "docs" / "workflow-graph.md").read_text(encoding="utf-8")
+    assert "shared" in workflow_graph and "intake" in workflow_graph
+    assert "schedule seed" in workflow_graph or "schedule seeds" in workflow_graph
+    assert "durable" in workflow_graph and "binding" in workflow_graph
 
 
 def test_durable_scheduled_workflow_evidence_has_valid_before_after_pngs():

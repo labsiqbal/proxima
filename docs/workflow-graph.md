@@ -24,8 +24,9 @@ opens the graph Editor directly.
 - Every node attempt runs in a fresh hidden ACP session against the selected runner.
 - Each node may name **its own agent**; nodes without one use the job's agent.
 - Independent branches execute **in parallel**, bounded by a concurrency budget.
-- An optional **trigger node** is the graph's entry point. It owns `manual` or
-  `scheduled` mode and the corresponding intake or cadence configuration.
+- An optional **trigger node** is the graph's entry point. It owns the shared
+  **intake contract** for manual Run plus optional **schedule seed** settings
+  (cron, overlap, enabled default Off) that promote to independent schedule rows.
 - A **script node** is a deterministic step (T6): it runs a saved script from the
   project's `scripts/` library as a subprocess — no LLM, no agent — under the same
   node state machine and dispatch budget, gated by a one-time hash-bound approval.
@@ -114,9 +115,9 @@ use `depends_on`; normalization converts it to edges and removes it from nodes.
 | Field | Meaning |
 | --- | --- |
 | `type` | `agent` (default), `trigger`, or `script`. Absent means `agent`, so graphs predating node types keep working. |
-| `trigger_kind` | Trigger nodes only. `manual` exposes intake fields; `scheduled` exposes cadence settings. |
-| `inputs` | Manual trigger only. The run intake declaration: `{id, label, kind, required, default?}` fields whose values fill `{{id}}` placeholders. IDs begin with a letter and contain only letters, numbers, and underscores. |
-| `schedule` | Scheduled trigger only. `{cron, overlap_policy, enabled}` settings promoted to the workflow's schedule row. |
+| `trigger_kind` | Trigger nodes only. Informational label for the entry point; intake and schedule seeds are independent fields on the same trigger. |
+| `inputs` | Shared run intake declaration: `{id, label, kind, required, default?}` fields whose values fill `{{id}}` placeholders on every manual **Run**. IDs begin with a letter and contain only letters, numbers, and underscores. |
+| `schedule` | Optional schedule seed: `{cron, overlap_policy, enabled}` (enabled defaults Off) promoted to the workflow's schedule row. Unattended ticks resolve durable bindings rather than replacing intake. |
 | `command` | Script nodes only (required). The library script this step runs - a path relative to the Container's physical `ops/scripts/` folder, canonicalized (`scripts/x.sh` ≡ `x.sh`) and jailed at normalization: `..`, absolute paths, and backslashes are rejected when the plan is frozen, not just at run time. |
 | `args` | Script nodes only. CLI args, a list of strings; `{{var}}` placeholders fill from the job input at execution time (the same substitution instructions get). Whole-blank entries are dropped. |
 | `expected_output` | Agent nodes only. Prose for what a good result is; reaches the runner as the prompt's EXPECTED OUTPUT. |
@@ -143,13 +144,16 @@ vanishing. The whole input is still handed to the node as typed data in
 and a profile already carries its skill/MCP selection — a second picker on the node would
 be a second answer to the same question. Choosing the agent is choosing the tool surface.
 
-A manual trigger carries declared **`inputs`** as
+A trigger carries declared **`inputs`** as
 `{id, label, kind, required, default?}`. They are authored in the trigger inspector as
-the reusable intake contract. New rows are valid, complete objects from their first
-write; label, ID, and default edits stage within a stable-ID row and commit only when
-the complete row is valid. Blank, malformed, and duplicate IDs remain local with an
-actionable field error. A rejected graph PATCH leaves the previous contract intact,
-keeps the draft Not saved, and exposes Retry without allowing execution.
+the shared reusable intake contract, and every manual **Run** from that template asks for
+them first. New rows are valid, complete objects from their first write; label, ID, and
+default edits stage within a stable-ID row and commit only when the complete row is valid.
+Blank, malformed, and duplicate IDs remain local with an actionable field error. A
+rejected graph PATCH leaves the previous contract intact, keeps the draft Not saved, and
+exposes Retry without allowing execution. Optional **schedule seed** settings on the same
+trigger do not replace intake: promoting a plan may create a schedule row (default Off),
+and unattended ticks or **Run now** resolve durable schedule bindings instead of prompting.
 `workflows.inputs` remains a compatibility projection for existing RunModal and API
 consumers. New saves derive it from the trigger, while migration and read-time
 hydration move legacy declarations onto the trigger without breaking `{{var}}`
@@ -169,13 +173,14 @@ be a contradiction). Its contract is fixed rather than authored — it is forced
 
 It resolves without a runner: `dispatch_ready` completes it immediately with the
 validated, frozen **job input** as its output, so downstream nodes receive that input as
-ordinary typed upstream data rather than through a special case. A manual trigger is
-the owner pressing start and exposes its intake-form editor. Before the job can claim
+ordinary typed upstream data rather than through a special case. The trigger always
+exposes the shared intake-form editor for manual **Run**. Before the job can claim
 `running`, the start API requires every declared required value, validates number and
 URL fields, applies declared defaults, and removes blank optional values. Existing
-job-owned values are preserved. A scheduled trigger
-exposes cron, overlap, and enabled settings instead; promotion creates the schedule
-with an empty input payload, so cadence execution does not prompt a human.
+job-owned values are preserved. Optional schedule seed fields (cron, overlap, enabled
+default Off) sit beside intake and promote to a schedule row without carrying per-run
+intake values; unattended cadence and **Run now** resolve durable bindings so they never
+prompt a human.
 
 The point of modelling the entry point as a node is that future webhook and event
 modes can become further `trigger_kind` values here, not a second execution path.
@@ -481,10 +486,10 @@ first step, with the authoring chat opened, since describing the workflow is the
 way to fill a blank canvas. (Sequential's "New workflow" retired with it; chat promotion
 must not be the only door into the editor.) Template metadata the chat proposes, such as
 name and description, rides along client-side and pre-fills the lightweight promotion
-dialog. The trigger's intake or cadence contract stays in the graph and autosaves with
-the plan. An empty Plan Chat explains this authoring relationship - graph steps,
-branches, inputs, review gates, and node tests - rather than borrowing main Chat's
-hands-on conversation and Archive guidance.
+dialog. The trigger's shared intake contract and optional schedule seeds stay in the
+graph and autosave with the plan. An empty Plan Chat explains this authoring relationship
+- graph steps, branches, inputs, review gates, and node tests - rather than borrowing
+main Chat's hands-on conversation and Archive guidance.
 
 A plan that has started is **frozen** — the job is the record of what ran, so its graph
 cannot be redrawn after the fact. Its **outputs are not**: editing a node's output and
