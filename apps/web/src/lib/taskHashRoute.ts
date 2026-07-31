@@ -23,3 +23,16 @@ export function withoutTaskPolicy(historyState: unknown): Record<string, unknown
   delete base.proximaTaskPolicy
   return base
 }
+
+/** Stamp/restamp the in-app Task open policy used by openTask and Task-linked Design return. */
+export function withInAppTaskPolicy(historyState: unknown): Record<string, unknown> {
+  const base =
+    historyState && typeof historyState === 'object'
+      ? { ...(historyState as Record<string, unknown>) }
+      : {}
+  return {
+    ...base,
+    proximaView: 'task',
+    proximaTaskPolicy: 'preserve-work',
+  }
+}

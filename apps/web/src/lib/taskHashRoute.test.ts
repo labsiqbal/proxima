@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   taskHashPreservesWorkProject,
+  withInAppTaskPolicy,
   withoutTaskPolicy,
 } from './taskHashRoute'
 
@@ -30,5 +31,19 @@ describe('task hash Work Project policy', () => {
       other: 1,
     })
     expect(withoutTaskPolicy(null)).toEqual({})
+  })
+
+  it('restamps preserve-work when returning from Task-linked Design', () => {
+    const restored = withInAppTaskPolicy({
+      proximaView: 'design',
+      other: 1,
+    })
+    expect(restored).toEqual({
+      proximaView: 'task',
+      proximaTaskPolicy: 'preserve-work',
+      other: 1,
+    })
+    expect(taskHashPreservesWorkProject(false, restored)).toBe(true)
+    expect(taskHashPreservesWorkProject(false, withInAppTaskPolicy(null))).toBe(true)
   })
 })

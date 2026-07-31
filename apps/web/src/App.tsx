@@ -41,6 +41,7 @@ import {
 } from './lib/workProjectPreference'
 import {
   taskHashPreservesWorkProject,
+  withInAppTaskPolicy,
   withoutTaskPolicy,
 } from './lib/taskHashRoute'
 const IterateStage = React.lazy(() => import('./screens/IterateStage').then(m => ({ default: m.IterateStage })))
@@ -334,11 +335,7 @@ export function App() {
     }))
     setActiveTaskId(jobId)
     window.history.replaceState({ ...window.history.state, proximaView: view }, '', window.location.href)
-    window.history.pushState({
-      ...window.history.state,
-      proximaView: 'task',
-      proximaTaskPolicy: 'preserve-work',
-    }, '', `#task/${jobId}`)
+    window.history.pushState(withInAppTaskPolicy(window.history.state), '', `#task/${jobId}`)
     setView('task')
   }, [view])
   const closeTask = React.useCallback(() => {
@@ -502,7 +499,11 @@ export function App() {
           setPendingDesign(null)
           setPendingDesignId(null)
           if (popped.originView === 'task' && activeTaskId != null) {
-            window.history.replaceState(window.history.state, '', `#task/${activeTaskId}`)
+            window.history.replaceState(
+              withInAppTaskPolicy(window.history.state),
+              '',
+              `#task/${activeTaskId}`,
+            )
           }
           setView(popped.originView)
         } else {
