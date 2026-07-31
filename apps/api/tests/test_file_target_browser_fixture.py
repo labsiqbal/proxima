@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from pathlib import Path
 
 import pytest
 
 
+ROOT = Path(__file__).resolve().parents[3]
+
+
 def _fixture_module():
-    script = (
-        Path(__file__).resolve().parents[3]
-        / "scripts"
-        / "verify_file_targets_browser.py"
-    )
+    script = ROOT / "scripts" / "verify_file_targets_browser.py"
     spec = importlib.util.spec_from_file_location(
         "proxima_file_target_browser",
         script,
@@ -40,3 +40,23 @@ def test_missing_openssl_fails_before_browser_fixture_build(
         match="OpenSSL is required",
     ):
         fixture.main()
+
+
+def test_accepted_preview_adr_remains_append_only() -> None:
+    adr = ROOT / "docs" / "adr" / "0015-distinct-tls-area-preview-origins.md"
+    digest = hashlib.sha256(adr.read_bytes()).hexdigest()
+    assert digest == "f1a2941b0b2c3a736ffe6b50131f8e5616cb5160c7fd712f531a6a23d1ead5d5"
+
+    successor = (
+        ROOT / "docs" / "adr" / "0016-frame-bound-area-preview-admission.md"
+    ).read_text(encoding="utf-8")
+    assert "- Status: Accepted" in successor
+    assert "without superseding" in successor
+
+    index = (ROOT / "docs" / "adr" / "README.md").read_text(
+        encoding="utf-8",
+    )
+    assert (
+        "| [0016](0016-frame-bound-area-preview-admission.md) "
+        "| Area preview admission is frame-bound | Accepted |"
+    ) in index

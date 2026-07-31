@@ -384,9 +384,35 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert page.headers["cross-origin-opener-policy"] == "same-origin"
     assert page.headers["referrer-policy"] == "no-referrer"
 
+    clean_top_level = api.get(
+        isolated_url,
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "document",
+        },
+    )
+    assert clean_top_level.status_code == 403
+    assert clean_top_level.text == "preview request metadata is invalid"
+
+    clean_frame = api.get(
+        isolated_url,
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "iframe",
+        },
+    )
+    assert clean_frame.status_code == 200
+    assert "Ops page" in clean_frame.text
+
     nested_asset = api.get(
         urljoin(isolated_url, "theme.css"),
-        headers=same_origin_metadata,
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Dest": "style",
+        },
     )
     assert nested_asset.status_code == 200, nested_asset.text
     assert nested_asset.text == "body { color: canonical-ops; }"
@@ -886,6 +912,10 @@ def test_loopback_relay_uses_shared_frame_only_admission(
         "<script>globalThis.__proximaPreviewExecuted = true</script>",
         encoding="utf-8",
     )
+    (root / "ops" / "theme.css").write_text(
+        "body { color: canonical-ops; }",
+        encoding="utf-8",
+    )
     row = api.app.state.db.execute(
         "SELECT pa.id, pa.project_id FROM project_areas pa "
         "JOIN projects p ON p.id = pa.project_id "
@@ -946,6 +976,28 @@ def test_loopback_relay_uses_shared_frame_only_admission(
     )
     assert clean.status_code == 200
     assert "__proximaPreviewExecuted" in clean.text
+
+    clean_top_level = relay.get(
+        gate.headers["location"],
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "document",
+        },
+    )
+    assert clean_top_level.status_code == 403
+    assert clean_top_level.text == "preview request metadata is invalid"
+
+    same_origin_resource = relay.get(
+        "/theme.css",
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Dest": "style",
+        },
+    )
+    assert same_origin_resource.status_code == 200
+    assert same_origin_resource.text == "body { color: canonical-ops; }"
 
     cross_site_resource = relay.get(
         "/index.html",

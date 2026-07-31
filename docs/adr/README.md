@@ -92,3 +92,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0013](0013-area-bound-file-preview-origins.md) | Canonical file previews use Area-bound capability origins | Superseded by ADR-0014 |
 | [0014](0014-capability-scoped-file-preview-gateways.md) | File previews use capability-scoped execution boundaries | Superseded by ADR-0015 |
 | [0015](0015-distinct-tls-area-preview-origins.md) | Active file previews require distinct TLS Area origins | Accepted |
+| [0016](0016-frame-bound-area-preview-admission.md) | Area preview admission is frame-bound | Accepted |

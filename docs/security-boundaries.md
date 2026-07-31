@@ -412,10 +412,12 @@ enter the clean same-origin URL. A shared Area dispatch gate applies capability 
 Fetch Metadata admission to named hosts, plain HTTP relays, TLS hosts, and clean
 redirects. Cross-origin Area entry requires a capability-bearing iframe or frame
 navigation; the clean frame may use the validated host-scoped cookie and remains
-bound by the signed frame ancestor. Top-level, malformed-entry,
-missing-entry-metadata, and cross-origin subresource requests are rejected before
-file service. Named-local HTTP uses a Secure `SameSite=None` cookie under the
-browser's trustworthy-localhost exception.
+bound by the signed frame ancestor. Top-level document navigation is rejected before
+same-origin or capability trust, including a clean URL with an ambient Area cookie.
+Same-origin non-document resources and proven frame navigations remain available.
+Malformed-entry, missing-entry-metadata, and cross-origin subresource requests are
+rejected before file service. Named-local HTTP uses a Secure `SameSite=None` cookie
+under the browser's trustworthy-localhost exception.
 
 Legacy active files never execute on the Proxima origin. HTML is upgraded to the
 canonical response sandbox, active XML and SVG download, main-origin HTML denies
