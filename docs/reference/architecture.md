@@ -1552,6 +1552,15 @@ for coherence) and **stays on the current view**; only intentional open paths
 
 `AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Master, Tasks, Workflows, Archive, gated Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Master's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. The dock accepts an availability boundary from `App`; unavailable Project context closes and hides the entire dock while retaining any already-visited panes for a safe return. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
 
+`App.tsx` serializes Work navigation through `lib/workRoute.ts`: mode, project,
+background Chat session, primary surface, and focused Workflow or Design identity form
+one validated browser-history entry. `WorkChatStateProvider` sits above `AppShell`, so
+Work/Delegate and primary-surface changes do not remount Chat state. Its owner-local,
+project/session-keyed store preserves the draft, selection, composer mode, safe pending
+attachment references, and scroll anchor across reload or installed-PWA restart.
+Project availability prunes only deleted project keys; URL resolution selects a
+same-project session or an explicit project fallback before exposing saved state.
+
 Design Studio owns a Canvas / Brand Guide / Moodboard section menu. Moodboard reads and
 writes a project-local `artifacts/moodboard/items.json` store through gated routes in
 `routes/design.py`; cached OG images and owner-uploaded screenshots live beside it under

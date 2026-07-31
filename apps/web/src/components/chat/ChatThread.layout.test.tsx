@@ -2,7 +2,7 @@ import React from "react";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatThread } from "./ChatThread";
 import type { ChatMessage } from "../../types";
@@ -150,5 +150,134 @@ describe("ChatThread scroll follow (layout metrics)", () => {
 		const el = { scrollHeight: 2400, clientHeight: 640, scrollTop: 100 };
 		applyThreadScrollFollow(el, true);
 		expect(el.scrollTop).toBe(2400);
+	});
+
+	it("restores a persisted anchor after messages load", () => {
+		const { container, rerender } = render(
+			<ChatThread
+				messages={[]}
+				events={[]}
+				scrollAnchor={123}
+				scrollRestoreKey="atlas:1"
+			/>,
+		);
+		const thread = container.querySelector(".thread") as HTMLDivElement;
+		Object.defineProperty(thread, "scrollHeight", { value: 1000, configurable: true });
+		Object.defineProperty(thread, "clientHeight", { value: 400, configurable: true });
+
+		rerender(
+			<ChatThread
+				messages={fewMessages}
+				events={[]}
+				scrollAnchor={123}
+				scrollRestoreKey="atlas:1"
+			/>,
+		);
+		expect(thread.scrollTop).toBe(123);
+	});
+
+	it("restores again when switching A → B → A on the same mount", () => {
+		const { container, rerender } = render(
+			<ChatThread
+				messages={[]}
+				events={[]}
+				scrollAnchor={120}
+				scrollRestoreKey="atlas:1"
+			/>,
+		);
+		const thread = container.querySelector(".thread") as HTMLDivElement;
+		Object.defineProperty(thread, "scrollHeight", { value: 1000, configurable: true });
+		Object.defineProperty(thread, "clientHeight", { value: 400, configurable: true });
+
+		rerender(
+			<ChatThread
+				messages={fewMessages}
+				events={[]}
+				scrollAnchor={120}
+				scrollRestoreKey="atlas:1"
+			/>,
+		);
+		expect(thread.scrollTop).toBe(120);
+
+		thread.scrollTop = 50;
+		rerender(
+			<ChatThread
+				messages={fewMessages}
+				events={[]}
+				scrollAnchor={340}
+				scrollRestoreKey="atlas:2"
+			/>,
+		);
+		expect(thread.scrollTop).toBe(340);
+
+		thread.scrollTop = 10;
+		rerender(
+			<ChatThread
+				messages={fewMessages}
+				events={[]}
+				scrollAnchor={120}
+				scrollRestoreKey="atlas:1"
+			/>,
+		);
+		expect(thread.scrollTop).toBe(120);
+	});
+
+	it("does not persist the transient zero position of a hidden surface", () => {
+		const onScrollAnchorChange = vi.fn();
+		const { container } = render(
+			<div hidden>
+				<ChatThread
+					messages={fewMessages}
+					events={[]}
+					scrollAnchor={123}
+					onScrollAnchorChange={onScrollAnchorChange}
+				/>
+			</div>,
+		);
+		const thread = container.querySelector(".thread") as HTMLDivElement;
+		thread.scrollTop = 0;
+		fireEvent.scroll(thread);
+		expect(onScrollAnchorChange).not.toHaveBeenCalled();
+	});
+
+	it("defers anchor restore until a keep-alive surface becomes visible", () => {
+		const { container, rerender } = render(
+			<div hidden>
+				<ChatThread
+					messages={fewMessages}
+					events={[]}
+					scrollAnchor={123}
+					scrollRestoreKey="atlas:1"
+					surfaceActive={false}
+				/>
+			</div>,
+		);
+		const thread = container.querySelector(".thread") as HTMLDivElement;
+		Object.defineProperty(thread, "scrollHeight", {
+			value: 1000,
+			configurable: true,
+		});
+		Object.defineProperty(thread, "clientHeight", {
+			value: 0,
+			configurable: true,
+		});
+		expect(thread.scrollTop).toBe(0);
+
+		Object.defineProperty(thread, "clientHeight", {
+			value: 400,
+			configurable: true,
+		});
+		rerender(
+			<div>
+				<ChatThread
+					messages={fewMessages}
+					events={[]}
+					scrollAnchor={123}
+					scrollRestoreKey="atlas:1"
+					surfaceActive
+				/>
+			</div>,
+		);
+		expect(thread.scrollTop).toBe(123);
 	});
 });

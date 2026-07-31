@@ -39,6 +39,7 @@ import {
 } from "../components/shell/runnerReadiness";
 import { IconAgents, IconClose, IconNewChat, IconWiki } from "../components/shell/icons";
 import { notify } from "../lib/notify";
+import { useWorkChatState } from "../work/WorkChatStateProvider";
 
 const cleanName = (n: string) => n.replace(/\s*\(private\)\s*$/i, "");
 
@@ -106,6 +107,8 @@ const defaultRunRecipePrompt = (features: AppFeatures) => {
 export function ChatScreen(props: {
 	token: string;
 	features: AppFeatures;
+	/** False while the keep-alive Chat pane is hidden behind another Work surface. */
+	active?: boolean;
 	activeProfile: Profile | null;
 	activeProject: Project | null;
 	activeSession: ChatSession | null;
@@ -145,7 +148,6 @@ export function ChatScreen(props: {
 	);
 	const [error, setError] = React.useState("");
 	const [wikiNotice, setWikiNotice] = React.useState("");
-	const [composerDrafts, setComposerDrafts] = React.useState<Record<string, string>>({});
 	const [wikiDraft, setWikiDraft] = React.useState<WikiDraft | null>(null);
 	const [savingWiki, setSavingWiki] = React.useState(false);
 	const seenDraftId = React.useRef(0);
@@ -156,6 +158,10 @@ export function ChatScreen(props: {
 	const mountedRef = React.useRef(true);
 	const activeSessionIdRef = React.useRef<number | null>(null);
 	const activeSession = localSession || props.activeSession;
+	const workChat = useWorkChatState(
+		activeSession?.project_slug || props.activeProject?.slug,
+		activeSession?.id,
+	);
 
 	React.useEffect(() => {
 		mountedRef.current = true;
@@ -783,14 +789,6 @@ export function ChatScreen(props: {
 	);
 	const projSlug =
 		activeSession?.project_slug || props.activeProject?.slug || undefined;
-	const composerDraftKey = chatDraftScopeKey(activeSession, props.activeProject);
-	const composerDraft = composerDrafts[composerDraftKey] ?? "";
-	const updateComposerDraft = React.useCallback((next: string) => {
-		setComposerDrafts(current => {
-			if ((current[composerDraftKey] ?? "") === next) return current;
-			return { ...current, [composerDraftKey]: next };
-		});
-	}, [composerDraftKey]);
 	return (
 		<section className="chat-stage code-view">
 			<header className="code-header">
@@ -804,7 +802,7 @@ export function ChatScreen(props: {
 			)}
 			{goalBanner}
 			<ChatThread
-				key={activeSession?.id ?? "new"}
+				key={workChat.key ?? "new"}
 				messages={messages}
 				events={events}
 				pendingRunId={busyRun}
@@ -816,8 +814,14 @@ export function ChatScreen(props: {
 				profiles={props.profiles}
 				onQuickReply={submit}
 				onOpenOutput={openOutput}
-					onMessageUpdated={updateMessageContent}
-					features={props.features}
+				onMessageUpdated={updateMessageContent}
+				scrollAnchor={workChat.state.scrollTop}
+				onScrollAnchorChange={(scrollTop) =>
+					workChat.update({ scrollTop })
+				}
+				scrollRestoreKey={workChat.key}
+				surfaceActive={props.active !== false}
+				features={props.features}
 			/>
 			{error && <div className="error-bar">{error}</div>}
 			<div className="chat-dock">
@@ -828,11 +832,19 @@ export function ChatScreen(props: {
 						slug={projSlug}
 						profileId={props.activeProfile?.id ?? null}
 						features={props.features}
-					draftValue={composerDraft}
-					onDraftChange={updateComposerDraft}
 					draftSeed={props.draftSeed}
 					draftSeedNonce={props.draftSeedNonce}
 					onDraftSeedConsumed={props.onDraftSeedConsumed}
+					draftValue={workChat.state.draft}
+					onDraftChange={(draft) => workChat.update({ draft })}
+					selectionValue={workChat.state.selection}
+					onSelectionChange={(selection) => workChat.update({ selection })}
+					modeValue={workChat.state.mode}
+					onModeChange={(mode) => workChat.update({ mode })}
+					attachmentsValue={workChat.state.attachments}
+					onAttachmentsChange={(attachments) =>
+						workChat.update({ attachments })
+					}
 					onCatalog={onCatalog}
 					onSubmit={submit}
 				/>

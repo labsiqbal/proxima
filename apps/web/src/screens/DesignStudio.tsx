@@ -602,7 +602,71 @@ const chatFromMessages = (msgs: { role: string; content: string }[]): { role: 'u
   .filter(m => (m.role === 'user' || m.role === 'assistant') && !!m.content && !m.content.startsWith('Agent produced no output'))
   .map(m => ({ role: m.role as 'user' | 'assistant', content: m.role === 'assistant' ? (stripDesignScene(m.content) || 'Updated the design.') : m.content }))
 
-export function DesignStudio({ token, project, profileId, openSession, openDesignId, onOpened, onExit, onStageChange, exitNonce }: { token: string; project: Project | null; profileId?: number | null; openSession?: { id: number; title: string } | null; openDesignId?: string | null; onOpened?: () => void; onExit?: () => void; onStageChange?: (stage: 'start' | 'studio' | 'gallery' | 'moodboard') => void; /** Bumped by chrome Back to leave the canvas (flush + start, or onExit when deep-opened). */ exitNonce?: number }) {
+/** Same-target session shortcut is valid only when the keep-alive scene still belongs to that session. */
+export function designSessionKeepAliveMatches(args: {
+  openedTargetKey: string
+  targetKey: string
+  scene: { id?: string; sessionId?: number | null } | null | undefined
+  openSessionId: number
+}): args is {
+  openedTargetKey: string
+  targetKey: string
+  scene: { id: string; sessionId?: number | null }
+  openSessionId: number
+} {
+  return (
+    args.openedTargetKey === args.targetKey
+    && !!args.scene?.id
+    && args.scene.sessionId === args.openSessionId
+  )
+}
+
+/** After a pending session open is cleared, return start only for orphaned studio loading. */
+export function designSessionOpenCancelStage(args: {
+  openSession: { id: number } | null | undefined
+  openDesignId?: string | null
+  hasScene: boolean
+  stage: 'start' | 'studio' | 'gallery' | 'moodboard'
+}): 'start' | null {
+  if (args.openSession) return null
+  if (args.openDesignId) return null
+  if (args.hasScene) return null
+  if (args.stage !== 'studio') return null
+  return 'start'
+}
+
+/** Intentional cancel/failure landing on empty start must consume one-time last-design restore
+ * and report start+null so a later effect cannot republish a stored design id. */
+export function designSessionOpenAbortReset(args: {
+  landedOnStart: boolean
+}): { consumeLastDesignRestore: boolean; reportStage: 'start' | null } {
+  if (!args.landedOnStart) {
+    return { consumeLastDesignRestore: false, reportStage: null }
+  }
+  return { consumeLastDesignRestore: true, reportStage: 'start' }
+}
+
+/** Shared leave/cancel plan: empty start/gallery with no scene or open target must
+ * consume last-design restore and report start+null (exitNonce, session cancel, failure). */
+export function designLeaveEmptyAbort(args: {
+  hasScene: boolean
+  hasOpenSession: boolean
+  hasOpenDesignId: boolean
+  stageAfterLeave: 'start' | 'studio' | 'gallery' | 'moodboard' | null
+}): { consumeLastDesignRestore: boolean; reportStage: 'start' | null; clearOpenedTarget: boolean } {
+  const emptyHome =
+    !args.hasScene
+    && !args.hasOpenSession
+    && !args.hasOpenDesignId
+    && (args.stageAfterLeave === 'start' || args.stageAfterLeave === 'gallery')
+  const abort = designSessionOpenAbortReset({ landedOnStart: emptyHome })
+  return {
+    ...abort,
+    clearOpenedTarget: emptyHome,
+  }
+}
+
+export function DesignStudio({ token, project, profileId, openSession, openDesignId, onOpened, onExit, onStageChange, exitNonce }: { token: string; project: Project | null; profileId?: number | null; openSession?: { id: number; title: string } | null; openDesignId?: string | null; onOpened?: () => void; onExit?: () => void; onStageChange?: (stage: 'start' | 'studio' | 'gallery' | 'moodboard', designId: string | null) => void; /** Bumped by chrome Back to leave the canvas (flush + start, or onExit when deep-opened). */ exitNonce?: number }) {
   const isMobile = useIsMobile()
   const mentionItems = useProjectMentionItems(token, project?.slug)
   const [mSheet, setMSheet] = React.useState<'panel' | 'inspector' | 'add' | null>(null)
@@ -613,9 +677,24 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const [middlePan, setMiddlePan] = React.useState(false)
   const [multiMode, setMultiMode] = React.useState(false) // touch multi-select: tapping layer rows toggles selection
   const [stage, setStage] = React.useState<'start' | 'studio' | 'gallery' | 'moodboard'>('start')
-  React.useEffect(() => { onStageChange?.(stage) }, [stage, onStageChange])
   const [brandGuideOpen, setBrandGuideOpen] = React.useState(false)
   const [scene, setScene] = React.useState<Scene | null>(null)
+  /** Target id while open/load is in flight so stage reports never republish a prior scene. */
+  const [openingDesignId, setOpeningDesignId] = React.useState<string | null>(null)
+  const [openingSessionId, setOpeningSessionId] = React.useState<number | null>(null)
+  React.useEffect(
+    () => {
+      if (stage !== 'studio') {
+        onStageChange?.(stage, null)
+        return
+      }
+      const reportedId =
+        openingDesignId
+        ?? (openingSessionId != null ? null : scene?.id ?? null)
+      onStageChange?.(stage, reportedId)
+    },
+    [stage, openingDesignId, openingSessionId, scene?.id, onStageChange],
+  )
   const [saved, setSaved] = React.useState<'idle' | 'saving' | 'saved'>('idle')
   // Explicit saved versions (snapshots the user chose to keep) — distinct from the
   // undo stack (change-log). Persisted as artifacts/design/<id>/versions/<ts>.json.
@@ -677,6 +756,10 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const hydrateChat = React.useCallback((sid: number | null) => hydrateChatRef.current(sid), [])
   const sessionRef = React.useRef<number | null>(null)
   const openedTargetRef = React.useRef('')
+  // One-time last-design restore per mount. Consumed on true fresh entry OR when a
+  // session-open cancel/failure intentionally lands on empty start (so restore cannot
+  // race in the same turn and republish a stale focused design id).
+  const restoredRef = React.useRef(false)
   // Which stage the studio was entered from, so Back returns there (e.g. the
   // "Your designs" gallery) instead of always dropping to the Design home.
   const studioFrom = React.useRef<'start' | 'gallery'>('start')
@@ -728,16 +811,34 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   // Newest not-yet-written auto-save body + the flusher that persists it on exit.
   const pendingSaveRef = React.useRef<{ path: string; body: string } | null>(null)
   const flushSaveRef = React.useRef<() => void>(() => {})
-  // Chrome Back bumps exitNonce: flush and leave the canvas (internal start/gallery,
-  // or onExit when Design was deep-opened from another surface).
+  // Chrome Back / route leave bumps exitNonce: flush, invalidate every in-flight load
+  // (session + folder id), and land on start/gallery. Empty landings consume one-time
+  // last-design restore so a later effect cannot republish a stale focused id.
   const lastExitNonce = React.useRef(exitNonce ?? 0)
   React.useEffect(() => {
     if (exitNonce == null || exitNonce === lastExitNonce.current) return
     lastExitNonce.current = exitNonce
     flushSaveRef.current()
-    if (onExit) onExit()
-    else setStage(studioFrom.current)
-  }, [exitNonce, onExit])
+    openSeq.current += 1
+    sessionOpenSeq.current += 1
+    setOpeningDesignId(null)
+    setOpeningSessionId(null)
+    if (onExit) {
+      onExit()
+      return
+    }
+    const nextStage = studioFrom.current
+    setStage(nextStage)
+    const leave = designLeaveEmptyAbort({
+      hasScene: !!sceneRef.current,
+      hasOpenSession: !!openSession,
+      hasOpenDesignId: !!openDesignId,
+      stageAfterLeave: nextStage,
+    })
+    if (leave.consumeLastDesignRestore) restoredRef.current = true
+    if (leave.reportStage === 'start') onStageChange?.('start', null)
+    if (leave.clearOpenedTarget) openedTargetRef.current = ''
+  }, [exitNonce, onExit, openSession, openDesignId, onStageChange])
   // Scene id whose gen: layers still need resolving. The load paths run while the
   // component is still on the start/gallery early-returns — where the resolver
   // assignment below them has never executed — so they set this marker and the
@@ -1161,10 +1262,71 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   React.useEffect(() => {
     if (!openSession || !designFs) {
       sessionOpenSeq.current += 1
+      setOpeningSessionId(null)
+      // Cancelled/invalidated session open with no scene and no replacement design
+      // target must not leave keep-alive stuck on studio Loading. If exitNonce already
+      // moved stage to start/gallery, still treat empty home as an abort landing.
+      let stageAfter: 'start' | 'studio' | 'gallery' | 'moodboard' | null = null
+      if (!openSession) {
+        setStage(prev => {
+          const next = designSessionOpenCancelStage({
+            openSession,
+            openDesignId,
+            hasScene: !!sceneRef.current,
+            stage: prev,
+          })
+          stageAfter = next ?? prev
+          return next ?? prev
+        })
+      }
+      const leave = designLeaveEmptyAbort({
+        hasScene: !!sceneRef.current,
+        hasOpenSession: !!openSession,
+        hasOpenDesignId: !!openDesignId,
+        stageAfterLeave: stageAfter,
+      })
+      if (leave.consumeLastDesignRestore) restoredRef.current = true
+      if (leave.reportStage === 'start') onStageChange?.('start', null)
+      if (leave.clearOpenedTarget) {
+        openedTargetRef.current = ''
+        setOpeningDesignId(null)
+      }
       return
     }
     const targetKey = `${project?.slug || ''}:session:${openSession.id}`
-    if (openedTargetRef.current === targetKey) { onOpened?.(); return }
+    // openedTargetRef is only a hint: re-report when the keep-alive scene still
+    // belongs to this session; otherwise clear the stale claim and resolve.
+    const alreadyOpenArgs = {
+      openedTargetKey: openedTargetRef.current,
+      targetKey,
+      scene: sceneRef.current,
+      openSessionId: openSession.id,
+    }
+    if (designSessionKeepAliveMatches(alreadyOpenArgs)) {
+      setOpeningSessionId(null)
+      setStage('studio')
+      onStageChange?.('studio', alreadyOpenArgs.scene.id)
+      onOpened?.()
+      return
+    }
+    if (openedTargetRef.current === targetKey) {
+      openedTargetRef.current = ''
+    }
+    const keepAliveMatches = sceneRef.current?.sessionId === openSession.id
+    if (!keepAliveMatches) {
+      openedTargetRef.current = ''
+      sceneRef.current = null
+      setScene(null)
+      setSelectedId(null)
+      setOpeningDesignId(null)
+      setOpeningSessionId(openSession.id)
+      setStage('studio')
+    } else {
+      setOpeningSessionId(null)
+      setStage('studio')
+      const keepId = sceneRef.current?.id ?? null
+      if (keepId) onStageChange?.('studio', keepId)
+    }
     const wantTitle = openSession.title.replace(/^Design:\s*/, '').trim()
     const seq = ++sessionOpenSeq.current
     ;(async () => {
@@ -1183,14 +1345,37 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
           const byTitle = scenes.filter(x => !x.sessionId && (x.title || '').trim() === wantTitle)
           if (byTitle.length === 1) { s = byTitle[0]; s.sessionId = openSession.id }
         }
-        if (s && mountedRef.current && seq === sessionOpenSeq.current) {
+        if (!mountedRef.current || seq !== sessionOpenSeq.current) return
+        if (s) {
           openedTargetRef.current = targetKey
-          dedupeSceneIds(s); autoGroupSceneLayers(s); collapseAutoGroups(s); sceneRef.current = s; setScene(s); setFocusAb(0); setSelectedId(null); sessionRef.current = s.sessionId ?? openSession.id; void hydrateChat(sessionRef.current); briefRef.current = ''; autoSent.current = true; fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setLeftTab('chat'); setStage('studio'); pendingResolveRef.current = s.id
+          dedupeSceneIds(s); autoGroupSceneLayers(s); collapseAutoGroups(s)
+          sceneRef.current = s; setScene(s); setFocusAb(0); setSelectedId(null)
+          sessionRef.current = s.sessionId ?? openSession.id; void hydrateChat(sessionRef.current)
+          briefRef.current = ''; autoSent.current = true; fittedFor.current = ''; hist.current = { undo: [], redo: [] }
+          setLeftTab('chat')
+          setOpeningDesignId(null)
+          setOpeningSessionId(null)
+          setStage('studio')
+          pendingResolveRef.current = s.id
+          onStageChange?.('studio', s.id)
+        } else {
+          // Proven miss: stay on real start and consume last-design restore so
+          // onOpened clearing openSession cannot republish a stored design id.
+          const abort = designSessionOpenAbortReset({ landedOnStart: true })
+          if (abort.consumeLastDesignRestore) restoredRef.current = true
+          if (abort.reportStage === 'start') onStageChange?.('start', null)
+          openedTargetRef.current = ''
+          setOpeningSessionId(null)
+          setOpeningDesignId(null)
+          setStage('start')
         }
-      } finally { if (mountedRef.current && seq === sessionOpenSeq.current) onOpened?.() }
+      } finally {
+        if (mountedRef.current && seq === sessionOpenSeq.current) onOpened?.()
+      }
     })()
     return () => { if (seq === sessionOpenSeq.current) sessionOpenSeq.current += 1 }
-  }, [openSession, designFs, collapseAutoGroups])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSession, openDesignId, designFs, collapseAutoGroups])
 
   // Keyboard (undo/redo/delete/nudge/copy-paste/duplicate) — delegated to keyRef
   // which is reassigned each render so it sees the latest selection/scene.
@@ -1253,18 +1438,30 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     if (!designFs) return
     studioFrom.current = stage === 'gallery' ? 'gallery' : 'start'
     const seq = ++openSeq.current
+    setOpeningDesignId(id)
+    // Drop a mismatched keep-alive scene so loading never displays or reports it.
+    if (sceneRef.current?.id !== id) {
+      sceneRef.current = null
+      setScene(null)
+      setSelectedId(null)
+    }
+    setStage('studio')
+    onStageChange?.('studio', id)
     try {
       const f = await designFs.read(`${id}/scene.json`)
       if (!mountedRef.current || seq !== openSeq.current) return
       const s = JSON.parse(f.content) as Scene
-      dedupeSceneIds(s); autoGroupSceneLayers(s); collapseAutoGroups(s); sceneRef.current = s; setScene(s); setFocusAb(0); setSelectedId(null); sessionRef.current = s.sessionId ?? null; void hydrateChat(sessionRef.current); briefRef.current = ''; autoSent.current = true; fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setStage('studio')
+      dedupeSceneIds(s); autoGroupSceneLayers(s); collapseAutoGroups(s); sceneRef.current = s; setScene(s); setFocusAb(0); setSelectedId(null); sessionRef.current = s.sessionId ?? null; void hydrateChat(sessionRef.current); briefRef.current = ''; autoSent.current = true; fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setOpeningDesignId(current => (current === id ? null : current)); setStage('studio')
       pendingResolveRef.current = s.id
     } catch (e) {
       // The design couldn't be read (deleted, or written a beat after the card was
       // clicked). Show the gallery rather than a bare start screen so the user still
       // sees their designs instead of an empty "home".
       console.warn('[DesignStudio] openDesign failed for', id, e)
-      if (mountedRef.current && seq === openSeq.current) setStage('gallery')
+      if (mountedRef.current && seq === openSeq.current) {
+        setOpeningDesignId(current => (current === id ? null : current))
+        setStage('gallery')
+      }
     }
   }
   // Deep-open a specific design by folder id (e.g. a /design draft's card, or one a
@@ -1279,7 +1476,12 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     // but decide whether to load from the scene actually on screen — never skip the
     // open just because a ref persisted across Fast Refresh / a remount-less re-click.
     openedTargetRef.current = `${project?.slug || ''}:design:${openDesignId}`
-    if (sceneRef.current?.id === openDesignId && stage === 'studio') { console.debug('[DesignStudio] deep-open: already showing', openDesignId); onOpened?.(); return }
+    if (sceneRef.current?.id === openDesignId && stage === 'studio') {
+      console.debug('[DesignStudio] deep-open: already showing', openDesignId)
+      onStageChange?.('studio', openDesignId)
+      onOpened?.()
+      return
+    }
     console.debug('[DesignStudio] deep-open: loading', openDesignId)
     void openDesign(openDesignId).finally(() => onOpened?.())
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1302,12 +1504,13 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     setVersionMenu(false)
     setVersions([])
   }, [scene?.id])
-  const restoredRef = React.useRef(false)
   React.useEffect(() => {
     // openedTargetRef is set once a deep-link (openSession/openDesignId) has been
     // handled this mount — guard on it too, so when onOpened() clears the prop and
     // this effect re-runs, restore can't race in and overwrite the just-opened design
     // with the last one before openDesign() finishes loading its scene.
+    // restoredRef is also set true by intentional session-open cancel/failure so an
+    // aborted open that cleared its guards cannot reopen lastDesign in the same turn.
     if (restoredRef.current || openSession || openDesignId || openedTargetRef.current || scene || !designFs || !lastDesignKey) return
     restoredRef.current = true
     let id: string | null = null
@@ -1344,7 +1547,10 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   if (stage === 'gallery') return <section className="design-studio">{designMenu}<GalleryView designs={designs} onOpen={openDesign} onDelete={deleteDesign} onDeleteMany={deleteManyDesigns} onBack={() => setStage('start')} resolveSrc={resolveSrc} projectName={cleanProjectName(project.name)} />
     {brandGuideOpen && <BrandGuideModal token={token} slug={project.slug} onClose={() => setBrandGuideOpen(false)} />}
   </section>
-  if (stage === 'start' || !scene) return <section className="design-studio">{designMenu}<StartScreen mentionItems={mentionItems} designCount={designs.length} onShowGallery={() => setStage('gallery')} onCreate={(t, brief) => { studioFrom.current = 'start'; setCollapsedGroups(new Set()); setScene(sceneFromTemplate(t, brief)); setFocusAb(0); setSelectedId(null); fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setChat([]); setChatBusyRun(null); sessionRef.current = null; briefRef.current = brief.trim(); autoSent.current = false; if (brief.trim()) setLeftTab('chat'); setStage('studio') }} />
+  if (stage === 'studio' && !scene) return <section className="design-studio">{designMenu}<div className="ds-loading muted">Loading design...</div>
+    {brandGuideOpen && <BrandGuideModal token={token} slug={project.slug} onClose={() => setBrandGuideOpen(false)} />}
+  </section>
+  if (stage === 'start' || !scene) return <section className="design-studio">{designMenu}<StartScreen mentionItems={mentionItems} designCount={designs.length} onShowGallery={() => setStage('gallery')} onCreate={(t, brief) => { openedTargetRef.current = ''; studioFrom.current = 'start'; setOpeningDesignId(null); setCollapsedGroups(new Set()); setScene(sceneFromTemplate(t, brief)); setFocusAb(0); setSelectedId(null); fittedFor.current = ''; hist.current = { undo: [], redo: [] }; setChat([]); setChatBusyRun(null); sessionRef.current = null; briefRef.current = brief.trim(); autoSent.current = false; if (brief.trim()) setLeftTab('chat'); setStage('studio') }} />
     {brandGuideOpen && <BrandGuideModal token={token} slug={project.slug} onClose={() => setBrandGuideOpen(false)} />}
   </section>
 

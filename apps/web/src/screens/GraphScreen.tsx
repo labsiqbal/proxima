@@ -221,7 +221,7 @@ export function GraphScreen({
   pendingJobId?: number | null
   onPendingConsumed?: () => void
   /** Lets the shell place the back control in its own chrome (the tab row). */
-  onStageChange?: (stage: 'home' | 'editor') => void
+  onStageChange?: (stage: 'home' | 'editor', jobId: number | null) => void
   backNonce?: number
 }) {
   const [jobs, setJobs] = React.useState<GraphJob[]>([])
@@ -231,6 +231,8 @@ export function GraphScreen({
   /** Short cron labels per workflow for how-it-runs badges. */
   const [scheduleCronByWorkflow, setScheduleCronByWorkflow] = React.useState<Map<number, string[]>>(() => new Map())
   const [job, setJob] = React.useState<GraphJob | null>(null)
+  /** Target id while open/load is in flight so stage reports never republish a prior job. */
+  const [openingJobId, setOpeningJobId] = React.useState<number | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [chatWidth, dragChat] = useDragWidth('proxima.graph.chatWidth', 352, 240, 620)
   const [inspectorWidth, dragInspector] = useDragWidth('proxima.graph.inspectorWidth', 336, 260, 720)
@@ -498,6 +500,7 @@ export function GraphScreen({
       }
       setJob(next)
       setPlan(next.graph)
+      setOpeningJobId(current => (current === next.id ? null : current))
       setJobs(current => {
         const idx = current.findIndex(item => item.id === next.id)
         if (idx < 0) return [next, ...current]
@@ -550,7 +553,17 @@ export function GraphScreen({
     }
   }, [job?.id, job?.status, draftMeta])
 
-  React.useEffect(() => { onStageChange?.(stage) }, [stage, onStageChange])
+  React.useEffect(
+    () => {
+      if (stage !== 'editor') {
+        onStageChange?.(stage, null)
+        return
+      }
+      // Prefer the requested open target over any keep-alive job still in state.
+      onStageChange?.(stage, openingJobId ?? job?.id ?? null)
+    },
+    [stage, openingJobId, job?.id, onStageChange],
+  )
   React.useEffect(() => {
     if (!selectedId) return
     const onKey = (event: KeyboardEvent) => {
@@ -567,15 +580,29 @@ export function GraphScreen({
   React.useEffect(() => {
     if (backNonce == null || backNonce === lastBack.current) return
     lastBack.current = backNonce
+    setOpeningJobId(null)
     setStage('home')
     setNotice('')
     void refreshList()
   }, [backNonce, refreshList])
 
+  const jobIdRef = React.useRef<number | null>(null)
+  jobIdRef.current = job?.id ?? null
+
   const openJob = React.useCallback((jobId: number) => {
+    setOpeningJobId(jobId)
+    // Drop a mismatched keep-alive job so loading never displays or reports it.
+    // Read via ref so this callback stays stable when job loads — otherwise the
+    // pendingJobId effect re-fires, re-GETs, and can clear the editor mid-edit.
+    if (jobIdRef.current !== jobId) {
+      setJob(null)
+      setPlan(null)
+      setSelectedId(null)
+    }
     setStage('editor')
+    onStageChange?.('editor', jobId)
     void loadJob(jobId)
-  }, [loadJob])
+  }, [loadJob, onStageChange])
 
   React.useEffect(() => { void refreshList() }, [refreshList])
 
@@ -610,6 +637,7 @@ export function GraphScreen({
         category: draft.category,
       })
       if (!mounted.current || seq !== draftSeq.current) return
+      setOpeningJobId(null)
       setStage('editor')
       setJob(created)
       setPlan(created.graph)
@@ -930,6 +958,7 @@ export function GraphScreen({
       chatJobRef.current = created.id
       setChatOpen(true)
       writeChatOpen(created.id, true)
+      setOpeningJobId(null)
       setStage('editor')
       setJobs(current => [created, ...current.filter(item => item.id !== created.id)])
       if (description?.trim()) setInitialAuthorText(description.trim())
@@ -1090,6 +1119,7 @@ export function GraphScreen({
       })
       if (!mounted.current) return
       setRunTarget(null)
+      setOpeningJobId(null)
       setStage('editor')
       setJob(next)
       setPlan(next.graph)
@@ -1123,6 +1153,7 @@ export function GraphScreen({
         category: template.category,
       })
       if (!mounted.current) return
+      setOpeningJobId(null)
       setStage('editor')
       setJob(created)
       setPlan(created.graph)
@@ -1146,6 +1177,7 @@ export function GraphScreen({
       if (!mounted.current) return
       await primeAutosave(next)
       if (!mounted.current) return
+      setOpeningJobId(null)
       setStage('editor')
       setJob(next)
       setPlan(next.graph)
