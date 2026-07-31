@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .container_registry import container_root, resolve_area_root
+from .run_projection import project_job_run
 
 
 class CheckpointError(RuntimeError):
@@ -179,16 +180,58 @@ def list_checkpoints(
     return [checkpoint_payload(row) for row in rows]
 
 
+def _decode_steps_state(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return []
+        return decoded if isinstance(decoded, list) else []
+    return []
+
+
+def _projected_job_status(
+    *,
+    status: Any,
+    steps_state: Any,
+    node_states: list[dict[str, Any]] | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "status": status,
+        "steps_state": _decode_steps_state(steps_state),
+    }
+    if node_states is not None:
+        payload["node_states"] = node_states
+    return str(project_job_run(payload)["status"])
+
+
 def restore_impact(conn, checkpoint_id: int) -> dict[str, Any]:
     row = conn.execute(
-        "SELECT cp.*, j.title, j.project_id, j.status AS current_status "
+        "SELECT cp.*, j.title, j.project_id, j.status AS current_status, "
+        "j.steps_state AS current_steps_state "
         "FROM job_checkpoints cp JOIN jobs j ON j.id = cp.job_id WHERE cp.id = ?",
         (checkpoint_id,),
     ).fetchone()
     if not row:
         raise CheckpointError("checkpoint not found")
     payload = checkpoint_payload(row)
-    snapshot = payload["payload"].get("job") or {}
+    snapshot_payload = payload["payload"] if isinstance(payload.get("payload"), dict) else {}
+    snapshot = snapshot_payload.get("job") or {}
+    snapshot_nodes = [
+        dict(item)
+        for item in (snapshot_payload.get("node_states") or [])
+        if isinstance(item, dict)
+    ]
+    current_nodes = [
+        dict(item)
+        for item in conn.execute(
+            "SELECT status, started_at, finished_at FROM node_states "
+            "WHERE job_id = ? ORDER BY id",
+            (row["job_id"],),
+        ).fetchall()
+    ]
     refs = payload["git_refs"]
     # A later job in the same project may depend on refs created after this
     # checkpoint. Refuse rather than rewinding shared git state underneath it.
@@ -202,8 +245,16 @@ def restore_impact(conn, checkpoint_id: int) -> dict[str, Any]:
         "checkpoint_id": checkpoint_id,
         "job_id": row["job_id"],
         "job_title": row["title"],
-        "current_status": row["current_status"],
-        "restored_status": snapshot.get("status"),
+        "current_status": _projected_job_status(
+            status=row["current_status"],
+            steps_state=row["current_steps_state"],
+            node_states=current_nodes,
+        ),
+        "restored_status": _projected_job_status(
+            status=snapshot.get("status"),
+            steps_state=snapshot.get("steps_state"),
+            node_states=snapshot_nodes,
+        ),
         "database_scope": ["job", "node_states", "job runs created after checkpoint"],
         "git_refs": refs,
         "conflicts": conflicts,

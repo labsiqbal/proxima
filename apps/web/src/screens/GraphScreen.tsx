@@ -40,6 +40,7 @@ import { RunModal } from '../components/workflows/RunModal'
 import { AuthoringChat, type WorkflowChatHandle } from '../components/workflows/AuthoringChat'
 import { buildGraphPrompt, buildNodeTestPrompt, parseGraphDraft, stripGraphBlock } from '../components/workflows/graphPrompt'
 import { useDragWidth } from '../hooks/useDragWidth'
+import { useEventStream } from '../hooks/useEventStream'
 import { usePolling } from '../hooks/usePolling'
 import { useProjectMentionItems } from '../hooks/useProjectMentionItems'
 import type {
@@ -591,6 +592,17 @@ export function GraphScreen({
     })
   }, [pendingDraft, token, activeProject?.slug, profileId, onDraftConsumed])
 
+  // Every external Task mutation publishes one durable job.update event to
+  // this Task's session. Running/review polling remains a liveness fallback.
+  useEventStream(token, job?.session_id ?? null, event => {
+    if (
+      event.type === 'job.update'
+      && job
+      && Number(event.payload?.job_id ?? job.id) === job.id
+    ) {
+      void loadJob(job.id)
+    }
+  })
   usePolling(
     () => job ? loadJob(job.id) : undefined,
     1500,

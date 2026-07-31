@@ -192,9 +192,7 @@ export function ActivityScreen({ token, activeProject, features, profiles, onOpe
   }, [token, effectiveStatus, activeProject?.slug, includeArchived, mode, features.workflowGraph])
 
   React.useEffect(() => { setOffset(0); void load(0, false) }, [load])
-  const hasActiveJobs = items.some(job => ['queued', 'running'].includes(projectRun(job).status))
-    || plans.some(plan => ['queued', 'running'].includes(projectRun(plan).status))
-  usePolling(() => load(0, false), 2500, { enabled: mode !== 'review' && hasActiveJobs, immediate: false })
+  usePolling(() => load(0, false), 2500, { enabled: true, immediate: false })
 
   const toggleExpanded = (planId: number) => setExpanded(current => {
     const next = new Set(current)
