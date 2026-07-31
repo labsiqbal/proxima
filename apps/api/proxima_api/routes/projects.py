@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import Depends, HTTPException
 
 from .. import container_registry, fsapi, repo_remote
+from ..project_browse import DirectoryBrowseUnavailable, browse_directory
 from ..project_areas import areas_payload, ensure_ops_area, sync_code_areas
 from ..settings import validate_slug
 from ..provisioning import scaffold_project_dir
@@ -108,32 +109,23 @@ def register(app, deps):
     def fs_dirs(path: str = "", user: dict[str, Any] = Depends(current_user)):
         """Browse directories under the configured link roots, to pick an existing
         folder to register as a project."""
-        roots = _link_roots()
-        base = Path(path).expanduser().resolve() if path else roots[0]
-        if not (base in roots or _within_link_roots(base)) or not base.is_dir():
-            base = roots[0]
-        dirs = []
         try:
-            for child in sorted(base.iterdir(), key=lambda c: c.name.lower()):
-                try:
-                    if child.is_dir() and not child.name.startswith("."):
-                        dirs.append({"name": child.name, "path": str(child)})
-                except OSError:
-                    pass
-        except OSError:
-            pass
-        parent = str(base.parent) if (base not in roots and _within_link_roots(base.parent)) else None
-        return {"path": str(base), "parent": parent, "dirs": dirs, "roots": [str(r) for r in roots]}
+            return browse_directory(path, _link_roots())
+        except DirectoryBrowseUnavailable as exc:
+            raise HTTPException(
+                status_code=403,
+                detail={"message": str(exc), "field": "path"},
+            ) from exc
 
     def _validate_new_folder_name(name: str) -> str:
         """Single path component only - no separators, traversal, or empty names."""
         cleaned = name.strip()
         if not cleaned or cleaned in (".", ".."):
-            raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "path"})
+            raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "folder"})
         if cleaned != name or any(sep in cleaned for sep in ("/", "\\", "\0")):
-            raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "path"})
+            raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "folder"})
         if len(cleaned) > 255:
-            raise HTTPException(status_code=400, detail={"message": "folder name is too long", "field": "path"})
+            raise HTTPException(status_code=400, detail={"message": "folder name is too long", "field": "folder"})
         return cleaned
 
     def _link_error(status_code: int, message: str, field: str) -> HTTPException:
@@ -161,34 +153,43 @@ def register(app, deps):
                 folder_name = _validate_new_folder_name(raw.name)
                 try:
                     parent = raw.parent.resolve()
+                    parent_is_dir = parent.is_dir()
+                except PermissionError as exc:
+                    raise _link_error(403, "permission denied - parent directory is not accessible", "parent") from exc
                 except OSError as exc:
-                    raise _link_error(400, "parent directory is not reachable", "path") from exc
+                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
                 if not _within_link_roots(parent):
-                    raise _link_error(403, "path is outside the allowed roots", "path")
-                if not parent.is_dir():
-                    raise _link_error(400, "parent directory does not exist", "path")
+                    raise _link_error(403, "path is outside the allowed roots", "parent")
+                if not parent_is_dir:
+                    raise _link_error(400, "parent directory does not exist", "parent")
                 target = parent / folder_name
-                # Refuse anything that would resolve outside the chosen parent (symlink games).
-                if target.exists():
-                    raise _link_error(409, "a folder with that name already exists", "path")
                 try:
                     target.mkdir(mode=0o755)  # single level only; never parents=True
                 except PermissionError as exc:
-                    raise _link_error(403, "permission denied - cannot create folder here", "path") from exc
+                    raise _link_error(403, "permission denied - cannot create folder here", "parent") from exc
                 except FileExistsError as exc:
-                    raise _link_error(409, "a folder with that name already exists", "path") from exc
+                    raise _link_error(409, "a folder with that name already exists", "folder") from exc
                 except OSError as exc:
-                    raise _link_error(400, f"could not create folder: {exc.strerror or exc}", "path") from exc
+                    raise _link_error(400, f"could not create folder: {exc.strerror or exc}", "parent") from exc
                 created_dir = target
-                target = target.resolve()
+                try:
+                    target = target.resolve()
+                except OSError as exc:
+                    raise _link_error(400, "created folder is not reachable", "parent") from exc
                 if not _within_link_roots(target):
                     # Extremely defensive: if resolve() jumped (unexpected), finally removes the empty dir.
-                    raise _link_error(403, "path is outside the allowed roots", "path")
+                    raise _link_error(403, "path is outside the allowed roots", "parent")
             else:
-                target = Path(payload.path).expanduser().resolve()
+                try:
+                    target = Path(payload.path).expanduser().resolve()
+                    target_is_dir = target.is_dir()
+                except PermissionError as exc:
+                    raise _link_error(403, "permission denied - selected folder is not accessible", "path") from exc
+                except OSError as exc:
+                    raise _link_error(400, "selected folder is not reachable", "path") from exc
                 if not _within_link_roots(target):
                     raise _link_error(403, "path is outside the allowed roots", "path")
-                if not target.is_dir():
+                if not target_is_dir:
                     raise _link_error(400, "not a directory", "path")
             name = (payload.name or target.name).strip()
             # strip("-") AFTER the 63-char truncation too: [:63] can re-cut a collapsed

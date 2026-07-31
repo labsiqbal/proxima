@@ -282,6 +282,27 @@ async function focusButton(cdp, label) {
   assert(focused, `Could not focus ${label}`)
 }
 
+async function activateButtonByKeyboard(cdp, label, key, code, keyCode, text = '') {
+  await focusButton(cdp, label)
+  assert.equal(
+    await evaluate(cdp, `document.activeElement?.textContent.trim()`),
+    label,
+    `${label} did not hold keyboard focus`,
+  )
+  await startAnnouncementTrace(cdp)
+  await pressKey(cdp, key, code, keyCode, text)
+}
+
+async function refreshSelectedFolder(cdp) {
+  const refreshed = await evaluate(cdp, `(() => {
+    const button = document.querySelector('button[name=selected-folder]')
+    if (!(button instanceof HTMLButtonElement)) return false
+    button.click()
+    return true
+  })()`)
+  assert(refreshed, 'Missing selected-folder recovery control')
+}
+
 async function pressKey(cdp, key, code, keyCode, text = '') {
   await cdp.send('Input.dispatchKeyEvent', {
     type: 'keyDown',
@@ -751,6 +772,8 @@ function writeEvidence(report) {
 
 This pass uses the production web bundle, a disposable owner database, and headless
 Chrome at 1440 x 1000. The local flow does not read or alter live Proxima data.
+The command also runs focused API regressions for error ownership, readable-ancestor
+selection, explicit no-ancestor failure, and the configured-root jail.
 The private-entry check sends one unauthenticated shell GET, verifies the current
 device Serve mapping, and blocks every live API or data request in the browser.
 
@@ -759,9 +782,15 @@ device Serve mapping, and blocks every live API or data request in the browser.
 | First-run mismatch focus and single announcement | pass |
 | Repeated mismatch gets one fresh announcement | pass |
 | Unsafe folder focus and single announcement | pass |
-| Repeated unsafe folder gets one fresh announcement | pass |
+| Repeated unsafe folder gets one fresh announcement with Enter | pass |
+| Repeated unsafe folder gets one fresh announcement with Space | pass |
 | Overlong display-name field routing | pass |
 | Derived-slug collision field routing | pass |
+| Missing create parent focuses selected-folder recovery | pass |
+| Permission-denied create parent focuses selected-folder recovery | pass |
+| Unreadable selection recovers to its nearest readable ancestor | pass |
+| No readable ancestor retains explicit invalid state | pass |
+| Browse recovery remains inside configured roots | pass |
 | Missing selected folder focuses its refresh/reselect control | pass |
 | Corrective targets and alerts have one semantic announcement owner | pass |
 | Pressed-button Tab and Space behavior | pass |
@@ -778,7 +807,7 @@ device Serve mapping, and blocks every live API or data request in the browser.
 | Flow | Before | After |
 | --- | --- | --- |
 | Password gate | [tour capture](../../screenshots/first-run-password.png) | [setup mismatch](auth-setup-mismatch-after.png), [returning login](auth-login-error-after.png) |
-| Folder onboarding | [legacy Link tab](../../screenshots/onboarding-link-folder.png), [legacy Create tab](../../screenshots/onboarding-create-folder.png) | [unsafe folder](onboarding-validation-after.png), [slug collision](onboarding-slug-collision-after.png), [missing selected folder](onboarding-path-error-after.png) |
+| Folder onboarding | [legacy Link tab](../../screenshots/onboarding-link-folder.png), [legacy Create tab](../../screenshots/onboarding-create-folder.png) | [unsafe folder](onboarding-validation-after.png), [slug collision](onboarding-slug-collision-after.png), [missing create parent](onboarding-create-parent-error-after.png), [permission-denied parent](onboarding-parent-permission-after.png), [missing selected folder](onboarding-path-error-after.png) |
 | Remote entry | - | [isolated Tailnet-host login](tailnet-unauthenticated-entry.png) |
 
 Machine-readable details are in [report.json](report.json), with the full
@@ -822,7 +851,17 @@ async function main() {
     fs.mkdirSync(directory, { recursive: true })
   }
   const vanishingFolder = path.join(fixtureHome, 'vanishing-folder')
-  fs.mkdirSync(vanishingFolder)
+  const disappearingParent = path.join(fixtureHome, 'disappearing-parent')
+  const permissionDeniedParent = path.join(fixtureHome, 'permission-denied-parent')
+  const noReadableParent = path.join(fixtureHome, 'no-readable-parent')
+  for (const directory of [
+    vanishingFolder,
+    disappearingParent,
+    permissionDeniedParent,
+    noReadableParent,
+  ]) {
+    fs.mkdirSync(directory)
+  }
   const apiEnvironment = disposableApiEnvironment({
     fixtureRoot,
     fixtureHome,
@@ -975,23 +1014,47 @@ async function main() {
       /cannot contain slashes/,
     )
 
-    const repeatedFolderFocusedBeforeError = await startAnnouncementTrace(cdp)
-    await clickButton(cdp, 'Create “bad/name” here')
+    await activateButtonByKeyboard(
+      cdp,
+      'Create “bad/name” here',
+      'Enter',
+      'Enter',
+      13,
+      '\r',
+    )
     await waitForPage(
       cdp,
       `(window.__proximaA11yEvents || []).filter(event => event.type === 'alert').length === 1`,
-      'Repeated unsafe-folder announcement',
+      'Repeated unsafe-folder Enter announcement',
     )
-    const repeatedFolderTrace = await announcementTrace(cdp)
+    const repeatedFolderEnterTrace = await announcementTrace(cdp)
     assertSingleAnnouncement(
-      repeatedFolderTrace,
+      repeatedFolderEnterTrace,
       'folder-name',
       /cannot contain slashes/,
-      repeatedFolderFocusedBeforeError === 'folder-name',
     )
-    const repeatedFolderAx = await accessibilitySummary(cdp)
+    await activateButtonByKeyboard(
+      cdp,
+      'Create “bad/name” here',
+      ' ',
+      'Space',
+      32,
+      ' ',
+    )
+    await waitForPage(
+      cdp,
+      `(window.__proximaA11yEvents || []).filter(event => event.type === 'alert').length === 1`,
+      'Repeated unsafe-folder Space announcement',
+    )
+    const repeatedFolderSpaceTrace = await announcementTrace(cdp)
+    assertSingleAnnouncement(
+      repeatedFolderSpaceTrace,
+      'folder-name',
+      /cannot contain slashes/,
+    )
+    const repeatedFolderKeyboardAx = await accessibilitySummary(cdp)
     assertSingleSemanticOwner(
-      repeatedFolderAx,
+      repeatedFolderKeyboardAx,
       node => node.name.includes('New folder name'),
       /cannot contain slashes/,
     )
@@ -1036,6 +1099,142 @@ async function main() {
     assert.equal(await evaluate(cdp, `document.querySelector('input[name=folder-name]').getAttribute('aria-invalid')`), null)
     await screenshot(cdp, 'onboarding-slug-collision-after.png')
 
+    await setInput(cdp, 'folder-name', 'valid-child')
+    await setInput(cdp, 'project-display-name', '')
+    await clickButton(cdp, 'disappearing-parent')
+    await waitForPage(
+      cdp,
+      `document.querySelector('button[name=selected-folder] code')?.textContent.endsWith('/disappearing-parent')`,
+      'Selected disappearing create parent',
+    )
+    fs.rmdirSync(disappearingParent)
+    await activateButtonByKeyboard(
+      cdp,
+      'Create “valid-child” here',
+      'Enter',
+      'Enter',
+      13,
+      '\r',
+    )
+    await waitForPage(
+      cdp,
+      `document.querySelector('[role=alert]')?.textContent.includes('parent directory does not exist')`,
+      'Missing create parent error',
+    )
+    const missingCreateParentTrace = await announcementTrace(cdp)
+    assertSingleAnnouncement(
+      missingCreateParentTrace,
+      'selected-folder',
+      /parent directory does not exist/,
+    )
+    const missingCreateParentAx = await accessibilitySummary(cdp)
+    assertSingleSemanticOwner(
+      missingCreateParentAx,
+      node => node.role === 'button' && node.name.includes('Selected folder:'),
+      /parent directory does not exist/,
+    )
+    await screenshot(cdp, 'onboarding-create-parent-error-after.png')
+    await refreshSelectedFolder(cdp)
+    await waitForPage(
+      cdp,
+      `document.querySelector('button[name=selected-folder] code')?.textContent
+          === ${JSON.stringify(fixtureHome)}
+        && !document.querySelector('[role=alert]')`,
+      'Missing create parent recovery',
+    )
+
+    await clickButton(cdp, 'permission-denied-parent')
+    await waitForPage(
+      cdp,
+      `document.querySelector('button[name=selected-folder] code')?.textContent.endsWith('/permission-denied-parent')`,
+      'Selected permission-denied create parent',
+    )
+    fs.chmodSync(permissionDeniedParent, 0o000)
+    await setInput(cdp, 'folder-name', 'permission-child')
+    await activateButtonByKeyboard(
+      cdp,
+      'Create “permission-child” here',
+      ' ',
+      'Space',
+      32,
+      ' ',
+    )
+    await waitForPage(
+      cdp,
+      `document.querySelector('[role=alert]')?.textContent.includes('permission denied')`,
+      'Permission-denied create parent error',
+    )
+    const permissionParentTrace = await announcementTrace(cdp)
+    assertSingleAnnouncement(
+      permissionParentTrace,
+      'selected-folder',
+      /permission denied/,
+    )
+    const permissionParentAx = await accessibilitySummary(cdp)
+    assertSingleSemanticOwner(
+      permissionParentAx,
+      node => node.role === 'button' && node.name.includes('Selected folder:'),
+      /permission denied/,
+    )
+    await screenshot(cdp, 'onboarding-parent-permission-after.png')
+    await refreshSelectedFolder(cdp)
+    await waitForPage(
+      cdp,
+      `document.querySelector('button[name=selected-folder] code')?.textContent
+          === ${JSON.stringify(fixtureHome)}
+        && !document.querySelector('[role=alert]')`,
+      'Unreadable selected-parent ancestor recovery',
+    )
+    fs.chmodSync(permissionDeniedParent, 0o700)
+
+    await clickButton(cdp, 'no-readable-parent')
+    await waitForPage(
+      cdp,
+      `document.querySelector('button[name=selected-folder] code')?.textContent.endsWith('/no-readable-parent')`,
+      'Selected no-readable-ancestor fixture',
+    )
+    fs.chmodSync(noReadableParent, 0o000)
+    fs.chmodSync(fixtureHome, 0o000)
+    const noReadableFocusedBeforeError = await startAnnouncementTrace(cdp)
+    await refreshSelectedFolder(cdp)
+    await waitForPage(
+      cdp,
+      `document.querySelector('[role=alert]')?.textContent.includes('No readable folder')`,
+      'No readable ancestor error',
+    )
+    const noReadableTrace = await announcementTrace(cdp)
+    assertSingleAnnouncement(
+      noReadableTrace,
+      'selected-folder',
+      /No readable folder/,
+      noReadableFocusedBeforeError === 'selected-folder',
+    )
+    const noReadableAx = await accessibilitySummary(cdp)
+    assertSingleSemanticOwner(
+      noReadableAx,
+      node => node.role === 'button' && node.name.includes('Selected folder:'),
+      /No readable folder/,
+    )
+    assert.equal(
+      await evaluate(cdp, `document.querySelector('button[name=selected-folder] code')?.textContent`),
+      noReadableParent,
+    )
+    fs.chmodSync(fixtureHome, 0o700)
+    fs.chmodSync(noReadableParent, 0o700)
+    await refreshSelectedFolder(cdp)
+    await waitForPage(
+      cdp,
+      `!document.querySelector('[role=alert]')`,
+      'No-readable-ancestor retry',
+    )
+    await clickButton(cdp, '↑ ..')
+    await waitForPage(
+      cdp,
+      `document.querySelector('button[name=selected-folder] code')?.textContent
+          === ${JSON.stringify(fixtureHome)}`,
+      'Returned to fixture root',
+    )
+
     await clickButton(cdp, 'Link existing')
     await waitForPage(
       cdp,
@@ -1049,7 +1248,7 @@ async function main() {
       'Selected disposable folder',
     )
     fs.rmdirSync(vanishingFolder)
-    await startAnnouncementTrace(cdp)
+    const selectedPathFocusedBeforeError = await startAnnouncementTrace(cdp)
     await clickButton(cdp, 'Link “vanishing-folder”')
     await waitForPage(
       cdp,
@@ -1057,7 +1256,12 @@ async function main() {
       'Missing selected folder error',
     )
     const selectedPathTrace = await announcementTrace(cdp)
-    assertSingleAnnouncement(selectedPathTrace, 'selected-folder', /not a directory/)
+    assertSingleAnnouncement(
+      selectedPathTrace,
+      'selected-folder',
+      /not a directory/,
+      selectedPathFocusedBeforeError === 'selected-folder',
+    )
     const selectedPathAx = await accessibilitySummary(cdp)
     assertSingleSemanticOwner(
       selectedPathAx,
@@ -1066,13 +1270,7 @@ async function main() {
     )
     await screenshot(cdp, 'onboarding-path-error-after.png')
 
-    const recovered = await evaluate(cdp, `(() => {
-      const button = document.querySelector('button[name=selected-folder]')
-      if (!(button instanceof HTMLButtonElement)) return false
-      button.click()
-      return true
-    })()`)
-    assert(recovered, 'Missing selected-folder recovery control')
+    await refreshSelectedFolder(cdp)
     await waitForPage(
       cdp,
       `document.querySelector('button[name=selected-folder] code')?.textContent
@@ -1156,9 +1354,13 @@ async function main() {
         setupMismatch: mismatchTrace,
         setupMismatchRepeat: repeatedMismatchTrace,
         unsafeFolder: folderTrace,
-        unsafeFolderRepeat: repeatedFolderTrace,
+        unsafeFolderEnter: repeatedFolderEnterTrace,
+        unsafeFolderSpace: repeatedFolderSpaceTrace,
         overlongDisplayName: displayTrace,
         derivedSlugCollision: collisionTrace,
+        missingCreateParent: missingCreateParentTrace,
+        permissionDeniedParent: permissionParentTrace,
+        noReadableAncestor: noReadableTrace,
         selectedPath: selectedPathTrace,
         returningLogin: loginTrace,
       },
@@ -1166,7 +1368,10 @@ async function main() {
         setupMismatch: mismatchAx,
         setupMismatchRepeat: repeatedMismatchAx,
         unsafeFolder: folderAx,
-        unsafeFolderRepeat: repeatedFolderAx,
+        unsafeFolderKeyboard: repeatedFolderKeyboardAx,
+        missingCreateParent: missingCreateParentAx,
+        permissionDeniedParent: permissionParentAx,
+        noReadableAncestor: noReadableAx,
         selectedPath: selectedPathAx,
         returningLogin: loginAx,
       },
@@ -1180,6 +1385,13 @@ async function main() {
   } catch (error) {
     throw new Error(`${error.stack || error}\nAPI log:\n${serverLog}\nChrome log:\n${chromeLog}`)
   } finally {
+    for (const directory of [fixtureHome, permissionDeniedParent, noReadableParent]) {
+      try {
+        fs.chmodSync(directory, 0o700)
+      } catch {
+        continue
+      }
+    }
     chrome.kill('SIGTERM')
     api.kill('SIGTERM')
     await sleep(300)

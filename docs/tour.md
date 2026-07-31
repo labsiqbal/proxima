@@ -92,9 +92,10 @@ only as before-state evidence; the pass then used Skip for the rest of the tour.
 
 The retained [auth and onboarding accessibility pass](evidence/auth-onboarding-accessibility/README.md)
 adds before/after validation states, real accessibility trees, keyboard traversal,
-repeat-submit announcements, single-owner alert semantics, selected-folder recovery, a
-complete gate text/focus contrast matrix for every canonical theme, a static-only
-current-device Tailscale Serve check, and Lighthouse.
+Enter/Space repeat-submit announcements, single-owner alert semantics, missing and
+permission-denied parent routing, readable-ancestor recovery, a complete gate text/focus
+contrast matrix for every canonical theme, a static-only current-device Tailscale Serve
+check, and Lighthouse.
 
 ## 3. Chat: hands-on work
 

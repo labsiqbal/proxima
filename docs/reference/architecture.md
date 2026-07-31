@@ -1395,13 +1395,16 @@ WCAG AA across every canonical preset.
 
 Project link/create failures use structured API details carrying the owning request
 field. The fetch client preserves FastAPI validation locations and explicit
-`path`/`name`/`slug` ownership; `FolderLinker` maps create-path failures to its folder
-input, link-path failures to a focusable selected-folder refresh control, and name/slug
-failures to the display-name input before focusing and publishing the single alert.
-Every repeated attempt remounts that sole announcement owner. Refreshing a missing
-selection reloads the closest valid browsable location for reselection. The retained
-browser audit runs the production bundle with allowlisted child environments, disposable
-runtime/profile roots, and background/live-service features disabled. Its real Tailscale entry check
+selected `path`/`parent`, child `folder`, and display `name`/`slug` ownership.
+`FolderLinker` maps parent and link-path failures to a focusable selected-folder refresh
+control, child-name failures to the folder input, and name/slug failures to the
+display-name input before focusing and publishing the single alert. Every repeated
+attempt remounts that sole announcement owner. Directory browsing tests readability,
+climbs only to the nearest readable ancestor within the owning configured root, and
+returns a structured path error while retaining the current invalid selection when no
+allowed ancestor is readable. The retained browser audit runs the production bundle
+with allowlisted child environments, disposable runtime/profile roots, and
+background/live-service features disabled. Its real Tailscale entry check
 correlates the origin to the current device root Serve handler, fetches the shell with
 one unauthenticated root GET, and forwards only allowlisted static shell requests.
 Config, setup status, and failed session resume are fulfilled inside the browser

@@ -147,7 +147,7 @@ def test_link_mkdir_rejects_existing_name(tmp_path: Path):
     )
     assert r.status_code == 409
     assert "already exists" in r.json()["detail"]["message"].lower()
-    assert r.json()["detail"]["field"] == "path"
+    assert r.json()["detail"]["field"] == "folder"
     # Must not delete or alter the existing folder.
     assert (existing / "keep-me.txt").read_text(encoding="utf-8") == "stay"
 
@@ -167,7 +167,7 @@ def test_link_mkdir_rejects_outside_roots_and_bad_names(tmp_path: Path):
     )
     assert r.status_code == 403
     assert "outside" in r.json()["detail"]["message"].lower()
-    assert r.json()["detail"]["field"] == "path"
+    assert r.json()["detail"]["field"] == "parent"
     assert not outside_target.exists()
 
     r = c.post(
@@ -177,7 +177,7 @@ def test_link_mkdir_rejects_outside_roots_and_bad_names(tmp_path: Path):
     )
     assert r.status_code == 400
     assert "invalid folder name" in r.json()["detail"]["message"].lower()
-    assert r.json()["detail"]["field"] == "path"
+    assert r.json()["detail"]["field"] == "folder"
 
     r = c.post(
         "/api/projects/link",
@@ -186,8 +186,169 @@ def test_link_mkdir_rejects_outside_roots_and_bad_names(tmp_path: Path):
     )
     assert r.status_code == 400
     assert "parent" in r.json()["detail"]["message"].lower()
-    assert r.json()["detail"]["field"] == "path"
+    assert r.json()["detail"]["field"] == "parent"
     assert not (root / "missing-parent").exists()
+
+
+def test_link_mkdir_routes_parent_permission_failure_to_parent(
+    tmp_path: Path,
+    monkeypatch,
+):
+    parent = tmp_path / "code"
+    parent.mkdir()
+    target = parent / "blocked"
+    c, h = _link_client(tmp_path)
+    original_mkdir = Path.mkdir
+
+    def deny_target(path: Path, *args, **kwargs):
+        if path == target:
+            raise PermissionError("denied")
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", deny_target)
+    response = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(target), "mkdir": True},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "message": "permission denied - cannot create folder here",
+        "field": "parent",
+    }
+    assert not target.exists()
+
+
+def test_link_mkdir_routes_unreadable_parent_probe_to_parent(
+    tmp_path: Path,
+    monkeypatch,
+):
+    parent = tmp_path / "code"
+    parent.mkdir()
+    target = parent / "blocked"
+    c, h = _link_client(tmp_path)
+    original_is_dir = Path.is_dir
+
+    def deny_parent(path: Path):
+        if path == parent:
+            raise PermissionError("denied")
+        return original_is_dir(path)
+
+    monkeypatch.setattr(Path, "is_dir", deny_parent)
+    response = c.post(
+        "/api/projects/link",
+        headers=h,
+        json={"path": str(target), "mkdir": True},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "message": "permission denied - parent directory is not accessible",
+        "field": "parent",
+    }
+    assert not target.exists()
+
+
+def test_browse_recovers_to_nearest_readable_ancestor(tmp_path: Path):
+    root = tmp_path / "allowed"
+    ancestor = root / "code"
+    ancestor.mkdir(parents=True)
+    (ancestor / "visible").mkdir()
+    c, h = _link_client(tmp_path, roots=[root])
+
+    response = c.get(
+        "/api/fs/dirs",
+        headers=h,
+        params={"path": str(ancestor / "missing" / "child")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["path"] == str(ancestor)
+    assert response.json()["dirs"] == [
+        {"name": "visible", "path": str(ancestor / "visible")},
+    ]
+
+
+def test_browse_recovers_from_unreadable_selection(tmp_path: Path, monkeypatch):
+    root = tmp_path / "allowed"
+    selected = root / "blocked"
+    selected.mkdir(parents=True)
+    c, h = _link_client(tmp_path, roots=[root])
+    original_iterdir = Path.iterdir
+
+    def deny_selected(path: Path):
+        if path == selected:
+            raise PermissionError("denied")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", deny_selected)
+    response = c.get(
+        "/api/fs/dirs",
+        headers=h,
+        params={"path": str(selected)},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["path"] == str(root)
+
+
+def test_browse_retains_error_when_no_allowed_ancestor_is_readable(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root = tmp_path / "allowed"
+    selected = root / "blocked"
+    selected.mkdir(parents=True)
+    c, h = _link_client(tmp_path, roots=[root])
+    original_is_dir = Path.is_dir
+
+    def deny_selected_status(path: Path):
+        if path == selected:
+            raise PermissionError("denied")
+        return original_is_dir(path)
+
+    def deny_root_traversal(path: Path):
+        if path == root:
+            raise PermissionError("denied")
+        return iter(())
+
+    monkeypatch.setattr(Path, "is_dir", deny_selected_status)
+    monkeypatch.setattr(Path, "iterdir", deny_root_traversal)
+    response = c.get(
+        "/api/fs/dirs",
+        headers=h,
+        params={"path": str(selected)},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "message": "No readable folder is available inside the allowed roots",
+        "field": "path",
+    }
+
+
+def test_browse_never_traverses_outside_allowed_roots(tmp_path: Path):
+    root = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (root / "visible").mkdir()
+    (outside / "private").mkdir()
+    (root / "escape").symlink_to(outside, target_is_directory=True)
+    c, h = _link_client(tmp_path, roots=[root])
+
+    response = c.get(
+        "/api/fs/dirs",
+        headers=h,
+        params={"path": str(outside / "private")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["path"] == str(root)
+    assert response.json()["dirs"] == [
+        {"name": "visible", "path": str(root / "visible")},
+    ]
 
 
 def test_link_mkdir_routes_derived_slug_collisions_to_name(tmp_path: Path):

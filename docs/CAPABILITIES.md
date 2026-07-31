@@ -1081,11 +1081,12 @@ owner, so the focused target does not duplicate the message as its description. 
 invalid submission mounts a fresh single alert, including an unchanged repeat while the
 target remains focused.
 Display names are checked against the API's 120-character limit before submission. The
-project-link error contract also identifies `path`, `name`, or `slug`; the client maps
-create-path failures to the folder field, link-path failures to a focusable selected-folder
-refresh control, and name/slug failures to the display-name field instead of guessing
-from the mode. Refreshing a missing selection returns the chooser to a valid browsable
-ancestor so the owner can reselect a folder.
+project-link error contract distinguishes the selected `path`/`parent`, child `folder`,
+and display `name`/`slug` targets. Parent and link-path failures focus a selected-folder
+refresh control, child-name failures focus the folder field, and name/slug failures
+focus the display-name field. Browsing selects the nearest actually readable ancestor
+inside the configured root. If no allowed ancestor is readable, the chooser retains
+its selection and explicit invalid state instead of reporting an empty success.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
 `PATCH/DELETE /api/projects/{slug}`.
 

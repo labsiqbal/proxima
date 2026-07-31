@@ -82,7 +82,15 @@ describe('FolderLinker', () => {
 
   it('surfaces API failures as human-readable errors', async () => {
     const user = userEvent.setup()
-    vi.mocked(linkProject).mockRejectedValue(new Error('a folder with that name already exists'))
+    const error = new ApiError(
+      409,
+      'POST /api/projects/link failed (409): a folder with that name already exists',
+      '/api/projects/link',
+      'POST',
+      'folder',
+      'a folder with that name already exists',
+    )
+    vi.mocked(linkProject).mockRejectedValue(error)
     render(<FolderLinker token="tok" onLinked={vi.fn()} />)
 
     await screen.findByText('/home/user/code')
@@ -93,6 +101,7 @@ describe('FolderLinker', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/already exists/i)
     expect(screen.getAllByRole('alert')).toHaveLength(1)
     expect(screen.getByPlaceholderText('my-project')).toHaveFocus()
+    expect(linkProjectErrorField(error)).toBe('folder')
   })
 
   it('rejects slash-containing folder names client-side', async () => {
@@ -219,6 +228,35 @@ describe('FolderLinker', () => {
     expect(recoveredFolder).not.toHaveAttribute('aria-invalid')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(browseDirs).toHaveBeenLastCalledWith('tok', '/home/user/code/existing')
+  })
+
+  it('returns a missing create parent to the selected-folder control', async () => {
+    const user = userEvent.setup()
+    const missingParent = new ApiError(
+      400,
+      'POST /api/projects/link failed (400): parent directory does not exist',
+      '/api/projects/link',
+      'POST',
+      'parent',
+      'parent directory does not exist',
+    )
+    vi.mocked(linkProject).mockRejectedValue(missingParent)
+    render(<FolderLinker token="tok" onLinked={vi.fn()} />)
+
+    await screen.findByText('/home/user/code')
+    await user.click(screen.getByRole('button', { name: /Create new folder/ }))
+    const folderName = screen.getByPlaceholderText('my-project')
+    await user.type(folderName, 'valid-child')
+    await user.click(screen.getByRole('button', { name: /Create “valid-child” here/ }))
+
+    const selectedFolder = screen.getByRole('button', {
+      name: /Selected folder: \/home\/user\/code\. Refresh folders/,
+    })
+    expect(await screen.findByRole('alert')).toHaveTextContent('parent directory does not exist')
+    expect(selectedFolder).toHaveFocus()
+    expect(selectedFolder).toHaveAttribute('aria-invalid', 'true')
+    expect(folderName).not.toHaveAttribute('aria-invalid')
+    expect(linkProjectErrorField(missingParent)).toBe('path')
   })
 
   it('uses pressed buttons with ordinary keyboard traversal for folder choice', async () => {

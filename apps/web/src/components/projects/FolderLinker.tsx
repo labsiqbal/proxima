@@ -106,7 +106,11 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
         const apiField = linkProjectErrorField(e)
         const field = apiField === 'name'
           ? 'display'
-          : mode === 'create' ? 'folder' : 'path'
+          : apiField === 'folder'
+            ? 'folder'
+            : apiField === 'path'
+              ? 'path'
+              : mode === 'create' ? 'folder' : 'path'
         const message = e instanceof ApiError && e.detail
           ? e.detail
           : e instanceof Error ? e.message : String(e)

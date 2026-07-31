@@ -40,7 +40,21 @@
         "name": "Folder name cannot contain slashes or be “.” / “..”"
       }
     ],
-    "unsafeFolderRepeat": [
+    "unsafeFolderEnter": [
+      {
+        "type": "focus",
+        "name": "folder-name"
+      },
+      {
+        "type": "alert",
+        "name": "Folder name cannot contain slashes or be “.” / “..”"
+      }
+    ],
+    "unsafeFolderSpace": [
+      {
+        "type": "focus",
+        "name": "folder-name"
+      },
       {
         "type": "alert",
         "name": "Folder name cannot contain slashes or be “.” / “..”"
@@ -62,11 +76,33 @@
         "name": "A project with that display name already exists - choose another display name"
       }
     ],
-    "selectedPath": [
+    "missingCreateParent": [
       {
         "type": "focus",
         "name": "selected-folder"
       },
+      {
+        "type": "alert",
+        "name": "parent directory does not exist"
+      }
+    ],
+    "permissionDeniedParent": [
+      {
+        "type": "focus",
+        "name": "selected-folder"
+      },
+      {
+        "type": "alert",
+        "name": "permission denied - cannot create folder here"
+      }
+    ],
+    "noReadableAncestor": [
+      {
+        "type": "alert",
+        "name": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-j8tE8p%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots"
+      }
+    ],
+    "selectedPath": [
       {
         "type": "alert",
         "name": "not a directory"
@@ -213,7 +249,28 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wGi6Dj/home. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-j8tE8p/home. Refresh folders",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "disappearing-parent",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "no-readable-parent",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "permission-denied-parent",
           "description": "",
           "focused": false,
           "invalid": "false"
@@ -258,7 +315,7 @@
       ],
       "tabs": []
     },
-    "unsafeFolderRepeat": {
+    "unsafeFolderKeyboard": {
       "mains": [
         {
           "role": "main",
@@ -297,7 +354,28 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wGi6Dj/home. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-j8tE8p/home. Refresh folders",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "disappearing-parent",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "no-readable-parent",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "permission-denied-parent",
           "description": "",
           "focused": false,
           "invalid": "false"
@@ -312,6 +390,258 @@
         {
           "role": "button",
           "name": "Create “bad/name” here",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Skip for now",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Link existing",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "false"
+        },
+        {
+          "role": "button",
+          "name": "Create new folder",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "true"
+        }
+      ],
+      "tabs": []
+    },
+    "missingCreateParent": {
+      "mains": [
+        {
+          "role": "main",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false
+        }
+      ],
+      "alerts": [
+        {
+          "role": "alert",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false,
+          "text": "parent directory does not exist"
+        }
+      ],
+      "focused": [
+        {
+          "role": "RootWebArea",
+          "name": "Proxima",
+          "description": "",
+          "focused": true,
+          "invalid": false
+        },
+        {
+          "role": "button",
+          "name": "Selected folder: /tmp/proxima-a11y-j8tE8p/home/disappearing-parent. Refresh folders",
+          "description": "",
+          "focused": true,
+          "invalid": "true"
+        }
+      ],
+      "buttons": [
+        {
+          "role": "button",
+          "name": "Selected folder: /tmp/proxima-a11y-j8tE8p/home/disappearing-parent. Refresh folders",
+          "description": "",
+          "focused": true,
+          "invalid": "true"
+        },
+        {
+          "role": "button",
+          "name": "↑ ..",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Create “valid-child” here",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Skip for now",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Link existing",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "false"
+        },
+        {
+          "role": "button",
+          "name": "Create new folder",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "true"
+        }
+      ],
+      "tabs": []
+    },
+    "permissionDeniedParent": {
+      "mains": [
+        {
+          "role": "main",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false
+        }
+      ],
+      "alerts": [
+        {
+          "role": "alert",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false,
+          "text": "permission denied - cannot create folder here"
+        }
+      ],
+      "focused": [
+        {
+          "role": "RootWebArea",
+          "name": "Proxima",
+          "description": "",
+          "focused": true,
+          "invalid": false
+        },
+        {
+          "role": "button",
+          "name": "Selected folder: /tmp/proxima-a11y-j8tE8p/home/permission-denied-parent. Refresh folders",
+          "description": "",
+          "focused": true,
+          "invalid": "true"
+        }
+      ],
+      "buttons": [
+        {
+          "role": "button",
+          "name": "Selected folder: /tmp/proxima-a11y-j8tE8p/home/permission-denied-parent. Refresh folders",
+          "description": "",
+          "focused": true,
+          "invalid": "true"
+        },
+        {
+          "role": "button",
+          "name": "↑ ..",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Create “permission-child” here",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Skip for now",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Link existing",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "false"
+        },
+        {
+          "role": "button",
+          "name": "Create new folder",
+          "description": "",
+          "focused": false,
+          "invalid": "false",
+          "pressed": "true"
+        }
+      ],
+      "tabs": []
+    },
+    "noReadableAncestor": {
+      "mains": [
+        {
+          "role": "main",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false
+        }
+      ],
+      "alerts": [
+        {
+          "role": "alert",
+          "name": "",
+          "description": "",
+          "focused": false,
+          "invalid": false,
+          "text": "GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-j8tE8p%2Fhome%2Fno-readable-parent failed (403): No readable folder is available inside the allowed roots GET /api/fs/dirs?path=%2Ftmp%2Fproxima-a11y-j8tE8p%2Fhome%2Fno- readable-parent failed (403): No readable folder is available inside the allowed roots"
+        }
+      ],
+      "focused": [
+        {
+          "role": "RootWebArea",
+          "name": "Proxima",
+          "description": "",
+          "focused": true,
+          "invalid": false
+        },
+        {
+          "role": "button",
+          "name": "Selected folder: /tmp/proxima-a11y-j8tE8p/home/no-readable-parent. Refresh folders",
+          "description": "",
+          "focused": true,
+          "invalid": "true"
+        }
+      ],
+      "buttons": [
+        {
+          "role": "button",
+          "name": "Selected folder: /tmp/proxima-a11y-j8tE8p/home/no-readable-parent. Refresh folders",
+          "description": "",
+          "focused": true,
+          "invalid": "true"
+        },
+        {
+          "role": "button",
+          "name": "↑ ..",
+          "description": "",
+          "focused": false,
+          "invalid": "false"
+        },
+        {
+          "role": "button",
+          "name": "Create “permission-child” here",
           "description": "",
           "focused": false,
           "invalid": "false"
@@ -372,7 +702,7 @@
         },
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wGi6Dj/home/vanishing-folder. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-j8tE8p/home/vanishing-folder. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -381,7 +711,7 @@
       "buttons": [
         {
           "role": "button",
-          "name": "Selected folder: /tmp/proxima-a11y-wGi6Dj/home/vanishing-folder. Refresh folders",
+          "name": "Selected folder: /tmp/proxima-a11y-j8tE8p/home/vanishing-folder. Refresh folders",
           "description": "",
           "focused": true,
           "invalid": "true"
@@ -639,7 +969,7 @@
       "forwarded": "same-origin static shell GET only",
       "bootstrap": "fulfilled in browser fixture",
       "liveDataRequests": "blocked",
-      "blockedRequestCount": 2
+      "blockedRequestCount": 1
     }
   },
   "tailscaleEntry": {
@@ -660,6 +990,6 @@
   "lighthouse": {
     "score": 100,
     "version": "12.8.2",
-    "url": "http://127.0.0.1:32769/"
+    "url": "http://127.0.0.1:35789/"
   }
 }

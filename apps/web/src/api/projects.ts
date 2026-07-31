@@ -16,10 +16,11 @@ export const updateProjectArea = (token: string, slug: string, areaId: number, b
 export const createProject = (token: string, body: { slug: string; name: string }) => api<Project>('/api/projects', token, { method: 'POST', body: JSON.stringify(body) })
 export const browseDirs = (token: string, path = '') => api<{ path: string; parent: string | null; dirs: { name: string; path: string }[]; roots: string[] }>(`/api/fs/dirs?path=${encodeURIComponent(path)}`, token)
 export const linkProject = (token: string, body: { path: string; name?: string; slug?: string; mkdir?: boolean }) => api<Project>('/api/projects/link', token, { method: 'POST', body: JSON.stringify(body) })
-export const linkProjectErrorField = (error: unknown): 'path' | 'name' | null => {
+export const linkProjectErrorField = (error: unknown): 'path' | 'folder' | 'name' | null => {
   if (!(error instanceof ApiError)) return null
   if (error.field === 'name' || error.field === 'slug') return 'name'
-  if (error.field === 'path' || error.field === 'mkdir') return 'path'
+  if (error.field === 'folder') return 'folder'
+  if (error.field === 'path' || error.field === 'parent' || error.field === 'mkdir') return 'path'
   return null
 }
 export const renameProject = (token: string, slug: string, name: string) => api<Project>(`/api/projects/${slug}`, token, { method: 'PATCH', body: JSON.stringify({ name }) })
