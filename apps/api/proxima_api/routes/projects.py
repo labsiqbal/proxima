@@ -434,7 +434,13 @@ def register(app, deps):
     @app.delete("/api/projects/{slug}")
     def delete_project(slug: str, user: dict[str, Any] = Depends(current_user)):
         project = visible_project(slug, user)
-        _purge_project(project)  # rm dir (jailed) + DB row; cascades tasks, nulls session/run links
+        try:
+            _purge_project(project)
+        except container_registry.ContainerBoundaryError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": str(exc)},
+            ) from exc
         db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.delete', 'project', ?)", (user["id"], slug))
         return {"ok": True, "slug": slug}
 

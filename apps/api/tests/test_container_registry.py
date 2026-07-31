@@ -149,8 +149,21 @@ def _prepare_completed_filesystem_move(
     recovery = manifest["container_doc"]["recovery_temp"]
     recovery["phase"] = "complete"
     recovery["identity"] = container_registry._stat_identity(document.lstat())
+    ops_fd = os.open(root / "ops", os.O_RDONLY)
+    try:
+        for entry in manifest["entries"]:
+            name = str(entry["name"])
+            source = root / name
+            source.rename(root / "ops" / name)
+            snapshot = container_registry._entry_snapshot_at(ops_fd, name)
+            entry["publication"]["destination_snapshot"] = snapshot
+            entry["publication"]["destination_directories"] = (
+                container_registry._snapshot_directory_identities(snapshot)
+            )
+            entry["publication"]["phase"] = "complete"
+    finally:
+        os.close(ops_fd)
     container_registry._upsert_marker(conn, container_id, "moving", manifest)
-    (root / "wiki").rename(root / "ops" / "wiki")
     return manifest
 
 
@@ -709,8 +722,16 @@ def _owned_api_legacy(api: TestClient, root: Path, slug: str) -> int:
     conn = api.app.state.db
     owner_id = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()["id"]
     container_id = conn.execute(
-        "INSERT INTO projects(slug, name, path, owner_user_id) VALUES (?, ?, ?, ?)",
-        (slug, slug.replace("-", " ").title(), str(root), owner_id),
+        "INSERT INTO projects("
+        "slug, name, path, path_identity, owner_user_id"
+        ") VALUES (?, ?, ?, ?, ?)",
+        (
+            slug,
+            slug.replace("-", " ").title(),
+            str(root),
+            directory_identity_for_path(root),
+            owner_id,
+        ),
     ).lastrowid
     conn.execute(
         "INSERT INTO project_areas(project_id, kind, rel_path, source) "
@@ -3220,6 +3241,213 @@ def test_retry_serializes_complete_project_purge(
     assert (root / "ops" / "wiki" / "existing.md").read_text(
         encoding="utf-8"
     ) == "existing"
+    assert api.app.state.db.execute(
+        "SELECT 1 FROM projects WHERE id = ?",
+        (container_id,),
+    ).fetchone() is None
+
+
+def test_delete_recovers_verified_orphan_guardian(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "delete-orphan-recovery"
+    container_id = _owned_api_legacy(api, root, "delete-orphan-recovery")
+    (root / "keep.txt").write_text("keep", encoding="utf-8")
+    database = Path(api.app.state.config["database_path"])
+    ready = tmp_path / "delete-orphan-ready"
+    api_root = Path(__file__).resolve().parents[1]
+    launcher = "\n".join(
+        (
+            "import os, subprocess, sys",
+            "from pathlib import Path",
+            "from proxima_api.container_registry import acquire_container_activity_lease",
+            "from proxima_api.db import connect",
+            "database, container_id, root, ready = sys.argv[1:]",
+            "lease = acquire_container_activity_lease(connect(database), int(container_id))",
+            "command, options = lease.guard_process([sys.executable, '-c', 'import time; time.sleep(60)'])",
+            "subprocess.Popen(command, cwd=root, **options)",
+            "lease.mark_process_started()",
+            "lease.release()",
+            "Path(ready).write_text('ready', encoding='utf-8')",
+            "os._exit(0)",
+        )
+    )
+    parent = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            launcher,
+            str(database),
+            str(container_id),
+            str(root),
+            str(ready),
+        ],
+        cwd=api_root,
+    )
+    assert parent.wait(timeout=5) == 0
+    assert ready.is_file()
+    record_dir = database.parent / f".{database.name}.container-locks"
+    deadline = time.monotonic() + 5
+    while (
+        not list(
+            record_dir.glob(
+                f"{container_id}.activity.*.guardian.json"
+            )
+        )
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+
+    response = api.delete(
+        "/api/projects/delete-orphan-recovery",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"ok": True, "slug": "delete-orphan-recovery"}
+    assert api.app.state.db.execute(
+        "SELECT 1 FROM projects WHERE id = ?",
+        (container_id,),
+    ).fetchone() is None
+    assert not list(
+        record_dir.glob(f"{container_id}.activity.*.guardian.json")
+    )
+
+
+def test_delete_reports_live_project_process_without_stopping_it(
+    tmp_path: Path,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "live-guardian-delete"
+    container_id = _owned_api_legacy(api, root, "live-guardian-delete")
+    (root / "keep.txt").write_text("keep", encoding="utf-8")
+    lease = container_registry.acquire_container_activity_lease(
+        api.app.state.db,
+        container_id,
+    )
+    command, options = lease.guard_process(
+        [sys.executable, "-c", "import time; time.sleep(60)"]
+    )
+    process = subprocess.Popen(command, cwd=root, **options)
+    lease.mark_process_started()
+    lease.release()
+    database = Path(api.app.state.config["database_path"])
+    record_dir = database.parent / f".{database.name}.container-locks"
+    deadline = time.monotonic() + 5
+    while (
+        not list(
+            record_dir.glob(
+                f"{container_id}.activity.*.guardian.json"
+            )
+        )
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+    try:
+        response = api.delete(
+            "/api/projects/live-guardian-delete",
+            headers=headers,
+        )
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert detail["active_processes"] == 1
+        assert detail["unresolved_processes"] == 0
+        assert "active processes" in detail["message"]
+        assert process.poll() is None
+        assert root.exists()
+        assert api.app.state.db.execute(
+            "SELECT 1 FROM projects WHERE id = ?",
+            (container_id,),
+        ).fetchone() is not None
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=5)
+
+
+def test_delete_reports_unresolved_guardian_identity(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "unresolved-guardian-delete"
+    container_id = _owned_api_legacy(
+        api,
+        root,
+        "unresolved-guardian-delete",
+    )
+    (root / "keep.txt").write_text("keep", encoding="utf-8")
+    database = Path(api.app.state.config["database_path"])
+    record_dir = database.parent / f".{database.name}.container-locks"
+    record_dir.mkdir(mode=0o700, exist_ok=True)
+    guardian_id = "d" * 32
+    record = (
+        record_dir
+        / f"{container_id}.activity.{guardian_id}.guardian.json"
+    )
+    record.write_text(
+        json.dumps(
+            {
+                "sentinel_pid": 2_000_000_011,
+                "sentinel_start": "dead-sentinel",
+                "owner_pid": 2_000_000_012,
+                "owner_start": "dead-owner",
+                "python": sys.executable,
+                "guardian": str(
+                    Path(container_activity.__file__).with_name(
+                        "activity_guardian.py"
+                    )
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = api.delete(
+        "/api/projects/unresolved-guardian-delete",
+        headers=headers,
+    )
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["active_processes"] == 0
+    assert detail["unresolved_processes"] >= 1
+    assert "ownership could not be verified" in detail["message"]
+    assert root.exists()
+    assert record.exists()
+    assert api.app.state.db.execute(
+        "SELECT 1 FROM projects WHERE id = ?",
+        (container_id,),
+    ).fetchone() is not None
+
+
+def test_delete_blocks_while_shared_writer_lease_is_held(tmp_path: Path):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "shared-writer-delete"
+    container_id = _owned_api_legacy(api, root, "shared-writer-delete")
+    (root / "keep.txt").write_text("keep", encoding="utf-8")
+    lease = container_registry.acquire_container_activity_lease(
+        api.app.state.db,
+        container_id,
+    )
+    try:
+        response = api.delete(
+            "/api/projects/shared-writer-delete",
+            headers=headers,
+        )
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert "message" in detail
+        assert detail["active_processes"] == 0
+        assert detail["unresolved_processes"] == 0
+        assert "active processes" in detail["message"]
+        assert root.exists()
+        assert api.app.state.db.execute(
+            "SELECT 1 FROM projects WHERE id = ?",
+            (container_id,),
+        ).fetchone() is not None
+    finally:
+        lease.release()
+
+    cleared = api.delete(
+        "/api/projects/shared-writer-delete",
+        headers=headers,
+    )
+    assert cleared.status_code == 200, cleared.text
     assert api.app.state.db.execute(
         "SELECT 1 FROM projects WHERE id = ?",
         (container_id,),

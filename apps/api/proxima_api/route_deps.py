@@ -24,6 +24,7 @@ from .container_registry import (
     container_mutation_lock,
     container_root,
     ops_root,
+    recover_container_activity_guardians,
     root_for_virtual_path,
 )
 from .profile_seed import seed_agent_home
@@ -511,10 +512,51 @@ def build_route_deps(
         for session_id in set(focus_notifications):
             app.state.hub.notify(session_id)
 
+    def _purge_activity_blocked_detail(recovery: Any) -> dict[str, Any]:
+        message = (
+            "Container has active processes; stop them before retrying"
+            if recovery.active
+            else (
+                "Project process ownership could not be verified; "
+                "exclusive work is blocked until process identity is reconciled"
+            )
+        )
+        return {
+            "message": message,
+            "active_processes": recovery.active,
+            "unresolved_processes": recovery.unresolved,
+        }
+
     def _purge_project(project: dict[str, Any]) -> None:
         with container_mutation_lock(db(), project):
-            with container_quiescence_lock(db(), project):
-                _purge_project_locked(project)
+            recovery = recover_container_activity_guardians(db(), project)
+            if recovery.active or recovery.unresolved:
+                raise http_exception(
+                    status_code=409,
+                    detail=_purge_activity_blocked_detail(recovery),
+                )
+            try:
+                with container_quiescence_lock(db(), project):
+                    recovery = recover_container_activity_guardians(
+                        db(),
+                        project,
+                    )
+                    if recovery.active or recovery.unresolved:
+                        raise http_exception(
+                            status_code=409,
+                            detail=_purge_activity_blocked_detail(recovery),
+                        )
+                    _purge_project_locked(project)
+            except ContainerBoundaryError as exc:
+                recovery = recover_container_activity_guardians(db(), project)
+                raise http_exception(
+                    status_code=409,
+                    detail={
+                        "message": str(exc),
+                        "active_processes": recovery.active,
+                        "unresolved_processes": recovery.unresolved,
+                    },
+                ) from exc
 
     def _can_access(_created_by: Any, _project_id: Any, _user: dict[str, Any]) -> bool:
         # Single-user: everything belongs to the owner.
