@@ -764,6 +764,13 @@ via `useRunStream.restore` — leave Workflows and return without a false error 
 canvas. **Start chat** and a node's **Test in chat** share one open path onto the plan's
 session (concurrent clicks await the same load) so the panel cannot stick on
 Opening…; a missing session surfaces an error instead of a silent idle card.
+An empty Plan Chat teaches workflow authoring - nodes, branches, inputs, review
+gates, and node tests - instead of reusing main Chat guidance. The canvas observes
+its real viewport and coalesces panel, metadata, inspector, browser-size, and graph
+growth changes into one refit per animation frame. Automatic framing keeps every
+node visible; after manual pan or zoom it preserves the owner's preferred focal
+point and scale wherever the available space allows, temporarily constraining them
+only enough to keep the complete graph in view.
 The **Sequential recipe editor is retired** — a linear recipe is a graph with no
 branches. The linear engine remains for pre-existing jobs; `IterateStage` is still
 reachable from an old session carrying `workflow_id`, but no new linear workflow can be

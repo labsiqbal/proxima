@@ -110,4 +110,18 @@ describe("ChatThread empty branch", () => {
 		);
 		expect(screen.queryByTestId("chat-empty")).not.toBeInTheDocument();
 	});
+
+	it("lets an embedded authoring surface replace the generic Chat guidance", () => {
+		render(
+			<ChatThread
+				messages={[]}
+				events={[]}
+				emptyContent={<div data-testid="workflow-empty">Workflow guidance</div>}
+			/>,
+		);
+		expect(screen.getByTestId("workflow-empty")).toHaveTextContent(
+			"Workflow guidance",
+		);
+		expect(screen.queryByTestId("chat-empty")).not.toBeInTheDocument();
+	});
 });

@@ -2,6 +2,7 @@ import React from 'react'
 import type { GraphJob, GraphNodeState, Profile, WorkflowGraph } from '../../types'
 import { lastOutputLine } from '../tasks/planProjection'
 import { layoutGraph } from '../../screens/graphLayout'
+import type { GraphLayout } from '../../screens/graphLayout'
 
 // The one dependency canvas (extracted from GraphScreen for slice 3): the
 // Workflows editor renders it editable, and the Tasks screen reuses it as the
@@ -35,10 +36,15 @@ export function statusLabel(status: GraphJob['status'] | GraphNodeState['status'
 
 const ZOOM_MIN = 0.35
 const ZOOM_MAX = 2.5
+const FIT_ZOOM_MIN = 0.01
 const HANDLE_RADIUS = 6
 
-type CanvasView = { x: number; y: number; k: number }
+export type CanvasView = { x: number; y: number; k: number }
 type Point = { x: number; y: number }
+type Viewport = { width: number; height: number }
+export type CanvasIntent =
+  | { mode: 'fit' }
+  | { mode: 'manual'; k: number; focus: Point }
 
 /** Pointer gesture in progress. The canvas can only be doing one at a time. */
 type Gesture =
@@ -50,6 +56,80 @@ type Gesture =
 function edgePath(from: Point, to: Point): string {
   const bend = Math.max(36, (to.x - from.x) / 2)
   return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`
+}
+
+function clamp(value: number, low: number, high: number): number {
+  return Math.min(high, Math.max(low, value))
+}
+
+function fitScale(viewport: Viewport, layout: GraphLayout): number {
+  if (!viewport.width || !viewport.height || !layout.width || !layout.height) {
+    return 1
+  }
+  return clamp(
+    Math.min(viewport.width / layout.width, viewport.height / layout.height),
+    FIT_ZOOM_MIN,
+    ZOOM_MAX,
+  )
+}
+
+function centeredFit(viewport: Viewport, layout: GraphLayout, k: number): CanvasView {
+  return {
+    k,
+    x: (viewport.width - layout.width * k) / 2 - layout.x * k,
+    y: (viewport.height - layout.height * k) / 2 - layout.y * k,
+  }
+}
+
+/**
+ * Remember the graph point under the viewport centre, plus the owner's preferred
+ * scale. Automatic refits may temporarily constrain either one to keep every node
+ * visible, but the stored intent is unchanged and returns when space allows.
+ */
+export function captureCanvasIntent(view: CanvasView, viewport: Viewport): Extract<CanvasIntent, { mode: 'manual' }> {
+  return {
+    mode: 'manual',
+    k: view.k,
+    focus: {
+      x: (viewport.width / 2 - view.x) / view.k,
+      y: (viewport.height / 2 - view.y) / view.k,
+    },
+  }
+}
+
+/**
+ * Derive the transform for a resized canvas. Fit mode frames the whole graph.
+ * Manual mode preserves the owner's focal point and preferred zoom whenever the
+ * new viewport permits it, constraining only as much as full visibility requires.
+ */
+export function refitGraphView(
+  viewport: Viewport,
+  layout: GraphLayout,
+  intent: CanvasIntent,
+): CanvasView {
+  const fitK = fitScale(viewport, layout)
+  if (intent.mode === 'fit') return centeredFit(viewport, layout, fitK)
+
+  const k = Math.min(intent.k, fitK)
+  const preferredX = viewport.width / 2 - intent.focus.x * k
+  const preferredY = viewport.height / 2 - intent.focus.y * k
+  const minX = -layout.x * k
+  const maxX = viewport.width - (layout.x + layout.width) * k
+  const minY = -layout.y * k
+  const maxY = viewport.height - (layout.y + layout.height) * k
+
+  return {
+    k,
+    x: clamp(preferredX, Math.min(minX, maxX), Math.max(minX, maxX)),
+    y: clamp(preferredY, Math.min(minY, maxY), Math.max(minY, maxY)),
+  }
+}
+
+function sameView(left: CanvasView, right: CanvasView): boolean {
+  const epsilon = 0.001
+  return Math.abs(left.x - right.x) < epsilon
+    && Math.abs(left.y - right.y) < epsilon
+    && Math.abs(left.k - right.k) < epsilon
 }
 
 export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDeselect, editable, onMoveNode, onConnect, onDisconnect, onAddNode, onAddScript, onAddTrigger, hasTrigger }: {
@@ -79,11 +159,46 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
   const [gesture, setGesture] = React.useState<Gesture>(null)
   const [linkAt, setLinkAt] = React.useState<Point | null>(null)
   const [selectedEdge, setSelectedEdge] = React.useState<string | null>(null)
+  const intentRef = React.useRef<CanvasIntent>({ mode: 'fit' })
+  const refitFrame = React.useRef(0)
+  const geometryKey = React.useMemo(
+    () => layout.nodes
+      .map(node => `${node.id}:${node.x}:${node.y}:${node.width}:${node.height}`)
+      .join('|'),
+    [layout.nodes],
+  )
 
   // A gesture reads the newest layout/view/callbacks without re-subscribing its
   // window listeners on every pointermove.
   const live = React.useRef({ view, layout, positions, plan, onMoveNode, onConnect })
   live.current = { view, layout, positions, plan, onMoveNode, onConnect }
+
+  const viewport = React.useCallback((): Viewport | null => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null
+    return { width: rect.width, height: rect.height }
+  }, [])
+
+  const rememberManualView = React.useCallback((next: CanvasView) => {
+    const size = viewport()
+    if (size) intentRef.current = captureCanvasIntent(next, size)
+  }, [viewport])
+
+  const applyRefit = React.useCallback(() => {
+    const size = viewport()
+    const box = live.current.layout
+    if (!size || !box.nodes.length || !box.width || !box.height) return
+    const next = refitGraphView(size, box, intentRef.current)
+    setView(current => sameView(current, next) ? current : next)
+  }, [viewport])
+
+  const scheduleRefit = React.useCallback(() => {
+    if (refitFrame.current) return
+    refitFrame.current = requestAnimationFrame(() => {
+      refitFrame.current = 0
+      applyRefit()
+    })
+  }, [applyRefit])
 
   const toGraphPoint = React.useCallback((event: { clientX: number; clientY: number }): Point => {
     const rect = svgRef.current?.getBoundingClientRect()
@@ -101,13 +216,15 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
       const rect = svgRef.current?.getBoundingClientRect()
       const at = focus ?? { x: (rect?.width ?? 0) / 2, y: (rect?.height ?? 0) / 2 }
       // Keep whatever sits under `at` pinned there while the scale changes.
-      return {
+      const next = {
         k,
         x: at.x - (at.x - current.x) * (k / current.k),
         y: at.y - (at.y - current.y) * (k / current.k),
       }
+      rememberManualView(next)
+      return next
     })
-  }, [])
+  }, [rememberManualView])
 
   // React attaches wheel listeners passively at the root, so a non-passive native
   // listener is the only way to zoom without the page scrolling underneath.
@@ -120,38 +237,48 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
       const focus = { x: event.clientX - rect.left, y: event.clientY - rect.top }
       setView(current => {
         const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, current.k * Math.exp(-event.deltaY * 0.0015)))
-        return {
+        const next = {
           k,
           x: focus.x - (focus.x - current.x) * (k / current.k),
           y: focus.y - (focus.y - current.y) * (k / current.k),
         }
+        rememberManualView(next)
+        return next
       })
     }
     element.addEventListener('wheel', onWheel, { passive: false })
     return () => element.removeEventListener('wheel', onWheel)
-  }, [])
+  }, [rememberManualView])
 
   const fit = React.useCallback(() => {
-    const rect = svgRef.current?.getBoundingClientRect()
-    const { layout: box } = live.current
-    if (!rect || !box.width || !box.height) return
-    const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.min(rect.width / box.width, rect.height / box.height)))
-    // Offset by the content origin, which is negative once a node has been
-    // dragged left of or above where the auto-layout started.
-    setView({
-      k,
-      x: (rect.width - box.width * k) / 2 - box.x * k,
-      y: (rect.height - box.height * k) / 2 - box.y * k,
-    })
-  }, [])
+    intentRef.current = { mode: 'fit' }
+    applyRefit()
+  }, [applyRefit])
 
-  // Frame the graph once it is known, so a plan never opens scrolled off-screen.
-  const framed = React.useRef(false)
-  React.useEffect(() => {
-    if (framed.current || !layout.nodes.length) return
-    framed.current = true
-    fit()
-  }, [fit, layout.nodes.length])
+  // The canvas viewport changes when Plan Chat, workflow metadata, the inspector,
+  // or the browser itself changes size. Observe the actual SVG rather than trying
+  // to mirror every parent-panel state here. Resize bursts are coalesced to one
+  // transform per animation frame, and graph geometry changes use the same path.
+  React.useLayoutEffect(() => {
+    const element = svgRef.current
+    if (!element) return
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(scheduleRefit)
+    observer?.observe(element)
+    window.addEventListener('resize', scheduleRefit)
+    scheduleRefit()
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', scheduleRefit)
+      if (refitFrame.current) cancelAnimationFrame(refitFrame.current)
+      refitFrame.current = 0
+    }
+  }, [scheduleRefit])
+
+  React.useLayoutEffect(() => {
+    scheduleRefit()
+  }, [geometryKey, layout.x, layout.y, layout.width, layout.height, scheduleRefit])
 
   // Listening on the window rather than capturing the pointer means a gesture
   // still completes when the pointer is released outside the canvas.
@@ -159,11 +286,15 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
     if (!gesture) return
     const onMove = (event: PointerEvent) => {
       if (gesture.kind === 'pan') {
-        setView(current => ({
-          ...current,
-          x: gesture.origin.x + (event.clientX - gesture.from.x),
-          y: gesture.origin.y + (event.clientY - gesture.from.y),
-        }))
+        setView(current => {
+          const next = {
+            ...current,
+            x: gesture.origin.x + (event.clientX - gesture.from.x),
+            y: gesture.origin.y + (event.clientY - gesture.from.y),
+          }
+          rememberManualView(next)
+          return next
+        })
         return
       }
       const point = toGraphPoint(event)
@@ -207,7 +338,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
     }
-  }, [gesture, toGraphPoint])
+  }, [gesture, toGraphPoint, rememberManualView])
 
   function beginPan(event: React.PointerEvent<SVGSVGElement>) {
     if (event.button !== 0) return

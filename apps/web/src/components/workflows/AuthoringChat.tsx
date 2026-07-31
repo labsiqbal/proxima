@@ -5,6 +5,8 @@ import { createRun } from '../../api/runs'
 import { useRunStream } from '../../hooks/useRunStream'
 import { ChatThread } from '../chat/ChatThread'
 import { Composer } from '../chat/Composer'
+import { CompactTeachingEmpty } from '../ui/CompactTeachingEmpty'
+import { IconWorkflows } from '../shell/icons'
 
 // What an outline can drive on the chat: run the artifact up to a given step and show the
 // result in the thread. The outline owns the buttons; the chat owns the session.
@@ -16,6 +18,35 @@ export type WorkflowChatHandle = { runThrough: (stepIndex: number, stepName?: st
  *  finished while the chat was unmounted. */
 export function appliedRunKey(sessionId: number): string {
   return `proxima.authoring.appliedRun.${sessionId}`
+}
+
+function WorkflowAuthoringEmpty() {
+  return <CompactTeachingEmpty
+    className="workflow-authoring-empty"
+    testId="workflow-authoring-empty"
+    title="Shape this workflow"
+    lead="Describe steps, dependencies, inputs, or review gates. The agent updates the plan beside this chat."
+    hints={[
+      { label: 'branch', hint: 'Ask for independent steps to run in parallel' },
+      { label: '@', hint: '@-mention project files and deliverables' },
+      { label: 'test', hint: 'Test a selected node here before starting the plan' },
+    ]}
+    helpTitle="How Plan Chat works"
+    helpLead="Plan Chat edits the workflow on the canvas beside it. It does not start the plan or change a hidden copy."
+    capabilities={[
+      'Turn a goal into connected workflow nodes',
+      'Revise branches, inputs, agents, and review gates',
+      'Test a node in this chat without starting the plan',
+    ]}
+    steps={[
+      'Describe what the workflow should do',
+      'Review the updated canvas and node details',
+      'Run when the plan is ready',
+    ]}
+    helpBtnTitle="Workflow nodes, branches, inputs, review gates, and node testing"
+    mark={<IconWorkflows size={30} />}
+    markTitle="Plan Chat authors the workflow beside it"
+  />
 }
 
 function readAppliedRun(sessionId: number): number | null {
@@ -313,6 +344,7 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
         agentName={activeProfile?.name}
         profiles={profiles}
         features={features}
+        emptyContent={<WorkflowAuthoringEmpty />}
         onQuickReply={text => void author(text)}
         onMessageUpdated={() => { if (session != null) void reload(session) }}
       />

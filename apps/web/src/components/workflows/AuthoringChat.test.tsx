@@ -27,7 +27,9 @@ vi.mock('../../hooks/useRunStream', () => ({
   }),
 }))
 vi.mock('../chat/ChatThread', () => ({
-  ChatThread: () => <div data-testid="chat-thread" />,
+  ChatThread: ({ emptyContent }: { emptyContent?: React.ReactNode }) => (
+    <div data-testid="chat-thread">{emptyContent}</div>
+  ),
 }))
 vi.mock('../chat/Composer', () => ({
   Composer: () => <div data-testid="composer" />,
@@ -154,6 +156,8 @@ describe('AuthoringChat', () => {
       />,
     )
     await waitFor(() => expect(screen.getByTestId('chat-thread')).toBeInTheDocument())
+    expect(screen.getByRole('heading', { name: 'Shape this workflow' })).toBeInTheDocument()
+    expect(screen.queryByText(/Hands-on work with one agent/)).not.toBeInTheDocument()
     expect(restoreMock).toHaveBeenCalledWith(5)
   })
 
