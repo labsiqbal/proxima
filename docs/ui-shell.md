@@ -155,13 +155,12 @@ The **New task** launcher lives behind the Tasks screen's `+ New task` button (i
 Workflows is the template library for repeatable work. One workflow owns one project (the shell project filter on the library home does not rebind an open plan or template). The screen has a browsable home and a focused editor:
 
 - **Home** remembers the last selected **Drafts**, **Workflows**, or **Runs** tab and
-  renders each collection as a table so long libraries remain scannable. Workflow rows
-  are split into **Manual (on-demand)** and **Scheduled** groups derived from
-  real schedule rows. Manual workflows can be edited or run; scheduled workflows can
-  be edited, rescheduled, paused, or resumed. The per-row Schedule action opens the
-  complete schedule form in a dialog, including create, enable, overlap, input, Run now,
-  and delete controls. A manual row also exposes Schedule so its first schedule can be
-  created. There is no standalone Scheduled navigation mode.
+  renders each collection as a table so long libraries remain scannable. Reusable
+  workflows share one table: **Availability** (active or paused) is separate from the
+  joined **Automation** summary, and every row keeps Edit, manual **Run**, **Schedules**,
+  availability pause/resume, and archive. The per-row Schedules action opens the complete
+  schedule form in a dialog, including create, durable bindings, enable, overlap, Run now,
+  configure, and delete. There is no standalone Scheduled navigation mode.
 - **Editor** is the plan/graph canvas. `PROXIMA_FEATURE_WORKFLOW_GRAPH` defaults on;
   with the recovery switch off the mode explains that the editor is off (the env var
   itself stays out of the UI copy — it is documented here and in installation docs).
@@ -233,11 +232,12 @@ can do, short tutorial steps, and one primary CTA where it applies (Chat, Master
 Workflows library context, Archive, Design home). Help/core tour nouns match the primary
 loop **Chat → Tasks → Workflows → Archive**, with Master as the delegate side path.
 
-**Workflow how-it-runs:** library table rows show Manual or Scheduled badges derived from
-real schedule rows (optional short cron text). Schedule forms lock project to the workflow
-owner — no free rebinding. Open deliverables from Chat/Tasks/Archive use the same
-in-app **ArtifactViewer** for supported types. Unsupported binary or directory-like
-paths show a download fallback immediately rather than remaining in a loading state.
+**Workflow how-it-runs:** library table rows show Availability separately from the joined
+Automation summary (schedules on, off, or needing bindings). Schedule forms lock project
+to the workflow owner - no free rebinding. Open deliverables from Chat/Tasks/Archive use
+the same in-app **ArtifactViewer** for supported types. Unsupported binary or
+directory-like paths show a download fallback immediately rather than remaining in a
+loading state.
 
 ## Global attention, running work, and account surfaces
 

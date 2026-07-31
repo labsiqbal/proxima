@@ -20,6 +20,34 @@ API_PYTHON = ROOT / "apps" / "api" / ".venv" / "bin" / "python"
 WEB_DIR = ROOT / "apps" / "web"
 PROBE_ROOT = ROOT / "trusted-probes" / "safe-update"
 WORKFLOW_NAME = "Scheduled browser trust"
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+SCREENSHOT_NAMES = (
+    "before-missing-binding",
+    "after-missing-binding-refusal",
+    "before-run-now",
+    "after-run-now-exact-job",
+)
+
+
+def screenshot_paths(directory: Path) -> dict[str, Path]:
+    return {name: directory / f"{name}.png" for name in SCREENSHOT_NAMES}
+
+
+def assert_valid_png(path: Path, *, minimum_bytes: int = 256) -> None:
+    data = path.read_bytes()
+    if len(data) < minimum_bytes or not data.startswith(PNG_MAGIC):
+        raise RuntimeError(f"invalid or empty PNG screenshot: {path}")
+
+
+def assert_screenshot_bundle(directory: Path) -> dict[str, Path]:
+    paths = screenshot_paths(directory)
+    for name, path in paths.items():
+        if path.name != f"{name}.png":
+            raise RuntimeError(f"screenshot name drift for {name}: {path.name}")
+        if not path.is_file():
+            raise RuntimeError(f"missing screenshot: {path.name}")
+        assert_valid_png(path)
+    return paths
 
 
 def _request(
@@ -85,9 +113,9 @@ def _build_web() -> None:
         raise RuntimeError(completed.stderr or completed.stdout or "web build failed")
 
 
-def _scenario_missing_source() -> dict:
+def _scenario_missing_binding() -> dict:
     return {
-        "name": "scheduled-workflow-missing-source",
+        "name": "scheduled-workflow-missing-binding",
         "authenticated": True,
         "steps": [
             {"action": "click", "selector": "button", "text": "Skip tour"},
@@ -105,13 +133,14 @@ def _scenario_missing_source() -> dict:
             {
                 "action": "assert",
                 "selector": ".workflow-home-workflow-row [data-label='Automation']",
-                "text": "1 needs source",
+                "text": "1 needs binding",
             },
             {
                 "action": "assert",
                 "selector": ".workflow-home-workflow-row button",
                 "text": "Run",
             },
+            {"action": "screenshot", "name": "before-missing-binding"},
             {
                 "action": "click",
                 "selector": ".workflow-home-workflow-row button",
@@ -146,6 +175,7 @@ def _scenario_missing_source() -> dict:
                 "action": "assert",
                 "selector": ".schedule-row button[title^='Run this schedule now'][disabled]",
             },
+            {"action": "screenshot", "name": "after-missing-binding-refusal"},
         ],
     }
 
@@ -191,6 +221,7 @@ def _scenario_ready_run_now() -> dict:
                 "action": "assert",
                 "selector": ".schedule-row input[aria-label='Schedule on']",
             },
+            {"action": "screenshot", "name": "before-run-now"},
             {
                 "action": "click",
                 "selector": ".schedule-row button",
@@ -204,6 +235,7 @@ def _scenario_ready_run_now() -> dict:
                 "action": "assert",
                 "selector": "button[aria-label^='Active project: Scheduled browser'][disabled]",
             },
+            {"action": "screenshot", "name": "after-run-now-exact-job"},
         ],
     }
 
@@ -241,12 +273,17 @@ def _stop_server(server: subprocess.Popen) -> None:
 
 
 def _seed_fixture(base_url: str, token: str, container: Path) -> tuple[int, int]:
+    roots = _request(f"{base_url}/api/fs/dirs", token=token)
+    root_id = roots.get("root_id")
+    if not isinstance(root_id, str) or not root_id:
+        raise RuntimeError("browse roots did not return a root_id")
     _request(
         f"{base_url}/api/projects/link",
         body={
             "name": "Scheduled browser",
             "path": str(container),
             "slug": "scheduled-browser",
+            "root_id": root_id,
         },
         token=token,
         expected_status=201,
@@ -389,21 +426,22 @@ def main(screenshot_dir: Path | None = None) -> None:
                 if not isinstance(detail, dict) or detail.get("code") != (
                     "schedule_missing_sources"
                 ):
-                    raise RuntimeError("missing-source enablement was not refused")
+                    raise RuntimeError("missing-binding enablement was not refused")
+                message = str(detail.get("message") or "")
+                if "source node" in message.lower():
+                    raise RuntimeError("refusal copy still mentions source nodes")
+                if "durable binding" not in message.lower():
+                    raise RuntimeError("refusal copy does not explain durable bindings")
 
                 missing_transcript = json.loads(
                     run_scenario(
                         executable=_browser(),
                         base_url=base_url,
-                        scenario=_scenario_missing_source(),
-                        profile=fixture / "browser-missing-source",
+                        scenario=_scenario_missing_binding(),
+                        profile=fixture / "browser-missing-binding",
                         auth_token=token,
                         drop_prefix=[],
-                        screenshot_path=(
-                            screenshot_dir / "after-missing-source-refusal.png"
-                            if screenshot_dir is not None
-                            else None
-                        ),
+                        screenshot_dir=screenshot_dir,
                     )
                 )
                 schedule_row = next(
@@ -436,11 +474,7 @@ def main(screenshot_dir: Path | None = None) -> None:
                         profile=fixture / "browser-ready",
                         auth_token=token,
                         drop_prefix=[],
-                        screenshot_path=(
-                            screenshot_dir / "after-run-now-exact-job.png"
-                            if screenshot_dir is not None
-                            else None
-                        ),
+                        screenshot_dir=screenshot_dir,
                     )
                 )
                 jobs = _request(
@@ -454,6 +488,10 @@ def main(screenshot_dir: Path | None = None) -> None:
                     raise RuntimeError("Run now did not create exactly one schedule job")
                 if spawned[0].get("input") != {"topic": "Durable browser value"}:
                     raise RuntimeError("Run now did not use the durable schedule binding")
+                if screenshot_dir is not None:
+                    captured = assert_screenshot_bundle(screenshot_dir)
+                else:
+                    captured = {}
                 print(
                     json.dumps(
                         {
@@ -464,6 +502,7 @@ def main(screenshot_dir: Path | None = None) -> None:
                                 missing_transcript[0]["name"],
                                 ready_transcript[0]["name"],
                             ],
+                            "screenshots": sorted(path.name for path in captured.values()),
                         },
                         sort_keys=True,
                     )
@@ -479,7 +518,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--screenshots",
         type=Path,
-        help="Optional directory for missing-source and exact-job screenshots.",
+        help=(
+            "Optional directory for stable before/after PNGs "
+            f"({', '.join(SCREENSHOT_NAMES)})."
+        ),
     )
     options = parser.parse_args()
     main(options.screenshots)

@@ -781,13 +781,14 @@ branches. The linear engine remains for pre-existing jobs; `IterateStage` is sti
 reachable from an old session carrying `workflow_id`, but no new linear workflow can be
 authored.
 The library home remembers its last selected **Drafts**, **Workflows**, or **Runs** tab
-and presents each as a table. The Workflows tab derives **Manual (on-demand)** and
-**Scheduled** groups from the trigger mode, with legacy schedule rows as a compatibility
-fallback. Manual rows expose Run through the same validated dialog used by drafts.
-Scheduled rows
-show cadence and pause/resume controls, with Run now and schedule maintenance available
-in the schedule dialog. Changing the trigger to Scheduled creates its cadence when the
-plan is promoted; it never carries manual intake values.
+and presents each as a table. The Workflows tab is one reusable-workflow table: each row
+shows **Availability** (active or paused) separately from the joined **Automation**
+summary (schedules on, off, or needing bindings). Every row keeps Edit, manual **Run**
+(per-run intake when fields are declared), **Schedules**, availability pause/resume, and
+archive. The schedule dialog owns timezone, five-field cron, durable input bindings,
+overlap, per-schedule On/Off, Run now, configure, and delete. Trigger-authored schedules
+seed cadence when the plan is promoted and never carry manual intake values into
+unattended runs.
 The Runs table consumes the API's canonical `run_projection` for effective status,
 start, finish, and duration. API timestamp fields are timezone-aware UTC ISO strings,
 so a new run cannot inherit the browser's local offset or disagree with Tasks and

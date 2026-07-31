@@ -1266,13 +1266,13 @@ export function GraphScreen({
     const scheduleSummary = (template: GraphTemplate) => {
       const rows = schedules.filter(schedule => schedule.workflow_id === template.id)
       if (rows.length === 0) return 'No schedules'
-      const needsSource = rows.filter(schedule => schedule.ready === false).length
+      const needsBinding = rows.filter(schedule => schedule.ready === false).length
       const on = rows.filter(schedule => schedule.enabled && schedule.ready !== false).length
-      const off = rows.length - on - needsSource
+      const off = rows.length - on - needsBinding
       const parts: string[] = []
       if (on) parts.push(`${on} schedule${on === 1 ? '' : 's'} on`)
       if (off) parts.push(`${off} schedule${off === 1 ? '' : 's'} off`)
-      if (needsSource) parts.push(`${needsSource} need${needsSource === 1 ? 's' : ''} source`)
+      if (needsBinding) parts.push(`${needsBinding} need${needsBinding === 1 ? 's' : ''} binding${needsBinding === 1 ? '' : 's'}`)
       return parts.join(' · ')
     }
     const workflowRow = (template: GraphTemplate) => <div className="workflow-home-row workflow-home-workflow-row" role="row" key={template.id}>

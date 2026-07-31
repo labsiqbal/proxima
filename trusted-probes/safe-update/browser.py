@@ -287,6 +287,21 @@ def _step(connection: _WebSocket, step: dict) -> dict:
         time.sleep(0.05)
 
 
+def _capture_png(connection: _WebSocket, path: Path) -> None:
+    captured = connection.call(
+        "Page.captureScreenshot",
+        {
+            "captureBeyondViewport": True,
+            "format": "png",
+            "fromSurface": True,
+        },
+    ).get("data")
+    if not isinstance(captured, str):
+        raise BrowserProbeError("browser screenshot data is unavailable")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(base64.b64decode(captured, validate=True))
+
+
 def run_scenario(
     *,
     executable: str,
@@ -297,6 +312,7 @@ def run_scenario(
     drop_prefix: list[str],
     path: str = "/",
     screenshot_path: Path | None = None,
+    screenshot_dir: Path | None = None,
 ) -> bytes:
     profile.mkdir(mode=0o777)
     profile.chmod(0o777)
@@ -393,20 +409,24 @@ def run_scenario(
             }
         ]
         for step in scenario["steps"]:
+            if step.get("action") == "screenshot":
+                name = str(step.get("name") or "").strip()
+                if not name:
+                    raise BrowserProbeError("screenshot step requires a name")
+                if screenshot_dir is not None:
+                    path = screenshot_dir / f"{name}.png"
+                    _capture_png(connection, path)
+                    transcript.append(
+                        {"action": "screenshot", "name": name, "path": str(path)}
+                    )
+                else:
+                    transcript.append(
+                        {"action": "screenshot", "name": name, "skipped": True}
+                    )
+                continue
             transcript.append(_step(connection, step))
         if screenshot_path is not None:
-            captured = connection.call(
-                "Page.captureScreenshot",
-                {
-                    "captureBeyondViewport": True,
-                    "format": "png",
-                    "fromSurface": True,
-                },
-            ).get("data")
-            if not isinstance(captured, str):
-                raise BrowserProbeError("browser screenshot data is unavailable")
-            screenshot_path.parent.mkdir(parents=True, exist_ok=True)
-            screenshot_path.write_bytes(base64.b64decode(captured, validate=True))
+            _capture_png(connection, screenshot_path)
         return json.dumps(
             transcript,
             sort_keys=True,

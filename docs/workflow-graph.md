@@ -426,10 +426,12 @@ The screen has **two stages**, Design Studio's shape: a browsable **home** and a
 focused **editor** - browsing and editing are different modes of work. Home remembers
 the last selected **Drafts**, **Workflows**, or **Runs** tab and uses tables so each list
 can grow independently. Draft rows are queued and editable, runnable, or promotable to
-a saved workflow. Workflow rows are split into **Manual (on-demand)** and
-**Scheduled** groups by trigger mode, with legacy schedule rows as a compatibility
-fallback. Manual rows open the same validated Run dialog used by drafts; Scheduled rows show
-cadence and open the schedule manager for pause, resume, Run now, editing, or deletion. Run rows show recency, status, duration, and a View
+a saved workflow. Workflow rows live in one reusable-workflow table with **Availability**
+(active or paused) separate from the joined **Automation** summary (schedules on, off, or
+needing bindings). Every row keeps Edit, manual **Run** (per-run intake when fields are
+declared), **Schedules**, availability pause/resume, and archive. The schedule dialog owns
+timezone, cron, durable bindings, overlap, per-schedule On/Off, Run now, configure, and
+delete. Run rows show recency, status, duration, and a View
 action. Opening anything lands in the editor: full-width canvas + workflow chat + node
 inspector, a ← back to home, and no rail — the editor is about one workflow at a time.
 Chat and inspector keep their **draggable widths** (persisted per panel); plan statuses
@@ -633,7 +635,11 @@ generations, so refreshing schedule summaries cannot cancel the handoff.
 Run the disposable Chromium regression with `npm run test:e2e:schedules`. It builds the
 web app, starts an isolated API with synthetic data and a fake runner, verifies missing
 binding refusal and reload behavior, then proves Run now opened the exact owning-project
-job with its durable binding. CI runs this scenario separately from unit tests.
+job with its durable binding. CI runs this scenario assertion-only. Pass
+`--screenshots <dir>` to capture the stable before/after PNGs
+(`before-missing-binding`, `after-missing-binding-refusal`, `before-run-now`,
+`after-run-now-exact-job`) and validate each as a nonempty PNG; durable evidence lives
+under `docs/evidence/scheduled-workflow-trust/`.
 
 With `PROXIMA_FEATURE_WORKFLOW_GRAPH` off, a graph schedule is **skipped with a logged
 warning** and its minute is still claimed: the executor would never dispatch the job, so

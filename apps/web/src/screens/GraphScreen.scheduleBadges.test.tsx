@@ -131,6 +131,51 @@ describe('GraphScreen how-it-runs badges', () => {
     expect(await screen.findByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
   })
 
+  it('summarizes one unresolved schedule as needs binding', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([
+      { id: 1, workflow_id: 10, cron: '0 * * * *', enabled: false, ready: false } as never,
+    ])
+    render(
+      <GraphScreen
+        token="t"
+        projects={[project]}
+        activeProject={project}
+        onActiveProject={vi.fn()}
+        profiles={[]}
+        profileId={null}
+        features={{ designStudio: false, workflowGraph: true, masterOrchestrator: false }}
+        activeProfile={null}
+      />,
+    )
+    await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
+    const nightlyRow = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
+    expect(within(nightlyRow).getByText('1 needs binding')).toBeInTheDocument()
+    expect(within(nightlyRow).queryByText(/source/i)).not.toBeInTheDocument()
+  })
+
+  it('summarizes multiple unresolved schedules as need bindings', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([
+      { id: 1, workflow_id: 10, cron: '0 * * * *', enabled: false, ready: false } as never,
+      { id: 2, workflow_id: 10, cron: '0 9 * * *', enabled: false, ready: false } as never,
+    ])
+    render(
+      <GraphScreen
+        token="t"
+        projects={[project]}
+        activeProject={project}
+        onActiveProject={vi.fn()}
+        profiles={[]}
+        profileId={null}
+        features={{ designStudio: false, workflowGraph: true, masterOrchestrator: false }}
+        activeProfile={null}
+      />,
+    )
+    await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
+    const nightlyRow = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
+    expect(within(nightlyRow).getByText('2 need bindings')).toBeInTheDocument()
+    expect(within(nightlyRow).queryByText(/source/i)).not.toBeInTheDocument()
+  })
+
   it('keeps the schedule dialog open until the exact spawned graph job is selected', async () => {
     const spawned = {
       id: 99,
