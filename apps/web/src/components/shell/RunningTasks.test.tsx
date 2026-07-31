@@ -108,12 +108,15 @@ describe('RunningTasks', () => {
 
   it('supports keyboard open and Escape dismiss', async () => {
     const user = userEvent.setup()
-    render(<RunningTasks token="token" />)
+    const onOpenChange = vi.fn()
+    render(<RunningTasks token="token" onOpenChange={onOpenChange} />)
     const trigger = await screen.findByRole('button', { name: '1 task running' })
     trigger.focus()
     await user.keyboard('{Enter}')
     expect(screen.getByRole('dialog', { name: 'Running tasks' })).toBeInTheDocument()
+    await waitFor(() => expect(onOpenChange).toHaveBeenLastCalledWith(true))
     await user.keyboard('{Escape}')
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Running tasks' })).not.toBeInTheDocument())
+    await waitFor(() => expect(onOpenChange).toHaveBeenLastCalledWith(false))
   })
 })

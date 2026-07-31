@@ -8,7 +8,15 @@ const labelForKind = (kind: string) => ({
   permission_job: 'Permission', master_decision: 'Master', master_budget: 'Master budget', settings_confirm: 'Settings',
 }[kind] || 'Attention')
 
-export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenTarget: (target: AttentionItem['target']) => void }) {
+export function AttentionInbox({
+  token,
+  onOpenTarget,
+  onOpenChange,
+}: {
+  token: string
+  onOpenTarget: (target: AttentionItem['target']) => void
+  onOpenChange?: (open: boolean) => void
+}) {
   const [items, setItems] = React.useState<AttentionItem[]>([])
   const [open, setOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
@@ -33,6 +41,13 @@ export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenT
     window.addEventListener('mousedown', dismiss); window.addEventListener('keydown', key)
     return () => { window.removeEventListener('mousedown', dismiss); window.removeEventListener('keydown', key) }
   }, [open])
+  React.useLayoutEffect(() => {
+    onOpenChange?.(open)
+    return () => onOpenChange?.(false)
+  }, [onOpenChange, open])
+  React.useEffect(() => {
+    if (items.length === 0) setOpen(false)
+  }, [items.length])
   const act = async (item: AttentionItem, action: string) => {
     const key = `${item.id}:${action}`
     if (busy) return

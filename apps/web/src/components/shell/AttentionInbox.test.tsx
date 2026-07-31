@@ -244,4 +244,22 @@ describe('AttentionInbox', () => {
     expect(deferMasterDecision).toHaveBeenCalledWith('token', 8, 1)
     expect(getAttention).toHaveBeenCalledTimes(2)
   })
+
+  it('reports keyboard disclosure state to the shell overlay owner', async () => {
+    const user = userEvent.setup()
+    const onOpenChange = vi.fn()
+    render(
+      <AttentionInbox
+        token="token"
+        onOpenTarget={vi.fn()}
+        onOpenChange={onOpenChange}
+      />,
+    )
+    const trigger = await screen.findByRole('button', { name: '1 attention item' })
+    trigger.focus()
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(onOpenChange).toHaveBeenLastCalledWith(true))
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(onOpenChange).toHaveBeenLastCalledWith(false))
+  })
 })

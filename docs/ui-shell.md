@@ -126,7 +126,9 @@ trigger never shares pixels with the composer, Send, attachments, prompt modes, 
 the right tool rail. That lane remains reserved while the popup is open, preserving
 the Chat draft and composer geometry.
 Auth, onboarding, the full Master home, update application, drawers, search,
-account menus, and ToolDock panels suppress it. Durable conversation messages stay
+account menus, ToolDock panels, and an open Running or Attention popover suppress it.
+The same status-popover boundary suppresses live Master toasts until the popover
+closes, so saturated mobile sheets remain unobscured. Durable conversation messages stay
 the completion/failure/review/Attention/Satpam truth; named durable transitions may
 also show one coalesced, keyboard-dismissible toast that never steals focus. Raw
 token, reasoning, and tool deltas never produce toasts.
@@ -267,7 +269,9 @@ move Search or New chat under the pointer. Each control keeps the shared minimum
 target and tokenized focus ring. The mobile safe-area height matches the rendered
 header rows, its layer paints above ordinary content and the tool rail, and narrow
 Running and Attention sheets stop before the rail so their complete bounds and
-controls remain visible, pointer-clickable, and keyboard reachable. Shared shell
+controls remain visible, pointer-clickable, and keyboard reachable. Opening either
+sheet also withholds the Master launcher and live toast region until it closes,
+including when the sheet is saturated and scrolls. Shared shell
 labels use the higher-contrast label and accent-text tokens, including Work, Work
 project, and Recent chats.
 

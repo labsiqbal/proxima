@@ -33,6 +33,7 @@ SCREENSHOT_SIZES = (
 STATUS_SCREENSHOTS = (
     "shell-safe-390x844-attention.png",
     "shell-safe-390x844-running.png",
+    "shell-safe-390x844-live-toast.png",
 )
 
 
@@ -57,6 +58,80 @@ def _request(
     if not isinstance(value, dict):
         raise RuntimeError(f"unexpected response from {url}")
     return value
+
+
+def _inject_live_master_toast(
+    *,
+    base_url: str,
+    token: str,
+    database: Path,
+    project_id: int,
+) -> str:
+    desk = _request(f"{base_url}/api/master/desk", token=token)
+    session = desk.get("session")
+    focus = desk.get("focus")
+    if not isinstance(session, dict) or not isinstance(focus, dict):
+        raise RuntimeError("Master desk could not provide a live-toast fixture")
+    session_id = int(session["id"])
+    version = int(focus["version"])
+    current_container_id = focus.get("current_container_id")
+    with sqlite3.connect(database) as connection:
+        owner_id = int(
+            connection.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+        )
+        task_id = int(
+            connection.execute(
+                "INSERT INTO jobs("
+                "project_id, title, status, created_by, started_at, finished_at"
+                ") VALUES (?, ?, 'done', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                (project_id, "Live shell toast fixture", owner_id),
+            ).lastrowid
+        )
+        message_id = int(
+            connection.execute(
+                "INSERT INTO messages(session_id, role, content, author) "
+                "VALUES (?, 'assistant', ?, 'Master')",
+                (session_id, f"Completed Task #{task_id}."),
+            ).lastrowid
+        )
+        sequence = int(
+            connection.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()[0]
+        )
+        payload = {
+            "message_id": message_id,
+            "task_id": task_id,
+            "focus_epoch_id": focus.get("current_epoch_id"),
+            "focus_container_id": current_container_id,
+            "subject_container_id": project_id,
+            "container_id": project_id,
+            "container_slug": "candidate-browser",
+        }
+        connection.execute(
+            "INSERT INTO events("
+            "run_id, session_id, project_id, seq, type, payload"
+            ") VALUES (NULL, ?, ?, ?, 'master.task.completed', ?)",
+            (
+                session_id,
+                project_id,
+                sequence,
+                json.dumps(payload, separators=(",", ":")),
+            ),
+        )
+    _request(
+        f"{base_url}/api/master/focus",
+        body={
+            "container_id": (
+                None if current_container_id is not None else project_id
+            ),
+            "version": version,
+        },
+        token=token,
+        method="PUT",
+    )
+    return f"Task #{task_id} completed"
 
 
 def _port() -> int:
@@ -557,15 +632,46 @@ def _assert_status_popover(
     trigger_selector: str,
     dialog_label: str,
     screenshot: Path,
+    live_toast_title: str,
 ) -> None:
     from browser import _evaluation
 
+    precondition = _evaluation(
+        connection,
+        f"""
+        (() => {{
+          const master = document.querySelector(".master-popup-trigger");
+          const toast = Array.from(document.querySelectorAll(".master-toast"))
+            .find(element => element.querySelector("strong")?.textContent
+              === {json.dumps(live_toast_title)});
+          return {{
+            master: master instanceof HTMLElement,
+            toast: toast instanceof HTMLElement,
+          }};
+        }})()
+        """,
+    )
+    if (
+        not isinstance(precondition, dict)
+        or not precondition.get("master")
+        or not precondition.get("toast")
+    ):
+        raise AssertionError(
+            f"{dialog_label} lacks live Master overlay preconditions: {precondition}"
+        )
     _keyboard_activate(connection, trigger_selector)
     dialog_selector = f"[role='dialog'][aria-label={json.dumps(dialog_label)}]"
     _wait_for(
         connection,
-        f"!!document.querySelector({json.dumps(dialog_selector)})",
-        message=f"{dialog_label} did not open by keyboard",
+        f"""
+        (() => {{
+          const dialog = document.querySelector({json.dumps(dialog_selector)});
+          return !!dialog
+            && !document.querySelector(".master-popup-trigger")
+            && !document.querySelector(".master-toast-region");
+        }})()
+        """,
+        message=f"{dialog_label} did not exclusively open by keyboard",
     )
     value = _evaluation(
         connection,
@@ -600,34 +706,19 @@ def _assert_status_popover(
             "a[href], button:not([disabled]), input:not([disabled]), "
               + "select:not([disabled]), textarea:not([disabled]), "
               + "[tabindex]:not([tabindex='-1'])"
-          )).filter(visible).map(element => {{
-            const bounds = rect(element);
-            const hit = document.elementFromPoint(
-              bounds.x + bounds.width / 2,
-              bounds.y + bounds.height / 2
-            );
-            return {{
-              rect: bounds,
-              hittable: hit === element || element.contains(hit),
-              point: {{
-                x: bounds.x + bounds.width / 2,
-                y: bounds.y + bounds.height / 2,
-              }},
-              hit: hit instanceof Element ? {{
-                tag: hit.tagName,
-                className: String(hit.className || ""),
-                label: hit.getAttribute("aria-label") || "",
-              }} : null,
-            }};
-          }});
+          )).filter(visible);
           return {{
             popover: rect(dialog),
             rail: rect(rail),
-            masterRoot: document.querySelector(".master-popup-root") instanceof HTMLElement
-              ? rect(document.querySelector(".master-popup-root"))
+            master: visible(document.querySelector(".master-popup-trigger"))
+              ? rect(document.querySelector(".master-popup-trigger"))
               : null,
+            toasts: Array.from(document.querySelectorAll(".master-toast"))
+              .filter(visible)
+              .map(rect),
             viewport: {{x: 0, y: 0, right: innerWidth, bottom: innerHeight}},
-            controls,
+            controlCount: controls.length,
+            saturated: dialog.scrollHeight > dialog.clientHeight + 1,
           }};
         }})()
         """,
@@ -644,32 +735,25 @@ def _assert_status_popover(
         raise AssertionError(
             f"{dialog_label} overlaps the tool rail by {overlap:.0f}px2"
         )
-    controls = value.get("controls")
-    if not isinstance(controls, list) or not controls:
+    if not value.get("saturated"):
+        raise AssertionError(f"{dialog_label} fixture did not saturate its scroll area")
+    overlays = [value.get("master"), *value.get("toasts", [])]
+    for overlay in overlays:
+        if isinstance(overlay, dict):
+            overlap = _intersection(popover, overlay)
+            if overlap:
+                raise AssertionError(
+                    f"{dialog_label} intersects a Master overlay by {overlap:.0f}px2"
+                )
+            raise AssertionError(
+                f"{dialog_label} left a Master overlay visible while open"
+            )
+    control_count = value.get("controlCount")
+    if not isinstance(control_count, int) or control_count <= 0:
         raise AssertionError(f"{dialog_label} has no reachable controls")
     _capture(connection, screenshot)
-    for index, control in enumerate(controls):
-        bounds = control["rect"]
-        if not _contained(bounds, popover):
-            raise AssertionError(
-                f"{dialog_label} control {index} escapes the visible popover"
-            )
-        if (
-            float(bounds["width"]) < MIN_TARGET_SIZE
-            or float(bounds["height"]) < MIN_TARGET_SIZE
-        ):
-            raise AssertionError(
-                f"{dialog_label} control {index} target is "
-                f"{bounds['width']:.0f}x{bounds['height']:.0f}"
-            )
-        if not control["hittable"]:
-            raise AssertionError(
-                f"{dialog_label} control {index} is pointer-occluded by "
-                f"{control.get('hit')} at {control.get('point')}; "
-                f"Master root is {value.get('masterRoot')}"
-            )
     reached: set[int] = set()
-    for _ in controls:
+    for _ in range(control_count):
         connection.call(
             "Input.dispatchKeyEvent",
             {
@@ -712,12 +796,43 @@ def _assert_status_popover(
               const style = active instanceof HTMLElement
                 ? getComputedStyle(active)
                 : null;
+              const bounds = active instanceof HTMLElement
+                ? active.getBoundingClientRect()
+                : null;
+              const dialogBounds = dialog.getBoundingClientRect();
+              const hit = bounds
+                ? document.elementFromPoint(
+                    bounds.x + bounds.width / 2,
+                    bounds.y + bounds.height / 2
+                  )
+                : null;
               return {{
                 index: controls.indexOf(active),
                 ring: !!style
                   && parseFloat(style.outlineWidth) > 0
                   && style.outlineStyle !== "none"
                   && style.outlineColor !== "transparent",
+                bounds: bounds && {{
+                  x: bounds.x,
+                  y: bounds.y,
+                  width: bounds.width,
+                  height: bounds.height,
+                  right: bounds.right,
+                  bottom: bounds.bottom,
+                }},
+                popover: {{
+                  x: dialogBounds.x,
+                  y: dialogBounds.y,
+                  right: dialogBounds.right,
+                  bottom: dialogBounds.bottom,
+                }},
+                hittable: active instanceof HTMLElement
+                  && (hit === active || active.contains(hit)),
+                hit: hit instanceof Element ? {{
+                  tag: hit.tagName,
+                  className: String(hit.className || ""),
+                  label: hit.getAttribute("aria-label") || "",
+                }} : null,
               }};
             }})()
             """,
@@ -726,8 +841,31 @@ def _assert_status_popover(
             raise AssertionError(f"{dialog_label} keyboard focus escaped the popover")
         if not focused.get("ring"):
             raise AssertionError(f"{dialog_label} keyboard target lacks a focus ring")
+        bounds = focused.get("bounds")
+        focused_popover = focused.get("popover")
+        if (
+            not isinstance(bounds, dict)
+            or not isinstance(focused_popover, dict)
+            or not _contained(bounds, focused_popover)
+        ):
+            raise AssertionError(
+                f"{dialog_label} keyboard target is outside the visible popover"
+            )
+        if (
+            float(bounds["width"]) < MIN_TARGET_SIZE
+            or float(bounds["height"]) < MIN_TARGET_SIZE
+        ):
+            raise AssertionError(
+                f"{dialog_label} keyboard target is "
+                f"{bounds['width']:.0f}x{bounds['height']:.0f}"
+            )
+        if not focused.get("hittable"):
+            raise AssertionError(
+                f"{dialog_label} keyboard target is pointer-occluded by "
+                f"{focused.get('hit')}"
+            )
         reached.add(int(focused["index"]))
-    if reached != set(range(len(controls))):
+    if reached != set(range(control_count)):
         raise AssertionError(f"{dialog_label} keyboard order skips a control")
     for event_type in ("keyDown", "keyUp"):
         connection.call(
@@ -744,13 +882,26 @@ def _assert_status_popover(
         f"!document.querySelector({json.dumps(dialog_selector)})",
         message=f"{dialog_label} did not close by keyboard",
     )
+    _wait_for(
+        connection,
+        "!!document.querySelector('.master-popup-trigger')",
+        message=f"Master launcher did not return after {dialog_label} closed",
+    )
     _evaluation(
         connection,
         f"document.querySelector({json.dumps(trigger_selector)})?.focus() || true",
     )
 
 
-def _assert_activation_and_state(connection: object, output_dir: Path) -> None:
+def _assert_activation_and_state(
+    connection: object,
+    output_dir: Path,
+    *,
+    base_url: str,
+    token: str,
+    database: Path,
+    project_id: int,
+) -> None:
     from browser import _evaluation
 
     textarea = "form.composer textarea"
@@ -774,6 +925,14 @@ def _assert_activation_and_state(connection: object, output_dir: Path) -> None:
         connection,
         "!!document.querySelector(\"[role='dialog'][aria-labelledby='master-popup-title']\")",
         message="Master popup did not open by pointer",
+    )
+    _wait_for(
+        connection,
+        """
+        Array.from(document.querySelectorAll(".master-popup-head small"))
+          .some(element => element.textContent?.includes("Live"))
+        """,
+        message="Master live stream did not connect before fixture injection",
     )
     preserved = _evaluation(
         connection,
@@ -830,17 +989,48 @@ def _assert_activation_and_state(connection: object, output_dir: Path) -> None:
         message="Search did not close by keyboard",
     )
 
+    attention_toast = _inject_live_master_toast(
+        base_url=base_url,
+        token=token,
+        database=database,
+        project_id=project_id,
+    )
+    _wait_for(
+        connection,
+        f"""
+        Array.from(document.querySelectorAll(".master-toast strong"))
+          .some(element => element.textContent === {json.dumps(attention_toast)})
+        """,
+        message="live Master toast did not render before Attention opened",
+    )
+    _capture(connection, output_dir / STATUS_SCREENSHOTS[2])
     _assert_status_popover(
         connection,
         trigger_selector=".mobile-topbar .attention-trigger",
         dialog_label="Attention inbox",
         screenshot=output_dir / STATUS_SCREENSHOTS[0],
+        live_toast_title=attention_toast,
+    )
+    running_toast = _inject_live_master_toast(
+        base_url=base_url,
+        token=token,
+        database=database,
+        project_id=project_id,
+    )
+    _wait_for(
+        connection,
+        f"""
+        Array.from(document.querySelectorAll(".master-toast strong"))
+          .some(element => element.textContent === {json.dumps(running_toast)})
+        """,
+        message="live Master toast did not render before Running opened",
     )
     _assert_status_popover(
         connection,
         trigger_selector=".mobile-topbar .running-pill",
         dialog_label="Running tasks",
         screenshot=output_dir / STATUS_SCREENSHOTS[1],
+        live_toast_title=running_toast,
     )
     stable_targets = _evaluation(
         connection,
@@ -927,6 +1117,8 @@ def _run_browser(
     base_url: str,
     profile: Path,
     token: str,
+    database: Path,
+    project_id: int,
     output_dir: Path,
     visual_oracle: dict,
 ) -> dict:
@@ -993,6 +1185,18 @@ def _run_browser(
         connection.call("Page.enable")
         connection.call("Runtime.enable")
         connection.call("Network.enable")
+        cookie = connection.call(
+            "Network.setCookie",
+            {
+                "name": "proxima_session",
+                "value": token,
+                "url": base_url,
+                "httpOnly": True,
+                "sameSite": "Lax",
+            },
+        )
+        if not cookie.get("success"):
+            raise RuntimeError("browser session cookie could not be installed")
         connection.call(
             "Network.setExtraHTTPHeaders",
             {"headers": {"Authorization": f"Bearer {token}"}},
@@ -1059,7 +1263,14 @@ def _run_browser(
             results.append(value)
             if width == 390:
                 tested_390 = True
-                _assert_activation_and_state(connection, output_dir)
+                _assert_activation_and_state(
+                    connection,
+                    output_dir,
+                    base_url=base_url,
+                    token=token,
+                    database=database,
+                    project_id=project_id,
+                )
                 connection.call(
                     "Input.dispatchKeyEvent",
                     {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27},
@@ -1260,24 +1471,38 @@ def main() -> None:
                             "Keep the Running popover visible.",
                         ),
                     )
-                    connection.execute(
-                        "INSERT INTO attention_items("
-                        "kind, title, target_json, inline_ok, actions_json, source_key"
-                        ") VALUES (?, ?, ?, ?, ?, ?)",
-                        (
-                            "master_decision",
-                            "Choose the safe shell direction",
-                            json.dumps({"view": "master"}),
-                            0,
-                            "[]",
-                            "shell-safe-area-browser",
-                        ),
-                    )
+                    for index in range(14):
+                        connection.execute(
+                            "INSERT INTO jobs("
+                            "project_id, title, status, created_by, started_at"
+                            ") VALUES (?, ?, 'running', ?, CURRENT_TIMESTAMP)",
+                            (
+                                project_id,
+                                f"Running shell fixture {index + 1}",
+                                owner_id,
+                            ),
+                        )
+                        connection.execute(
+                            "INSERT INTO attention_items("
+                            "kind, title, target_json, inline_ok, actions_json, "
+                            "source_key"
+                            ") VALUES (?, ?, ?, ?, ?, ?)",
+                            (
+                                "master_decision",
+                                f"Choose safe shell direction {index + 1}",
+                                json.dumps({"view": "master"}),
+                                0,
+                                "[]",
+                                f"shell-safe-area-browser-{index + 1}",
+                            ),
+                        )
                 result = _run_browser(
                     executable=_browser(),
                     base_url=base_url,
                     profile=fixture / "browser-profile",
                     token=token,
+                    database=database,
+                    project_id=project_id,
                     output_dir=args.output_dir.resolve(),
                     visual_oracle=visual_oracle,
                 )

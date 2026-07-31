@@ -102,6 +102,8 @@ export function AppShell(props: {
   const [menuOpen, setMenuOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [toolOpen, setToolOpen] = React.useState(false)
+  const [runningOpen, setRunningOpen] = React.useState(false)
+  const [attentionOpen, setAttentionOpen] = React.useState(false)
   const [leftWidth, setLeftWidth] = React.useState(() => stored('proxima.leftWidth', 294))
   const [leftCollapsed, setLeftCollapsed] = React.useState(() => (typeof localStorage !== 'undefined' && localStorage.getItem('proxima.leftCollapsed') === '1'))
   const mobileShell = useMobileShell()
@@ -215,6 +217,7 @@ export function AppShell(props: {
   // collapse its navigation never hides this bounded navigation surface.
   const effectiveLeftCollapsed = !delegateMode && leftCollapsed
   const shellStyle = { ['--left-w']: effectiveLeftCollapsed ? '58px' : `${leftWidth}px` } as React.CSSProperties
+  const statusOverlayOpen = runningOpen || attentionOpen
   const statusControls = (
     <div className="shell-status-controls">
       <RunningTasks
@@ -223,9 +226,14 @@ export function AppShell(props: {
         onOpenJob={props.onOpenRunningJob}
         onOpenSession={props.onOpenRunningSession}
         onOpenTasks={() => props.onSelectView('activity')}
+        onOpenChange={setRunningOpen}
       />
       <span className="attention-control-slot">
-        <AttentionInbox token={props.token} onOpenTarget={target => props.onOpenAttentionTarget?.(target)} />
+        <AttentionInbox
+          token={props.token}
+          onOpenTarget={target => props.onOpenAttentionTarget?.(target)}
+          onOpenChange={setAttentionOpen}
+        />
       </span>
     </div>
   )
@@ -321,6 +329,7 @@ export function AppShell(props: {
               && !menuOpen
               && !searchOpen
               && !toolOpen
+              && !statusOverlayOpen
               && props.currentView !== 'master'
               && props.currentView !== 'home'
             }
@@ -328,7 +337,13 @@ export function AppShell(props: {
             onOpenJob={(id, engine) => props.onOpenRunningJob?.(id, engine)}
           />
           <MasterToastRegion
-            available={!drawerOpen && !menuOpen && !searchOpen && !toolOpen}
+            available={
+              !drawerOpen
+              && !menuOpen
+              && !searchOpen
+              && !toolOpen
+              && !statusOverlayOpen
+            }
           />
         </>
       )}

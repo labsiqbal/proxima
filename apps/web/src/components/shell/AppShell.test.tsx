@@ -5,13 +5,37 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { AppShell } from './AppShell'
 
 vi.mock('./ToolDock', () => ({ ToolDock: () => <div data-testid="tool-dock" /> }))
-vi.mock('./AttentionInbox', () => ({ AttentionInbox: () => null }))
-vi.mock('./RunningTasks', () => ({ RunningTasks: () => null }))
+vi.mock('./AttentionInbox', () => ({
+  AttentionInbox: (props: { onOpenChange?: (open: boolean) => void }) => (
+    <>
+      <button type="button" onClick={() => props.onOpenChange?.(true)}>Open Attention fixture</button>
+      <button type="button" onClick={() => props.onOpenChange?.(false)}>Close Attention fixture</button>
+    </>
+  ),
+}))
+vi.mock('./RunningTasks', () => ({
+  RunningTasks: (props: { onOpenChange?: (open: boolean) => void }) => (
+    <>
+      <button type="button" onClick={() => props.onOpenChange?.(true)}>Open Running fixture</button>
+      <button type="button" onClick={() => props.onOpenChange?.(false)}>Close Running fixture</button>
+    </>
+  ),
+}))
 vi.mock('./SearchModal', () => ({
   SearchModal: (props: { onClose: () => void }) => (
     <div role="dialog" aria-label="Search">
       <button type="button" onClick={props.onClose}>Close search</button>
     </div>
+  ),
+}))
+vi.mock('../master/MasterPopup', () => ({
+  MasterPopup: (props: { available: boolean }) => (
+    <output data-testid="master-popup-availability">{String(props.available)}</output>
+  ),
+}))
+vi.mock('../master/MasterToastRegion', () => ({
+  MasterToastRegion: (props: { available: boolean }) => (
+    <output data-testid="master-toast-availability">{String(props.available)}</output>
   ),
 }))
 
@@ -215,5 +239,33 @@ describe('AppShell mobile drawer + search', () => {
   it('does not expose Delegate while Master is disabled', () => {
     render(<AppShell {...base} features={{ ...base.features, masterOrchestrator: false }}><div>main</div></AppShell>)
     expect(screen.queryByRole('button', { name: 'Delegate' })).not.toBeInTheDocument()
+  })
+
+  it('withholds every Master overlay while either status popover is open', async () => {
+    const user = userEvent.setup()
+    render(
+      <AppShell
+        {...base}
+        features={{ ...base.features, masterOrchestrator: true }}
+      >
+        <div>main</div>
+      </AppShell>,
+    )
+
+    expect(screen.getByTestId('master-popup-availability')).toHaveTextContent('true')
+    expect(screen.getByTestId('master-toast-availability')).toHaveTextContent('true')
+
+    await user.click(screen.getByRole('button', { name: 'Open Running fixture' }))
+    expect(screen.getByTestId('master-popup-availability')).toHaveTextContent('false')
+    expect(screen.getByTestId('master-toast-availability')).toHaveTextContent('false')
+
+    await user.click(screen.getByRole('button', { name: 'Open Attention fixture' }))
+    await user.click(screen.getByRole('button', { name: 'Close Running fixture' }))
+    expect(screen.getByTestId('master-popup-availability')).toHaveTextContent('false')
+    expect(screen.getByTestId('master-toast-availability')).toHaveTextContent('false')
+
+    await user.click(screen.getByRole('button', { name: 'Close Attention fixture' }))
+    expect(screen.getByTestId('master-popup-availability')).toHaveTextContent('true')
+    expect(screen.getByTestId('master-toast-availability')).toHaveTextContent('true')
   })
 })

@@ -199,8 +199,10 @@ every mobile CSS width from 320 through 767, checks the desktop reference sizes,
 captures visual evidence without touching live data. The evidence viewports also
 must match the checked-in `scripts/shell_safe_area_visual_oracle.json` landmark
 geometry. At 390px it opens Running and Attention, verifies viewport and tool-rail
-clearance, pointer hit testing, keyboard order, target size, and focus rings, then
-captures both open popovers:
+clearance, saturated scrolling, pointer hit testing, keyboard order, target size,
+and focus rings. It injects disposable live Master toasts and verifies that both
+the toast region and launcher are withheld while each popover is open, then captures
+the live toast and both open popovers:
 
 ```bash
 python3 scripts/verify_shell_safe_areas_browser.py

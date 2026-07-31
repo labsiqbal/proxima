@@ -61,12 +61,14 @@ export function RunningTasks({
   onOpenJob,
   onOpenSession,
   onOpenTasks,
+  onOpenChange,
 }: {
   token: string
   sessions?: ChatSession[]
   onOpenJob?: (id: number, engine?: string) => void
   onOpenSession?: (sessionId: number) => void
   onOpenTasks?: () => void
+  onOpenChange?: (open: boolean) => void
 }) {
   const [sessionIds, setSessionIds] = React.useState<number[]>([])
   const [jobs, setJobs] = React.useState<Job[]>([])
@@ -112,12 +114,19 @@ export function RunningTasks({
       window.removeEventListener('keydown', key)
     }
   }, [open])
+  React.useLayoutEffect(() => {
+    onOpenChange?.(open)
+    return () => onOpenChange?.(false)
+  }, [onOpenChange, open])
 
   const items = React.useMemo(
     () => buildRunningItems(sessionIds, jobs, sessions),
     [sessionIds, jobs, sessions],
   )
   const count = items.length
+  React.useEffect(() => {
+    if (count === 0) setOpen(false)
+  }, [count])
 
   const go = (item: RunningTaskItem) => {
     setOpen(false)
