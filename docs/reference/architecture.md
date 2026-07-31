@@ -296,9 +296,12 @@ metadata is rejected before file service. Named-local HTTP uses a Secure
 `SameSite=None` cookie under the browser's trustworthy-localhost exception.
 The matrix follows the
 [Fetch destination types](https://fetch.spec.whatwg.org/#concept-request-destination)
-and the
+plus the HTML request algorithms for
+[manifests](https://html.spec.whatwg.org/multipage/links.html#link-type-manifest),
+[tracks](https://html.spec.whatwg.org/multipage/media.html#attr-track-src), and
 [HTML module request algorithm](https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script).
-Worklets remain `cors`; only top-level worker, shared-worker, and service-worker
+Manifests and worklets remain `cors`; a same-origin track without a CORS setting
+uses `same-origin`; and only top-level worker, shared-worker, and service-worker
 module requests switch to `same-origin`. The dispatch gate accepts exactly one
 canonical Structured Field occurrence for site, mode, destination, and optional
 user activation. Duplicate, combined, non-ASCII, differently cased, and

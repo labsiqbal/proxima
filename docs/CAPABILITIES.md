@@ -1327,10 +1327,13 @@ subresource metadata is rejected before file service. Named-local HTTP uses a Se
 HTTP relays use `SameSite=Strict`.
 The tuple matrix follows the
 [Fetch destination types](https://fetch.spec.whatwg.org/#concept-request-destination)
-and the
+plus the HTML request algorithms for
+[manifests](https://html.spec.whatwg.org/multipage/links.html#link-type-manifest),
+[tracks](https://html.spec.whatwg.org/multipage/media.html#attr-track-src), and
 [HTML module request algorithm](https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script):
-worklets remain `cors`, while only top-level worker, shared-worker, and
-service-worker module requests switch to `same-origin`. Each `Sec-Fetch-Site`,
+manifests and worklets remain `cors`; a same-origin track without a CORS setting
+uses `same-origin`; and only top-level worker, shared-worker, and service-worker
+module requests switch to `same-origin`. Each `Sec-Fetch-Site`,
 `Sec-Fetch-Mode`, and `Sec-Fetch-Dest` must be one canonical Structured Field
 token, and optional `Sec-Fetch-User` must be the canonical `?1` boolean on a
 navigation. Duplicate, comma-combined, non-ASCII, differently cased, or

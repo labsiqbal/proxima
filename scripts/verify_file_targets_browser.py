@@ -4,6 +4,7 @@ import base64
 import contextlib
 import http.server
 import json
+import logging
 import os
 import shutil
 import signal
@@ -24,6 +25,51 @@ API_PYTHON = ROOT / "apps" / "api" / ".venv" / "bin" / "python"
 WEB_DIR = ROOT / "apps" / "web"
 PROBE_ROOT = ROOT / "trusted-probes" / "safe-update"
 PASSWORD = "file-target-browser-password"
+
+
+def _instrumented_app():
+    from proxima_api.main import app
+
+    metadata_log = os.environ.get("PROXIMA_PREVIEW_METADATA_LOG", "")
+    if not metadata_log:
+        raise RuntimeError("preview metadata log is unavailable")
+    handler = logging.FileHandler(metadata_log, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger = logging.getLogger("proxima_api.target_preview")
+    logger.handlers = [handler]
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+
+    async def instrumented(scope, receive, send):
+        query = bytes(scope.get("query_string") or b"")
+        if (
+            scope.get("type") == "http"
+            and scope.get("path") == "/site/metadata.html"
+            and b"__proxima_fixture_frame=1" in query.split(b"&")
+        ):
+            fetch_names = {
+                b"sec-fetch-dest",
+                b"sec-fetch-mode",
+                b"sec-fetch-site",
+                b"sec-fetch-user",
+            }
+            scope = dict(scope)
+            scope["headers"] = [
+                (name, value)
+                for name, value in scope.get("headers", [])
+                if name.lower() not in fetch_names
+                and not (
+                    name.lower() == b"origin"
+                    and value.strip().lower() == b"null"
+                )
+            ] + [
+                (b"sec-fetch-site", b"same-origin"),
+                (b"sec-fetch-mode", b"navigate"),
+                (b"sec-fetch-dest", b"iframe"),
+            ]
+        await app(scope, receive, send)
+
+    return instrumented
 
 
 def _request(
@@ -290,6 +336,22 @@ fetch("data.json")
     probe: "target-preview-fetch",
     value: "blocked"
   }, "*"));
+const media = document.createElement("video");
+const captions = document.createElement("track");
+captions.kind = "captions";
+captions.src = "captions.vtt";
+captions.default = true;
+captions.addEventListener("load", () => parent.postMessage({
+  probe: "target-preview-track",
+  value: "loaded"
+}, "*"));
+captions.addEventListener("error", () => parent.postMessage({
+  probe: "target-preview-track",
+  value: "blocked"
+}, "*"));
+media.append(captions);
+document.body.append(media);
+captions.track.mode = "hidden";
 const worker = new Worker("worker.js", {type: "module"});
 worker.onmessage = event => parent.postMessage({
   probe: "target-preview-worker",
@@ -370,6 +432,45 @@ if (mainOrigin) {
 """.strip(),
         encoding="utf-8",
     )
+    (ops / "site" / "metadata.html").write_text(
+        """
+<link rel="manifest" href="app.webmanifest">
+<main>METADATA RESOURCES LOADING</main>
+<script>
+globalThis.__proximaMetadataResourcesLoaded = false;
+let manifestLoaded = false;
+let trackLoaded = false;
+const finish = () => {
+  if (!manifestLoaded || !trackLoaded) return;
+  globalThis.__proximaMetadataResourcesLoaded = true;
+  document.querySelector("main").textContent = "METADATA RESOURCES LOADED";
+};
+const manifestUrl = new URL("app.webmanifest", location.href).href;
+const observeManifest = () => {
+  if (performance.getEntriesByName(manifestUrl).length) {
+    manifestLoaded = true;
+    finish();
+  } else {
+    setTimeout(observeManifest, 50);
+  }
+};
+observeManifest();
+const media = document.createElement("video");
+const captions = document.createElement("track");
+captions.kind = "captions";
+captions.src = "captions.vtt";
+captions.default = true;
+captions.addEventListener("load", () => {
+  trackLoaded = true;
+  finish();
+});
+media.append(captions);
+document.body.append(media);
+captions.track.mode = "hidden";
+</script>
+""".strip(),
+        encoding="utf-8",
+    )
     (ops / "site" / "theme.css").write_text(
         "body { color: canonical-ops; }",
         encoding="utf-8",
@@ -415,6 +516,20 @@ registerPaint("canonical-probe", class {
     (ops / "site" / "font.ttf").write_bytes(font_source.read_bytes())
     (ops / "site" / "data.json").write_text(
         '{"source":"canonical"}',
+        encoding="utf-8",
+    )
+    (ops / "site" / "app.webmanifest").write_text(
+        json.dumps(
+            {
+                "name": "Canonical preview",
+                "short_name": "Canonical",
+                "start_url": "./index.html",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ops / "site" / "captions.vtt").write_text(
+        "WEBVTT\n\n00:00.000 --> 00:01.000\nCanonical caption\n",
         encoding="utf-8",
     )
     (ops / "site" / "navigate.html").write_text(
@@ -826,6 +941,9 @@ def _browser_expression() -> str:
       const targetFrame = overlay.querySelector("iframe.av-frame");
       window.__targetPreviewEntry = targetFrame.src;
       window.__targetPreviewOrigin = previewOrigin;
+      window.__targetPreviewManifestUrl = `${previewOrigin}/site/app.webmanifest`;
+      window.__targetPreviewMetadataUrl = `${previewOrigin}/site/metadata.html`;
+      window.__targetPreviewTrackUrl = `${previewOrigin}/site/captions.vtt`;
       const cleanLocation = await until(
         `${name} capability cleanup`,
         () => previewMessages["target-preview-clean-location"]
@@ -867,6 +985,7 @@ def _browser_expression() -> str:
         "target-preview-module",
         "target-preview-worker",
         "target-preview-worklet",
+        "target-preview-track",
         "target-preview-font",
         "target-preview-fetch",
       ]) {
@@ -879,6 +998,7 @@ def _browser_expression() -> str:
       }
       checks.push("https-area-native-module-worker");
       checks.push("https-area-cors-paint-worklet");
+      checks.push("https-area-same-origin-track");
       const serviceWorker = await until(
         `${name} service worker rejection`,
         () => previewMessages["target-preview-service-worker"]
@@ -1082,6 +1202,101 @@ def _clean_top_level_preview_probe(name: str) -> dict[str, object]:
     }
 
 
+def _resource_metadata_denial_probe(
+    name: str,
+    *,
+    url_expression: str,
+    path: str,
+    mode: str,
+    destination: str,
+) -> dict[str, object]:
+    return {
+        "action": "popup_response",
+        "name": name,
+        "timeout": 15,
+        "url_expression": url_expression,
+        "request_headers": {
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": mode,
+            "Sec-Fetch-Dest": destination,
+        },
+        "expected_status": 403,
+        "expected_final_origin_expression": "window.__targetPreviewOrigin",
+        "expected_final_path": path,
+        "expected_capability_query": False,
+        "expected_executed": False,
+        "expected_body": "preview request metadata is invalid",
+    }
+
+
+def _browser_metadata_recording_probe() -> dict[str, object]:
+    return {
+        "action": "popup_response",
+        "name": "HTTPS browser-emitted manifest and track metadata",
+        "timeout": 15,
+        "url_expression": (
+            "window.__targetPreviewMetadataUrl"
+            " + '?__proxima_fixture_frame=1'"
+        ),
+        "execution_marker": "__proximaMetadataResourcesLoaded",
+        "expected_status": 200,
+        "expected_final_origin_expression": "window.__targetPreviewOrigin",
+        "expected_final_path": "/site/metadata.html",
+        "expected_capability_query": False,
+        "expected_executed": True,
+        "expected_body": "METADATA RESOURCES LOADED",
+    }
+
+
+def _observed_resource_metadata(path: Path) -> dict[str, object]:
+    records = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        prefix = "target-preview-admitted "
+        if not line.startswith(prefix):
+            continue
+        value = json.loads(line[len(prefix) :])
+        if isinstance(value, dict):
+            records.append(value)
+    expected = {
+        "/site/app.webmanifest": ("same-origin", "cors", "manifest"),
+        "/site/captions.vtt": ("same-origin", "same-origin", "track"),
+    }
+    observed: dict[str, dict[str, object]] = {}
+    for resource_path, tuple_value in expected.items():
+        matching = [
+            record
+            for record in records
+            if record.get("path") == resource_path
+        ]
+        actual = {
+            (
+                record.get("site"),
+                record.get("mode"),
+                record.get("destination"),
+            )
+            for record in matching
+        }
+        if tuple_value not in actual:
+            raise RuntimeError(
+                f"{resource_path} emitted unexpected Fetch Metadata: "
+                f"{sorted(actual, key=str)}"
+            )
+        if any(mode == "no-cors" for _site, mode, _destination in actual):
+            raise RuntimeError(
+                f"{resource_path} emitted an impossible no-cors request"
+            )
+        observed[resource_path] = {
+            "destination": tuple_value[2],
+            "mode": tuple_value[1],
+            "site": tuple_value[0],
+        }
+    return {
+        "name": "browser-emitted preview resource metadata",
+        "observed": observed,
+        "ok": True,
+    }
+
+
 def _coop_success_probe(url: str) -> dict[str, object]:
     return {
         "action": "popup_response",
@@ -1120,6 +1335,7 @@ def main() -> None:
         tls_context.check_hostname = False
         tls_context.verify_mode = ssl.CERT_NONE
         database = fixture / "candidate.db"
+        preview_metadata_log = fixture / "preview-metadata.jsonl"
         environment = {
             "HOME": str(home),
             "LANG": "C.UTF-8",
@@ -1133,6 +1349,7 @@ def main() -> None:
             "PROXIMA_HERMES_PROFILES_ROOT": str(runner_home),
             "PROXIMA_LINK_ROOTS": str(workspace),
             "PROXIMA_PORT": str(port),
+            "PROXIMA_PREVIEW_METADATA_LOG": str(preview_metadata_log),
             "PROXIMA_PROJECTCTL_COMMAND": "/usr/bin/true",
             "PROXIMA_REFRESH_CREDENTIALS": "0",
             "PROXIMA_SINGLE_USER": "1",
@@ -1150,7 +1367,8 @@ def main() -> None:
                     str(API_PYTHON),
                     "-m",
                     "uvicorn",
-                    "proxima_api.main:app",
+                    "scripts.verify_file_targets_browser:_instrumented_app",
+                    "--factory",
                     "--host",
                     "127.0.0.1",
                     "--port",
@@ -1231,6 +1449,32 @@ def main() -> None:
                                 "timeout": 45,
                                 "expression": _browser_expression(),
                             },
+                            _browser_metadata_recording_probe(),
+                            _resource_metadata_denial_probe(
+                                "HTTPS impossible no-cors manifest rejection",
+                                url_expression=(
+                                    "window.__targetPreviewManifestUrl"
+                                ),
+                                path="/site/app.webmanifest",
+                                mode="no-cors",
+                                destination="manifest",
+                            ),
+                            _resource_metadata_denial_probe(
+                                "HTTPS impossible no-cors track rejection",
+                                url_expression="window.__targetPreviewTrackUrl",
+                                path="/site/captions.vtt",
+                                mode="no-cors",
+                                destination="track",
+                            ),
+                            _resource_metadata_denial_probe(
+                                "HTTPS malformed manifest metadata rejection",
+                                url_expression=(
+                                    "window.__targetPreviewManifestUrl"
+                                ),
+                                path="/site/app.webmanifest",
+                                mode="cors, no-cors",
+                                destination="manifest",
+                            ),
                             _top_level_preview_probe(
                                 "HTTPS top-level Area navigation rejection"
                             ),
@@ -1277,13 +1521,17 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                         ),
                         ignore_certificate_errors=True,
                     )
+                transcript_value = json.loads(transcript)
+                transcript_value.append(
+                    _observed_resource_metadata(preview_metadata_log)
+                )
                 print(
                     json.dumps(
                         {
                             "fixture": "disposable",
                             "ok": True,
                             "scenario": scenario["name"],
-                            "transcript": json.loads(transcript),
+                            "transcript": transcript_value,
                         },
                         sort_keys=True,
                     )
@@ -1302,7 +1550,8 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                             str(API_PYTHON),
                             "-m",
                             "uvicorn",
-                            "proxima_api.main:app",
+                            "scripts.verify_file_targets_browser:_instrumented_app",
+                            "--factory",
                             "--host",
                             "127.0.0.1",
                             "--port",
