@@ -107,6 +107,9 @@ def test_docs_describe_single_reusable_workflow_table_not_manual_scheduled_split
         "split into **Manual",
         "are split into **Manual",
         "derives **Manual (on-demand)**",
+        "owns **Manual / Scheduled** mode",
+        "Scheduled triggers own cron, overlap, and enabled settings instead",
+        "start with no human intake prompt",
     )
     for path in docs:
         text = path.read_text(encoding="utf-8")
@@ -114,6 +117,10 @@ def test_docs_describe_single_reusable_workflow_table_not_manual_scheduled_split
             assert marker not in text, f"{path} still teaches {marker!r}"
         assert "Availability" in text
         assert "Automation" in text or "Schedules" in text
+    capabilities = (REPO / "docs" / "CAPABILITIES.md").read_text(encoding="utf-8")
+    assert "shared **intake contract**" in capabilities
+    assert "schedule seed" in capabilities
+    assert "durable schedule" in capabilities and "bindings" in capabilities
 
 
 def test_durable_scheduled_workflow_evidence_has_valid_before_after_pngs():

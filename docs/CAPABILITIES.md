@@ -749,16 +749,19 @@ and never gate promotion. **One workflow = one project** - open plans/templates 
 `project_slug`; the shell project filter does not rebind mid-edit/run.
 **How:** authored on the **graph canvas** (see §Graph workflow engine): nodes carry
 `instruction`, `expected_output`, `rules`, an optional per-node agent and review gate;
-edges carry dependencies. The trigger node owns **Manual / Scheduled** mode. Manual
-triggers declare their intake fields (`text`, `url`, `number`, or `file`) in the node
-inspector; each field has a stable identifier, optional default, and required flag.
-Rows are created and edited as complete units, so a transient blank or duplicate ID
-never reaches persistence. Draft Run and reusable Manual Run open the same validated
-dialog, which applies defaults, omits blank optional values, and refuses missing or
-type-invalid values before execution. The API repeats that validation before claiming
-the job and freezes the resolved values into the job and trigger output. Each field's
-`{{id}}` is substituted into node text. Scheduled triggers own cron, overlap, and enabled settings instead and start with
-no human intake prompt. Existing graph workflows keep the compatibility
+edges carry dependencies. The trigger node owns the shared **intake contract** plus
+optional **schedule seed** settings. Intake fields (`text`, `url`, `number`, or `file`)
+live on the trigger and power every manual **Run**: each field has a stable identifier,
+optional default, and required flag. Rows are created and edited as complete units, so a
+transient blank or duplicate ID never reaches persistence. Draft Run and reusable Manual
+Run open the same validated dialog, which applies defaults, omits blank optional values,
+and refuses missing or type-invalid values before execution. The API repeats that
+validation before claiming the job and freezes the resolved values into the job and
+trigger output. Each field's `{{id}}` is substituted into node text. Schedule seed
+settings (cron, overlap, enabled, default Off) are independent of intake - promoting a
+plan may create a schedule row from those seeds, but unattended ticks and **Run now**
+resolve durable schedule bindings rather than prompting, and never replace the manual Run
+path. Existing graph workflows keep the compatibility
 `workflows.inputs` projection, which is migrated and hydrated onto the trigger so old
 templates and `{{id}}` references continue to work. An **authoring chat** (Plan Chat) beside the
 canvas emits `<workflow-graph>` blocks that are applied to the plan on screen, never

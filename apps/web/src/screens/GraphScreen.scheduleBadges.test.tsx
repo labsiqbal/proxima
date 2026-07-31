@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getGraphJob, listGraphJobs, listGraphTemplates } from '../api/graph'
+import { getGraphJob, listGraphJobs, listGraphTemplates, startGraphJob } from '../api/graph'
 import { listSchedules, runScheduleNow } from '../api/schedules'
 import { GraphScreen } from './GraphScreen'
 
@@ -464,5 +464,90 @@ describe('GraphScreen how-it-runs badges', () => {
     expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
     expect(runScheduleNow).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('keeps live polling after Start from the editor without openJob', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const queued = {
+      ...runningJob(42, 'Editor draft'),
+      status: 'queued',
+      workflow_id: null,
+    } as never
+    const started = runningJob(42, 'Editor draft')
+    const refreshed = {
+      ...started,
+      title: 'Editor draft live',
+    } as never
+    let launched = false
+    let gets = 0
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId !== 42) throw new Error(`unexpected job ${jobId}`)
+      gets += 1
+      return launched ? refreshed : queued
+    })
+    vi.mocked(startGraphJob).mockImplementation(async () => {
+      launched = true
+      return started
+    })
+
+    render(
+      <GraphScreen
+        {...screenBase}
+        pendingJobId={42}
+        onPendingConsumed={vi.fn()}
+      />,
+    )
+    expect(await screen.findByRole('button', { name: '▶ Run' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '▶ Run' }))
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 42))
+    expect(await screen.findByText('Execution started.')).toBeInTheDocument()
+
+    const getsAfterStart = gets
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    await waitFor(() => expect(gets).toBeGreaterThan(getsAfterStart))
+    expect(await screen.findByRole('button', { name: 'Rename workflow Editor draft live' })).toBeInTheDocument()
+  })
+
+  it('keeps live polling after home Run draft without openJob', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const draft = {
+      ...runningJob(55, 'Home draft'),
+      status: 'queued',
+      workflow_id: null,
+    } as never
+    const started = runningJob(55, 'Home draft')
+    const refreshed = {
+      ...started,
+      title: 'Home draft refreshed',
+    } as never
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [draft] })
+    let launched = false
+    let gets = 0
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId !== 55) throw new Error(`unexpected job ${jobId}`)
+      gets += 1
+      return launched ? refreshed : draft
+    })
+    vi.mocked(startGraphJob).mockImplementation(async () => {
+      launched = true
+      return started
+    })
+
+    render(<GraphScreen {...screenBase} />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 1' }))
+    const row = (await screen.findByText('Home draft')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Run' }))
+
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 55))
+    expect(await screen.findByRole('button', { name: 'Rename workflow Home draft' })).toBeInTheDocument()
+
+    const getsAfterStart = gets
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    await waitFor(() => expect(gets).toBeGreaterThan(getsAfterStart))
+    expect(await screen.findByRole('button', { name: 'Rename workflow Home draft refreshed' })).toBeInTheDocument()
   })
 })
