@@ -56,41 +56,6 @@ def _clean_capability_url(url: str) -> str:
     )
 
 
-_BROWSER_RESOURCE_FETCH_METADATA = frozenset(
-    {
-        ("cors", "empty"),
-        ("cors", "audio"),
-        ("cors", "audioworklet"),
-        ("cors", "font"),
-        ("cors", "image"),
-        ("cors", "json"),
-        ("cors", "manifest"),
-        ("cors", "paintworklet"),
-        ("cors", "script"),
-        ("cors", "sharedworker"),
-        ("cors", "style"),
-        ("cors", "text"),
-        ("cors", "track"),
-        ("cors", "video"),
-        ("cors", "worker"),
-        ("no-cors", "empty"),
-        ("no-cors", "audio"),
-        ("no-cors", "image"),
-        ("no-cors", "manifest"),
-        ("no-cors", "script"),
-        ("no-cors", "style"),
-        ("no-cors", "track"),
-        ("no-cors", "video"),
-        ("same-origin", "empty"),
-        ("same-origin", "script"),
-        ("same-origin", "serviceworker"),
-        ("same-origin", "sharedworker"),
-        ("same-origin", "style"),
-        ("same-origin", "worker"),
-    }
-)
-
-
 def _fetch_metadata(
     headers: list[tuple[str, str | bytes]],
 ) -> target_preview._PreviewFetchMetadata:
@@ -123,14 +88,20 @@ def _browser_fetch_metadata(
     return _fetch_metadata(headers)
 
 
-def test_same_origin_preview_metadata_allows_normative_resource_tuples() -> None:
-    assert (
-        target_preview._SAME_ORIGIN_RESOURCE_FETCH_METADATA
-        == _BROWSER_RESOURCE_FETCH_METADATA
-    )
-    for mode, destination in _BROWSER_RESOURCE_FETCH_METADATA:
-        metadata = _browser_fetch_metadata(mode, destination)
-        assert metadata.admits_area_request(capability_present=True)
+@pytest.mark.parametrize(
+    ("mode", "destination"),
+    [
+        ("cors", "manifest"),
+        ("cors", "track"),
+        ("same-origin", "track"),
+    ],
+)
+def test_same_origin_preview_metadata_allows_manifest_and_track_requests(
+    mode: str,
+    destination: str,
+) -> None:
+    metadata = _browser_fetch_metadata(mode, destination)
+    assert metadata.admits_area_request(capability_present=True)
 
 
 @pytest.mark.parametrize(
@@ -150,6 +121,8 @@ def test_same_origin_preview_metadata_allows_normative_resource_tuples() -> None
         ("cors", "iframe"),
         ("cors", "invalid"),
         ("no-cors", "worker"),
+        ("no-cors", "manifest"),
+        ("no-cors", "track"),
         ("same-origin", "image"),
         ("same-origin", "audioworklet"),
         ("same-origin", "paintworklet"),

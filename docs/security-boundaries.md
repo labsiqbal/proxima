@@ -423,9 +423,12 @@ HTTP uses a Secure `SameSite=None` cookie under the browser's trustworthy-localh
 exception.
 The accepted tuple set follows the
 [Fetch destination types](https://fetch.spec.whatwg.org/#concept-request-destination)
-and the
+plus the HTML request algorithms for
+[manifests](https://html.spec.whatwg.org/multipage/links.html#link-type-manifest),
+[tracks](https://html.spec.whatwg.org/multipage/media.html#attr-track-src), and
 [HTML module request algorithm](https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script):
-worklet modules remain `cors`, and only top-level worker, shared-worker, and
+manifest and worklet requests remain `cors`; a same-origin track without a CORS
+setting uses `same-origin`; and only top-level worker, shared-worker, and
 service-worker module requests switch to `same-origin`. Site, mode, and destination
 must each be one canonical Structured Field token; optional user activation must be
 the canonical `?1` boolean on a navigation. Duplicate lines, comma-combined values,

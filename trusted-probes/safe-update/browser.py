@@ -346,16 +346,25 @@ def _popup_response_step(
         marker = json.dumps(
             step.get("execution_marker", "__proximaPreviewExecuted")
         )
+        expected_status = int(step["expected_status"])
+        wait_for_execution = step.get("expected_executed") is True
         expression = f"""
 (() => {{
   const navigation = performance.getEntriesByType("navigation")[0];
   const status = Number(navigation?.responseStatus || 0);
+  const executed = Boolean(globalThis[{marker}]);
   return {{
-    ok: document.readyState === "complete" && status > 0,
+    ok: document.readyState === "complete"
+      && status > 0
+      && (
+        !{json.dumps(wait_for_execution)}
+        || executed
+        || status !== {expected_status}
+      ),
     status,
     finalUrl: location.href,
     body: (document.body?.textContent || "").slice(0, 1024),
-    executed: Boolean(globalThis[{marker}])
+    executed
   }};
 }})()
 """

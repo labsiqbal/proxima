@@ -10,6 +10,7 @@ import hmac
 import html
 import ipaddress
 import json
+import logging
 import mimetypes
 import re
 import secrets
@@ -29,6 +30,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from . import container_registry, file_targets
 from .db import connect
 from .preview_proxy import resolve_preview_bind_host
+
+_LOG = logging.getLogger(__name__)
 
 FILE_PREVIEW_COOKIE = "proxima_file_preview"
 FILE_PREVIEW_TTL_SECONDS = 60 * 60
@@ -91,6 +94,8 @@ _FETCH_DESTINATIONS = frozenset(
 )
 # Sources: https://www.w3.org/TR/fetch-metadata/,
 # https://fetch.spec.whatwg.org/#concept-request-destination, and
+# https://html.spec.whatwg.org/multipage/links.html#link-type-manifest,
+# https://html.spec.whatwg.org/multipage/media.html#attr-track-src, and
 # https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script
 _SAME_ORIGIN_RESOURCE_FETCH_METADATA = frozenset(
     {
@@ -112,16 +117,15 @@ _SAME_ORIGIN_RESOURCE_FETCH_METADATA = frozenset(
         ("no-cors", "empty"),
         ("no-cors", "audio"),
         ("no-cors", "image"),
-        ("no-cors", "manifest"),
         ("no-cors", "script"),
         ("no-cors", "style"),
-        ("no-cors", "track"),
         ("no-cors", "video"),
         ("same-origin", "empty"),
         ("same-origin", "script"),
         ("same-origin", "serviceworker"),
         ("same-origin", "sharedworker"),
         ("same-origin", "style"),
+        ("same-origin", "track"),
         ("same-origin", "worker"),
     }
 )
@@ -746,6 +750,22 @@ class TargetPreviewManager:
                 "preview request metadata is invalid",
             )
             return
+        _LOG.debug(
+            "target-preview-admitted %s",
+            json.dumps(
+                {
+                    "area": area.area_id,
+                    "destination": metadata.destination,
+                    "kind": area.kind,
+                    "mode": metadata.mode,
+                    "path": str(scope.get("path") or ""),
+                    "project": area.project_id,
+                    "site": metadata.site,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
         await self._serve_admitted(
             area,
             scope,
