@@ -12,6 +12,7 @@ leaves an `'excluded'` tombstone so re-detection cannot resurrect it.
 
 Root resolution and boundary validation live in ``container_registry.py``.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -27,7 +28,21 @@ from .container_registry import (
 
 # Mirrors the detect_apps scan in routes/files.py: bounded depth, skip heavy
 # and tooling dirs, never follow hidden folders.
-SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "dist", "build", ".next", "__pycache__", ".cache", "target", ".hermes", ".claude", OPS_RELPATH}
+SKIP_DIRS = {
+    "node_modules",
+    ".git",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    "__pycache__",
+    ".cache",
+    "target",
+    ".hermes",
+    ".claude",
+    OPS_RELPATH,
+}
 MAX_DEPTH = 2  # scan the root + two subfolder levels
 MAX_AREAS = 50
 
@@ -56,7 +71,11 @@ def detect_code_areas(root: Path) -> list[str]:
             return
         for c in children:
             try:
-                if c.is_dir() and c.name not in SKIP_DIRS and not c.name.startswith("."):
+                if (
+                    c.is_dir()
+                    and c.name not in SKIP_DIRS
+                    and not c.name.startswith(".")
+                ):
                     scan(c, depth + 1)
             except OSError:
                 pass
@@ -186,15 +205,22 @@ def areas_payload(conn: sqlite3.Connection, project_id: int) -> dict:
     ).fetchall()
     code = [
         {
-            "id": r["id"], "rel_path": r["rel_path"], "source": r["source"],
+            "id": r["id"],
+            "rel_path": r["rel_path"],
+            "source": r["source"],
             "push_on_merge": bool(r["push_on_merge"]),
             # The URL pinned at opt-in (audit F3) - what a push will insist on.
             "push_remote_url": r["push_remote_url"],
         }
-        for r in rows if r["kind"] == "code"
+        for r in rows
+        if r["kind"] == "code"
     ]
     ops = next(
-        ({"id": r["id"], "rel_path": r["rel_path"]} for r in rows if r["kind"] == "ops"),
+        (
+            {"id": r["id"], "rel_path": r["rel_path"]}
+            for r in rows
+            if r["kind"] == "ops"
+        ),
         None,
     )
     return {"code_areas": code, "ops_area": ops}

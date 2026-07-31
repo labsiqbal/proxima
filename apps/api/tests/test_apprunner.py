@@ -2801,6 +2801,7 @@ def test_guarded_preview_launcher_sigkill_keeps_lease_until_tree_exits(tmp_path)
                 self.release()
                 return
             from proxima_api.container_activity import retain_activity_lease
+
             retain = kwargs.get("retain_ingress")
             if retain is not None:
                 retain(self.ingress)
@@ -2842,6 +2843,7 @@ def test_guarded_preview_launcher_sigkill_keeps_lease_until_tree_exits(tmp_path)
                     pass
             except ContainerBoundaryError:
                 blocked = True
+            assert blocked is True
             # status() must stay non-blocking and fail-closed while the tree is
             # unproven; _drain owns termination of the identity-bound tree.
             poll = manager.status("demo")
@@ -2850,7 +2852,9 @@ def test_guarded_preview_launcher_sigkill_keeps_lease_until_tree_exits(tmp_path)
             while time.monotonic() < deadline and _listener_pids(port):
                 manager.status("demo")
                 await asyncio.sleep(0.05)
-            assert not _listener_pids(port), "writer tree listener survived launcher death"
+            assert not _listener_pids(port), (
+                "writer tree listener survived launcher death"
+            )
             # Ingress must not have been released early on launcher-only death.
             # Activity may release only after tree proof.
             deadline = time.monotonic() + 3
@@ -2858,7 +2862,8 @@ def test_guarded_preview_launcher_sigkill_keeps_lease_until_tree_exits(tmp_path)
                 manager.status("demo")
                 await asyncio.sleep(0.05)
             assert released["ingress"] is False or (
-                group.finished is not None and group.finished.get("process_exited") is True
+                group.finished is not None
+                and group.finished.get("process_exited") is True
             )
             # After tree exit, activity can release; ingress only on verified finish.
             if group.finished and group.finished.get("process_exited"):
@@ -2991,9 +2996,10 @@ def test_retain_activity_lease_waits_for_tree_not_just_launcher(tmp_path):
     assert not raised or not isinstance(raised[0], ContainerBoundaryError)
 
 
-def test_worker_script_retains_activity_lease_on_containment_failure(tmp_path, monkeypatch):
+def test_worker_script_retains_activity_lease_on_containment_failure(
+    tmp_path, monkeypatch
+):
     """Script containment failure must not drop the activity lease in finally."""
-    from proxima_api.container_activity import ContainerActivityLease
 
     class FakeLease:
         def __init__(self):
@@ -3030,13 +3036,10 @@ def test_worker_script_retains_activity_lease_on_containment_failure(tmp_path, m
         except RuntimeError:
             pass
         finally:
-            if (
-                script_activity_lease is not None
-                and not getattr(
-                    script_activity_lease,
-                    "_retained_for_writer_tree",
-                    False,
-                )
+            if script_activity_lease is not None and not getattr(
+                script_activity_lease,
+                "_retained_for_writer_tree",
+                False,
             ):
                 if not getattr(script_activity_lease, "_released", False):
                     script_activity_lease.release()
@@ -3068,13 +3071,10 @@ def test_worker_acp_recycle_failure_retains_activity_lease():
     recycle_verified = False
     recycle_tree = object()
     if project_activity_lease is not None:
-        if (
-            recycle_verified
-            and not getattr(
-                project_activity_lease,
-                "_retained_for_writer_tree",
-                False,
-            )
+        if recycle_verified and not getattr(
+            project_activity_lease,
+            "_retained_for_writer_tree",
+            False,
         ):
             project_activity_lease.release()
         elif not recycle_verified:
@@ -3104,13 +3104,10 @@ def test_worker_acp_uncached_start_failure_honors_transferred_activity_lease():
     project_activity_lease = FakeLease()
     recycle_verified = True  # recycle() is a no-op when proc was never cached
     if project_activity_lease is not None:
-        if (
-            recycle_verified
-            and not getattr(
-                project_activity_lease,
-                "_retained_for_writer_tree",
-                False,
-            )
+        if recycle_verified and not getattr(
+            project_activity_lease,
+            "_retained_for_writer_tree",
+            False,
         ):
             project_activity_lease.release()
         elif not recycle_verified:
@@ -3209,9 +3206,7 @@ def test_writer_tree_stale_record_with_unseeded_orphan_fails_closed(tmp_path):
         pass
 
     writer_pid = int(ready.read_text(encoding="utf-8").strip())
-    sentinel_pid = int(
-        (tmp_path / "sentinel-pid").read_text(encoding="utf-8").strip()
-    )
+    sentinel_pid = int((tmp_path / "sentinel-pid").read_text(encoding="utf-8").strip())
     launcher_start = process_start_identity(launcher)
     # Launcher is already dead; bind with dead launcher + live record only.
     tree = GuardedWriterTree(
@@ -3377,9 +3372,7 @@ def test_app_status_stays_non_blocking_when_writer_tree_unproven(tmp_path):
             "owner_start": "",
         }
         record.write_text(json.dumps(payload), encoding="utf-8")
-        (tmp_path / "status-sentinel-pid").write_text(
-            str(sentinel), encoding="utf-8"
-        )
+        (tmp_path / "status-sentinel-pid").write_text(str(sentinel), encoding="utf-8")
         os._exit(0)
 
     deadline = time.monotonic() + 2
@@ -3403,6 +3396,7 @@ def test_app_status_stays_non_blocking_when_writer_tree_unproven(tmp_path):
         pass
 
     manager = AppManager()
+
     # Synthesize a drained launcher with an unproven writer tree so status
     # takes the fail-closed branch without attempting termination.
     class _DeadProc:

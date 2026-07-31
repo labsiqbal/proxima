@@ -3,6 +3,7 @@
 Single-user cockpit: every project belongs to the sole owner. No membership,
 sharing, invites, or visibility — those were the multi-user surface.
 """
+
 from __future__ import annotations
 
 import json
@@ -31,7 +32,13 @@ from ..project_browse import (
 )
 from ..project_areas import areas_payload, ensure_ops_area, sync_code_areas
 from ..provisioning import scaffold_project_dir
-from ..schemas import ProjectAreaAddRequest, ProjectAreaUpdateRequest, ProjectCreateRequest, ProjectLinkRequest, ProjectUpdateRequest
+from ..schemas import (
+    ProjectAreaAddRequest,
+    ProjectAreaUpdateRequest,
+    ProjectCreateRequest,
+    ProjectLinkRequest,
+    ProjectUpdateRequest,
+)
 from ..settings import validate_slug
 
 
@@ -54,18 +61,26 @@ def register(app, deps):
             if added_rels is not None:
                 if not added_rels:
                     return
-                rows = db().execute(
-                    "SELECT id FROM project_areas "
-                    "WHERE project_id = ? AND kind = 'code' AND source != 'excluded' "
-                    "AND rel_path IN (" + ",".join("?" * len(added_rels)) + ")",
-                    (project_id, *added_rels),
-                ).fetchall()
+                rows = (
+                    db()
+                    .execute(
+                        "SELECT id FROM project_areas "
+                        "WHERE project_id = ? AND kind = 'code' AND source != 'excluded' "
+                        "AND rel_path IN (" + ",".join("?" * len(added_rels)) + ")",
+                        (project_id, *added_rels),
+                    )
+                    .fetchall()
+                )
             else:
-                rows = db().execute(
-                    "SELECT id FROM project_areas "
-                    "WHERE project_id = ? AND kind = 'code' AND source != 'excluded'",
-                    (project_id,),
-                ).fetchall()
+                rows = (
+                    db()
+                    .execute(
+                        "SELECT id FROM project_areas "
+                        "WHERE project_id = ? AND kind = 'code' AND source != 'excluded'",
+                        (project_id,),
+                    )
+                    .fetchall()
+                )
             if not rows:
                 return
             lifecycle.on_code_areas_registered(
@@ -96,6 +111,7 @@ def register(app, deps):
             logging.getLogger("proxima.projects").exception(
                 "Knowledge graph registration hook failed (non-fatal)"
             )
+
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
     project_payload = deps["project_payload"]
@@ -142,16 +158,26 @@ def register(app, deps):
         """Single path component only - no separators, traversal, or empty names."""
         cleaned = name.strip()
         if not cleaned or cleaned in (".", ".."):
-            raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "folder"})
+            raise HTTPException(
+                status_code=400,
+                detail={"message": "invalid folder name", "field": "folder"},
+            )
         if cleaned != name or any(sep in cleaned for sep in ("/", "\\", "\0")):
-            raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "folder"})
+            raise HTTPException(
+                status_code=400,
+                detail={"message": "invalid folder name", "field": "folder"},
+            )
         return cleaned
 
     def _link_error(status_code: int, message: str, field: str) -> HTTPException:
-        return HTTPException(status_code=status_code, detail={"message": message, "field": field})
+        return HTTPException(
+            status_code=status_code, detail={"message": message, "field": field}
+        )
 
     @app.post("/api/projects/link", status_code=201)
-    def link_project(payload: ProjectLinkRequest, user: dict[str, Any] = Depends(current_user)):
+    def link_project(
+        payload: ProjectLinkRequest, user: dict[str, Any] = Depends(current_user)
+    ):
         """Register a folder as a project (no scaffold under the data dir). The
         project's path points at the real folder, so chat/terminal/files operate
         on it. Pass mkdir=true to create a brand-new empty directory first
@@ -169,34 +195,52 @@ def register(app, deps):
                 try:
                     raw_parent, raw_name = split_directory_target(payload.path)
                 except PathResolutionUnavailable as exc:
-                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
+                    raise _link_error(
+                        400, "parent directory is not reachable", "parent"
+                    ) from exc
                 folder_name = _validate_new_folder_name(raw_name)
                 try:
                     parent = allowed_roots.resolve(raw_parent, payload.root_id)
                 except PathOutsideRoots as exc:
                     raise _link_error(403, str(exc), "parent") from exc
                 except PathResolutionUnavailable as exc:
-                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
+                    raise _link_error(
+                        400, "parent directory is not reachable", "parent"
+                    ) from exc
                 try:
                     created_dir = create_directory_component(parent, folder_name)
                 except DirectoryComponentInvalid as exc:
                     raise _link_error(400, str(exc), "folder") from exc
                 except PermissionError as exc:
-                    raise _link_error(403, "permission denied - cannot create folder here", "parent") from exc
+                    raise _link_error(
+                        403, "permission denied - cannot create folder here", "parent"
+                    ) from exc
                 except FileExistsError as exc:
-                    raise _link_error(409, "a folder with that name already exists", "folder") from exc
+                    raise _link_error(
+                        409, "a folder with that name already exists", "folder"
+                    ) from exc
                 except FileNotFoundError as exc:
-                    raise _link_error(400, "parent directory does not exist", "parent") from exc
+                    raise _link_error(
+                        400, "parent directory does not exist", "parent"
+                    ) from exc
                 except NotADirectoryError as exc:
-                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
+                    raise _link_error(
+                        400, "parent directory is not reachable", "parent"
+                    ) from exc
                 except (PathOutsideRoots, PathResolutionUnavailable) as exc:
-                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
+                    raise _link_error(
+                        400, "parent directory is not reachable", "parent"
+                    ) from exc
                 except OSError as exc:
-                    raise _link_error(400, f"could not create folder: {exc.strerror or exc}", "parent") from exc
+                    raise _link_error(
+                        400, f"could not create folder: {exc.strerror or exc}", "parent"
+                    ) from exc
                 try:
                     target = created_dir.require_staged()
                 except (PathOutsideRoots, PathResolutionUnavailable) as exc:
-                    raise _link_error(400, "created folder is not reachable", "parent") from exc
+                    raise _link_error(
+                        400, "created folder is not reachable", "parent"
+                    ) from exc
                 path_identity = created_dir.identity
             else:
                 try:
@@ -207,23 +251,43 @@ def register(app, deps):
                 except PathOutsideRoots as exc:
                     raise _link_error(403, str(exc), "path") from exc
                 except PathResolutionUnavailable as exc:
-                    raise _link_error(400, "selected folder is not reachable", "path") from exc
+                    raise _link_error(
+                        400, "selected folder is not reachable", "path"
+                    ) from exc
                 try:
                     path_identity = directory_identity(resolved_target)
                 except PermissionError as exc:
-                    raise _link_error(403, "permission denied - selected folder is not accessible", "path") from exc
+                    raise _link_error(
+                        403,
+                        "permission denied - selected folder is not accessible",
+                        "path",
+                    ) from exc
                 except (OSError, PathResolutionUnavailable) as exc:
-                    raise _link_error(400, "selected folder is not reachable", "path") from exc
+                    raise _link_error(
+                        400, "selected folder is not reachable", "path"
+                    ) from exc
                 target = resolved_target.path
             name = (payload.name or target.name).strip()
             # strip("-") AFTER the 63-char truncation too: [:63] can re-cut a collapsed
             # run mid-hyphen and leave a trailing '-', which validate_slug would reject.
-            base_slug = ((payload.slug or re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-"))[:63].strip("-")) or "project"
+            base_slug = (
+                (payload.slug or re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-"))[
+                    :63
+                ].strip("-")
+            ) or "project"
             try:
                 slug = validate_slug(base_slug)
             except ValueError as exc:
-                raise _link_error(422, f"invalid project slug: {exc}", "slug" if payload.slug else "name") from exc
-            if db().execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone():
+                raise _link_error(
+                    422,
+                    f"invalid project slug: {exc}",
+                    "slug" if payload.slug else "name",
+                ) from exc
+            if (
+                db()
+                .execute("SELECT id FROM projects WHERE slug = ?", (slug,))
+                .fetchone()
+            ):
                 message = (
                     f"slug '{slug}' already exists - pick another"
                     if payload.slug
@@ -273,7 +337,12 @@ def register(app, deps):
             audit_action = "project.link.mkdir" if made_dir else "project.link"
             db().execute(
                 "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, 'project', ?, ?)",
-                (user["id"], audit_action, slug, json.dumps({"path": str(target), "mkdir": made_dir})),
+                (
+                    user["id"],
+                    audit_action,
+                    slug,
+                    json.dumps({"path": str(target), "mkdir": made_dir}),
+                ),
             )
             _notify_code_graphs(
                 owner_user_id=int(user["id"]),
@@ -285,7 +354,14 @@ def register(app, deps):
                 owner_user_id=int(user["id"]),
                 container_slug=slug,
             )
-            row = dict(db().execute("SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p JOIN users u ON u.id = p.owner_user_id WHERE p.id = ?", (pid,)).fetchone())
+            row = dict(
+                db()
+                .execute(
+                    "SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p JOIN users u ON u.id = p.owner_user_id WHERE p.id = ?",
+                    (pid,),
+                )
+                .fetchone()
+            )
             container_registry.container_root(row)
             if created_dir is not None:
                 created_dir.finish()
@@ -308,8 +384,14 @@ def register(app, deps):
                 created_dir.rollback()
 
     @app.post("/api/projects", status_code=201)
-    def create_project(payload: ProjectCreateRequest, user: dict[str, Any] = Depends(current_user)):
-        if db().execute("SELECT id FROM projects WHERE slug = ?", (payload.slug,)).fetchone():
+    def create_project(
+        payload: ProjectCreateRequest, user: dict[str, Any] = Depends(current_user)
+    ):
+        if (
+            db()
+            .execute("SELECT id FROM projects WHERE slug = ?", (payload.slug,))
+            .fetchone()
+        ):
             raise HTTPException(status_code=409, detail="project slug already exists")
         path = str(Path(cfg["workspace_root"]) / "projects" / payload.slug)
         run_projectctl("create-project", payload.slug, "--owner", user["os_user"])
@@ -325,7 +407,10 @@ def register(app, deps):
         ensure_ops_area(db(), project_id)
         summary = sync_code_areas(db(), project_id, path)
         container_registry.refresh_registry_projection(db(), project_id)
-        db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.create', 'project', ?)", (user["id"], payload.slug))
+        db().execute(
+            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.create', 'project', ?)",
+            (user["id"], payload.slug),
+        )
         _notify_code_graphs(
             owner_user_id=int(user["id"]),
             container_slug=payload.slug,
@@ -336,7 +421,14 @@ def register(app, deps):
             owner_user_id=int(user["id"]),
             container_slug=payload.slug,
         )
-        row = dict(db().execute("SELECT p.*, ? AS owner, 'owner' AS role FROM projects p WHERE p.id = ?", (user["username"], project_id)).fetchone())
+        row = dict(
+            db()
+            .execute(
+                "SELECT p.*, ? AS owner, 'owner' AS role FROM projects p WHERE p.id = ?",
+                (user["username"], project_id),
+            )
+            .fetchone()
+        )
         return project_payload(row)
 
     @app.get("/api/projects/{slug}")
@@ -414,21 +506,37 @@ def register(app, deps):
             (
                 user["id"],
                 slug,
-                json.dumps({"migration_version": container_registry.OPS_MIGRATION_VERSION}),
+                json.dumps(
+                    {"migration_version": container_registry.OPS_MIGRATION_VERSION}
+                ),
             ),
         )
         return container_registry.inspect_ops_migration(db(), project)
 
     @app.patch("/api/projects/{slug}")
-    def update_project(slug: str, payload: ProjectUpdateRequest, user: dict[str, Any] = Depends(current_user)):
+    def update_project(
+        slug: str,
+        payload: ProjectUpdateRequest,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         project = visible_project(slug, user)
         if payload.name is not None:
-            db().execute("UPDATE projects SET name = ? WHERE id = ?", (payload.name.strip(), project["id"]))
-            db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.rename', 'project', ?)", (user["id"], slug))
-        row = dict(db().execute(
-            "SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p JOIN users u ON u.id = p.owner_user_id WHERE p.id = ?",
-            (project["id"],),
-        ).fetchone())
+            db().execute(
+                "UPDATE projects SET name = ? WHERE id = ?",
+                (payload.name.strip(), project["id"]),
+            )
+            db().execute(
+                "INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.rename', 'project', ?)",
+                (user["id"], slug),
+            )
+        row = dict(
+            db()
+            .execute(
+                "SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p JOIN users u ON u.id = p.owner_user_id WHERE p.id = ?",
+                (project["id"],),
+            )
+            .fetchone()
+        )
         return project_payload(row)
 
     @app.delete("/api/projects/{slug}")
@@ -441,12 +549,17 @@ def register(app, deps):
                 status_code=409,
                 detail={"message": str(exc)},
             ) from exc
-        db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.delete', 'project', ?)", (user["id"], slug))
+        db().execute(
+            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id) VALUES (?, 'project.delete', 'project', ?)",
+            (user["id"], slug),
+        )
         return {"ok": True, "slug": slug}
 
     # ── Work-container areas (Phase-1 slice 1, T1): code areas + ops area ──
 
-    def _with_remotes(project: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    def _with_remotes(
+        project: dict[str, Any], payload: dict[str, Any]
+    ) -> dict[str, Any]:
         """Pair each code area with its detected git remote (T9, slice 11) so
         the settings UI knows whether to offer the push-after-merge toggle -
         no remote, no toggle. Only the dedicated areas endpoints pay for this
@@ -470,7 +583,11 @@ def register(app, deps):
         return _with_remotes(project, areas_payload(db(), project["id"]))
 
     @app.post("/api/projects/{slug}/areas", status_code=201)
-    def add_project_area(slug: str, payload: ProjectAreaAddRequest, user: dict[str, Any] = Depends(current_user)):
+    def add_project_area(
+        slug: str,
+        payload: ProjectAreaAddRequest,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Manually register (or correct) a code area - T1's hybrid override.
         The folder must exist inside the project but need not be a git repo yet
         (not-yet-`git init`'d code is a valid code area). A manual row is never
@@ -480,18 +597,26 @@ def register(app, deps):
             try:
                 root = container_registry.container_root(project)
             except container_registry.ContainerBoundaryError:
-                raise HTTPException(status_code=400, detail="project folder is missing on disk")
+                raise HTTPException(
+                    status_code=400, detail="project folder is missing on disk"
+                )
             try:
                 target = fsapi.resolve_in_project(root, payload.rel_path)
             except fsapi.FsError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not target.is_dir():
-                raise HTTPException(status_code=400, detail="not a directory inside the project")
+                raise HTTPException(
+                    status_code=400, detail="not a directory inside the project"
+                )
             rel = "." if target == root else target.relative_to(root).as_posix()
-            existing = db().execute(
-                "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'code' AND rel_path = ?",
-                (project["id"], rel),
-            ).fetchone()
+            existing = (
+                db()
+                .execute(
+                    "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'code' AND rel_path = ?",
+                    (project["id"], rel),
+                )
+                .fetchone()
+            )
             db().execute("BEGIN")
             try:
                 if existing:
@@ -501,11 +626,17 @@ def register(app, deps):
                         (area_id,),
                     )
                 else:
-                    area_id = db().execute(
-                        "INSERT INTO project_areas(project_id, kind, rel_path, source) VALUES (?, 'code', ?, 'manual')",
-                        (project["id"], rel),
-                    ).lastrowid
-                container_registry.validated_area_roots(db(), project, deep_ops_scan=True)
+                    area_id = (
+                        db()
+                        .execute(
+                            "INSERT INTO project_areas(project_id, kind, rel_path, source) VALUES (?, 'code', ?, 'manual')",
+                            (project["id"], rel),
+                        )
+                        .lastrowid
+                    )
+                container_registry.validated_area_roots(
+                    db(), project, deep_ops_scan=True
+                )
                 db().execute(
                     "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
                     "VALUES (?, 'project.area.add', 'project', ?, ?)",
@@ -528,7 +659,12 @@ def register(app, deps):
         return {"id": area_id, "rel_path": rel, "source": "manual"}
 
     @app.patch("/api/projects/{slug}/areas/{area_id}")
-    def update_project_area(slug: str, area_id: int, payload: ProjectAreaUpdateRequest, user: dict[str, Any] = Depends(current_user)):
+    def update_project_area(
+        slug: str,
+        area_id: int,
+        payload: ProjectAreaUpdateRequest,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Per-area settings - today that is the T9 push-after-merge toggle
         (default off). Turning it ON requires a detected git remote: the
         toggle is only ever offered where a push could go somewhere, and the
@@ -536,10 +672,14 @@ def register(app, deps):
         is no remote to configure in-app. Turning it OFF always works."""
         project = visible_project(slug, user)
         with container_registry.container_mutation_lock(db(), project):
-            row = db().execute(
-                "SELECT id, kind, source, rel_path, push_on_merge FROM project_areas WHERE id = ? AND project_id = ?",
-                (area_id, project["id"]),
-            ).fetchone()
+            row = (
+                db()
+                .execute(
+                    "SELECT id, kind, source, rel_path, push_on_merge FROM project_areas WHERE id = ? AND project_id = ?",
+                    (area_id, project["id"]),
+                )
+                .fetchone()
+            )
             if not row or row["kind"] != "code" or row["source"] == "excluded":
                 raise HTTPException(status_code=404, detail="code area not found")
             remote = None
@@ -567,26 +707,54 @@ def register(app, deps):
             )
             db().execute(
                 "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.push_on_merge', 'project', ?, ?)",
-                (user["id"], slug, json.dumps({"rel_path": row["rel_path"], "push_on_merge": payload.push_on_merge, "push_remote_url": pinned_url})),
+                (
+                    user["id"],
+                    slug,
+                    json.dumps(
+                        {
+                            "rel_path": row["rel_path"],
+                            "push_on_merge": payload.push_on_merge,
+                            "push_remote_url": pinned_url,
+                        }
+                    ),
+                ),
             )
-        return {"id": area_id, "rel_path": row["rel_path"], "push_on_merge": payload.push_on_merge, "push_remote_url": pinned_url, "remote": remote}
+        return {
+            "id": area_id,
+            "rel_path": row["rel_path"],
+            "push_on_merge": payload.push_on_merge,
+            "push_remote_url": pinned_url,
+            "remote": remote,
+        }
 
     @app.delete("/api/projects/{slug}/areas/{area_id}")
-    def remove_project_area(slug: str, area_id: int, user: dict[str, Any] = Depends(current_user)):
+    def remove_project_area(
+        slug: str, area_id: int, user: dict[str, Any] = Depends(current_user)
+    ):
         """Remove a code area. The row becomes an 'excluded' tombstone (not a
         delete) so auto-re-detection cannot resurrect an area the owner
         explicitly removed; the tombstone is garbage-collected once the folder
         stops being detectable."""
         project = visible_project(slug, user)
         with container_registry.container_mutation_lock(db(), project):
-            row = db().execute(
-                "SELECT id, kind, source, rel_path FROM project_areas WHERE id = ? AND project_id = ?",
-                (area_id, project["id"]),
-            ).fetchone()
+            row = (
+                db()
+                .execute(
+                    "SELECT id, kind, source, rel_path FROM project_areas WHERE id = ? AND project_id = ?",
+                    (area_id, project["id"]),
+                )
+                .fetchone()
+            )
             if not row or row["kind"] != "code" or row["source"] == "excluded":
                 raise HTTPException(status_code=404, detail="code area not found")
-            db().execute("UPDATE project_areas SET source = 'excluded', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (area_id,))
-            db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.remove', 'project', ?, ?)", (user["id"], slug, json.dumps({"rel_path": row["rel_path"]})))
+            db().execute(
+                "UPDATE project_areas SET source = 'excluded', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (area_id,),
+            )
+            db().execute(
+                "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.remove', 'project', ?, ?)",
+                (user["id"], slug, json.dumps({"rel_path": row["rel_path"]})),
+            )
         return {"ok": True, "id": area_id}
 
     @app.post("/api/projects/{slug}/areas/detect")
@@ -603,4 +771,7 @@ def register(app, deps):
             project_id=int(project["id"]),
             added_rels=list(summary.get("added") or []),
         )
-        return {**_with_remotes(project, areas_payload(db(), project["id"])), "detect": summary}
+        return {
+            **_with_remotes(project, areas_payload(db(), project["id"])),
+            "detect": summary,
+        }

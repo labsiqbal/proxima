@@ -4,6 +4,7 @@ The existing ``projects`` and ``project_areas`` tables remain the persistence
 backbone. Activity leases, platform primitives, and publication are delegated
 to their ownership modules.
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -101,7 +102,9 @@ def get_container(
     container: int | sqlite3.Row | Mapping[str, Any],
 ) -> dict[str, Any]:
     if isinstance(container, int):
-        row = conn.execute("SELECT * FROM projects WHERE id = ?", (container,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (container,)
+        ).fetchone()
         if row is None:
             raise ContainerBoundaryError(f"Container {container} does not exist")
         return dict(row)
@@ -130,9 +133,7 @@ def container_root(container: sqlite3.Row | Mapping[str, Any]) -> Path:
         raise ContainerBoundaryError("Container root identity is unavailable")
     try:
         verification_root = (
-            root.absolute()
-            if _directory_backend.platform == "windows"
-            else resolved
+            root.absolute() if _directory_backend.platform == "windows" else resolved
         )
         handle = _directory_backend.open_absolute(verification_root)
     except (OSError, RuntimeError, ValueError) as exc:
@@ -176,7 +177,9 @@ def _reject_symlinks(root: Path, *, deep: bool = True) -> None:
                     f"physical Ops root contains a symlink: {path.relative_to(root).as_posix()}"
                 )
     except OSError as exc:
-        raise ContainerBoundaryError(f"physical Ops root cannot be inspected: {exc}") from exc
+        raise ContainerBoundaryError(
+            f"physical Ops root cannot be inspected: {exc}"
+        ) from exc
 
 
 def validated_area_roots(
@@ -242,14 +245,16 @@ def validated_area_roots(
             right_root = resolved[int(right["id"])]
             if left_root == right_root:
                 continue
-            if left_root not in right_root.parents and right_root not in left_root.parents:
+            if (
+                left_root not in right_root.parents
+                and right_root not in left_root.parents
+            ):
                 continue
             pair = {left["kind"], right["kind"]}
             rels = {left["rel_path"], right["rel_path"]}
             root_repo_with_ops = pair == {"code", "ops"} and "." in rels
-            legacy_ops = (
-                (left["kind"] == "ops" and left["rel_path"] == ".")
-                or (right["kind"] == "ops" and right["rel_path"] == ".")
+            legacy_ops = (left["kind"] == "ops" and left["rel_path"] == ".") or (
+                right["kind"] == "ops" and right["rel_path"] == "."
             )
             if root_repo_with_ops or legacy_ops:
                 continue
@@ -365,9 +370,7 @@ def _create_physical_ops_root_windows(
         for dirname in starter_dirs:
             rel = _safe_rel_path(dirname)
             if not rel.parts:
-                raise ContainerBoundaryError(
-                    f"Ops starter path is unsafe: {dirname!r}"
-                )
+                raise ContainerBoundaryError(f"Ops starter path is unsafe: {dirname!r}")
             parent_handle = physical_handle
             opened: list[int] = []
             try:
@@ -436,9 +439,8 @@ def _revalidate_root_identity(root: Path, root_fd: int) -> None:
 
 def _revalidate_physical_identity(root_fd: int, physical_fd: int) -> None:
     current = os.stat(OPS_RELPATH, dir_fd=root_fd, follow_symlinks=False)
-    if (
-        not stat.S_ISDIR(current.st_mode)
-        or not _same_identity(current, os.fstat(physical_fd))
+    if not stat.S_ISDIR(current.st_mode) or not _same_identity(
+        current, os.fstat(physical_fd)
     ):
         raise OpsMigrationCollision("physical Ops root changed during migration")
 
@@ -596,9 +598,7 @@ def _atomic_write_if_missing(
                 try:
                     anonymous_fd = os.open(
                         ".",
-                        os.O_TMPFILE
-                        | os.O_WRONLY
-                        | getattr(os, "O_CLOEXEC", 0),
+                        os.O_TMPFILE | os.O_WRONLY | getattr(os, "O_CLOEXEC", 0),
                         0o600,
                         dir_fd=parent_fd,
                     )
@@ -715,9 +715,7 @@ def _atomic_write_if_missing(
                 try:
                     anonymous_fd = os.open(
                         ".",
-                        os.O_TMPFILE
-                        | os.O_WRONLY
-                        | getattr(os, "O_CLOEXEC", 0),
+                        os.O_TMPFILE | os.O_WRONLY | getattr(os, "O_CLOEXEC", 0),
                         0o600,
                         dir_fd=parent_fd,
                     )
@@ -748,8 +746,7 @@ def _atomic_write_if_missing(
                         raise
                     if (
                         recovery["phase"] == "prepared"
-                        and _path_state_at(parent_fd, recovery_name)
-                        == "missing"
+                        and _path_state_at(parent_fd, recovery_name) == "missing"
                     ):
                         advance("planned", None)
                 finally:
@@ -1337,26 +1334,33 @@ def _build_manifest(
         ).fetchall()
     }
     if any(
-        path == OPS_RELPATH or path.startswith(f"{OPS_RELPATH}/")
-        for path in code_paths
+        path == OPS_RELPATH or path.startswith(f"{OPS_RELPATH}/") for path in code_paths
     ):
-        raise OpsMigrationCollision("the requested physical Ops root is an active repo Area")
+        raise OpsMigrationCollision(
+            "the requested physical Ops root is an active repo Area"
+        )
 
     entries: list[dict[str, Any]] = []
     for name in (*KNOWN_OPS_DIRS, *KNOWN_OPS_FILES):
         source = root / name
         if not source.exists() and not source.is_symlink():
             continue
-        if name in code_paths or any(path.startswith(f"{name}/") for path in code_paths):
+        if name in code_paths or any(
+            path.startswith(f"{name}/") for path in code_paths
+        ):
             raise OpsMigrationCollision(f"legacy Ops path overlaps a repo Area: {name}")
         destination = physical / name
         if destination.exists() or destination.is_symlink():
             raise OpsMigrationCollision(f"destination already exists: ops/{name}")
         expected_dir = name in KNOWN_OPS_DIRS
         if expected_dir and not source.is_dir():
-            raise OpsMigrationCollision(f"legacy Ops directory has an unexpected type: {name}")
+            raise OpsMigrationCollision(
+                f"legacy Ops directory has an unexpected type: {name}"
+            )
         if not expected_dir and not source.is_file():
-            raise OpsMigrationCollision(f"legacy Ops file has an unexpected type: {name}")
+            raise OpsMigrationCollision(
+                f"legacy Ops file has an unexpected type: {name}"
+            )
         snapshot = _entry_snapshot(source)
         entries.append(
             {
@@ -1414,7 +1418,9 @@ def _upsert_marker(
     manifest: dict[str, Any] | None,
     error: str | None = None,
 ) -> None:
-    manifest_json = json.dumps(manifest, sort_keys=True) if manifest is not None else None
+    manifest_json = (
+        json.dumps(manifest, sort_keys=True) if manifest is not None else None
+    )
     digest = _manifest_digest(manifest) if manifest is not None else None
     conn.execute(
         """
@@ -1557,17 +1563,13 @@ def _apply_manifest(
         destination_exists = destination_state != "missing"
         if publication["phase"] == "complete":
             if source_exists or not destination_exists:
-                raise OpsMigrationCollision(
-                    f"published Ops layout changed: {name}"
-                )
+                raise OpsMigrationCollision(f"published Ops layout changed: {name}")
             destination_snapshot = _entry_snapshot_at(physical_fd, name)
             if not _snapshot_matches(
                 destination_snapshot,
                 publication["destination_snapshot"],
             ):
-                raise OpsMigrationCollision(
-                    f"published Ops content changed: {name}"
-                )
+                raise OpsMigrationCollision(f"published Ops content changed: {name}")
             continue
         if not source_exists:
             if (
@@ -1588,9 +1590,7 @@ def _apply_manifest(
             raise OpsMigrationCollision(
                 f"migration source is missing before publication: {name}"
             )
-        expected_state = (
-            "directory" if entry["kind"] == "directory" else "file"
-        )
+        expected_state = "directory" if entry["kind"] == "directory" else "file"
         if publication["phase"] in {"planned", "publishing"} and (
             source_state != expected_state
             or not _snapshot_matches(
@@ -1601,9 +1601,10 @@ def _apply_manifest(
             raise OpsMigrationCollision(
                 f"content changed after migration planning: {name}"
             )
-        if os.stat(name, dir_fd=root_fd, follow_symlinks=False).st_dev != os.fstat(
-            physical_fd
-        ).st_dev:
+        if (
+            os.stat(name, dir_fd=root_fd, follow_symlinks=False).st_dev
+            != os.fstat(physical_fd).st_dev
+        ):
             raise OpsMigrationCollision(
                 f"source and destination are on different filesystems: {name}"
             )
@@ -1644,17 +1645,13 @@ def _apply_manifest(
             publication["phase"] = "ready"
             persist_manifest()
         if publication["phase"] != "ready":
-            raise OpsMigrationCollision(
-                f"Ops publication state is invalid: {name}"
-            )
+            raise OpsMigrationCollision(f"Ops publication state is invalid: {name}")
         destination_snapshot = _entry_snapshot_at(physical_fd, name)
         if not _snapshot_matches(
             destination_snapshot,
             publication["destination_snapshot"],
         ):
-            raise OpsMigrationCollision(
-                f"published Ops content changed: {name}"
-            )
+            raise OpsMigrationCollision(f"published Ops content changed: {name}")
         if _path_state_at(physical_fd, retained_name) != "missing":
             raise OpsMigrationCollision(
                 f"retained migration source already exists: {retained_name}"
@@ -1685,9 +1682,7 @@ def _apply_manifest(
             _entry_snapshot_at(physical_fd, name),
             publication["destination_snapshot"],
         ):
-            raise OpsMigrationCollision(
-                f"published Ops content changed: {name}"
-            )
+            raise OpsMigrationCollision(f"published Ops content changed: {name}")
         publication["phase"] = "complete"
         persist_manifest()
     return physical
@@ -2159,7 +2154,9 @@ def _physical_ops_state(
                         kind = "file"
                     else:
                         kind = "other"
-                    entries.append({"path": f"{OPS_RELPATH}/{child.name}", "kind": kind})
+                    entries.append(
+                        {"path": f"{OPS_RELPATH}/{child.name}", "kind": kind}
+                    )
         except OSError:
             state = "unavailable"
             entries = []
@@ -2256,8 +2253,8 @@ def _upgrade_publication_directory_identities(
                 raise OpsMigrationCollision(
                     "legacy directory publication has no destination identity"
                 )
-            publication["destination_directories"] = (
-                _snapshot_directory_identities(snapshot)
+            publication["destination_directories"] = _snapshot_directory_identities(
+                snapshot
             )
             continue
         raise OpsMigrationCollision(
@@ -2351,10 +2348,7 @@ def _upgrade_manifest(
             )
         strategy = planned.get("strategy")
         expected_hash = planned.get("sha256")
-        if (
-            strategy not in {"generate", "move"}
-            or not isinstance(expected_hash, str)
-        ):
+        if strategy not in {"generate", "move"} or not isinstance(expected_hash, str):
             raise OpsMigrationCollision(
                 "stored Ops migration manifest has an invalid planned container.md"
             )
@@ -2362,8 +2356,7 @@ def _upgrade_manifest(
             content = planned.get("content")
             if (
                 not isinstance(content, str)
-                or hashlib.sha256(content.encode("utf-8")).hexdigest()
-                != expected_hash
+                or hashlib.sha256(content.encode("utf-8")).hexdigest() != expected_hash
             ):
                 raise OpsMigrationCollision(
                     "stored Ops migration manifest has an invalid generated container.md"
@@ -2631,10 +2624,7 @@ def _valid_recovery_temp(
         }
         and (
             (phase in {"planned", "creating"} and identity is None)
-            or (
-                phase not in {"planned", "creating"}
-                and _valid_identity(identity)
-            )
+            or (phase not in {"planned", "creating"} and _valid_identity(identity))
         )
     )
 
@@ -2817,43 +2807,28 @@ def _validate_manifest_entries(manifest: Mapping[str, Any]) -> None:
             raise OpsMigrationCollision(
                 "stored Ops migration manifest has an invalid entry"
             )
-        directory_identities = publication.get(
-            "destination_directories"
-        )
+        directory_identities = publication.get("destination_directories")
         if (
             not isinstance(directory_identities, Mapping)
             or any(
-                not _valid_snapshot_path(path)
-                or not _valid_identity(identity)
+                not _valid_snapshot_path(path) or not _valid_identity(identity)
                 for path, identity in directory_identities.items()
             )
-            or (
-                entry.get("kind") == "file"
-                and bool(directory_identities)
-            )
-            or (
-                publication.get("phase") == "planned"
-                and bool(directory_identities)
-            )
+            or (entry.get("kind") == "file" and bool(directory_identities))
+            or (publication.get("phase") == "planned" and bool(directory_identities))
         ):
             raise OpsMigrationCollision(
                 "stored Ops migration has invalid directory ownership"
             )
         if entry.get("kind") == "directory":
-            expected_paths = set(
-                _snapshot_directory_identities(entry)
-            )
-            if not set(directory_identities).issubset(
-                expected_paths
-            ):
+            expected_paths = set(_snapshot_directory_identities(entry))
+            if not set(directory_identities).issubset(expected_paths):
                 raise OpsMigrationCollision(
                     "stored Ops migration has unplanned directory ownership"
                 )
             if publication.get("phase") in {"ready", "complete"}:
                 expected_destination = (
-                    _snapshot_directory_identities(
-                        destination_snapshot
-                    )
+                    _snapshot_directory_identities(destination_snapshot)
                     if isinstance(
                         destination_snapshot,
                         Mapping,
@@ -2881,15 +2856,16 @@ def _validated_retry_manifest(
         try:
             manifest = json.loads(str(marker["manifest_json"]))
         except (TypeError, ValueError) as exc:
-            raise OpsMigrationCollision("stored Ops migration manifest is invalid") from exc
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest is invalid"
+            ) from exc
         if _manifest_digest(manifest) != marker.get("manifest_hash"):
             raise OpsMigrationCollision(
                 "stored Ops migration manifest failed its integrity check"
             )
-        if (
-            manifest.get("container_root") != str(root)
-            or manifest.get("ops_root") != str(physical)
-        ):
+        if manifest.get("container_root") != str(root) or manifest.get(
+            "ops_root"
+        ) != str(physical):
             raise OpsMigrationCollision(
                 "stored Ops migration manifest no longer matches this Container"
             )
@@ -2909,14 +2885,12 @@ def _validated_retry_manifest(
         raise OpsMigrationCollision("physical Ops root collides with a non-directory")
 
     allowed_physical = {
-        str(entry.get("name") or "")
-        for entry in manifest.get("entries") or []
+        str(entry.get("name") or "") for entry in manifest.get("entries") or []
     } | {CONTAINER_DOC}
     allowed_physical.update(
         str(entry["publication"]["retained_name"])
         for entry in manifest.get("entries") or []
-        if isinstance(entry, Mapping)
-        and isinstance(entry.get("publication"), Mapping)
+        if isinstance(entry, Mapping) and isinstance(entry.get("publication"), Mapping)
     )
     recovery_temp = _manifest_recovery_temp(manifest)
     if recovery_temp is not None:
@@ -2958,9 +2932,7 @@ def _validated_retry_manifest(
                     raise OpsMigrationCollision(
                         "container.md recovery file has ambiguous ownership"
                     )
-                if (
-                    _hash_file(recovery_path) != recovery_temp["sha256"]
-                ):
+                if _hash_file(recovery_path) != recovery_temp["sha256"]:
                     raise OpsMigrationCollision(
                         "container.md recovery file has ambiguous ownership"
                     )
@@ -3025,7 +2997,9 @@ def _validated_retry_manifest(
     for entry in manifest.get("entries") or []:
         name = str(entry.get("name") or "")
         if not name or "/" in name or "\\" in name or name in {".", ".."}:
-            raise OpsMigrationCollision("stored Ops migration manifest has an unsafe path")
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest has an unsafe path"
+            )
         source = root / name
         destination = physical / name
         source_state = _path_state(source)
@@ -3034,13 +3008,16 @@ def _validated_retry_manifest(
         destination_exists = destination_state != "missing"
         publication = entry["publication"]
         publication_phase = publication["phase"]
-        if source_exists and destination_exists and publication_phase not in {
-            "publishing",
-            "ready",
-        }:
-            raise OpsMigrationCollision(
-                f"both source and destination exist for {name}"
-            )
+        if (
+            source_exists
+            and destination_exists
+            and publication_phase
+            not in {
+                "publishing",
+                "ready",
+            }
+        ):
+            raise OpsMigrationCollision(f"both source and destination exist for {name}")
         if not source_exists and not destination_exists:
             raise OpsMigrationCollision(
                 f"both source and destination are missing for {name}"
@@ -3052,9 +3029,7 @@ def _validated_retry_manifest(
             "ready",
         }:
             if source_state == "symlink":
-                raise OpsMigrationCollision(
-                    f"Ops migration path is a symlink: {name}"
-                )
+                raise OpsMigrationCollision(f"Ops migration path is a symlink: {name}")
             if source_state != expected_kind:
                 raise OpsMigrationCollision(
                     f"Ops migration path has an unexpected type: {name}"
@@ -3069,24 +3044,18 @@ def _validated_retry_manifest(
                 _entry_snapshot(destination),
                 expected_destination,
             ):
-                raise OpsMigrationCollision(
-                    f"published Ops content changed: {name}"
-                )
+                raise OpsMigrationCollision(f"published Ops content changed: {name}")
         if (
             destination_exists
             and publication_phase == "publishing"
             and entry.get("kind") == "directory"
         ):
             if destination_state != "directory":
-                raise OpsMigrationCollision(
-                    f"published Ops path changed type: {name}"
-                )
+                raise OpsMigrationCollision(f"published Ops path changed type: {name}")
             actual_directories = _snapshot_directory_identities(
                 _entry_snapshot(destination)
             )
-            if actual_directories != dict(
-                publication["destination_directories"]
-            ):
+            if actual_directories != dict(publication["destination_directories"]):
                 raise OpsMigrationCollision(
                     f"destination directory ownership changed: {name}"
                 )
@@ -3104,9 +3073,7 @@ def _validated_retry_manifest(
                 f"legacy Ops path reappeared after publication: {name}"
             )
         if publication_phase in {"ready", "complete"} and not destination_exists:
-            raise OpsMigrationCollision(
-                f"published Ops destination is missing: {name}"
-            )
+            raise OpsMigrationCollision(f"published Ops destination is missing: {name}")
         if source_exists and _path_device(source) != destination_device:
             raise OpsMigrationCollision(
                 f"source and destination are on different filesystems: {name}"
@@ -3129,9 +3096,7 @@ def inspect_ops_migration(
         """,
         (data["id"],),
     ).fetchall()
-    active_ops_path = (
-        str(area_rows[0]["rel_path"]) if len(area_rows) == 1 else None
-    )
+    active_ops_path = str(area_rows[0]["rel_path"]) if len(area_rows) == 1 else None
     marker_row = conn.execute(
         """
         SELECT migration_version, status, manifest_json, manifest_hash, last_error,
@@ -3202,17 +3167,13 @@ def inspect_ops_migration(
             try:
                 phase = recovery_temp["phase"]
                 state = _path_state(recovery_path)
-                exact_recovery = (
-                    state == "file"
-                    and (
-                        phase not in {"planned", "creating", "created"}
-                        and _identity_matches(
-                            recovery_temp["identity"],
-                            recovery_path.lstat(),
-                        )
-                        and _hash_file(recovery_path)
-                        == recovery_temp["sha256"]
+                exact_recovery = state == "file" and (
+                    phase not in {"planned", "creating", "created"}
+                    and _identity_matches(
+                        recovery_temp["identity"],
+                        recovery_path.lstat(),
                     )
+                    and _hash_file(recovery_path) == recovery_temp["sha256"]
                 )
             except OSError:
                 exact_recovery = False
@@ -3302,8 +3263,10 @@ def inspect_ops_migration(
         validation_reason = "Container must have exactly one active Ops Area."
     else:
         validation_reason = f"unsupported legacy Ops Area path: {active_ops_path}"
-    if validation_reason and active_ops_path != OPS_RELPATH and not any(
-        item["reason"] == validation_reason for item in conflicts
+    if (
+        validation_reason
+        and active_ops_path != OPS_RELPATH
+        and not any(item["reason"] == validation_reason for item in conflicts)
     ):
         conflicts.append({"path": OPS_RELPATH, "reason": validation_reason})
 
@@ -3328,7 +3291,9 @@ def inspect_ops_migration(
             "are unavailable through normal Ops features until recovery completes."
         )
     else:
-        usability_summary = "Ops features are unavailable until the Area layout is repaired."
+        usability_summary = (
+            "Ops features are unavailable until the Area layout is repaired."
+        )
     return {
         "project": {
             "id": int(data["id"]),
@@ -3337,7 +3302,9 @@ def inspect_ops_migration(
         },
         "phase": phase,
         "migration_version": (
-            int(marker["migration_version"]) if marker is not None else OPS_MIGRATION_VERSION
+            int(marker["migration_version"])
+            if marker is not None
+            else OPS_MIGRATION_VERSION
         ),
         "stored_reason": stored_reason,
         "active_ops_path": active_ops_path,
@@ -3369,8 +3336,12 @@ def inspect_ops_migration(
         },
         "attention": {
             "status": attention_row["status"] if attention_row is not None else "none",
-            "created_at": attention_row["created_at"] if attention_row is not None else None,
-            "resolved_at": attention_row["resolved_at"] if attention_row is not None else None,
+            "created_at": attention_row["created_at"]
+            if attention_row is not None
+            else None,
+            "resolved_at": attention_row["resolved_at"]
+            if attention_row is not None
+            else None,
         },
         "timestamps": {
             "started_at": marker.get("started_at") if marker else None,
@@ -3424,11 +3395,7 @@ def _migrate_container_ops_locked(
         (data["id"],),
     ).fetchone()
     manifest: dict[str, Any] | None = None
-    resuming = bool(
-        marker
-        and marker["status"] == "moving"
-        and marker["manifest_json"]
-    )
+    resuming = bool(marker and marker["status"] == "moving" and marker["manifest_json"])
     if not resuming:
         try:
             manifest = _build_manifest(conn, data)
@@ -3452,8 +3419,8 @@ def _migrate_container_ops_locked(
             dict(current_marker) if current_marker is not None else None,
         )
         _upsert_marker(conn, int(data["id"]), "moving", manifest)
-        strategy, container_doc, expected_container_doc_hash = (
-            _manifest_container_doc(manifest)
+        strategy, container_doc, expected_container_doc_hash = _manifest_container_doc(
+            manifest
         )
         root = Path(str(manifest["container_root"]))
         physical_container_doc = Path(str(manifest["ops_root"])) / CONTAINER_DOC
@@ -3498,13 +3465,8 @@ def _migrate_container_ops_locked(
                     manifest,
                 ),
             )
-            if (
-                _hash_file_at(physical_fd, CONTAINER_DOC)
-                != expected_container_doc_hash
-            ):
-                raise OpsMigrationCollision(
-                    "ops/container.md changed during migration"
-                )
+            if _hash_file_at(physical_fd, CONTAINER_DOC) != expected_container_doc_hash:
+                raise OpsMigrationCollision("ops/container.md changed during migration")
             exclude_ops_from_root_repo(root, root_fd=root_fd)
             _revalidate_root_identity(root, root_fd)
             _revalidate_physical_identity(root_fd, physical_fd)

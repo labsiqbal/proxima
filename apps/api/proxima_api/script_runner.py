@@ -26,6 +26,7 @@ Environment boundary: the subprocess gets a minimal environment (PATH, HOME,
 locale) rather than the server's, so scripts cannot read Proxima's own config
 or secrets out of the API process environment.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -115,11 +116,14 @@ class ScriptRunner:
         db = self.app.state.worker_db
         run_id = _as_int(run["id"])
         with self.app.state.db_lock:
-            failed = db.execute(
-                "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP "
-                "WHERE id = ? AND status = 'running'",
-                (error, run_id),
-            ).rowcount > 0
+            failed = (
+                db.execute(
+                    "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND status = 'running'",
+                    (error, run_id),
+                ).rowcount
+                > 0
+            )
             if not failed:
                 return  # cancelled concurrently — nothing to advance
             self.worker.add_event(
@@ -179,7 +183,9 @@ class ScriptRunner:
         # project file is never consulted again, so a concurrent swap between
         # the trust check and exec cannot run unapproved content (audit F4).
         try:
-            script_path = scripts_library.resolve_script(project_root, str(node["command"]))
+            script_path = scripts_library.resolve_script(
+                project_root, str(node["command"])
+            )
             script_mode = script_path.stat().st_mode
             script_bytes = script_path.read_bytes()
             digest = scripts_library.hash_bytes(script_bytes)
@@ -190,7 +196,9 @@ class ScriptRunner:
 
         # The trust gate — checked against the exact bytes about to run, every
         # run, so an edit between approval and execution cannot slip through.
-        trusted = scripts_library.trusted_hash(db, _as_int(attempt["job_project_id"]), rel_path)
+        trusted = scripts_library.trusted_hash(
+            db, _as_int(attempt["job_project_id"]), rel_path
+        )
         if trusted != digest:
             with self.app.state.db_lock:
                 self.worker.add_event(
@@ -258,9 +266,7 @@ class ScriptRunner:
                     cwd=str(project_root),
                     label="script",
                 )
-                effect_lease = (
-                    self.app.state.maintenance.background_lease()
-                )
+                effect_lease = self.app.state.maintenance.background_lease()
             guard_options: dict[str, Any] = {}
             if activity_lease is not None:
                 command, guard_options = activity_lease.guard_process(command)
@@ -277,6 +283,7 @@ class ScriptRunner:
                 if activity_lease is not None:
                     activity_lease.mark_process_started()
                     from .container_activity import process_start_identity
+
                     proc_pid = int(proc.pid) if proc.pid is not None else None
                     writer_tree = GuardedWriterTree.bind(
                         activity_lease,
@@ -361,9 +368,7 @@ class ScriptRunner:
                         else (getattr(proc, "pid", None) if proc else None)
                     ),
                     start_identity=(
-                        writer_tree.launcher_start
-                        if writer_tree is not None
-                        else None
+                        writer_tree.launcher_start if writer_tree is not None else None
                     ),
                 )
             shutil.rmtree(exec_dir, ignore_errors=True)
@@ -381,7 +386,9 @@ class ScriptRunner:
         run_id = _as_int(run["id"])
         session_id = _as_int(run["session_id"])
         project_id = run.get("project_id")
-        output_links = self.worker.outputs.output_links_for_project(project_id, run_start_ts)
+        output_links = self.worker.outputs.output_links_for_project(
+            project_id, run_start_ts
+        )
         self.worker.outputs.save_assistant_message(
             run_id,
             session_id,
@@ -392,14 +399,20 @@ class ScriptRunner:
             self.worker.add_event,
         )
         with self.app.state.db_lock:
-            completed = db.execute(
-                "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP "
-                "WHERE id = ? AND status = 'running'",
-                (run_id,),
-            ).rowcount > 0
+            completed = (
+                db.execute(
+                    "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND status = 'running'",
+                    (run_id,),
+                ).rowcount
+                > 0
+            )
             if completed:
                 self.worker.add_event(
-                    run_id, session_id, project_id, "run.completed",
+                    run_id,
+                    session_id,
+                    project_id,
+                    "run.completed",
                     {"stop_reason": "script_exit", "kind": "wf_script_node"},
                 )
         if not completed:

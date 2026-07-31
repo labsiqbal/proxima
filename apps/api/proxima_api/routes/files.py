@@ -494,8 +494,6 @@ def register(app, deps):
                 _audit_fs(user, "file.upload", slug, rel)
         return {"path": rel, "name": target.name}
 
-
-
     # ── Image-generation provider settings ────────────────────────────────
 
     def _resolve_image_gen() -> dict[str, Any]:
@@ -1143,7 +1141,6 @@ def register(app, deps):
             )
         _audit_fs(user, "app.start", slug, f"{payload.dir or '.'}: {payload.command}")
         return {"ok": True}
-
 
     @app.post("/api/projects/{slug}/app/stop")
     async def app_stop(slug: str, user: dict[str, Any] = Depends(current_user)):

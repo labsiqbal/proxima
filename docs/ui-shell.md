@@ -197,7 +197,9 @@ Project agree, preventing Files or Preview from presenting stale Work context.
   the panel closes) so shells survive closing the panel and navigating anywhere.
 - **Files** — the shared workspace tree over the project root, with the inline
   CodeMirror editor. Also kept mounted after first open so unsaved edits survive a
-  closed panel.
+  closed panel. Recovery inspection can swap the tree to a read-only Container-root
+  adapter; a dirty ordinary project buffer stays mounted and read-only, never
+  discarded by inspection path browses, and write returns when inspection ends.
 - **Preview** — the Run & Preview dev-server dock (`AppRunner`). Not kept mounted:
   its server is a managed backend process that survives on its own, and unmounting
   stops the status polling. The Archive and the recipe test bench keep their own
@@ -330,7 +332,11 @@ targets for the chosen side through a read-only Files adapter with no create, sa
 rename, or delete controls. Revealed directories expand and receive the active-row
 marker. Per-path inspection uses each side's actual file or directory state, while
 backend-declared root inspectability keeps missing, symlinked, unavailable, or
-unsupported targets disabled with an accessible refusal reason.
+unsupported targets disabled with an accessible refusal reason. If the ordinary
+Files editor already holds unsaved project bytes, inspection keeps that buffer
+mounted and read-only with a visible retain banner; tree selection can browse the
+inspection side without replacing those bytes, and write returns only when the
+ordinary virtual root is restored.
 Closing that inspection, changing Projects, or opening Files normally clears the
 Container-root target and restores the ordinary virtual Files view. Changing
 Projects or leaving the Projects Settings section clears the durable detail hash,

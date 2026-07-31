@@ -8,6 +8,7 @@ artifact scanning (artifacts.py), reaper/watchdog logic (run_reaper.py),
 post-run summary/logging helpers (run_summaries.py), and goal/job advancement
 (run_advancers.py) were extracted into their own modules.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -103,7 +104,9 @@ def required_skills_for_session(db: Any, session_id: int) -> tuple[str, ...]:
     return (MASTERPLAN_SKILL_ID,) if started_masterplan else ()
 
 
-def required_skills_for_run(db: Any, session_id: int, run: dict[str, Any] | None = None) -> tuple[str, ...]:
+def required_skills_for_run(
+    db: Any, session_id: int, run: dict[str, Any] | None = None
+) -> tuple[str, ...]:
     """Session-sticky skills plus any Required skill declared on this run's prompt.
 
     Skill slash commands (and /masterplan) embed Required skill: `id` so an
@@ -166,6 +169,7 @@ class RunWorker:
         if self.run_tasks:
             await asyncio.gather(*self.run_tasks.values(), return_exceptions=True)
             self.run_tasks.clear()
+
     def _collect_finished_run_tasks(self) -> None:
         for run_id, task in list(self.run_tasks.items()):
             if not task.done():
@@ -176,7 +180,9 @@ class RunWorker:
             except asyncio.CancelledError as _exc:
                 pass
             except Exception as exc:
-                logging.getLogger("proxima.worker").exception("run task %s crashed: %s", run_id, exc)
+                logging.getLogger("proxima.worker").exception(
+                    "run task %s crashed: %s", run_id, exc
+                )
 
     async def _execute_admitted_run(
         self,
@@ -270,7 +276,9 @@ class RunWorker:
 
     def claim_run(self) -> dict[str, Any] | None:
         db = self.app.state.worker_db
-        stale_seconds = _as_int(getattr(self.app.state, "config", {}).get("run_stale_seconds") or 60)
+        stale_seconds = _as_int(
+            getattr(self.app.state, "config", {}).get("run_stale_seconds") or 60
+        )
         self.reap_stale_run_blockers(stale_seconds)
         with self.app.state.db_lock:
             db.execute("BEGIN IMMEDIATE")
@@ -470,9 +478,7 @@ class RunWorker:
             {"runner": claimed_row["runner_id"]},
         )
         if master_job and self.app.state.master_projection is not None:
-            self.app.state.master_projection.safe_project_task(
-                int(master_job["id"])
-            )
+            self.app.state.master_projection.safe_project_task(int(master_job["id"]))
         return claimed_row
 
     def _reconstruct_text(self, run_id: int) -> str:
@@ -494,19 +500,27 @@ class RunWorker:
     def _agent_name(self, run_id: int) -> str | None:
         return self.summaries.agent_name(run_id)
 
-    async def _generate_title(self, proc: Any, cwd: str, user_msg: str, assistant_msg: str) -> str:
+    async def _generate_title(
+        self, proc: Any, cwd: str, user_msg: str, assistant_msg: str
+    ) -> str:
         return await self.summaries.generate_title(proc, cwd, user_msg, assistant_msg)
 
-    async def _write_auto_log(self, run: dict[str, Any], proc: Any, acp_sid: str) -> None:
+    async def _write_auto_log(
+        self, run: dict[str, Any], proc: Any, acp_sid: str
+    ) -> None:
         await self.summaries.write_auto_log(run, proc, acp_sid)
 
-    def _fail_interrupted(self, run_id: int, session_id: int, project_id: int | None, reason: str) -> None:
+    def _fail_interrupted(
+        self, run_id: int, session_id: int, project_id: int | None, reason: str
+    ) -> None:
         """Terminally close a run that lost its in-memory state (shutdown / crash /
         stale heartbeat). Salvages chat output, but keeps sidecar review output out of
         the main transcript."""
         db = self.app.state.worker_db
         with self.app.state.db_lock:
-            cur = db.execute("SELECT status, kind FROM runs WHERE id = ?", (run_id,)).fetchone()
+            cur = db.execute(
+                "SELECT status, kind FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
             if not cur or cur["status"] != "running":
                 return  # already finalized by someone else
             if str(cur["kind"]).startswith("message_review"):
@@ -517,8 +531,13 @@ class RunWorker:
                 return
             salvaged = strip_runner_preamble(self._reconstruct_text(run_id))
             if salvaged:
-                db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
-            self.add_event(run_id, session_id, project_id, "run.failed", {"error": reason})
+                db.execute(
+                    "INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)",
+                    (session_id, salvaged, self._agent_name(run_id), run_id),
+                )
+            self.add_event(
+                run_id, session_id, project_id, "run.failed", {"error": reason}
+            )
             db.execute(
                 "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
                 (reason, run_id),
@@ -560,8 +579,13 @@ class RunWorker:
             while True:
                 await asyncio.sleep(interval)
                 with self.app.state.db_lock:
-                    db.execute("UPDATE runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE id = ?", (run_id,))
-                    row = db.execute("SELECT collaboration_id FROM runs WHERE id = ?", (run_id,)).fetchone()
+                    db.execute(
+                        "UPDATE runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (run_id,),
+                    )
+                    row = db.execute(
+                        "SELECT collaboration_id FROM runs WHERE id = ?", (run_id,)
+                    ).fetchone()
                     if row and row["collaboration_id"]:
                         db.execute(
                             "UPDATE runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE id = (SELECT parent_run_id FROM prompt_collaborations WHERE id = ?)",
@@ -588,9 +612,22 @@ class RunWorker:
             ).fetchone()
             if not live:
                 return None
-            if event_type in {"message.delta", "reasoning.delta", "tool.start", "tool.complete", "approval.request"} and live["status"] != "running":
+            if (
+                event_type
+                in {
+                    "message.delta",
+                    "reasoning.delta",
+                    "tool.start",
+                    "tool.complete",
+                    "approval.request",
+                }
+                and live["status"] != "running"
+            ):
                 return None
-            seq_row = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM events WHERE run_id = ?", (run_id,)).fetchone()
+            seq_row = db.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM events WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
             seq = _as_int(seq_row["next_seq"])
             cursor = db.execute(
                 "INSERT INTO events(run_id, session_id, project_id, seq, type, payload) VALUES (?, ?, ?, ?, ?, ?)",
@@ -616,9 +653,13 @@ class RunWorker:
         if run.get("kind") == GRAPH_NODE_RUN_KIND:
             self.graph_advancers.advance_run(run, answer, self.add_event)
             return
-        self.advancers.advance_job(run, answer, self.add_event, self._produced_artifacts)
+        self.advancers.advance_job(
+            run, answer, self.add_event, self._produced_artifacts
+        )
 
-    def _complete_message_review(self, run: dict[str, Any], answer: str, stop_reason: str | None) -> bool:
+    def _complete_message_review(
+        self, run: dict[str, Any], answer: str, stop_reason: str | None
+    ) -> bool:
         kind = run.get("kind")
         if kind not in {"message_review", "message_review_merge"}:
             return False
@@ -632,11 +673,14 @@ class RunWorker:
             # and review row atomic; if cancellation won, no result lands.
             db.execute("SAVEPOINT finish_message_review")
             try:
-                completed = db.execute(
-                    "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP "
-                    "WHERE id = ? AND status = 'running'",
-                    (run_id,),
-                ).rowcount > 0
+                completed = (
+                    db.execute(
+                        "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ? AND status = 'running'",
+                        (run_id,),
+                    ).rowcount
+                    > 0
+                )
                 if not completed:
                     db.execute("ROLLBACK TO finish_message_review")
                     db.execute("RELEASE finish_message_review")
@@ -670,7 +714,9 @@ class RunWorker:
                             run_id,
                         ),
                     )
-                row = db.execute("SELECT * FROM message_reviews WHERE run_id = ?", (run_id,)).fetchone()
+                row = db.execute(
+                    "SELECT * FROM message_reviews WHERE run_id = ?", (run_id,)
+                ).fetchone()
                 completed_review = review_payload(row) if row else None
                 db.execute("RELEASE finish_message_review")
             except Exception:
@@ -681,12 +727,26 @@ class RunWorker:
             # Notify only after the transaction commits; otherwise an SSE reader can
             # wake before the rows are visible and miss the final wake-up.
             if completed_review:
-                self.add_event(run_id, session_id, project_id, "message_review.completed", {"review": completed_review})
-            self.add_event(run_id, session_id, project_id, "run.completed", {"stop_reason": stop_reason, "kind": kind})
+                self.add_event(
+                    run_id,
+                    session_id,
+                    project_id,
+                    "message_review.completed",
+                    {"review": completed_review},
+                )
+            self.add_event(
+                run_id,
+                session_id,
+                project_id,
+                "run.completed",
+                {"stop_reason": stop_reason, "kind": kind},
+            )
         return True
 
     def _collaboration_profile(self, profile_id: int) -> dict[str, Any]:
-        row = self.app.state.worker_db.execute("SELECT * FROM profiles WHERE id = ?", (profile_id,)).fetchone()
+        row = self.app.state.worker_db.execute(
+            "SELECT * FROM profiles WHERE id = ?", (profile_id,)
+        ).fetchone()
         return dict(row) if row else {}
 
     def _emit_collaboration_child_event(
@@ -699,57 +759,147 @@ class RunWorker:
         collab: dict[str, Any] | sqlite3.Row | None = None,
         profile: dict[str, Any] | None = None,
     ) -> None:
-        kind = str(run["kind"] if isinstance(run, sqlite3.Row) else run.get("kind") or "")
-        if not kind.startswith("collab_") or kind in {"collab_brainstorm", "collab_debate"}:
+        kind = str(
+            run["kind"] if isinstance(run, sqlite3.Row) else run.get("kind") or ""
+        )
+        if not kind.startswith("collab_") or kind in {
+            "collab_brainstorm",
+            "collab_debate",
+        }:
             return
         db = self.app.state.worker_db
-        collab_id = run["collaboration_id"] if isinstance(run, sqlite3.Row) else run.get("collaboration_id")
+        collab_id = (
+            run["collaboration_id"]
+            if isinstance(run, sqlite3.Row)
+            else run.get("collaboration_id")
+        )
         if not collab_id:
             return
-        collab = collab or db.execute("SELECT * FROM prompt_collaborations WHERE id = ?", (collab_id,)).fetchone()
+        collab = (
+            collab
+            or db.execute(
+                "SELECT * FROM prompt_collaborations WHERE id = ?", (collab_id,)
+            ).fetchone()
+        )
         if not collab:
             return
-        profile = profile or self._collaboration_profile(_as_int(run["profile_id"] if isinstance(run, sqlite3.Row) else run.get("profile_id") or 0))
+        profile = profile or self._collaboration_profile(
+            _as_int(
+                run["profile_id"]
+                if isinstance(run, sqlite3.Row)
+                else run.get("profile_id") or 0
+            )
+        )
         run_id = _as_int(run["id"] if isinstance(run, sqlite3.Row) else run["id"])
-        session_id = _as_int(run["session_id"] if isinstance(run, sqlite3.Row) else run["session_id"])
-        project_id = run["project_id"] if isinstance(run, sqlite3.Row) else run.get("project_id")
-        role = run["collaboration_role"] if isinstance(run, sqlite3.Row) else run.get("collaboration_role")
-        self.add_event(run_id, session_id, project_id, f"collaboration.child.{event_type}", collaboration_card_payload(dict(collab), run_id, profile, role, status, text, error))
+        session_id = _as_int(
+            run["session_id"] if isinstance(run, sqlite3.Row) else run["session_id"]
+        )
+        project_id = (
+            run["project_id"] if isinstance(run, sqlite3.Row) else run.get("project_id")
+        )
+        role = (
+            run["collaboration_role"]
+            if isinstance(run, sqlite3.Row)
+            else run.get("collaboration_role")
+        )
+        self.add_event(
+            run_id,
+            session_id,
+            project_id,
+            f"collaboration.child.{event_type}",
+            collaboration_card_payload(
+                dict(collab), run_id, profile, role, status, text, error
+            ),
+        )
 
     def _debate_round_target(self) -> int:
-        return app_settings.get_collaboration_settings(self.app.state.worker_db)["debate_rounds"]
+        return app_settings.get_collaboration_settings(self.app.state.worker_db)[
+            "debate_rounds"
+        ]
 
-    def _queue_collaboration_run(self, collab: sqlite3.Row, profile: dict[str, Any], prompt: str, kind: str, role: str) -> int:
+    def _queue_collaboration_run(
+        self,
+        collab: sqlite3.Row,
+        profile: dict[str, Any],
+        prompt: str,
+        kind: str,
+        role: str,
+    ) -> int:
         db = self.app.state.worker_db
         cur = db.execute(
             """
             INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind, collaboration_id, collaboration_role)
             VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
             """,
-            (collab["session_id"], collab["project_id"], collab["user_id"], profile["id"], profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"], kind, collab["id"], role),
+            (
+                collab["session_id"],
+                collab["project_id"],
+                collab["user_id"],
+                profile["id"],
+                profile["runner_id"],
+                prompt,
+                profile["default_model"],
+                profile["hermes_home"],
+                kind,
+                collab["id"],
+                role,
+            ),
         )
         run_id = _as_int(cur.lastrowid)
         ids = [_as_int(x) for x in _json_array(collab["child_run_ids"])]
         ids.append(run_id)
-        db.execute("UPDATE prompt_collaborations SET child_run_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (json.dumps(ids), collab["id"]))
-        self.add_event(run_id, collab["session_id"], collab["project_id"], "run.queued", {"runner": profile["runner_id"], "kind": kind, "collaboration_id": collab["id"], "role": role})
+        db.execute(
+            "UPDATE prompt_collaborations SET child_run_ids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (json.dumps(ids), collab["id"]),
+        )
+        self.add_event(
+            run_id,
+            collab["session_id"],
+            collab["project_id"],
+            "run.queued",
+            {
+                "runner": profile["runner_id"],
+                "kind": kind,
+                "collaboration_id": collab["id"],
+                "role": role,
+            },
+        )
         run = db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         if run:
-            self._emit_collaboration_child_event("queued", run, "queued", collab=collab, profile=profile)
+            self._emit_collaboration_child_event(
+                "queued", run, "queued", collab=collab, profile=profile
+            )
         return run_id
 
-    def _add_collaboration_progress(self, collab: sqlite3.Row, text: str | None = None) -> None:
+    def _add_collaboration_progress(
+        self, collab: sqlite3.Row, text: str | None = None
+    ) -> None:
         # Heartbeat the parent run (keeps the stale reaper away). Progress prose
         # is optional now — the collaboration cards already show per-agent
         # status, so the parent bubble only streams the final synthesis.
         parent_id = collab["parent_run_id"]
         if not parent_id:
             return
-        self.app.state.worker_db.execute("UPDATE runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE id = ?", (parent_id,))
+        self.app.state.worker_db.execute(
+            "UPDATE runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (parent_id,),
+        )
         if text:
-            self.add_event(_as_int(parent_id), collab["session_id"], collab["project_id"], "message.delta", {"text": text})
+            self.add_event(
+                _as_int(parent_id),
+                collab["session_id"],
+                collab["project_id"],
+                "message.delta",
+                {"text": text},
+            )
 
-    def _finish_collaboration(self, collab: sqlite3.Row, outputs: list[dict[str, Any]], synthesis: str, stop_reason: str | None) -> None:
+    def _finish_collaboration(
+        self,
+        collab: sqlite3.Row,
+        outputs: list[dict[str, Any]],
+        synthesis: str,
+        stop_reason: str | None,
+    ) -> None:
         db = self.app.state.worker_db
         parent_id = _as_int(collab["parent_run_id"])
         final = format_final(collab["mode"], collab["prompt"], outputs, synthesis)
@@ -759,11 +909,14 @@ class RunWorker:
             # cancelled collaboration can never receive a late assistant answer.
             db.execute("SAVEPOINT finish_collaboration")
             try:
-                completed = db.execute(
-                    "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP "
-                    "WHERE id = ? AND status = 'running'",
-                    (parent_id,),
-                ).rowcount > 0
+                completed = (
+                    db.execute(
+                        "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ? AND status = 'running'",
+                        (parent_id,),
+                    ).rowcount
+                    > 0
+                )
                 collaboration_done = state.guarded_transition(
                     db,
                     "prompt_collaborations",
@@ -812,9 +965,14 @@ class RunWorker:
                 {"stop_reason": stop_reason, "kind": f"collab_{collab['mode']}"},
             )
 
-    def _complete_collaboration_run(self, run: dict[str, Any], answer: str, stop_reason: str | None) -> bool:
+    def _complete_collaboration_run(
+        self, run: dict[str, Any], answer: str, stop_reason: str | None
+    ) -> bool:
         kind = str(run.get("kind") or "")
-        if not kind.startswith("collab_") or kind in {"collab_brainstorm", "collab_debate"}:
+        if not kind.startswith("collab_") or kind in {
+            "collab_brainstorm",
+            "collab_debate",
+        }:
             return False
         db = self.app.state.worker_db
         collab_id = run.get("collaboration_id")
@@ -824,7 +982,9 @@ class RunWorker:
         session_id = _as_int(run["session_id"])
         project_id = run.get("project_id")
         with self.app.state.db_lock:
-            collab = db.execute("SELECT * FROM prompt_collaborations WHERE id = ?", (collab_id,)).fetchone()
+            collab = db.execute(
+                "SELECT * FROM prompt_collaborations WHERE id = ?", (collab_id,)
+            ).fetchone()
             if not collab:
                 return False
             profile = self._collaboration_profile(_as_int(run.get("profile_id") or 0))
@@ -834,26 +994,52 @@ class RunWorker:
             # synthesis prompts (Pi often prefixes the real answer with a catalog).
             clean_answer = strip_runner_preamble(answer)
             if not kind.endswith("_synthesis"):
-                outputs.append({
-                    "run_id": run_id,
-                    "profile_id": profile.get("id"),
-                    "profile_name": profile.get("name") or self._agent_name(run_id) or "Agent",
-                    "runner_id": profile.get("runner_id") or run.get("runner_id"),
-                    "role": run.get("collaboration_role") or "participant",
-                    "content": clean_answer,
-                })
+                outputs.append(
+                    {
+                        "run_id": run_id,
+                        "profile_id": profile.get("id"),
+                        "profile_name": profile.get("name")
+                        or self._agent_name(run_id)
+                        or "Agent",
+                        "runner_id": profile.get("runner_id") or run.get("runner_id"),
+                        "role": run.get("collaboration_role") or "participant",
+                        "content": clean_answer,
+                    }
+                )
                 db.execute(
                     "UPDATE prompt_collaborations SET child_outputs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (json.dumps(outputs), collab_id),
                 )
-            completed = db.execute(
-                "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
-                (run_id,),
-            ).rowcount > 0
+            completed = (
+                db.execute(
+                    "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
+                    (run_id,),
+                ).rowcount
+                > 0
+            )
             if completed:
-                self.add_event(run_id, session_id, project_id, "run.completed", {"stop_reason": stop_reason, "kind": kind, "collaboration_id": collab_id})
-                self._emit_collaboration_child_event("completed", run, "done", clean_answer, collab=collab, profile=profile)
-            collab = db.execute("SELECT * FROM prompt_collaborations WHERE id = ?", (collab_id,)).fetchone()
+                self.add_event(
+                    run_id,
+                    session_id,
+                    project_id,
+                    "run.completed",
+                    {
+                        "stop_reason": stop_reason,
+                        "kind": kind,
+                        "collaboration_id": collab_id,
+                    },
+                )
+                self._emit_collaboration_child_event(
+                    "completed",
+                    run,
+                    "done",
+                    clean_answer,
+                    collab=collab,
+                    profile=profile,
+                )
+            collab = db.execute(
+                "SELECT * FROM prompt_collaborations WHERE id = ?", (collab_id,)
+            ).fetchone()
             if not collab:
                 return True
 
@@ -879,12 +1065,25 @@ class RunWorker:
                 self._add_collaboration_progress(collab)
                 if all_children_done and not collab["synthesis_run_id"]:
                     outputs = loads_list(collab["child_outputs"])
-                    synth_profile = self._collaboration_profile(_as_int(_json_array(collab["profile_ids"])[0]))
-                    synth_id = self._queue_collaboration_run(collab, synth_profile, build_brainstorm_synthesis_prompt(collab["prompt"], outputs), "collab_brainstorm_synthesis", "synthesis")
-                    db.execute("UPDATE prompt_collaborations SET synthesis_run_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (synth_id, collab_id))
+                    synth_profile = self._collaboration_profile(
+                        _as_int(_json_array(collab["profile_ids"])[0])
+                    )
+                    synth_id = self._queue_collaboration_run(
+                        collab,
+                        synth_profile,
+                        build_brainstorm_synthesis_prompt(collab["prompt"], outputs),
+                        "collab_brainstorm_synthesis",
+                        "synthesis",
+                    )
+                    db.execute(
+                        "UPDATE prompt_collaborations SET synthesis_run_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (synth_id, collab_id),
+                    )
                     # Stream the result header now; the synthesis text follows via
                     # forwarded deltas, so the final message flows in live.
-                    self._add_collaboration_progress(collab, final_header(collab["mode"], collab["prompt"]) + "\n\n")
+                    self._add_collaboration_progress(
+                        collab, final_header(collab["mode"], collab["prompt"]) + "\n\n"
+                    )
                 return True
 
             if kind.startswith("collab_debate_") and kind != "collab_debate_synthesis":
@@ -894,41 +1093,75 @@ class RunWorker:
                 if len(debate_outputs) < target_rounds:
                     round_number = len(debate_outputs) + 1
                     role = debate_round_role(round_number)
-                    next_profile = self._collaboration_profile(profile_ids[(round_number - 1) % max(1, len(profile_ids))])
+                    next_profile = self._collaboration_profile(
+                        profile_ids[(round_number - 1) % max(1, len(profile_ids))]
+                    )
                     if role == "rebuttal":
-                        prompt = build_debate_rebuttal_prompt(collab["prompt"], debate_outputs[-1], next_profile)
+                        prompt = build_debate_rebuttal_prompt(
+                            collab["prompt"], debate_outputs[-1], next_profile
+                        )
                     else:
-                        prompt = build_debate_followup_prompt(collab["prompt"], debate_outputs, next_profile, role)
-                    self._queue_collaboration_run(collab, next_profile, prompt, f"collab_debate_{role}", role)
+                        prompt = build_debate_followup_prompt(
+                            collab["prompt"], debate_outputs, next_profile, role
+                        )
+                    self._queue_collaboration_run(
+                        collab, next_profile, prompt, f"collab_debate_{role}", role
+                    )
                     self._add_collaboration_progress(collab)
                     return True
                 synth_profile = self._collaboration_profile(profile_ids[0])
-                synth_id = self._queue_collaboration_run(collab, synth_profile, build_debate_synthesis_prompt(collab["prompt"], outputs), "collab_debate_synthesis", "synthesis")
-                db.execute("UPDATE prompt_collaborations SET synthesis_run_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (synth_id, collab_id))
-                self._add_collaboration_progress(collab, final_header(collab["mode"], collab["prompt"]) + "\n\n")
+                synth_id = self._queue_collaboration_run(
+                    collab,
+                    synth_profile,
+                    build_debate_synthesis_prompt(collab["prompt"], outputs),
+                    "collab_debate_synthesis",
+                    "synthesis",
+                )
+                db.execute(
+                    "UPDATE prompt_collaborations SET synthesis_run_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (synth_id, collab_id),
+                )
+                self._add_collaboration_progress(
+                    collab, final_header(collab["mode"], collab["prompt"]) + "\n\n"
+                )
                 return True
 
             if kind in {"collab_brainstorm_synthesis", "collab_debate_synthesis"}:
-                self._finish_collaboration(collab, loads_list(collab["child_outputs"]), answer, stop_reason)
+                self._finish_collaboration(
+                    collab, loads_list(collab["child_outputs"]), answer, stop_reason
+                )
                 return True
         return True
 
-    def _fail_collaboration_run(self, run_id: int, session_id: int, project_id: int | None, error: str) -> None:
+    def _fail_collaboration_run(
+        self, run_id: int, session_id: int, project_id: int | None, error: str
+    ) -> None:
         db = self.app.state.worker_db
-        row = db.execute("SELECT collaboration_id FROM runs WHERE id = ?", (run_id,)).fetchone()
+        row = db.execute(
+            "SELECT collaboration_id FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
         if not row or not row["collaboration_id"]:
             return
-        collab = db.execute("SELECT * FROM prompt_collaborations WHERE id = ?", (row["collaboration_id"],)).fetchone()
+        collab = db.execute(
+            "SELECT * FROM prompt_collaborations WHERE id = ?",
+            (row["collaboration_id"],),
+        ).fetchone()
         if not collab:
             return
         state.guarded_transition(
-            db, "prompt_collaborations", _as_int(collab["id"]), "failed",
+            db,
+            "prompt_collaborations",
+            _as_int(collab["id"]),
+            "failed",
             state.non_terminal(state.COLLABORATION),
-            set_extra="error = ?, updated_at = CURRENT_TIMESTAMP", set_params=(error,),
+            set_extra="error = ?, updated_at = CURRENT_TIMESTAMP",
+            set_params=(error,),
         )
         parent_id = collab["parent_run_id"]
         failed_run = db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
-        failed_profile = self._collaboration_profile(_as_int(failed_run["profile_id"] if failed_run else 0))
+        failed_profile = self._collaboration_profile(
+            _as_int(failed_run["profile_id"] if failed_run else 0)
+        )
         siblings = db.execute(
             "SELECT * FROM runs WHERE collaboration_id = ? AND id != ? AND (? IS NULL OR id != ?) AND status IN ('queued','running')",
             (collab["id"], run_id, parent_id, parent_id),
@@ -939,30 +1172,81 @@ class RunWorker:
         )
         for sibling in siblings:
             sid = _as_int(sibling["id"])
-            self.add_event(sid, sibling["session_id"], sibling["project_id"], "run.cancelled", {"kind": "collaboration"})
-            self._emit_collaboration_child_event("cancelled", sibling, "cancelled", collab=collab)
+            self.add_event(
+                sid,
+                sibling["session_id"],
+                sibling["project_id"],
+                "run.cancelled",
+                {"kind": "collaboration"},
+            )
+            self._emit_collaboration_child_event(
+                "cancelled", sibling, "cancelled", collab=collab
+            )
             self.cancel(sid)
         state.guarded_transition(
-            db, "runs", run_id, "failed", ("queued", "running"),
-            set_extra="error = ?, finished_at = CURRENT_TIMESTAMP", set_params=(error,),
+            db,
+            "runs",
+            run_id,
+            "failed",
+            ("queued", "running"),
+            set_extra="error = ?, finished_at = CURRENT_TIMESTAMP",
+            set_params=(error,),
         )
         if failed_run:
-            self._emit_collaboration_child_event("failed", failed_run, "failed", error=error, collab=collab, profile=failed_profile)
+            self._emit_collaboration_child_event(
+                "failed",
+                failed_run,
+                "failed",
+                error=error,
+                collab=collab,
+                profile=failed_profile,
+            )
         if parent_id:
-            db.execute("UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'", (error, parent_id))
-            self.add_event(_as_int(parent_id), collab["session_id"], collab["project_id"], "run.failed", {"error": error, "kind": f"collab_{collab['mode']}"})
-        self.add_event(run_id, session_id, project_id, "run.failed", {"error": error, "kind": "collaboration"})
+            db.execute(
+                "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
+                (error, parent_id),
+            )
+            self.add_event(
+                _as_int(parent_id),
+                collab["session_id"],
+                collab["project_id"],
+                "run.failed",
+                {"error": error, "kind": f"collab_{collab['mode']}"},
+            )
+        self.add_event(
+            run_id,
+            session_id,
+            project_id,
+            "run.failed",
+            {"error": error, "kind": "collaboration"},
+        )
 
-    def _fail_message_review(self, run_id: int, session_id: int, project_id: int | None, error: str) -> None:
+    def _fail_message_review(
+        self, run_id: int, session_id: int, project_id: int | None, error: str
+    ) -> None:
         db = self.app.state.worker_db
         db.execute(
             "UPDATE message_reviews SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE run_id = ?",
             (error, run_id),
         )
-        row = db.execute("SELECT * FROM message_reviews WHERE run_id = ?", (run_id,)).fetchone()
+        row = db.execute(
+            "SELECT * FROM message_reviews WHERE run_id = ?", (run_id,)
+        ).fetchone()
         if row:
-            self.add_event(run_id, session_id, project_id, "message_review.failed", {"review": review_payload(row), "error": error})
-        self.add_event(run_id, session_id, project_id, "run.failed", {"error": error, "kind": "message_review"})
+            self.add_event(
+                run_id,
+                session_id,
+                project_id,
+                "message_review.failed",
+                {"review": review_payload(row), "error": error},
+            )
+        self.add_event(
+            run_id,
+            session_id,
+            project_id,
+            "run.failed",
+            {"error": error, "kind": "message_review"},
+        )
         db.execute(
             "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
             (error, run_id),
@@ -976,11 +1260,14 @@ class RunWorker:
         session_id = _as_int(run["session_id"])
         project_id = run.get("project_id")
         with self.app.state.db_lock:
-            failed = db.execute(
-                "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP "
-                "WHERE id = ? AND status = 'running'",
-                (detail, run_id),
-            ).rowcount > 0
+            failed = (
+                db.execute(
+                    "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND status = 'running'",
+                    (detail, run_id),
+                ).rowcount
+                > 0
+            )
             if not failed:
                 return False
             if str(run.get("kind", "")).startswith("message_review"):
@@ -1001,8 +1288,12 @@ class RunWorker:
                 "message.complete",
                 {"message_id": cur.lastrowid, "text": f"Run failed: {detail}"},
             )
-            self.add_event(run_id, session_id, project_id, "run.failed", {"error": detail})
-            mode = db.execute("SELECT mode FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            self.add_event(
+                run_id, session_id, project_id, "run.failed", {"error": detail}
+            )
+            mode = db.execute(
+                "SELECT mode FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
             if mode and mode["mode"] == "master":
                 master_focus.apply_pending_if_idle(db, master_session_id=session_id)
         self._fail_job(session_id, detail, run_id)
@@ -1012,16 +1303,22 @@ class RunWorker:
         """Terminally record a failed linear step or pause a failed graph node."""
         db = self.app.state.worker_db
         with self.app.state.db_lock:
-            srow = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            srow = db.execute(
+                "SELECT job_id FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
             if not srow or not srow["job_id"]:
                 return
-            job = db.execute("SELECT * FROM jobs WHERE id = ?", (srow["job_id"],)).fetchone()
+            job = db.execute(
+                "SELECT * FROM jobs WHERE id = ?", (srow["job_id"],)
+            ).fetchone()
             if not job or job["status"] != "running":
                 return
             if job["engine"] == "graph":
                 if run_id is None:
                     return
-                run = db.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+                run = db.execute(
+                    "SELECT * FROM runs WHERE id = ?", (run_id,)
+                ).fetchone()
                 if run:
                     self.graph_advancers.fail_run(dict(run), error, self.add_event)
                 return
@@ -1049,10 +1346,14 @@ class RunWorker:
         db = self.app.state.worker_db
         run_id = _as_int(run["id"])
         session_id = _as_int(run["session_id"])
-        srow = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        srow = db.execute(
+            "SELECT job_id FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
         if not srow or not srow["job_id"]:
             return {}
-        job = db.execute("SELECT * FROM jobs WHERE id = ?", (srow["job_id"],)).fetchone()
+        job = db.execute(
+            "SELECT * FROM jobs WHERE id = ?", (srow["job_id"],)
+        ).fetchone()
         if not job or job["status"] != "running":
             return {}
         kind = str(run.get("kind") or "")
@@ -1076,11 +1377,14 @@ class RunWorker:
         steer_note = None
         try:
             wrow = db.execute(
-                "SELECT steer_pending FROM satpam_watch WHERE session_id = ?", (session_id,)
+                "SELECT steer_pending FROM satpam_watch WHERE session_id = ?",
+                (session_id,),
             ).fetchone()
             steer_note = wrow["steer_pending"] if wrow else None
         except sqlite3.Error:
-            logging.getLogger("proxima.satpam").exception("steer lookup failed (fail-quiet)")
+            logging.getLogger("proxima.satpam").exception(
+                "steer lookup failed (fail-quiet)"
+            )
         cur = db.execute(
             "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, "
             "model, hermes_home, kind, continued_from_run_id, continuation_count) "
@@ -1138,7 +1442,9 @@ class RunWorker:
                     (session_id,),
                 )
             except sqlite3.Error:
-                logging.getLogger("proxima.satpam").exception("steer clear failed (fail-quiet)")
+                logging.getLogger("proxima.satpam").exception(
+                    "steer clear failed (fail-quiet)"
+                )
         payload = {
             "runner": run["runner_id"],
             "job": job["id"],
@@ -1148,10 +1454,14 @@ class RunWorker:
         }
         if attempt is not None:
             payload["node_id"] = attempt["node_id"]
-        self.add_event(new_run_id, session_id, run.get("project_id"), "run.queued", payload)
+        self.add_event(
+            new_run_id, session_id, run.get("project_id"), "run.queued", payload
+        )
         return {"run_id": new_run_id, "continuation": used + 1, "limit": limit}
 
-    def _produced_artifacts(self, job: dict[str, Any] | sqlite3.Row, since_iso: str | None) -> list[dict[str, Any]]:
+    def _produced_artifacts(
+        self, job: dict[str, Any] | sqlite3.Row, since_iso: str | None
+    ) -> list[dict[str, Any]]:
         """What this step produced (files modified since it started), typed for preview."""
         db = self.app.state.worker_db
         if not job["project_id"]:
@@ -1163,11 +1473,14 @@ class RunWorker:
         if not prow:
             return []
         from datetime import timezone
+
         ts = since_iso or job["started_at"]
         start = 0.0
         if ts:
             try:
-                dt = datetime.fromisoformat(ts)  # iso_now() is ISO-8601; DB timestamps also parse
+                dt = datetime.fromisoformat(
+                    ts
+                )  # iso_now() is ISO-8601; DB timestamps also parse
             except Exception:
                 try:
                     dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
@@ -1195,7 +1508,9 @@ class RunWorker:
         project_activity_lease = None
         guarded_runner_key = None
         try:
-            mode_row = db.execute("SELECT mode FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            mode_row = db.execute(
+                "SELECT mode FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
             session_mode = (mode_row["mode"] if mode_row else None) or "chat"
             gated_feature = features.queued_run_feature(run, session_mode)
             if gated_feature and not features.enabled(cfg, gated_feature):
@@ -1206,7 +1521,13 @@ class RunWorker:
                         "WHERE id = ? AND status IN ('queued', 'running')",
                         (error, run_id),
                     )
-                    self.add_event(run_id, session_id, project_id, "run.failed", features.disabled_payload(gated_feature))
+                    self.add_event(
+                        run_id,
+                        session_id,
+                        project_id,
+                        "run.failed",
+                        features.disabled_payload(gated_feature),
+                    )
                 self._fail_job(session_id, error, run_id)
                 return
             # Deterministic script step (T6): executed as a subprocess by the
@@ -1234,13 +1555,10 @@ class RunWorker:
                             activity_lease=script_activity_lease,
                         )
                 finally:
-                    if (
-                        script_activity_lease is not None
-                        and not getattr(
-                            script_activity_lease,
-                            "_retained_for_writer_tree",
-                            False,
-                        )
+                    if script_activity_lease is not None and not getattr(
+                        script_activity_lease,
+                        "_retained_for_writer_tree",
+                        False,
                     ):
                         # Only release after script_runner proved tree exit.
                         # Unproven stops transfer the lease to a tree monitor.
@@ -1255,14 +1573,9 @@ class RunWorker:
             spec = runner_spec(run["runner_id"])
             codex_master = (
                 session_mode == "master"
-                and getattr(spec, "protocol", "acp")
-                == "codex-app-server"
+                and getattr(spec, "protocol", "acp") == "codex-app-server"
             )
-            master_tool_specs = (
-                master_dynamic_tools()
-                if codex_master
-                else None
-            )
+            master_tool_specs = master_dynamic_tools() if codex_master else None
             cwd = str(Path(cfg["workspace_root"]) / "scratch")
             if session_mode == "master":
                 cwd = master_runtime.prepare_master_runtime(
@@ -1305,7 +1618,9 @@ class RunWorker:
                 (session_id,),
             ).fetchone()
             is_job = bool(jrow and jrow["job_id"])
-            is_build = bool(jrow and jrow["workflow_id"])  # a workflow iterate/test chat
+            is_build = bool(
+                jrow and jrow["workflow_id"]
+            )  # a workflow iterate/test chat
             if row and (
                 session_mode == "design"
                 or str(run.get("kind") or "") == "brand_guide"
@@ -1356,7 +1671,9 @@ class RunWorker:
                         in_worktree = graph_node_touches_repo
                     if in_worktree:
                         if not Path(wt["worktree_path"]).is_dir():
-                            raise RuntimeError(f"job worktree missing on disk: {wt['worktree_path']} - restart the job to re-cut it")
+                            raise RuntimeError(
+                                f"job worktree missing on disk: {wt['worktree_path']} - restart the job to re-cut it"
+                            )
                         cwd = wt["worktree_path"]
             Path(cwd).mkdir(parents=True, exist_ok=True)
             # Hands-on Chat keeps a bounded pre-turn file journal. Only changed
@@ -1369,7 +1686,9 @@ class RunWorker:
             # Collaboration synthesis streams into the PARENT run's bubble too, so
             # the Brainstorm/Debate result flows in like a normal reply instead of
             # appearing all at once (the header was already streamed at queue time).
-            if str(run.get("kind") or "").endswith("_synthesis") and run.get("collaboration_id"):
+            if str(run.get("kind") or "").endswith("_synthesis") and run.get(
+                "collaboration_id"
+            ):
                 crow = db.execute(
                     "SELECT parent_run_id FROM prompt_collaborations WHERE id = ?",
                     (run["collaboration_id"],),
@@ -1407,15 +1726,35 @@ class RunWorker:
                                 return
                         chunks.append(text)
                         with self.app.state.db_lock:
-                            self.add_event(run_id, session_id, project_id, "message.delta", {"text": text})
-                            self._emit_collaboration_child_event("delta", run, "running", text)
+                            self.add_event(
+                                run_id,
+                                session_id,
+                                project_id,
+                                "message.delta",
+                                {"text": text},
+                            )
+                            self._emit_collaboration_child_event(
+                                "delta", run, "running", text
+                            )
                             if synth_parent_id:
-                                self.add_event(synth_parent_id, session_id, project_id, "message.delta", {"text": text})
+                                self.add_event(
+                                    synth_parent_id,
+                                    session_id,
+                                    project_id,
+                                    "message.delta",
+                                    {"text": text},
+                                )
                 elif kind == "agent_thought_chunk":
                     text = (u.get("content") or {}).get("text", "")
                     if text:
                         with self.app.state.db_lock:
-                            self.add_event(run_id, session_id, project_id, "reasoning.delta", {"text": text})
+                            self.add_event(
+                                run_id,
+                                session_id,
+                                project_id,
+                                "reasoning.delta",
+                                {"text": text},
+                            )
                 elif kind == "tool_call":
                     if session_mode == "master":
                         master_native_tool_violation = True
@@ -1430,9 +1769,7 @@ class RunWorker:
                                 "approval.denied",
                                 {
                                     "title": (
-                                        u.get("title")
-                                        or u.get("kind")
-                                        or "native tool"
+                                        u.get("title") or u.get("kind") or "native tool"
                                     ),
                                     "reason": "Master is chat-only",
                                 },
@@ -1443,12 +1780,35 @@ class RunWorker:
                     # event only names the tool rather than every path it will touch.
                     tool_write_event_seen = True
                     with self.app.state.db_lock:
-                        self.add_event(run_id, session_id, project_id, "tool.start", {"id": u.get("toolCallId"), "title": u.get("title") or u.get("kind") or "tool"})
-                elif kind == "tool_call_update" and u.get("status") in ("completed", "failed"):
+                        self.add_event(
+                            run_id,
+                            session_id,
+                            project_id,
+                            "tool.start",
+                            {
+                                "id": u.get("toolCallId"),
+                                "title": u.get("title") or u.get("kind") or "tool",
+                            },
+                        )
+                elif kind == "tool_call_update" and u.get("status") in (
+                    "completed",
+                    "failed",
+                ):
                     with self.app.state.db_lock:
-                        self.add_event(run_id, session_id, project_id, "tool.complete", {"id": u.get("toolCallId"), "status": u.get("status")})
+                        self.add_event(
+                            run_id,
+                            session_id,
+                            project_id,
+                            "tool.complete",
+                            {"id": u.get("toolCallId"), "status": u.get("status")},
+                        )
 
-            def on_permission(_acp_session_id: str, request_id: str, options: list, params: dict[str, Any]) -> None:
+            def on_permission(
+                _acp_session_id: str,
+                request_id: str,
+                options: list,
+                params: dict[str, Any],
+            ) -> None:
                 # Agent asked permission for a tool (run a command, edit files, …).
                 tc = params.get("toolCall") or {}
                 title = tc.get("title") or params.get("title") or "Permission required"
@@ -1475,23 +1835,51 @@ class RunWorker:
                 # Auto-approve (explicit opt-in): pick the allow option and resolve immediately,
                 # logging an approval.auto event so the activity feed still shows what ran.
                 if self._auto_approve_on(run_id):
-                    allow = next((o for o in options if o.get("kind") in ("allow_always", "allow_once")), None)
+                    allow = next(
+                        (
+                            o
+                            for o in options
+                            if o.get("kind") in ("allow_always", "allow_once")
+                        ),
+                        None,
+                    )
                     allow = allow or (options[0] if options else None)
                     if allow and allow.get("optionId"):
                         with self.app.state.db_lock:
-                            self.add_event(run_id, session_id, project_id, "approval.auto", {"title": title})
+                            self.add_event(
+                                run_id,
+                                session_id,
+                                project_id,
+                                "approval.auto",
+                                {"title": title},
+                            )
                         self.resolve_permission(run_id, request_id, allow["optionId"])
                         return
                 # Otherwise surface an interactive card; the user's pick comes back via
                 # POST /api/runs/{id}/permission.
                 with self.app.state.db_lock:
-                    safe_options = [{"optionId": o.get("optionId"), "name": o.get("name"), "kind": o.get("kind")} for o in options]
-                    self.add_event(run_id, session_id, project_id, "approval.request", {
-                        "request_id": request_id,
-                        "title": title,
-                        "options": safe_options,
-                    })
-                    job = db.execute("SELECT job_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+                    safe_options = [
+                        {
+                            "optionId": o.get("optionId"),
+                            "name": o.get("name"),
+                            "kind": o.get("kind"),
+                        }
+                        for o in options
+                    ]
+                    self.add_event(
+                        run_id,
+                        session_id,
+                        project_id,
+                        "approval.request",
+                        {
+                            "request_id": request_id,
+                            "title": title,
+                            "options": safe_options,
+                        },
+                    )
+                    job = db.execute(
+                        "SELECT job_id FROM sessions WHERE id = ?", (session_id,)
+                    ).fetchone()
                     if job and job["job_id"]:
                         source_key = f"permission:{run_id}:{request_id}"
                         db.execute(
@@ -1503,7 +1891,15 @@ class RunWorker:
                             "resolved_at = NULL",
                             (
                                 title,
-                                json.dumps({"view": "task", "job_id": job["job_id"], "run_id": run_id, "request_id": request_id, "options": safe_options}),
+                                json.dumps(
+                                    {
+                                        "view": "task",
+                                        "job_id": job["job_id"],
+                                        "run_id": run_id,
+                                        "request_id": request_id,
+                                        "options": safe_options,
+                                    }
+                                ),
                                 source_key,
                             ),
                         )
@@ -1511,19 +1907,18 @@ class RunWorker:
                             "SELECT id FROM attention_items WHERE source_key = ?",
                             (source_key,),
                         ).fetchone()
-                        projection = getattr(
-                            self.app.state, "master_projection", None
-                        )
+                        projection = getattr(self.app.state, "master_projection", None)
                         if projection is not None and attention is not None:
-                            projection.safe_project_attention(
-                                int(attention["id"])
-                            )
+                            projection.safe_project_attention(int(attention["id"]))
 
             def on_dynamic_tool(name: str, arguments: Any) -> dict[str, Any]:
                 nonlocal master_dynamic_call_count
                 nonlocal master_dynamic_result_bytes
                 master_dynamic_call_count += 1
-                if master_dynamic_call_count > master_runtime.MASTER_MAX_CALLS_PER_ROUND:
+                if (
+                    master_dynamic_call_count
+                    > master_runtime.MASTER_MAX_CALLS_PER_ROUND
+                ):
                     result = {
                         "ok": False,
                         "tool": name or None,
@@ -1537,10 +1932,8 @@ class RunWorker:
                         },
                     }
                 elif (
-                    name
-                    in {"delegate_tasks", "start_tasks", "create_attention"}
-                    and master_dynamic_result_bytes
-                    + MASTER_TOOL_RESULT_BYTES
+                    name in {"delegate_tasks", "start_tasks", "create_attention"}
+                    and master_dynamic_result_bytes + MASTER_TOOL_RESULT_BYTES
                     > master_runtime.MASTER_MAX_ROUND_RESULT_BYTES
                 ):
                     result = {
@@ -1599,13 +1992,13 @@ class RunWorker:
                         ") VALUES (?, 'system', ?, 'Proxima', ?)",
                         (
                             session_id,
-                            "Master tool result:\n```json\n"
-                            + result_json
-                            + "\n```",
+                            "Master tool result:\n```json\n" + result_json + "\n```",
                             run_id,
                         ),
                     )
-                    message_id = _as_int(db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+                    message_id = _as_int(
+                        db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+                    )
                     master_focus.stamp_message_for_run(
                         db, message_id=message_id, run_id=run_id
                     )
@@ -1617,13 +2010,10 @@ class RunWorker:
                 return result
 
             try:
-                if (
-                    project_activity_lease is not None
-                    and getattr(
-                        self.app.state.acp_manager,
-                        "supports_activity_guardian",
-                        False,
-                    )
+                if project_activity_lease is not None and getattr(
+                    self.app.state.acp_manager,
+                    "supports_activity_guardian",
+                    False,
                 ):
                     guarded_runner_key = (
                         spec,
@@ -1685,7 +2075,11 @@ class RunWorker:
                     require_explicit_empty=session_mode == "master",
                     fixed_code_graph_path=fixed_code_graph_path,
                 )
-                proc, acp_sid, fresh_session = await self.prompting.load_or_create_agent_session(
+                (
+                    proc,
+                    acp_sid,
+                    fresh_session,
+                ) = await self.prompting.load_or_create_agent_session(
                     run_id,
                     session_id,
                     spec,
@@ -1695,12 +2089,14 @@ class RunWorker:
                     master_dynamic_tools=master_tool_specs,
                     activity_lease=project_activity_lease,
                     activity_scope=(
-                        str(run_id)
-                        if project_activity_lease is not None
-                        else None
+                        str(run_id) if project_activity_lease is not None else None
                     ),
                 )
-                hb_task = asyncio.create_task(self._heartbeat(run_id, float(cfg.get("run_heartbeat_seconds") or 10)))
+                hb_task = asyncio.create_task(
+                    self._heartbeat(
+                        run_id, float(cfg.get("run_heartbeat_seconds") or 10)
+                    )
+                )
                 # Per-turn quota: the in-app setting wins (DB-backed, so it applies on
                 # every entrypoint), config/env is the fallback. Read per run so a
                 # settings change takes effect without a restart.
@@ -1712,17 +2108,33 @@ class RunWorker:
                 # loading the agent already flipped runs.status='cancelled'. The post-prompt
                 # check below would only catch it AFTER the agent ran a full turn of real
                 # work — bail here so the cancel actually short-circuits before the prompt.
-                if db.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()["status"] == "cancelled":
+                if (
+                    db.execute(
+                        "SELECT status FROM runs WHERE id = ?", (run_id,)
+                    ).fetchone()["status"]
+                    == "cancelled"
+                ):
                     return
                 if str(run.get("kind", "")).startswith("collab_"):
                     with self.app.state.db_lock:
                         self._emit_collaboration_child_event("started", run, "running")
                 if str(run.get("kind", "")).startswith("message_review"):
                     with self.app.state.db_lock:
-                        db.execute("UPDATE message_reviews SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE run_id = ?", (run_id,))
-                        row = db.execute("SELECT * FROM message_reviews WHERE run_id = ?", (run_id,)).fetchone()
+                        db.execute(
+                            "UPDATE message_reviews SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE run_id = ?",
+                            (run_id,),
+                        )
+                        row = db.execute(
+                            "SELECT * FROM message_reviews WHERE run_id = ?", (run_id,)
+                        ).fetchone()
                         if row:
-                            self.add_event(run_id, session_id, project_id, "message_review.started", {"review": review_payload(row)})
+                            self.add_event(
+                                run_id,
+                                session_id,
+                                project_id,
+                                "message_review.started",
+                                {"review": review_payload(row)},
+                            )
                 prompt_text = self.prompting.build_prompt_text(
                     run,
                     session_id,
@@ -1791,9 +2203,7 @@ class RunWorker:
                         master_dynamic_tools=master_tool_specs,
                         activity_lease=project_activity_lease,
                         activity_scope=(
-                            str(run_id)
-                            if project_activity_lease is not None
-                            else None
+                            str(run_id) if project_activity_lease is not None else None
                         ),
                     )
                     fresh_session = True
@@ -1851,7 +2261,9 @@ class RunWorker:
                         "master_native_tool_denied: Master runner attempted a native tool"
                     )
 
-                status_row = db.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+                status_row = db.execute(
+                    "SELECT status FROM runs WHERE id = ?", (run_id,)
+                ).fetchone()
                 if status_row and status_row["status"] == "cancelled":
                     return
                 answer = "".join(chunks).strip()
@@ -1859,7 +2271,9 @@ class RunWorker:
                     # Empty output usually means the agent hit an error (auth, rate
                     # limit, refusal) — surface the real reason instead of a blank
                     # "no output" so it's diagnosable.
-                    detail = proc.recent_stderr() if hasattr(proc, "recent_stderr") else ""
+                    detail = (
+                        proc.recent_stderr() if hasattr(proc, "recent_stderr") else ""
+                    )
                     answer = f"Agent produced no output (stop reason: {stop_reason})."
                     if detail:
                         answer += f"\n\nAgent error log:\n```\n{detail}\n```"
@@ -1867,12 +2281,16 @@ class RunWorker:
                     return
                 if self._complete_collaboration_run(run, answer, stop_reason):
                     return
-                if self.drafts.handle_draft_run(run, answer, stop_reason, self.add_event):
+                if self.drafts.handle_draft_run(
+                    run, answer, stop_reason, self.add_event
+                ):
                     return
                 # Strip before save + auto-title so main chat and sidebar titles keep
                 # the real answer, not Pi's version/skills banner.
                 answer = strip_runner_preamble(answer)
-                output_links = self.outputs.output_links_for_project(project_id, run_start_ts)
+                output_links = self.outputs.output_links_for_project(
+                    project_id, run_start_ts
+                )
                 trow = self.outputs.save_assistant_message(
                     run_id,
                     session_id,
@@ -1882,7 +2300,11 @@ class RunWorker:
                     output_links,
                     self.add_event,
                 )
-                if tool_write_event_seen and turn_before is not None and turn_root is not None:
+                if (
+                    tool_write_event_seen
+                    and turn_before is not None
+                    and turn_root is not None
+                ):
                     try:
                         message = db.execute(
                             "SELECT id FROM messages WHERE run_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
@@ -1898,27 +2320,46 @@ class RunWorker:
                                 root_semantics=turn_restore.ROOT_CONTAINER_VIRTUAL_V2,
                             )
                     except Exception:
-                        logging.getLogger("proxima.worker").exception("turn restore journal failed (non-fatal)")
+                        logging.getLogger("proxima.worker").exception(
+                            "turn restore journal failed (non-fatal)"
+                        )
                 try:
                     if not codex_master:
-                        master_runtime.handle_master_response(
-                            self.app, db, run, answer
-                        )
+                        master_runtime.handle_master_response(self.app, db, run, answer)
                 except Exception:
-                    logging.getLogger("proxima.worker").exception("Master product tool handling failed (non-fatal)")
+                    logging.getLogger("proxima.worker").exception(
+                        "Master product tool handling failed (non-fatal)"
+                    )
                 # Auto-name the chat from a ≤3-word recap on the first exchange (chats
                 # only). Done BEFORE run.completed so the sidebar shows the recap as soon
                 # as the run leaves the active set. Best-effort; never fails the run.
                 try:
                     is_task = bool(trow and trow["job_id"])
-                    trow_title = db.execute("SELECT title, manual_title FROM sessions WHERE id = ?", (session_id,)).fetchone()
-                    is_design = bool(trow_title and (trow_title["title"] or "").startswith("Design: "))
-                    account = db.execute("SELECT COUNT(*) AS c FROM messages WHERE session_id = ? AND role = 'assistant'", (session_id,)).fetchone()["c"]
+                    trow_title = db.execute(
+                        "SELECT title, manual_title FROM sessions WHERE id = ?",
+                        (session_id,),
+                    ).fetchone()
+                    is_design = bool(
+                        trow_title
+                        and (trow_title["title"] or "").startswith("Design: ")
+                    )
+                    account = db.execute(
+                        "SELECT COUNT(*) AS c FROM messages WHERE session_id = ? AND role = 'assistant'",
+                        (session_id,),
+                    ).fetchone()["c"]
                     # Skip iterate/test chats (is_build): their '⚙ <workflow>' title is
                     # their identity in the Workflows panel — auto-titling would erase it.
-                    if not is_task and not is_design and not is_build and not (trow_title and trow_title["manual_title"]) and account == 1:
+                    if (
+                        not is_task
+                        and not is_design
+                        and not is_build
+                        and not (trow_title and trow_title["manual_title"])
+                        and account == 1
+                    ):
                         title_before = trow_title["title"] if trow_title else ""
-                        title = await self._generate_title(proc, cwd, run["prompt"], answer)
+                        title = await self._generate_title(
+                            proc, cwd, run["prompt"], answer
+                        )
                         if title:
                             with self.app.state.db_lock:
                                 db.execute(
@@ -1927,49 +2368,70 @@ class RunWorker:
                                     (title, session_id, title_before),
                                 )
                 except Exception:
-                    logging.getLogger("proxima.worker").exception("auto-title failed (non-fatal)")
+                    logging.getLogger("proxima.worker").exception(
+                        "auto-title failed (non-fatal)"
+                    )
                 # Re-catalog the wiki in case the agent wrote/updated notes this run, so
                 # the next session's preamble reflects the new knowledge.
                 try:
                     if project_wiki is not None and project_wiki.is_dir():
                         wiki_memory.rebuild_index(project_wiki)
                 except Exception:
-                    logging.getLogger("proxima.worker").exception("wiki index rebuild failed (non-fatal)")
+                    logging.getLogger("proxima.worker").exception(
+                        "wiki index rebuild failed (non-fatal)"
+                    )
                 # Finalize atomically: only complete a run that's still 'running'. If the
                 # user cancelled during the post-prompt awaits (auto-title can take ~30s),
                 # the cancel set status='cancelled' — don't resurrect it to 'completed',
                 # and crucially don't advance the goal/job loop (which would keep the agent
                 # working after the user pressed Cancel).
                 with self.app.state.db_lock:
-                    completed = db.execute(
-                        "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
-                        (run_id,),
-                    ).rowcount > 0
+                    completed = (
+                        db.execute(
+                            "UPDATE runs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
+                            (run_id,),
+                        ).rowcount
+                        > 0
+                    )
                     if completed:
-                        self.add_event(run_id, session_id, project_id, "run.completed", {"stop_reason": stop_reason})
+                        self.add_event(
+                            run_id,
+                            session_id,
+                            project_id,
+                            "run.completed",
+                            {"stop_reason": stop_reason},
+                        )
                 if not completed:
                     return  # cancelled mid-window — stop here; do not advance goal/job
                 # Autonomous goal loop: enqueue the next turn or finish the goal. Best-effort.
                 try:
                     self._advance_goal(run, answer)
                 except Exception:
-                    logging.getLogger("proxima.worker").exception("goal advance failed (non-fatal)")
+                    logging.getLogger("proxima.worker").exception(
+                        "goal advance failed (non-fatal)"
+                    )
                 # Workflow job: record this step's output and enqueue the next (or finish). Best-effort.
                 try:
                     self._advance_job(run, answer)
                 except Exception:
-                    logging.getLogger("proxima.worker").exception("job advance failed (non-fatal)")
+                    logging.getLogger("proxima.worker").exception(
+                        "job advance failed (non-fatal)"
+                    )
                 # Layer 1: append a one-line memory-log entry for this turn. Best-effort —
                 # a logging failure must never fail the user's actual run.
                 if answer and not answer.startswith("Agent produced no output"):
                     try:
                         await self._write_auto_log(run, proc, acp_sid)
                     except Exception:
-                        logging.getLogger("proxima.worker").exception("auto-log failed (non-fatal)")
+                        logging.getLogger("proxima.worker").exception(
+                            "auto-log failed (non-fatal)"
+                        )
             except asyncio.CancelledError as _exc:
                 # Graceful shutdown: close the run cleanly (salvaging streamed text)
                 # instead of leaving it orphaned in 'running'.
-                self._fail_interrupted(run_id, session_id, project_id, "Interrupted by server shutdown")
+                self._fail_interrupted(
+                    run_id, session_id, project_id, "Interrupted by server shutdown"
+                )
                 raise
             except asyncio.TimeoutError as _exc:
                 # Abort the agent's turn so it stops working in the background and the
@@ -1980,8 +2442,10 @@ class RunWorker:
                 # message in this project returns "Queued for the next turn".
                 entry = self.active_runs.get(run_id)
                 if entry:
-                    try: entry[0].cancel(entry[1])
-                    except Exception: pass
+                    try:
+                        entry[0].cancel(entry[1])
+                    except Exception:
+                        pass
                 try:
                     if codex_master:
                         await self.app.state.acp_manager.recycle(
@@ -1991,28 +2455,38 @@ class RunWorker:
                             master_chat_only=True,
                         )
                     else:
-                        await self.app.state.acp_manager.recycle(
-                            spec, hermes_home, cwd
-                        )
+                        await self.app.state.acp_manager.recycle(spec, hermes_home, cwd)
                 except Exception:
-                    logging.getLogger("proxima.worker").exception("failed to recycle agent process after timeout")
+                    logging.getLogger("proxima.worker").exception(
+                        "failed to recycle agent process after timeout"
+                    )
                 reason = "Hermes runner timed out"
                 with self.app.state.db_lock:
-                    failed = db.execute(
-                        "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
-                        (reason, run_id),
-                    ).rowcount > 0
+                    failed = (
+                        db.execute(
+                            "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'",
+                            (reason, run_id),
+                        ).rowcount
+                        > 0
+                    )
                     if not failed:
                         return
                     if str(run.get("kind", "")).startswith("message_review"):
-                        self._fail_message_review(run_id, session_id, project_id, reason)
+                        self._fail_message_review(
+                            run_id, session_id, project_id, reason
+                        )
                         return
                     if str(run.get("kind", "")).startswith("collab_"):
-                        self._fail_collaboration_run(run_id, session_id, project_id, reason)
+                        self._fail_collaboration_run(
+                            run_id, session_id, project_id, reason
+                        )
                         return
                     salvaged = strip_runner_preamble(self._reconstruct_text(run_id))
                     if salvaged:
-                        db.execute("INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)", (session_id, salvaged, self._agent_name(run_id), run_id))
+                        db.execute(
+                            "INSERT INTO messages(session_id, role, content, author, run_id) VALUES (?, 'assistant', ?, ?, ?)",
+                            (session_id, salvaged, self._agent_name(run_id), run_id),
+                        )
                     # Phase-1 slice 5 (T5): a job turn that hits the quota is resumed,
                     # not abandoned - a continuation run is enqueued in the SAME
                     # session (context carries via the persistent ACP session) and,
@@ -2025,13 +2499,21 @@ class RunWorker:
                             f"Hermes runner timed out after {timeout}s - "
                             f"auto-continuing ({outcome['continuation']}/{outcome['limit']})"
                         )
-                        db.execute("UPDATE runs SET error = ? WHERE id = ?", (reason, run_id))
-                        self.add_event(run_id, session_id, project_id, "run.failed", {
-                            "error": reason,
-                            "continued_by_run_id": outcome["run_id"],
-                            "continuation": outcome["continuation"],
-                            "continuation_limit": outcome["limit"],
-                        })
+                        db.execute(
+                            "UPDATE runs SET error = ? WHERE id = ?", (reason, run_id)
+                        )
+                        self.add_event(
+                            run_id,
+                            session_id,
+                            project_id,
+                            "run.failed",
+                            {
+                                "error": reason,
+                                "continued_by_run_id": outcome["run_id"],
+                                "continuation": outcome["continuation"],
+                                "continuation_limit": outcome["limit"],
+                            },
+                        )
                         return  # the job stays running; the continuation picks the work up
                     if outcome.get("capped"):
                         reason = (
@@ -2041,14 +2523,20 @@ class RunWorker:
                             "then split it into smaller jobs or raise the turn quota in Settings "
                             "and restart it."
                         )
-                        db.execute("UPDATE runs SET error = ? WHERE id = ?", (reason, run_id))
-                    self.add_event(run_id, session_id, project_id, "run.failed", {"error": reason})
+                        db.execute(
+                            "UPDATE runs SET error = ? WHERE id = ?", (reason, run_id)
+                        )
+                    self.add_event(
+                        run_id, session_id, project_id, "run.failed", {"error": reason}
+                    )
                 self._fail_job(session_id, reason, run_id)
                 if outcome.get("capped"):
                     # Slice 12 (T10 'confused' rung): the honest stop above is also a
                     # satpam escalation record, so the cap surfaces as an owner-facing
                     # card, not just a failed run. Fail-quiet inside.
-                    self.satpam.record_cap_escalation(run, _as_int(outcome["limit"]), _as_int(timeout))
+                    self.satpam.record_cap_escalation(
+                        run, _as_int(outcome["limit"]), _as_int(timeout)
+                    )
             except Exception as exc:
                 detail = format_rpc_error(str(exc)[-2000:])
                 self._fail_run_exception(run, detail)
@@ -2079,6 +2567,7 @@ class RunWorker:
                     if recycle_tree is None:
                         try:
                             from .container_activity import GuardedWriterTree
+
                             recycle_tree = GuardedWriterTree.bind(
                                 project_activity_lease,
                             )
@@ -2095,17 +2584,15 @@ class RunWorker:
                             guarded_cwd,
                         )
             if project_activity_lease is not None:
-                if (
-                    recycle_verified
-                    and not getattr(
-                        project_activity_lease,
-                        "_retained_for_writer_tree",
-                        False,
-                    )
+                if recycle_verified and not getattr(
+                    project_activity_lease,
+                    "_retained_for_writer_tree",
+                    False,
                 ):
                     project_activity_lease.release()
                 elif not recycle_verified:
                     from .container_activity import retain_activity_lease
+
                     retain_activity_lease(
                         project_activity_lease,
                         tree=recycle_tree,
@@ -2131,10 +2618,10 @@ class RunWorker:
                         if changed:
                             self.app.state.hub.notify(session_id)
             except Exception:
-                logging.getLogger("proxima.worker").exception("pending Master Focus apply failed")
-            if recycle_error is not None and not isinstance(
-                recycle_error, Exception
-            ):
+                logging.getLogger("proxima.worker").exception(
+                    "pending Master Focus apply failed"
+                )
+            if recycle_error is not None and not isinstance(recycle_error, Exception):
                 raise recycle_error
 
     def cancel(self, run_id: int) -> None:
@@ -2166,7 +2653,12 @@ class RunWorker:
                     except (TypeError, ValueError):
                         return False
                     return task_input.get("execution_policy") == "autonomous"
-                return app_settings.get_setting(self.app.state.worker_db, "auto_approve_permissions", "0") == "1"
+                return (
+                    app_settings.get_setting(
+                        self.app.state.worker_db, "auto_approve_permissions", "0"
+                    )
+                    == "1"
+                )
         except Exception:
             return False
 

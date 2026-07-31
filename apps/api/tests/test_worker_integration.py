@@ -12,6 +12,7 @@ This module closes that gap: it points a fake runner spec at a tiny JSON-RPC age
 script, starts the worker for real, enqueues a chat run, and asserts the full
 queued -> running -> completed path with streamed events and a persisted message.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,7 +32,7 @@ from proxima_api.runner_specs import RunnerSpec
 # session/new / session/load / session/prompt (emitting one agent_message_chunk
 # notification, then end_turn). Run as a REAL subprocess so the AcpProcess
 # handshake, reader loop, and session/update dispatch are all exercised.
-FAKE_ACP_SCRIPT = '''\
+FAKE_ACP_SCRIPT = """\
 import sys, json
 SID = "fake-session-1"
 def send(o):
@@ -60,7 +61,7 @@ for line in sys.stdin:
     else:
         if mid is not None:
             send({"jsonrpc":"2.0","id":mid,"result":{}})
-'''
+"""
 
 
 def _install_fake_runner(script: Path) -> None:
@@ -82,13 +83,19 @@ def _install_fake_runner(script: Path) -> None:
     os.environ["PROXIMA_DEFAULT_RUNNER"] = "fake-acp"
 
 
-def _wait_for_run(client: TestClient, headers: dict, run_id: int, timeout: float = 15.0) -> str:
+def _wait_for_run(
+    client: TestClient, headers: dict, run_id: int, timeout: float = 15.0
+) -> str:
     """Poll the run until it reaches a terminal status (the live worker loop runs
     on the TestClient portal loop and advances while this thread sleeps)."""
     deadline = time.time() + timeout
     status = "queued"
     while time.time() < deadline:
-        status = client.get(f"/api/runs/{run_id}", headers=headers).json().get("status", status)
+        status = (
+            client.get(f"/api/runs/{run_id}", headers=headers)
+            .json()
+            .get("status", status)
+        )
         if status in ("completed", "failed", "cancelled"):
             return status
         time.sleep(0.05)
@@ -109,37 +116,49 @@ def test_live_worker_loop_drives_real_acp_subprocess(tmp_path, message, expected
     saved_spec = runner_specs.RUNNER_SPECS.get("fake-acp")
     _install_fake_runner(script)
     try:
-        app = create_app({
-            "database_path": str(tmp_path / "proxima.db"),
-            "workspace_root": str(tmp_path / "ws"),
-            "projectctl_path": "/usr/bin/true",
-            "start_worker": True,        # the whole point: run the live loop
-            "start_scheduler": False,
-            "run_worker_poll_interval_ms": 20,  # snappy polling so the test is fast
-        })
+        app = create_app(
+            {
+                "database_path": str(tmp_path / "proxima.db"),
+                "workspace_root": str(tmp_path / "ws"),
+                "projectctl_path": "/usr/bin/true",
+                "start_worker": True,  # the whole point: run the live loop
+                "start_scheduler": False,
+                "run_worker_poll_interval_ms": 20,  # snappy polling so the test is fast
+            }
+        )
         with TestClient(app) as client:
             token = client.post("/auth/auto").json()["token"]
             headers = {"Authorization": f"Bearer {token}"}
-            session = client.post("/api/sessions", headers=headers, json={"title": "integration"}).json()
+            session = client.post(
+                "/api/sessions", headers=headers, json={"title": "integration"}
+            ).json()
             run = client.post(
-                f"/api/sessions/{session['id']}/runs", headers=headers, json={"message": message}
+                f"/api/sessions/{session['id']}/runs",
+                headers=headers,
+                json={"message": message},
             ).json()
 
             status = _wait_for_run(client, headers, run["run_id"])
-            assert status == "completed", f"run did not complete via live worker: {status}"
+            assert status == "completed", (
+                f"run did not complete via live worker: {status}"
+            )
             saved_run = client.get(f"/api/runs/{run['run_id']}", headers=headers).json()
             assert saved_run["kind"] == expected_kind
             if expected_kind == "masterplan":
                 assert "bundled/masterplan" in saved_run["prompt"]
 
-            events = client.get(f"/api/sessions/{session['id']}/events", headers=headers).json()["events"]
+            events = client.get(
+                f"/api/sessions/{session['id']}/events", headers=headers
+            ).json()["events"]
             types = [e["type"] for e in events]
             assert "run.started" in types
-            assert "message.delta" in types          # streamed by the real AcpProcess reader
+            assert "message.delta" in types  # streamed by the real AcpProcess reader
             assert "message.complete" in types
             assert "run.completed" in types
 
-            msgs = client.get(f"/api/sessions/{session['id']}/messages", headers=headers).json()["messages"]
+            msgs = client.get(
+                f"/api/sessions/{session['id']}/messages", headers=headers
+            ).json()["messages"]
             assert any("integration-ok" in (m.get("content") or "") for m in msgs), msgs
 
             # A REAL AcpProcess was spawned + cached: the lifecycle (handshake,
@@ -163,14 +182,16 @@ def test_project_runner_recycles_before_activity_lease_release(tmp_path):
     saved_spec = runner_specs.RUNNER_SPECS.get("fake-acp")
     _install_fake_runner(script)
     try:
-        app = create_app({
-            "database_path": str(tmp_path / "proxima.db"),
-            "workspace_root": str(tmp_path / "ws"),
-            "projectctl_path": "/usr/bin/true",
-            "start_worker": True,
-            "start_scheduler": False,
-            "run_worker_poll_interval_ms": 20,
-        })
+        app = create_app(
+            {
+                "database_path": str(tmp_path / "proxima.db"),
+                "workspace_root": str(tmp_path / "ws"),
+                "projectctl_path": "/usr/bin/true",
+                "start_worker": True,
+                "start_scheduler": False,
+                "run_worker_poll_interval_ms": 20,
+            }
+        )
         with TestClient(app) as client:
             token = client.post("/auth/auto").json()["token"]
             headers = {"Authorization": f"Bearer {token}"}
@@ -191,19 +212,19 @@ def test_project_runner_recycles_before_activity_lease_release(tmp_path):
                 json={"message": "go"},
             ).json()
 
-            assert _wait_for_run(
-                client,
-                headers,
-                run["run_id"],
-            ) == "completed"
+            assert (
+                _wait_for_run(
+                    client,
+                    headers,
+                    run["run_id"],
+                )
+                == "completed"
+            )
             deadline = time.time() + 5
             while (
-                (
-                    app.state.acp_manager._procs
-                    or run["run_id"] in app.state.worker.active_runs
-                )
-                and time.time() < deadline
-            ):
+                app.state.acp_manager._procs
+                or run["run_id"] in app.state.worker.active_runs
+            ) and time.time() < deadline:
                 time.sleep(0.02)
             assert not app.state.acp_manager._procs
             assert run["run_id"] not in app.state.worker.active_runs
@@ -219,6 +240,7 @@ def test_project_runner_recycles_before_activity_lease_release(tmp_path):
 
 
 # --- cancel-during-setup (locks in the worker race fix) ---------------------
+
 
 class _CancelDuringSetupProcess:
     """new_session() flips the active run to 'cancelled' (exactly what the cancel
@@ -245,7 +267,9 @@ class _CancelDuringSetupProcess:
 
     async def prompt(self, *args, **kwargs):
         self.mgr.prompted = True
-        raise AssertionError("prompt must not run when the run was cancelled during setup")
+        raise AssertionError(
+            "prompt must not run when the run was cancelled during setup"
+        )
 
     def cancel(self, session_id):
         pass
@@ -269,18 +293,22 @@ class _CancelDuringSetupManager:
 def test_cancel_during_setup_skips_the_prompt(tmp_path):
     """A cancel that arrives while the agent is being spawned/loaded must
     short-circuit BEFORE the prompt is issued — not after a full agent turn."""
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+        }
+    )
     mgr = _CancelDuringSetupManager(app)
     app.state.acp_manager = mgr
     client = TestClient(app)
     token = client.post("/auth/auto").json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
-    sid = client.post("/api/sessions", headers=headers, json={"title": "c"}).json()["id"]
+    sid = client.post("/api/sessions", headers=headers, json={"title": "c"}).json()[
+        "id"
+    ]
     client.post(f"/api/sessions/{sid}/runs", headers=headers, json={"message": "hi"})
 
     async def go():

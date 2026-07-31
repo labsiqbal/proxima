@@ -1,4 +1,5 @@
 """ACP session setup and prompt framing helpers for RunWorker.execute_run."""
+
 from __future__ import annotations
 
 import json
@@ -139,6 +140,8 @@ def extract_vision_images(
         fallback_root=fallback_root,
     )
     return clean, images
+
+
 from . import workflows as wf
 from . import features
 from .capabilities import (
@@ -208,21 +211,34 @@ class RunPrompting:
                 raise RuntimeError(
                     "Master requires an explicit empty skill and MCP selection"
                 )
-            required = [str(skill_id) for skill_id in required_skill_ids if str(skill_id)]
+            required = [
+                str(skill_id) for skill_id in required_skill_ids if str(skill_id)
+            ]
             # None, or a selection without an explicit skills list, already means
             # inherit every detected skill. Only an explicit subset needs a
             # temporary addition. Do not rewrite profiles.capabilities: invoking
             # one command must not silently change the owner's normal profile.
-            if selection is not None and isinstance(selection.get("skills"), list) and required:
+            if (
+                selection is not None
+                and isinstance(selection.get("skills"), list)
+                and required
+            ):
                 selection = {
                     **selection,
                     "skills": list(dict.fromkeys([*selection["skills"], *required])),
                 }
-            override = cfg.get("source_hermes_home") if getattr(spec, "id", "") == "hermes" else None
+            override = (
+                cfg.get("source_hermes_home")
+                if getattr(spec, "id", "") == "hermes"
+                else None
+            )
             from . import app_settings as _app_settings
+
             custom_roots: list[str] = []
             try:
-                custom_roots = _app_settings.get_custom_skill_roots(self.app.state.worker_db)
+                custom_roots = _app_settings.get_custom_skill_roots(
+                    self.app.state.worker_db
+                )
             except Exception:
                 custom_roots = []
             # Master must never receive the Code graph MCP entry.
@@ -241,9 +257,7 @@ class RunPrompting:
                 "skills": [],
                 "mcp": [],
             }:
-                raise RuntimeError(
-                    "Master capability activation was not empty"
-                )
+                raise RuntimeError("Master capability activation was not empty")
         except Exception:
             if require_explicit_empty:
                 raise
@@ -269,10 +283,18 @@ class RunPrompting:
         if spec.refresh_files and hermes_home and cfg.get("refresh_credentials", True):
             try:
                 if spec.id == "hermes":
-                    src = Path(cfg.get("source_hermes_home") or os.path.expanduser("~/.hermes"))
+                    src = Path(
+                        cfg.get("source_hermes_home") or os.path.expanduser("~/.hermes")
+                    )
                 else:
-                    src = Path(os.path.expanduser(spec.source_dir)) if spec.source_dir else Path("/nonexistent")
-                changed = refresh_agent_credentials(src, Path(hermes_home), spec.refresh_files)
+                    src = (
+                        Path(os.path.expanduser(spec.source_dir))
+                        if spec.source_dir
+                        else Path("/nonexistent")
+                    )
+                changed = refresh_agent_credentials(
+                    src, Path(hermes_home), spec.refresh_files
+                )
                 if changed:
                     # A cached agent process holds the old auth in memory; drop
                     # it so the next get() spawns one that reads the fresh token.
@@ -284,11 +306,11 @@ class RunPrompting:
                             master_chat_only=True,
                         )
                     else:
-                        await self.app.state.acp_manager.recycle(
-                            spec, hermes_home, cwd
-                        )
+                        await self.app.state.acp_manager.recycle(spec, hermes_home, cwd)
             except Exception:
-                logging.getLogger("proxima.worker").exception("agent credential refresh failed")
+                logging.getLogger("proxima.worker").exception(
+                    "agent credential refresh failed"
+                )
 
     async def load_or_create_agent_session(
         self,
@@ -319,13 +341,10 @@ class RunPrompting:
             recycle_options: dict[str, Any] = {
                 "master_chat_only": True,
             }
-            if (
-                activity_lease is not None
-                and getattr(
-                    self.app.state.acp_manager,
-                    "supports_activity_guardian",
-                    False,
-                )
+            if activity_lease is not None and getattr(
+                self.app.state.acp_manager,
+                "supports_activity_guardian",
+                False,
             ):
                 recycle_options["cache_scope"] = activity_scope
             await self.app.state.acp_manager.recycle(
@@ -337,13 +356,10 @@ class RunPrompting:
         manager_options: dict[str, Any] = {}
         if restricted:
             manager_options["master_chat_only"] = True
-        if (
-            activity_lease is not None
-            and getattr(
-                self.app.state.acp_manager,
-                "supports_activity_guardian",
-                False,
-            )
+        if activity_lease is not None and getattr(
+            self.app.state.acp_manager,
+            "supports_activity_guardian",
+            False,
         ):
             manager_options["activity_lease"] = activity_lease
             manager_options["cache_scope"] = activity_scope
@@ -433,11 +449,7 @@ class RunPrompting:
                     )
             routing = self._master_routing_context(db, int(run["id"]))
             if routing:
-                prompt_text += (
-                    "\n\n---\n\n"
-                    "# Proxima routing context\n\n"
-                    + routing
-                )
+                prompt_text += "\n\n---\n\n# Proxima routing context\n\n" + routing
         moodboard_references: list[dict[str, Any]] = []
         if is_fresh_session and run.get("kind", "chat") != "wiki_draft":
             try:
@@ -449,9 +461,16 @@ class RunPrompting:
                 ).fetchone()
                 instr = (prow["instructions"] if prow else None) or ""
                 if instr.strip():
-                    prompt_text = f"# Profile instructions\n\n{instr.strip()}\n\n---\n\n" + prompt_text
+                    prompt_text = (
+                        f"# Profile instructions\n\n{instr.strip()}\n\n---\n\n"
+                        + prompt_text
+                    )
                 # Generate the catalog on first sight so the preamble can point at it.
-                if project_wiki is not None and project_wiki.is_dir() and not (project_wiki / "index.md").exists():
+                if (
+                    project_wiki is not None
+                    and project_wiki.is_dir()
+                    and not (project_wiki / "index.md").exists()
+                ):
                     wiki_memory.rebuild_index(project_wiki)
                 # Brand guidelines live at <project>/design.md (a sibling of wiki/); read
                 # them so the design agent composes on-brand without a tool call.
@@ -476,7 +495,8 @@ class RunPrompting:
                     # recommended tools (cheap, first turn only) so present ones
                     # are advertised to the agent. Missing ones stay silent here.
                     host_tools=recommended_tools.probe_recommended_tools(
-                        cfg.get("bundled_skills_dir")),
+                        cfg.get("bundled_skills_dir")
+                    ),
                 )
                 if preamble:
                     prompt_text = preamble + "\n\n---\n\n" + prompt_text
@@ -484,11 +504,18 @@ class RunPrompting:
                 # agent can decide to produce a real Design Studio design, use project
                 # files, etc. — straight from the step's instruction (AI auto-detects).
                 if is_job:
-                    prompt_text = wf.build_capability_preamble(
-                        include_design_studio=include_design_studio,
-                    ) + "\n\n---\n\n" + prompt_text
+                    prompt_text = (
+                        wf.build_capability_preamble(
+                            include_design_studio=include_design_studio,
+                        )
+                        + "\n\n---\n\n"
+                        + prompt_text
+                    )
                 elif is_build:
-                    wfb = db.execute("SELECT name, steps FROM workflows WHERE id = ?", (jrow["workflow_id"],)).fetchone()
+                    wfb = db.execute(
+                        "SELECT name, steps FROM workflows WHERE id = ?",
+                        (jrow["workflow_id"],),
+                    ).fetchone()
                     if wfb:
                         prompt_text = (
                             wf.build_iteration_preamble(
@@ -504,31 +531,54 @@ class RunPrompting:
                             + prompt_text
                         )
             except Exception:
-                logging.getLogger("proxima.worker").exception("preamble build failed (non-fatal)")
+                logging.getLogger("proxima.worker").exception(
+                    "preamble build failed (non-fatal)"
+                )
         # Iterate chats keep the agent in sync with the recipe AFTER the first turn:
         # the user may have edited steps directly in the stage editor, so re-inject the
         # current recipe each turn (the full sandbox preamble already covered turn 1).
         if is_build and not is_fresh_session:
             try:
-                wfc = db.execute("SELECT name, steps FROM workflows WHERE id = ?", (jrow["workflow_id"],)).fetchone()
+                wfc = db.execute(
+                    "SELECT name, steps FROM workflows WHERE id = ?",
+                    (jrow["workflow_id"],),
+                ).fetchone()
                 if wfc:
-                    prompt_text = wf.build_recipe_context(wfc["name"], json.loads(wfc["steps"] or "[]")) + "\n\n---\n\n" + prompt_text
+                    prompt_text = (
+                        wf.build_recipe_context(
+                            wfc["name"], json.loads(wfc["steps"] or "[]")
+                        )
+                        + "\n\n---\n\n"
+                        + prompt_text
+                    )
             except Exception:
-                logging.getLogger("proxima.worker").exception("recipe context inject failed (non-fatal)")
+                logging.getLogger("proxima.worker").exception(
+                    "recipe context inject failed (non-fatal)"
+                )
         # A design session is always framed as design (every turn), regardless of
         # what the client sent — keeps the agent editing the scene, never launching
         # workflows or unrelated tasks.
         if session_mode == "design":
-            if not moodboard_references and include_design_studio and project_wiki is not None:
+            if (
+                not moodboard_references
+                and include_design_studio
+                and project_wiki is not None
+            ):
                 try:
-                    moodboard_references = wiki_memory.read_moodboard_references(project_wiki.parent)
+                    moodboard_references = wiki_memory.read_moodboard_references(
+                        project_wiki.parent
+                    )
                 except Exception:
                     logger.exception("moodboard context read failed (non-fatal)")
             if not is_fresh_session:
-                moodboard_context = wiki_memory.moodboard_reference_context(moodboard_references)
+                moodboard_context = wiki_memory.moodboard_reference_context(
+                    moodboard_references
+                )
                 if moodboard_context:
                     prompt_text = moodboard_context + "\n\n---\n\n" + prompt_text
-            prompt_text = wiki_memory.DESIGN_SESSION_GUARDRAIL + "\n\n---\n\n" + prompt_text
+            prompt_text = (
+                wiki_memory.DESIGN_SESSION_GUARDRAIL + "\n\n---\n\n" + prompt_text
+            )
             prompt_text = append_vision_references(
                 prompt_text,
                 [
@@ -557,18 +607,24 @@ class RunPrompting:
                 "AND ((? IS NULL AND mf.focus_epoch_id IS NULL) OR mf.focus_epoch_id = ?) "
                 "ORDER BY m.id"
             )
-            rows = [dict(row) for row in db.execute(
-                query, (session_id, focus_epoch_id, focus_epoch_id)
-            ).fetchall()]
+            rows = [
+                dict(row)
+                for row in db.execute(
+                    query, (session_id, focus_epoch_id, focus_epoch_id)
+                ).fetchall()
+            ]
         except sqlite3.OperationalError:
             # Tiny compatibility fixtures which predate the Focus schema model
             # a legacy fleet-only transcript. Real initialized databases always
             # take the epoch-scoped branch above.
-            rows = [dict(row) for row in db.execute(
-                "SELECT role, content FROM messages WHERE session_id = ? "
-                "AND role IN ('user', 'assistant', 'system', 'error') ORDER BY id",
-                (session_id,),
-            ).fetchall()]
+            rows = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT role, content FROM messages WHERE session_id = ? "
+                    "AND role IN ('user', 'assistant', 'system', 'error') ORDER BY id",
+                    (session_id,),
+                ).fetchall()
+            ]
         if (
             rows
             and rows[-1]["role"] == "user"
@@ -642,19 +698,24 @@ class RunPrompting:
         activity_scope: str | None = None,
     ) -> tuple[Any, str]:
         db = self.app.state.worker_db
-        logging.getLogger("proxima.worker").warning("resetting ACP session %s for chat %s: %s", acp_sid, session_id, reason[-240:])
+        logging.getLogger("proxima.worker").warning(
+            "resetting ACP session %s for chat %s: %s",
+            acp_sid,
+            session_id,
+            reason[-240:],
+        )
         with self.app.state.db_lock:
-            db.execute("DELETE FROM agent_sessions WHERE session_id = ? AND hermes_home = ?", (session_id, hermes_home))
+            db.execute(
+                "DELETE FROM agent_sessions WHERE session_id = ? AND hermes_home = ?",
+                (session_id, hermes_home),
+            )
         recycle_options: dict[str, Any] = {}
         if master_dynamic_tools is not None:
             recycle_options["master_chat_only"] = True
-        if (
-            activity_lease is not None
-            and getattr(
-                self.app.state.acp_manager,
-                "supports_activity_guardian",
-                False,
-            )
+        if activity_lease is not None and getattr(
+            self.app.state.acp_manager,
+            "supports_activity_guardian",
+            False,
         ):
             recycle_options["cache_scope"] = activity_scope
         try:
@@ -665,17 +726,16 @@ class RunPrompting:
                 **recycle_options,
             )
         except Exception:
-            logging.getLogger("proxima.worker").exception("failed to recycle agent process after ACP history error")
+            logging.getLogger("proxima.worker").exception(
+                "failed to recycle agent process after ACP history error"
+            )
         manager_options: dict[str, Any] = {}
         if master_dynamic_tools is not None:
             manager_options["master_chat_only"] = True
-        if (
-            activity_lease is not None
-            and getattr(
-                self.app.state.acp_manager,
-                "supports_activity_guardian",
-                False,
-            )
+        if activity_lease is not None and getattr(
+            self.app.state.acp_manager,
+            "supports_activity_guardian",
+            False,
         ):
             manager_options["activity_lease"] = activity_lease
             manager_options["cache_scope"] = activity_scope

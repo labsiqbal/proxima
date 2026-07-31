@@ -146,7 +146,9 @@ class TerminalSession:
     def resize(self, rows: int, cols: int) -> None:
         if self.fd is not None:
             try:
-                fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+                fcntl.ioctl(
+                    self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0)
+                )
             except OSError:
                 pass
 

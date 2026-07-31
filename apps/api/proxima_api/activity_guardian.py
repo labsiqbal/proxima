@@ -101,7 +101,9 @@ def _descendants(parent: int) -> set[int]:
             continue
         try:
             status = (item / "status").read_text(encoding="utf-8")
-            line = next(value for value in status.splitlines() if value.startswith("PPid:"))
+            line = next(
+                value for value in status.splitlines() if value.startswith("PPid:")
+            )
             ppid = int(line.split(":", 1)[1])
         except (OSError, StopIteration, ValueError):
             continue
@@ -185,9 +187,7 @@ def _process_start_identity(pid: int) -> str | None:
         finally:
             close_handle(handle)
     try:
-        fields = Path(f"/proc/{pid}/stat").read_text(
-            encoding="utf-8"
-        ).split()
+        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
     except OSError:
         return None
     return fields[21] if len(fields) > 21 else None
@@ -440,9 +440,7 @@ def _run_writer(
             time.sleep(3600)
     os.close(activity_fd)
     if job is not None:
-        ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(
-            ctypes.c_void_p(job)
-        )
+        ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(ctypes.c_void_p(job))
     return int(result)
 
 

@@ -1485,9 +1485,7 @@ def connect(
 ) -> sqlite3.Connection:
     db_path = Path(path)
     dynamically_fenced = deny_writes or writes_fenced is not None
-    initially_fenced = deny_writes or (
-        writes_fenced is not None and writes_fenced()
-    )
+    initially_fenced = deny_writes or (writes_fenced is not None and writes_fenced())
     connect_kwargs: dict[str, Any] = {
         "check_same_thread": False,
         "isolation_level": None,
@@ -1561,15 +1559,11 @@ def connect(
         ) -> int:
             if action not in denied:
                 return sqlite3.SQLITE_OK
-            if deny_writes or (
-                writes_fenced is not None and writes_fenced()
-            ):
+            if deny_writes or (writes_fenced is not None and writes_fenced()):
                 return sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK
 
-        conn.set_authorizer(
-            authorize
-        )
+        conn.set_authorizer(authorize)
     if not read_only and not initially_fenced:
         try:
             conn.execute("PRAGMA journal_mode = WAL")
@@ -1611,9 +1605,15 @@ def _ensure_prompt_collaborations(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_session ON prompt_collaborations(session_id, id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_parent ON prompt_collaborations(parent_run_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_synthesis ON prompt_collaborations(synthesis_run_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_session ON prompt_collaborations(session_id, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_parent ON prompt_collaborations(parent_run_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prompt_collaborations_synthesis ON prompt_collaborations(synthesis_run_id)"
+    )
 
 
 def _ensure_message_reviews(conn: sqlite3.Connection) -> None:
@@ -1645,9 +1645,15 @@ def _ensure_message_reviews(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_message_reviews_source ON message_reviews(source_message_id, id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_message_reviews_session ON message_reviews(session_id, id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_message_reviews_run ON message_reviews(run_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_message_reviews_source ON message_reviews(source_message_id, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_message_reviews_session ON message_reviews(session_id, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_message_reviews_run ON message_reviews(run_id)"
+    )
 
 
 def _ensure_node_states(conn: sqlite3.Connection) -> None:
@@ -1673,7 +1679,9 @@ def _ensure_node_states(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_node_states_job ON node_states(job_id, status)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_node_states_job ON node_states(job_id, status)"
+    )
 
 
 def backfill_project_path_identities(conn: sqlite3.Connection) -> None:
@@ -1682,9 +1690,7 @@ def backfill_project_path_identities(conn: sqlite3.Connection) -> None:
     ).fetchone()
     if table is None:
         return
-    columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
-    }
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if not {"id", "path", "path_identity"}.issubset(columns):
         return
     for row in conn.execute(
@@ -1707,16 +1713,32 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _ensure_node_states(conn)
     _add_column(conn, "users", "password_hash", "password_hash TEXT")
     _add_column(conn, "users", "password_set_at", "password_set_at TEXT")
-    _add_column(conn, "projects", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'")
+    _add_column(
+        conn, "projects", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'"
+    )
     _add_column(conn, "projects", "path_identity", "path_identity TEXT")
     backfill_project_path_identities(conn)
-    _add_column(conn, "sessions", "profile_id", "profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL")
-    _add_column(conn, "sessions", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'")
+    _add_column(
+        conn,
+        "sessions",
+        "profile_id",
+        "profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL",
+    )
+    _add_column(
+        conn, "sessions", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'"
+    )
     _add_column(conn, "sessions", "mode", "mode TEXT NOT NULL DEFAULT 'chat'")
     _add_column(conn, "sessions", "job_id", "job_id INTEGER")
     _add_column(conn, "sessions", "workflow_id", "workflow_id INTEGER")
-    _add_column(conn, "sessions", "manual_title", "manual_title INTEGER NOT NULL DEFAULT 0")
-    _add_column(conn, "sessions", "produced_artifacts", "produced_artifacts TEXT NOT NULL DEFAULT '[]'")
+    _add_column(
+        conn, "sessions", "manual_title", "manual_title INTEGER NOT NULL DEFAULT 0"
+    )
+    _add_column(
+        conn,
+        "sessions",
+        "produced_artifacts",
+        "produced_artifacts TEXT NOT NULL DEFAULT '[]'",
+    )
     _add_column(conn, "workflows", "inputs", "inputs TEXT NOT NULL DEFAULT '[]'")
     _add_column(conn, "workflows", "graph", "graph TEXT")
     _add_column(conn, "workflows", "pre_archive_status", "pre_archive_status TEXT")
@@ -1724,7 +1746,12 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "jobs", "engine", "engine TEXT NOT NULL DEFAULT 'linear'")
     _add_column(conn, "jobs", "graph", "graph TEXT")
     _add_column(conn, "runs", "heartbeat_at", "heartbeat_at TEXT")
-    _add_column(conn, "profiles", "runner_id", f"runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}'")
+    _add_column(
+        conn,
+        "profiles",
+        "runner_id",
+        f"runner_id TEXT NOT NULL DEFAULT '{FALLBACK_RUNNER}'",
+    )
     _add_column(conn, "profiles", "system_kind", "system_kind TEXT")
     _add_column(conn, "jobs", "blocked_reason", "blocked_reason TEXT")
     job_columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
@@ -1742,18 +1769,23 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "profiles", "capabilities", "capabilities TEXT")
     _add_column(conn, "messages", "author", "author TEXT")
     _add_column(conn, "messages", "run_id", "run_id INTEGER")
-    _add_column(conn, "messages", "output_links", "output_links TEXT NOT NULL DEFAULT '[]'")
+    _add_column(
+        conn, "messages", "output_links", "output_links TEXT NOT NULL DEFAULT '[]'"
+    )
     _add_column(conn, "runs", "kind", "kind TEXT NOT NULL DEFAULT 'chat'")
     _add_column(conn, "runs", "collaboration_id", "collaboration_id INTEGER")
     _add_column(conn, "runs", "collaboration_role", "collaboration_role TEXT")
     _add_column(conn, "message_reviews", "merge_transcript", "merge_transcript TEXT")
-    _add_column(conn, "message_reviews", "source_original_content", "source_original_content TEXT")
+    _add_column(
+        conn,
+        "message_reviews",
+        "source_original_content",
+        "source_original_content TEXT",
+    )
     _add_column(conn, "message_reviews", "applied_at", "applied_at TEXT")
     if "task_recovery_corrections" in {
         row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        )
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }:
         _add_column(
             conn,
@@ -1777,12 +1809,15 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
             "CHECK (last_successor_task_event_id "
             ">= first_successor_task_event_id)",
         )
-        if conn.execute(
-            "SELECT 1 FROM task_recovery_corrections "
-            "WHERE marker_kind = 'aggregate' "
-            "AND state IN ('pending', 'failed_attribution') "
-            "GROUP BY job_id HAVING COUNT(*) > 1 LIMIT 1"
-        ).fetchone() is None:
+        if (
+            conn.execute(
+                "SELECT 1 FROM task_recovery_corrections "
+                "WHERE marker_kind = 'aggregate' "
+                "AND state IN ('pending', 'failed_attribution') "
+                "GROUP BY job_id HAVING COUNT(*) > 1 LIMIT 1"
+            ).fetchone()
+            is None
+        ):
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS "
                 "uq_task_recovery_corrections_active_job "
@@ -1809,7 +1844,9 @@ def _cleanup_orphan_agent_sessions(conn: sqlite3.Connection) -> int:
     orphan rows from before that lifecycle was reliable. Leaving them violates
     PRAGMA foreign_key_check and can point a future agent load at a deleted chat.
     """
-    if "agent_sessions" not in {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}:
+    if "agent_sessions" not in {
+        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }:
         return 0
     cur = conn.execute(
         "DELETE FROM agent_sessions "
@@ -1818,7 +1855,12 @@ def _cleanup_orphan_agent_sessions(conn: sqlite3.Connection) -> int:
     return int(cur.rowcount or 0)
 
 
-def init_db(conn: sqlite3.Connection, seed_users: list[dict[str, str]] | None = None, hermes_home_factory: Any | None = None, source_hermes_home: str | None = None) -> None:
+def init_db(
+    conn: sqlite3.Connection,
+    seed_users: list[dict[str, str]] | None = None,
+    hermes_home_factory: Any | None = None,
+    source_hermes_home: str | None = None,
+) -> None:
     conn.executescript(SCHEMA)
     migrate_existing(conn)
     from .auth import hash_password, iso_now
@@ -1826,7 +1868,9 @@ def init_db(conn: sqlite3.Connection, seed_users: list[dict[str, str]] | None = 
     for user in seed_users or []:
         # Password-less by default (single-user owner is created without a password;
         # they set one via the setup flow). Only seed a hash if one is explicitly given.
-        password_hash = user.get("password_hash") or (hash_password(user["password"]) if user.get("password") else None)
+        password_hash = user.get("password_hash") or (
+            hash_password(user["password"]) if user.get("password") else None
+        )
         conn.execute(
             """
             INSERT OR IGNORE INTO users(username, os_user, role, password_hash, password_set_at)
@@ -1840,13 +1884,21 @@ def init_db(conn: sqlite3.Connection, seed_users: list[dict[str, str]] | None = 
                 iso_now() if password_hash else None,
             ),
         )
-        row = conn.execute("SELECT * FROM users WHERE username = ?", (user["username"],)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM users WHERE username = ?", (user["username"],)
+        ).fetchone()
         if row and hermes_home_factory:
-            exists = conn.execute("SELECT id FROM profiles WHERE user_id = ?", (row["id"],)).fetchone()
+            exists = conn.execute(
+                "SELECT id FROM profiles WHERE user_id = ?", (row["id"],)
+            ).fetchone()
             if not exists:
                 home = hermes_home_factory(row["username"], "default")
                 Path(home).mkdir(parents=True, exist_ok=True)
-                _source = Path(source_hermes_home) if source_hermes_home else Path(os.path.expanduser("~/.hermes"))
+                _source = (
+                    Path(source_hermes_home)
+                    if source_hermes_home
+                    else Path(os.path.expanduser("~/.hermes"))
+                )
                 seed_hermes_home(_source, Path(home))
                 conn.execute(
                     "INSERT INTO profiles(user_id, slug, name, hermes_home, is_default) VALUES (?, 'default', 'Default', ?, 1)",

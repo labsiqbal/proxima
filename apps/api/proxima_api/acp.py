@@ -6,6 +6,7 @@ tool events without coupling the run layer to a vendor-specific gateway.
 
 One AcpProcess per managed profile home hosts many ACP sessions.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -48,7 +49,13 @@ def config_sig(hermes_home: str) -> tuple:
     #   codex/grok -> config.toml.
     # Live Claude home is CLAUDE_CONFIG_DIR=~/.claude but mcpServers live in the
     # sibling ~/.claude.json (same rule as capabilities.claude_config_json).
-    for rel in ("config.yaml", "skills", ".skills_prompt_snapshot.json", ".claude.json", "config.toml"):
+    for rel in (
+        "config.yaml",
+        "skills",
+        ".skills_prompt_snapshot.json",
+        ".claude.json",
+        "config.toml",
+    ):
         try:
             if rel == ".claude.json" and base.name == ".claude":
                 path = base.parent / ".claude.json"
@@ -69,7 +76,10 @@ def _permission_timeout_outcome(options: list[dict[str, Any]]) -> dict[str, Any]
     behavior for a fully autonomous goal loop you trust."""
     action = os.environ.get("PROXIMA_ACP_TIMEOUT_ACTION", "cancel").strip().lower()
     if action in ("allow", "allow_once", "auto"):
-        allow = next((o for o in options if o.get("kind") in ("allow_always", "allow_once")), None)
+        allow = next(
+            (o for o in options if o.get("kind") in ("allow_always", "allow_once")),
+            None,
+        )
         if allow:
             return {"outcome": {"outcome": "selected", "optionId": allow["optionId"]}}
     return {"outcome": {"outcome": "cancelled"}}
@@ -130,7 +140,6 @@ def _enrich_runner_error(text: str) -> str:
     return f"{body.rstrip('. ')}. {hint}"
 
 
-
 def _rpc_error_text(error: Any) -> str:
     if error is None:
         return ""
@@ -173,12 +182,20 @@ def _rpc_error_from_dict(err: dict[str, Any]) -> str:
         with suppress(Exception):
             inner = json.loads(message)
             if isinstance(inner, dict):
-                nested = _rpc_error_from_dict(inner.get("error") if isinstance(inner.get("error"), dict) else inner)
+                nested = _rpc_error_from_dict(
+                    inner.get("error")
+                    if isinstance(inner.get("error"), dict)
+                    else inner
+                )
                 if nested:
                     return nested
     if details:
         # Prefer the specific reason when the top-level message is a generic shell.
-        if not message or message.lower() in {"internal error", "error", "server error"}:
+        if not message or message.lower() in {
+            "internal error",
+            "error",
+            "server error",
+        }:
             return details
         if details.lower() not in message.lower():
             return f"{message}: {details}"
@@ -211,9 +228,11 @@ class AcpProcess:
         self.writer_tree: GuardedWriterTree | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
-        self._handlers: dict[str, UpdateHandler] = {}   # sessionId -> update handler
+        self._handlers: dict[str, UpdateHandler] = {}  # sessionId -> update handler
         self._perm_futures: dict[str, asyncio.Future] = {}  # request_id -> user choice
-        self._permission_handlers: dict[str, Any] = {}  # sessionId -> callback(session_id, request_id, options, params)
+        self._permission_handlers: dict[
+            str, Any
+        ] = {}  # sessionId -> callback(session_id, request_id, options, params)
         self._reader: asyncio.Task | None = None
         self._stderr_reader: asyncio.Task | None = None
         self._stderr_lines: deque[str] = deque(maxlen=60)
@@ -259,8 +278,12 @@ class AcpProcess:
             argv, guard_options = self.activity_lease.guard_process(argv)
         self.proc = await asyncio.create_subprocess_exec(
             *argv,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, env=env, cwd=self.cwd, limit=READ_LIMIT,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=self.cwd,
+            limit=READ_LIMIT,
             **guard_options,
         )
         if self.activity_lease is not None:
@@ -270,9 +293,7 @@ class AcpProcess:
                 self.activity_lease,
                 launcher_pid=proc_pid,
                 launcher_start=(
-                    process_start_identity(proc_pid)
-                    if proc_pid is not None
-                    else None
+                    process_start_identity(proc_pid) if proc_pid is not None else None
                 ),
             )
             try:
@@ -285,11 +306,23 @@ class AcpProcess:
             # Bound the handshake: a spawned-but-silent agent must not hang here
             # forever. On ANY failure tear down the subprocess + reader tasks —
             # we aren't tracked by the manager yet, so nothing else would reap them.
-            init_res = await asyncio.wait_for(self._request("initialize", {"protocolVersion": 1, "clientCapabilities": {}}), timeout=60)
+            init_res = await asyncio.wait_for(
+                self._request(
+                    "initialize", {"protocolVersion": 1, "clientCapabilities": {}}
+                ),
+                timeout=60,
+            )
             # Does this agent accept image content blocks in session/prompt? Only send
             # them if it advertises the capability, else fall back to text-only.
             try:
-                self._image_capable = bool((((init_res or {}).get("agentCapabilities") or {}).get("promptCapabilities") or {}).get("image"))
+                self._image_capable = bool(
+                    (
+                        ((init_res or {}).get("agentCapabilities") or {}).get(
+                            "promptCapabilities"
+                        )
+                        or {}
+                    ).get("image")
+                )
             except Exception:
                 self._image_capable = False
         except BaseException as start_exc:
@@ -416,9 +449,7 @@ class AcpProcess:
             return True
         return False
 
-    def deny_permission(
-        self, request_id: str, options: list[dict[str, Any]]
-    ) -> bool:
+    def deny_permission(self, request_id: str, options: list[dict[str, Any]]) -> bool:
         reject = next(
             (
                 option
@@ -440,14 +471,25 @@ class AcpProcess:
         result: dict[str, Any]
         if method == "session/request_permission":
             options = params.get("options", [])
-            allow = next((o for o in options if o.get("kind") in ("allow_always", "allow_once")), None)
+            allow = next(
+                (o for o in options if o.get("kind") in ("allow_always", "allow_once")),
+                None,
+            )
             if allow:
-                result = {"outcome": {"outcome": "selected", "optionId": allow["optionId"]}}
+                result = {
+                    "outcome": {"outcome": "selected", "optionId": allow["optionId"]}
+                }
             else:
                 result = {"outcome": {"outcome": "cancelled"}}
         else:
             # Unsupported agent->client request (e.g. fs/* we didn't advertise).
-            self._send({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": "unsupported"}})
+            self._send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": msg["id"],
+                    "error": {"code": -32601, "message": "unsupported"},
+                }
+            )
             return
         self._send({"jsonrpc": "2.0", "id": msg["id"], "result": result})
 
@@ -470,9 +512,19 @@ class AcpProcess:
         return res["sessionId"]
 
     async def load_session(self, session_id: str, cwd: str) -> None:
-        await self._request("session/load", {"sessionId": session_id, "cwd": cwd, "mcpServers": []})
+        await self._request(
+            "session/load", {"sessionId": session_id, "cwd": cwd, "mcpServers": []}
+        )
 
-    async def prompt(self, session_id: str, text: str, on_update: UpdateHandler, on_permission=None, timeout: float = 600, images: list[tuple[bytes, str]] | None = None) -> str:
+    async def prompt(
+        self,
+        session_id: str,
+        text: str,
+        on_update: UpdateHandler,
+        on_permission=None,
+        timeout: float = 600,
+        images: list[tuple[bytes, str]] | None = None,
+    ) -> str:
         self._handlers[session_id] = on_update
         if on_permission:
             self._permission_handlers[session_id] = on_permission
@@ -482,10 +534,19 @@ class AcpProcess:
             # accepts them (capability from initialize) — otherwise a runner could choke.
             if images and getattr(self, "_image_capable", False):
                 import base64 as _b64
+
                 for raw, mime in images:
-                    content.append({"type": "image", "mimeType": mime or "image/png", "data": _b64.b64encode(raw).decode()})
+                    content.append(
+                        {
+                            "type": "image",
+                            "mimeType": mime or "image/png",
+                            "data": _b64.b64encode(raw).decode(),
+                        }
+                    )
             res = await asyncio.wait_for(
-                self._request("session/prompt", {"sessionId": session_id, "prompt": content}),
+                self._request(
+                    "session/prompt", {"sessionId": session_id, "prompt": content}
+                ),
                 timeout=timeout,
             )
             return res.get("stopReason", "end_turn")
@@ -496,7 +557,13 @@ class AcpProcess:
 
     def cancel(self, session_id: str) -> None:
         try:
-            self._send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}})
+            self._send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "session/cancel",
+                    "params": {"sessionId": session_id},
+                }
+            )
         except Exception:
             pass
 
@@ -519,9 +586,7 @@ class AcpProcess:
                 if tree is not None
                 else (getattr(self.proc, "pid", None) if self.proc else None)
             ),
-            start_identity=(
-                tree.launcher_start if tree is not None else None
-            ),
+            start_identity=(tree.launcher_start if tree is not None else None),
         )
 
     async def stop(self) -> None:
@@ -559,9 +624,7 @@ class AcpProcess:
                 except BaseException as exc:
                     if failure is None:
                         failure = exc
-            self._started = bool(
-                self.proc is not None and self.proc.returncode is None
-            )
+            self._started = bool(self.proc is not None and self.proc.returncode is None)
             tree_clear = True
             if self.writer_tree is not None:
                 try:
@@ -572,9 +635,7 @@ class AcpProcess:
             if failure is not None:
                 raise failure
             if not tree_clear:
-                raise RuntimeError(
-                    "ACP runner process tree exit was not verified"
-                )
+                raise RuntimeError("ACP runner process tree exit was not verified")
         finally:
             self._retain_activity_for_unproven_tree()
 
@@ -586,6 +647,7 @@ def _process_class(spec):
     lives in the spec, not in run-layer logic."""
     if getattr(spec, "protocol", "acp") == "codex-app-server":
         from .codex_appserver import CodexAppServerProcess
+
         return CodexAppServerProcess
     return AcpProcess
 
@@ -661,9 +723,7 @@ class AcpManager:
                 tree_clear = False
         if process is not None and process.returncode is None:
             self._finish_effect_lease(lease, verified=False)
-            raise _attach_tree(
-                RuntimeError("runner process exit was not verified")
-            )
+            raise _attach_tree(RuntimeError("runner process exit was not verified"))
         if not tree_clear:
             self._finish_effect_lease(lease, verified=False)
             raise _attach_tree(
@@ -692,10 +752,7 @@ class AcpManager:
         async with self._lock:
             proc = self._procs.get(key)
             if proc is not None:
-                if (
-                    proc._started
-                    and proc.config_sig == config_sig(home)
-                ):
+                if proc._started and proc.config_sig == config_sig(home):
                     return proc
                 logger.info(
                     "acp: recycling unavailable or stale process for %s",
@@ -779,9 +836,7 @@ class AcpManager:
                                 else getattr(process, "pid", None)
                             ),
                             start_identity=(
-                                tree.launcher_start
-                                if tree is not None
-                                else None
+                                tree.launcher_start if tree is not None else None
                             ),
                         )
                 self._finish_effect_lease(lease, verified=verified)
@@ -844,16 +899,9 @@ class AcpManager:
             self._procs.clear()
             self._effect_leases.clear()
         results = await asyncio.gather(
-            *(
-                self._stop_detached(proc, lease)
-                for proc, lease in processes
-            ),
+            *(self._stop_detached(proc, lease) for proc, lease in processes),
             return_exceptions=True,
         )
-        failures = [
-            result
-            for result in results
-            if isinstance(result, BaseException)
-        ]
+        failures = [result for result in results if isinstance(result, BaseException)]
         if failures:
             raise RuntimeError("runner containment shutdown failed") from failures[0]

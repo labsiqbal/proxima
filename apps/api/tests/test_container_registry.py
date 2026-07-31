@@ -25,6 +25,7 @@ from proxima_api import (
     ops_publication,
     scripts_library,
 )
+from proxima_api.container_activity import _MUTATION_LOCK_DEPTH
 from proxima_api.container_registry import (
     ContainerBoundaryError,
     migrate_container_ops,
@@ -75,9 +76,7 @@ def test_container_ownership_modules_do_not_depend_on_registry():
         ops_filesystem,
         ops_publication,
     ):
-        tree = ast.parse(
-            Path(module.__file__).read_text(encoding="utf-8")
-        )
+        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
         imported = {
             alias.name
             for node in ast.walk(tree)
@@ -88,10 +87,7 @@ def test_container_ownership_modules_do_not_depend_on_registry():
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom)
         }
-        assert all(
-            not name.endswith("container_registry")
-            for name in imported
-        )
+        assert all(not name.endswith("container_registry") for name in imported)
 
 
 def _v1_manifest(root: Path, *names: str) -> dict:
@@ -197,20 +193,19 @@ def test_clean_legacy_ops_migration_preserves_bytes_and_is_idempotent(tmp_path: 
     ).fetchone()
     assert marker["status"] == "complete"
     manifest = json.loads(marker["manifest_json"])
-    canonical = json.dumps(
-        manifest, sort_keys=True, separators=(",", ":")
-    ).encode()
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
     assert marker["manifest_hash"] == hashlib.sha256(canonical).hexdigest()
     assert all(entry["sha256"] for entry in manifest["entries"])
     planned_doc = manifest["container_doc"]
     assert planned_doc["path"] == "container.md"
     assert planned_doc["strategy"] == "generate"
-    assert planned_doc["sha256"] == hashlib.sha256(
-        planned_doc["content"].encode("utf-8")
-    ).hexdigest()
-    assert (root / "ops" / "container.md").read_text(
-        encoding="utf-8"
-    ) == planned_doc["content"]
+    assert (
+        planned_doc["sha256"]
+        == hashlib.sha256(planned_doc["content"].encode("utf-8")).hexdigest()
+    )
+    assert (root / "ops" / "container.md").read_text(encoding="utf-8") == planned_doc[
+        "content"
+    ]
     before = {
         path.relative_to(root).as_posix(): path.read_bytes()
         for path in (root / "ops").rglob("*")
@@ -243,17 +238,13 @@ def test_v1_moving_manifest_upgrades_unambiguous_partial_layouts(
         for name in moved:
             (root / name).rename(root / "ops" / name)
         (root / "ops" / "container.md").write_text(
-            container_registry._container_doc_text(
-                f"V1-Partial-{len(moved)}"
-            ),
+            container_registry._container_doc_text(f"V1-Partial-{len(moved)}"),
             encoding="utf-8",
         )
     _store_moving_manifest(conn, container_id, manifest)
 
     assert migrate_container_ops(conn, container_id) is True
-    assert (root / "ops" / "wiki" / "data.txt").read_text(
-        encoding="utf-8"
-    ) == "wiki"
+    assert (root / "ops" / "wiki" / "data.txt").read_text(encoding="utf-8") == "wiki"
     assert (root / "ops" / "artifacts" / "data.txt").read_text(
         encoding="utf-8"
     ) == "artifact"
@@ -299,20 +290,13 @@ def test_v5_planned_directory_manifest_upgrades_with_empty_ownership(
 
     assert migrate_container_ops(conn, container_id) is True
     marker = conn.execute(
-        "SELECT manifest_json FROM container_ops_migrations "
-        "WHERE container_id = ?",
+        "SELECT manifest_json FROM container_ops_migrations WHERE container_id = ?",
         (container_id,),
     ).fetchone()
     upgraded = json.loads(marker["manifest_json"])
-    wiki = next(
-        entry
-        for entry in upgraded["entries"]
-        if entry["name"] == "wiki"
-    )
+    wiki = next(entry for entry in upgraded["entries"] if entry["name"] == "wiki")
     assert upgraded["version"] == 6
-    assert set(
-        wiki["publication"]["destination_directories"]
-    ) == {"."}
+    assert set(wiki["publication"]["destination_directories"]) == {"."}
 
 
 def test_v5_partial_directory_without_identity_stops_for_owner(
@@ -335,11 +319,7 @@ def test_v5_partial_directory_without_identity_stops_for_owner(
         container_registry.get_container(conn, container_id),
     )
     manifest["version"] = 5
-    wiki = next(
-        entry
-        for entry in manifest["entries"]
-        if entry["name"] == "wiki"
-    )
+    wiki = next(entry for entry in manifest["entries"] if entry["name"] == "wiki")
     wiki["publication"]["phase"] = "publishing"
     for entry in manifest["entries"]:
         entry["publication"].pop("destination_directories")
@@ -376,9 +356,7 @@ def test_v1_completed_moves_upgrade_only_with_exact_generated_document(tmp_path:
     _store_moving_manifest(conn, container_id, manifest)
 
     assert migrate_container_ops(conn, container_id) is True
-    assert (root / "ops" / "container.md").read_text(
-        encoding="utf-8"
-    ) == generated
+    assert (root / "ops" / "container.md").read_text(encoding="utf-8") == generated
 
 
 def test_v1_planned_document_metadata_upgrades_partial_move(tmp_path: Path):
@@ -477,16 +455,22 @@ def test_collision_leaves_legacy_row_and_every_file_unchanged(tmp_path: Path):
         if path.is_file()
     }
     assert after == before
-    assert conn.execute(
-        "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
-        (container_id,),
-    ).fetchone()["rel_path"] == "."
+    assert (
+        conn.execute(
+            "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+            (container_id,),
+        ).fetchone()["rel_path"]
+        == "."
+    )
     attention = conn.execute(
         "SELECT status, target_json FROM attention_items WHERE source_key = ?",
         (f"container-ops-migration:{container_id}",),
     ).fetchone()
     assert attention["status"] == "open"
-    assert "physical Ops root is not empty" in json.loads(attention["target_json"])["reason"]
+    assert (
+        "physical Ops root is not empty"
+        in json.loads(attention["target_json"])["reason"]
+    )
     assert migrate_container_ops(conn, container_id) is False
     rerun = {
         path.relative_to(root).as_posix(): path.read_bytes()
@@ -504,10 +488,17 @@ def test_collision_recovery_detail_is_exact_and_read_only(tmp_path: Path):
     (root / "ops" / "wiki" / "physical.md").write_text("physical", encoding="utf-8")
     api, headers = _api(tmp_path)
 
+    roots = api.get("/api/fs/dirs", headers=headers)
+    assert roots.status_code == 200, roots.text
     linked = api.post(
         "/api/projects/link",
         headers=headers,
-        json={"path": str(root), "name": "Collision detail", "slug": "collision-detail"},
+        json={
+            "path": str(root),
+            "root_id": roots.json()["root_id"],
+            "name": "Collision detail",
+            "slug": "collision-detail",
+        },
     )
     assert linked.status_code == 201, linked.text
     before = {
@@ -584,13 +575,18 @@ def test_partial_move_recovers_from_durable_manifest(tmp_path: Path, monkeypatch
     assert migrate_container_ops(conn, container_id) is True
     assert (root / "ops" / "wiki" / "data.bin").read_bytes() == b"wiki"
     assert (root / "ops" / "artifacts" / "data.bin").read_bytes() == b"artifact"
-    assert conn.execute(
-        "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
-        (container_id,),
-    ).fetchone()["rel_path"] == "ops"
+    assert (
+        conn.execute(
+            "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+            (container_id,),
+        ).fetchone()["rel_path"]
+        == "ops"
+    )
 
 
-def test_area_validation_rejects_escape_duplicate_overlap_and_ops_symlink(tmp_path: Path):
+def test_area_validation_rejects_escape_duplicate_overlap_and_ops_symlink(
+    tmp_path: Path,
+):
     conn = _database(tmp_path)
     root = tmp_path / "boundaries"
     container_id = _legacy_container(conn, root, "boundaries")
@@ -605,7 +601,10 @@ def test_area_validation_rejects_escape_duplicate_overlap_and_ops_symlink(tmp_pa
         "VALUES (?, 'code', 'repo', 'manual')",
         (container_id,),
     ).lastrowid
-    assert validated_area_roots(conn, container_id)[int(first)] == (root / "repo").resolve()
+    assert (
+        validated_area_roots(conn, container_id)[int(first)]
+        == (root / "repo").resolve()
+    )
 
     (root / "repo" / "nested").mkdir()
     nested = conn.execute(
@@ -696,13 +695,18 @@ def test_migrate_isolates_unhealthy_already_migrated_container(tmp_path: Path):
         (f"container-ops-migration:{missing_id}",),
     ).fetchone()
     assert attention is not None and attention["status"] == "open"
-    assert conn.execute(
-        "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
-        (healthy_id,),
-    ).fetchone()["rel_path"] == "ops"
+    assert (
+        conn.execute(
+            "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+            (healthy_id,),
+        ).fetchone()["rel_path"]
+        == "ops"
+    )
 
 
-def _api(tmp_path: Path, database_path: Path | None = None) -> tuple[TestClient, dict[str, str]]:
+def _api(
+    tmp_path: Path, database_path: Path | None = None
+) -> tuple[TestClient, dict[str, str]]:
     app = create_app(
         {
             "database_path": str(database_path or tmp_path / "api.db"),
@@ -760,9 +764,12 @@ def test_ops_migration_detail_rejects_symlink_without_following_it(tmp_path: Pat
     body = detail.json()
     assert body["retry_safe"] is False
     assert "symlink" in body["stored_reason"]
-    assert next(
-        item for item in body["legacy_owned_paths"] if item["path"] == "wiki"
-    )["legacy_state"] == "symlink"
+    assert (
+        next(item for item in body["legacy_owned_paths"] if item["path"] == "wiki")[
+            "legacy_state"
+        ]
+        == "symlink"
+    )
     retry = api.post(
         "/api/projects/symlink-layout/ops-migration/retry",
         headers=headers,
@@ -771,7 +778,9 @@ def test_ops_migration_detail_rejects_symlink_without_following_it(tmp_path: Pat
     assert (outside / "do-not-read.md").read_bytes() == before
 
 
-def test_ops_migration_detail_reports_repo_overlap_and_keeps_legacy_active(tmp_path: Path):
+def test_ops_migration_detail_reports_repo_overlap_and_keeps_legacy_active(
+    tmp_path: Path,
+):
     api, headers = _api(tmp_path)
     root = tmp_path / "overlap-layout"
     container_id = _owned_api_legacy(api, root, "overlap-layout")
@@ -848,9 +857,9 @@ def test_interrupted_move_is_visible_and_owner_retry_resolves_attention(
     assert resolved["attention"]["status"] == "resolved"
     assert resolved["retry_safe"] is False
     assert (root / "ops" / "wiki" / "data.txt").read_text(encoding="utf-8") == "wiki"
-    assert (
-        root / "ops" / "artifacts" / "data.txt"
-    ).read_text(encoding="utf-8") == "artifact"
+    assert (root / "ops" / "artifacts" / "data.txt").read_text(
+        encoding="utf-8"
+    ) == "artifact"
 
 
 def test_interrupted_retry_rechecks_late_code_area_before_any_remaining_move(
@@ -899,8 +908,13 @@ def test_interrupted_retry_rechecks_late_code_area_before_any_remaining_move(
         headers=headers,
     )
     assert retry.status_code == 409
+    # Non-destructive publication may already own ops/artifacts before the
+    # interrupted source-retention rename. Unsafe retry must leave the still-
+    # legacy source bytes untouched and must not complete the migration.
     assert (root / "artifacts" / "data.txt").read_text(encoding="utf-8") == "artifact"
-    assert not (root / "ops" / "artifacts").exists()
+    assert (root / "artifacts").exists()
+    assert retry.json()["detail"]["migration"]["phase"] == "moving"
+    assert retry.json()["detail"]["migration"]["active_ops_path"] == "."
 
 
 def test_interrupted_retry_rejects_late_physical_ops_root_area_before_any_move(
@@ -950,7 +964,9 @@ def test_interrupted_retry_rejects_late_physical_ops_root_area_before_any_move(
     )
     assert retry.status_code == 409
     assert (root / "artifacts" / "data.txt").read_text(encoding="utf-8") == "artifact"
-    assert not (root / "ops" / "artifacts").exists()
+    assert (root / "artifacts").exists()
+    assert retry.json()["detail"]["migration"]["phase"] == "moving"
+    assert retry.json()["detail"]["migration"]["active_ops_path"] == "."
 
 
 def test_interrupted_retry_rejects_container_doc_symlink_before_remaining_move(
@@ -1000,7 +1016,9 @@ def test_interrupted_retry_rejects_container_doc_symlink_before_remaining_move(
     )
     assert retry.status_code == 409
     assert (root / "artifacts" / "data.txt").read_text(encoding="utf-8") == "artifact"
-    assert not (root / "ops" / "artifacts").exists()
+    assert (root / "artifacts").exists()
+    assert retry.json()["detail"]["migration"]["phase"] == "moving"
+    assert retry.json()["detail"]["migration"]["active_ops_path"] == "."
     assert outside.read_text(encoding="utf-8") == "outside"
 
 
@@ -1041,8 +1059,12 @@ def test_interrupted_retry_rejects_changed_container_doc_before_remaining_move(
     )
     assert detail.status_code == 200, detail.text
     assert detail.json()["retry_safe"] is False
-    assert "container.md" in detail.json()["validation_reason"]
-    assert "changed" in detail.json()["validation_reason"]
+    reason = detail.json()["validation_reason"] or ""
+    assert "container.md" in reason
+    # Generated docs publish via hardlink to the recovery inode, so rewriting
+    # container.md also mutates the recovery artifact. Fail closed either with
+    # the direct changed-hash reason or recovery ownership ambiguity.
+    assert "changed" in reason or "ambiguous ownership" in reason
 
     retry = api.post(
         "/api/projects/container-doc-tampering/ops-migration/retry",
@@ -1050,7 +1072,9 @@ def test_interrupted_retry_rejects_changed_container_doc_before_remaining_move(
     )
     assert retry.status_code == 409
     assert (root / "artifacts" / "data.txt").read_text(encoding="utf-8") == "artifact"
-    assert not (root / "ops" / "artifacts").exists()
+    assert (root / "artifacts").exists()
+    assert retry.json()["detail"]["migration"]["phase"] == "moving"
+    assert retry.json()["detail"]["migration"]["active_ops_path"] == "."
     assert (root / "ops" / "container.md").read_text(
         encoding="utf-8"
     ) == "# Unplanned authority\n"
@@ -1085,16 +1109,18 @@ def test_retry_serializes_late_area_registration_before_manifest_apply(
     real_snapshot_at = container_registry._entry_snapshot_at
     apply_entered = threading.Event()
     release_apply = threading.Event()
-    artifact_hashes = 0
 
     def pause_manifest_apply(directory_fd: int, name: str):
-        nonlocal artifact_hashes
         result = real_snapshot_at(directory_fd, name)
-        if name == "artifacts":
-            artifact_hashes += 1
-            if artifact_hashes == 2:
-                apply_entered.set()
-                assert release_apply.wait(timeout=5)
+        if name != "artifacts" or apply_entered.is_set():
+            return result
+        # Route-level inspect snapshots outside the mutation lock. Pause only
+        # once retry validation/apply holds the shared per-Container lock so
+        # late Area registration must block behind it.
+        depths = getattr(_MUTATION_LOCK_DEPTH, "values", None) or {}
+        if any(depth > 0 for depth in depths.values()):
+            apply_entered.set()
+            assert release_apply.wait(timeout=5)
         return result
 
     monkeypatch.setattr(
@@ -1457,10 +1483,7 @@ def test_activity_guardian_uses_isolated_verified_script(
         [
             sys.executable,
             "-c",
-            (
-                "from pathlib import Path; "
-                f"Path({str(target_ran)!r}).write_text('yes')"
-            ),
+            (f"from pathlib import Path; Path({str(target_ran)!r}).write_text('yes')"),
         ]
     )
     assert command[1:3] == ["-I", "-S"]
@@ -1562,11 +1585,7 @@ def test_retry_route_reports_live_project_process_without_stopping_it(
     record_dir = database.parent / f".{database.name}.container-locks"
     deadline = time.monotonic() + 5
     while (
-        not list(
-            record_dir.glob(
-                f"{container_id}.activity.*.guardian.json"
-            )
-        )
+        not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
         and time.monotonic() < deadline
     ):
         time.sleep(0.01)
@@ -1633,11 +1652,7 @@ def test_owner_retry_recovers_verified_orphan_guardian(
     record_dir = database.parent / f".{database.name}.container-locks"
     deadline = time.monotonic() + 5
     while (
-        not list(
-            record_dir.glob(
-                f"{container_id}.activity.*.guardian.json"
-            )
-        )
+        not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
         and time.monotonic() < deadline
     ):
         time.sleep(0.01)
@@ -1671,10 +1686,7 @@ def test_windows_orphan_recovery_uses_identity_bound_job(
     record_dir.mkdir(mode=0o700)
     guardian_id = "a" * 32
     job_name = f"Local\\ProximaActivity-{guardian_id}"
-    record = (
-        record_dir
-        / f"{container_id}.activity.{guardian_id}.guardian.json"
-    )
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
     record.write_text(
         json.dumps(
             {
@@ -1721,11 +1733,9 @@ def test_windows_orphan_recovery_uses_identity_bound_job(
         lambda _pid, _start: False,
     )
 
-    recovery = (
-        container_registry.recover_container_activity_guardians(
-            conn,
-            container_id,
-        )
+    recovery = container_registry.recover_container_activity_guardians(
+        conn,
+        container_id,
     )
 
     assert terminated == [job_name]
@@ -1747,10 +1757,7 @@ def test_stale_guardian_record_blocks_recovery_and_migrate(
     record_dir = tmp_path / ".proxima.db.container-locks"
     record_dir.mkdir(mode=0o700)
     guardian_id = "b" * 32
-    record = (
-        record_dir
-        / f"{container_id}.activity.{guardian_id}.guardian.json"
-    )
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
     record.write_text(
         json.dumps(
             {
@@ -1760,9 +1767,7 @@ def test_stale_guardian_record_blocks_recovery_and_migrate(
                 "owner_start": "dead-owner",
                 "python": sys.executable,
                 "guardian": str(
-                    Path(container_activity.__file__).with_name(
-                        "activity_guardian.py"
-                    )
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
                 ),
             }
         ),
@@ -1833,10 +1838,7 @@ def test_dead_sentinel_live_orphan_blocks_migrate_and_retry(
     record_dir = tmp_path / ".proxima.db.container-locks"
     record_dir.mkdir(mode=0o700)
     guardian_id = "d" * 32
-    record = (
-        record_dir
-        / f"{container_id}.activity.{guardian_id}.guardian.json"
-    )
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
     ready = tmp_path / "orphan-writer-ready"
 
     sentinel = os.fork()
@@ -1871,9 +1873,7 @@ def test_dead_sentinel_live_orphan_blocks_migrate_and_retry(
                 "owner_start": "",
                 "python": sys.executable,
                 "guardian": str(
-                    Path(container_activity.__file__).with_name(
-                        "activity_guardian.py"
-                    )
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
                 ),
             }
         ),
@@ -1896,9 +1896,7 @@ def test_dead_sentinel_live_orphan_blocks_migrate_and_retry(
         assert recovery.unresolved >= 1
         assert recovery.active == 0
         assert migrate_container_ops(conn, container_id) is False
-        assert (root / "wiki" / "note.md").read_text(
-            encoding="utf-8"
-        ) == "owner-bytes"
+        assert (root / "wiki" / "note.md").read_text(encoding="utf-8") == "owner-bytes"
         # Exclusive flock can succeed (sentinel released it) but leftover
         # record must still fail closed.
         blocked = False
@@ -1943,10 +1941,7 @@ def test_reconcile_never_unlinks_on_sentinel_death_alone(
         known_identities={2_000_000_011: "gone"},
         members_observed=False,
     )
-    assert (
-        container_activity._reconcile_recovered_guardian_record(tree)
-        is False
-    )
+    assert container_activity._reconcile_recovered_guardian_record(tree) is False
     assert record.exists()
 
 
@@ -1971,10 +1966,7 @@ def test_reconcile_never_unlinks_on_sentinel_only_observation(
         known_identities={2_000_000_021: "gone-sentinel"},
         members_observed=True,
     )
-    assert (
-        container_activity._reconcile_recovered_guardian_record(tree)
-        is False
-    )
+    assert container_activity._reconcile_recovered_guardian_record(tree) is False
     assert record.exists()
 
 
@@ -2118,10 +2110,7 @@ def test_reconcile_unlinks_only_after_observed_members_exit(
         known_identities={2_000_000_012: "gone"},
         members_observed=True,
     )
-    assert (
-        container_activity._reconcile_recovered_guardian_record(tree)
-        is True
-    )
+    assert container_activity._reconcile_recovered_guardian_record(tree) is True
     assert not record.exists()
 
 
@@ -2150,10 +2139,7 @@ def test_reconcile_retains_record_while_seeded_writer_live(
             },
             members_observed=True,
         )
-        assert (
-            container_activity._reconcile_recovered_guardian_record(tree)
-            is False
-        )
+        assert container_activity._reconcile_recovered_guardian_record(tree) is False
         assert record.exists()
     finally:
         writer.kill()
@@ -2183,10 +2169,7 @@ def test_recovery_sentinel_only_observation_keeps_missed_orphan_blocked(
     record_dir = tmp_path / ".proxima.db.container-locks"
     record_dir.mkdir(mode=0o700)
     guardian_id = "2" * 32
-    record = (
-        record_dir
-        / f"{container_id}.activity.{guardian_id}.guardian.json"
-    )
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
     ready = tmp_path / "sentinel-only-ready"
 
     sentinel = os.fork()
@@ -2222,9 +2205,7 @@ def test_recovery_sentinel_only_observation_keeps_missed_orphan_blocked(
                 "owner_start": "dead-owner",
                 "python": sys.executable,
                 "guardian": str(
-                    Path(container_activity.__file__).with_name(
-                        "activity_guardian.py"
-                    )
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
                 ),
             }
         ),
@@ -2270,9 +2251,7 @@ def test_recovery_sentinel_only_observation_keeps_missed_orphan_blocked(
         assert (sentinel, signal.SIGTERM) not in killed
         assert Path(f"/proc/{writer_pid}").exists()
         assert migrate_container_ops(conn, container_id) is False
-        assert (root / "wiki" / "note.md").read_text(
-            encoding="utf-8"
-        ) == "keep"
+        assert (root / "wiki" / "note.md").read_text(encoding="utf-8") == "keep"
     finally:
         monkeypatch.setattr(os, "kill", real_kill)
         for pid in (writer_pid, sentinel):
@@ -2309,10 +2288,7 @@ def test_recovery_child_identity_miss_keeps_record_and_blocks_migrate(
     record_dir = tmp_path / ".proxima.db.container-locks"
     record_dir.mkdir(mode=0o700)
     guardian_id = "3" * 32
-    record = (
-        record_dir
-        / f"{container_id}.activity.{guardian_id}.guardian.json"
-    )
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
     ready = tmp_path / "identity-miss-ready"
 
     sentinel = os.fork()
@@ -2348,9 +2324,7 @@ def test_recovery_child_identity_miss_keeps_record_and_blocks_migrate(
                 "owner_start": "dead-owner",
                 "python": sys.executable,
                 "guardian": str(
-                    Path(container_activity.__file__).with_name(
-                        "activity_guardian.py"
-                    )
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
                 ),
             }
         ),
@@ -2440,10 +2414,7 @@ def test_recovery_signal_then_sentinel_crash_retains_live_orphan(
     record_dir = tmp_path / ".proxima.db.container-locks"
     record_dir.mkdir(mode=0o700)
     guardian_id = "e" * 32
-    record = (
-        record_dir
-        / f"{container_id}.activity.{guardian_id}.guardian.json"
-    )
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
     ready = tmp_path / "recovery-orphan-ready"
 
     sentinel = os.fork()
@@ -2480,9 +2451,7 @@ def test_recovery_signal_then_sentinel_crash_retains_live_orphan(
                 "owner_start": "dead-owner",
                 "python": sys.executable,
                 "guardian": str(
-                    Path(container_activity.__file__).with_name(
-                        "activity_guardian.py"
-                    )
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
                 ),
             }
         ),
@@ -2532,9 +2501,7 @@ def test_recovery_signal_then_sentinel_crash_retains_live_orphan(
         assert recovery.active == 0
         assert Path(f"/proc/{writer_pid}").exists()
         assert migrate_container_ops(conn, container_id) is False
-        assert (root / "wiki" / "note.md").read_text(
-            encoding="utf-8"
-        ) == "keep"
+        assert (root / "wiki" / "note.md").read_text(encoding="utf-8") == "keep"
         blocked = False
         try:
             with container_registry.container_quiescence_lock(
@@ -2577,10 +2544,7 @@ def test_recovery_clears_record_after_delayed_observed_tree_exit(
     record_dir = tmp_path / ".proxima.db.container-locks"
     record_dir.mkdir(mode=0o700)
     guardian_id = "1" * 32
-    record = (
-        record_dir
-        / f"{container_id}.activity.{guardian_id}.guardian.json"
-    )
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
     ready = tmp_path / "delayed-exit-ready"
 
     sentinel = os.fork()
@@ -2616,9 +2580,7 @@ def test_recovery_clears_record_after_delayed_observed_tree_exit(
                 "owner_start": "dead-owner",
                 "python": sys.executable,
                 "guardian": str(
-                    Path(container_activity.__file__).with_name(
-                        "activity_guardian.py"
-                    )
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
                 ),
             }
         ),
@@ -2765,9 +2727,7 @@ def test_directory_publication_rejects_unbound_late_destination(
     )
 
     assert migrate_container_ops(conn, container_id) is False
-    assert (root / "wiki" / "keep.md").read_text(
-        encoding="utf-8"
-    ) == "legacy"
+    assert (root / "wiki" / "keep.md").read_text(encoding="utf-8") == "legacy"
     assert list((root / "ops" / "wiki").iterdir()) == []
 
 
@@ -2795,22 +2755,13 @@ def test_directory_identity_is_durable_before_content_publication(
         _name: str,
     ) -> None:
         row = conn.execute(
-            "SELECT manifest_json FROM container_ops_migrations "
-            "WHERE container_id = ?",
+            "SELECT manifest_json FROM container_ops_migrations WHERE container_id = ?",
             (container_id,),
         ).fetchone()
         manifest = json.loads(row["manifest_json"])
-        wiki = next(
-            entry
-            for entry in manifest["entries"]
-            if entry["name"] == "wiki"
-        )
-        captured.update(
-            wiki["publication"]["destination_directories"]
-        )
-        raise container_registry.OpsMigrationCollision(
-            "stop after ownership check"
-        )
+        wiki = next(entry for entry in manifest["entries"] if entry["name"] == "wiki")
+        captured.update(wiki["publication"]["destination_directories"])
+        raise container_registry.OpsMigrationCollision("stop after ownership check")
 
     monkeypatch.setattr(
         container_registry,
@@ -2864,9 +2815,9 @@ def test_generated_document_recovers_each_owned_write_stage(
         (root / "ops" / "container.md").hardlink_to(recovery_path)
 
     assert migrate_container_ops(conn, container_id) is True
-    assert (root / "ops" / "container.md").read_text(
-        encoding="utf-8"
-    ) == planned["content"]
+    assert (root / "ops" / "container.md").read_text(encoding="utf-8") == planned[
+        "content"
+    ]
     assert recovery_path.samefile(root / "ops" / "container.md")
 
 
@@ -3241,10 +3192,13 @@ def test_retry_serializes_complete_project_purge(
     assert (root / "ops" / "wiki" / "existing.md").read_text(
         encoding="utf-8"
     ) == "existing"
-    assert api.app.state.db.execute(
-        "SELECT 1 FROM projects WHERE id = ?",
-        (container_id,),
-    ).fetchone() is None
+    assert (
+        api.app.state.db.execute(
+            "SELECT 1 FROM projects WHERE id = ?",
+            (container_id,),
+        ).fetchone()
+        is None
+    )
 
 
 def test_delete_recovers_verified_orphan_guardian(tmp_path: Path):
@@ -3288,11 +3242,7 @@ def test_delete_recovers_verified_orphan_guardian(tmp_path: Path):
     record_dir = database.parent / f".{database.name}.container-locks"
     deadline = time.monotonic() + 5
     while (
-        not list(
-            record_dir.glob(
-                f"{container_id}.activity.*.guardian.json"
-            )
-        )
+        not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
         and time.monotonic() < deadline
     ):
         time.sleep(0.01)
@@ -3303,13 +3253,14 @@ def test_delete_recovers_verified_orphan_guardian(tmp_path: Path):
     )
     assert response.status_code == 200, response.text
     assert response.json() == {"ok": True, "slug": "delete-orphan-recovery"}
-    assert api.app.state.db.execute(
-        "SELECT 1 FROM projects WHERE id = ?",
-        (container_id,),
-    ).fetchone() is None
-    assert not list(
-        record_dir.glob(f"{container_id}.activity.*.guardian.json")
+    assert (
+        api.app.state.db.execute(
+            "SELECT 1 FROM projects WHERE id = ?",
+            (container_id,),
+        ).fetchone()
+        is None
     )
+    assert not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
 
 
 def test_delete_reports_live_project_process_without_stopping_it(
@@ -3333,11 +3284,7 @@ def test_delete_reports_live_project_process_without_stopping_it(
     record_dir = database.parent / f".{database.name}.container-locks"
     deadline = time.monotonic() + 5
     while (
-        not list(
-            record_dir.glob(
-                f"{container_id}.activity.*.guardian.json"
-            )
-        )
+        not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
         and time.monotonic() < deadline
     ):
         time.sleep(0.01)
@@ -3353,10 +3300,13 @@ def test_delete_reports_live_project_process_without_stopping_it(
         assert "active processes" in detail["message"]
         assert process.poll() is None
         assert root.exists()
-        assert api.app.state.db.execute(
-            "SELECT 1 FROM projects WHERE id = ?",
-            (container_id,),
-        ).fetchone() is not None
+        assert (
+            api.app.state.db.execute(
+                "SELECT 1 FROM projects WHERE id = ?",
+                (container_id,),
+            ).fetchone()
+            is not None
+        )
     finally:
         if process.poll() is None:
             process.terminate()
@@ -3376,10 +3326,7 @@ def test_delete_reports_unresolved_guardian_identity(tmp_path: Path):
     record_dir = database.parent / f".{database.name}.container-locks"
     record_dir.mkdir(mode=0o700, exist_ok=True)
     guardian_id = "d" * 32
-    record = (
-        record_dir
-        / f"{container_id}.activity.{guardian_id}.guardian.json"
-    )
+    record = record_dir / f"{container_id}.activity.{guardian_id}.guardian.json"
     record.write_text(
         json.dumps(
             {
@@ -3389,9 +3336,7 @@ def test_delete_reports_unresolved_guardian_identity(tmp_path: Path):
                 "owner_start": "dead-owner",
                 "python": sys.executable,
                 "guardian": str(
-                    Path(container_activity.__file__).with_name(
-                        "activity_guardian.py"
-                    )
+                    Path(container_activity.__file__).with_name("activity_guardian.py")
                 ),
             }
         ),
@@ -3409,10 +3354,13 @@ def test_delete_reports_unresolved_guardian_identity(tmp_path: Path):
     assert "ownership could not be verified" in detail["message"]
     assert root.exists()
     assert record.exists()
-    assert api.app.state.db.execute(
-        "SELECT 1 FROM projects WHERE id = ?",
-        (container_id,),
-    ).fetchone() is not None
+    assert (
+        api.app.state.db.execute(
+            "SELECT 1 FROM projects WHERE id = ?",
+            (container_id,),
+        ).fetchone()
+        is not None
+    )
 
 
 def test_delete_blocks_while_shared_writer_lease_is_held(tmp_path: Path):
@@ -3436,10 +3384,13 @@ def test_delete_blocks_while_shared_writer_lease_is_held(tmp_path: Path):
         assert detail["unresolved_processes"] == 0
         assert "active processes" in detail["message"]
         assert root.exists()
-        assert api.app.state.db.execute(
-            "SELECT 1 FROM projects WHERE id = ?",
-            (container_id,),
-        ).fetchone() is not None
+        assert (
+            api.app.state.db.execute(
+                "SELECT 1 FROM projects WHERE id = ?",
+                (container_id,),
+            ).fetchone()
+            is not None
+        )
     finally:
         lease.release()
 
@@ -3448,10 +3399,13 @@ def test_delete_blocks_while_shared_writer_lease_is_held(tmp_path: Path):
         headers=headers,
     )
     assert cleared.status_code == 200, cleared.text
-    assert api.app.state.db.execute(
-        "SELECT 1 FROM projects WHERE id = ?",
-        (container_id,),
-    ).fetchone() is None
+    assert (
+        api.app.state.db.execute(
+            "SELECT 1 FROM projects WHERE id = ?",
+            (container_id,),
+        ).fetchone()
+        is None
+    )
 
 
 def test_retry_serializes_design_writer_before_root_resolution(
@@ -3583,9 +3537,7 @@ def test_manifest_publication_cannot_select_swapped_source_name(
     assert parked.read_bytes() == b"manifest design"
     assert (root / "ops" / "design.md").read_bytes() == b"manifest design"
     retained = list(
-        (root / "ops").glob(
-            f"{container_registry.RETAINED_SOURCE_PREFIX}*-design.md"
-        )
+        (root / "ops").glob(f"{container_registry.RETAINED_SOURCE_PREFIX}*-design.md")
     )
     assert retained == []
 
@@ -3840,11 +3792,14 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
     assert refreshed["summary"] == "Launch workspace."
     assert refreshed["source_hash"] != registry["source_hash"]
 
-    assert api.put(
-        "/api/projects/fresh/file?path=wiki/note.md",
-        headers=headers,
-        json={"content": "# Note"},
-    ).status_code == 200
+    assert (
+        api.put(
+            "/api/projects/fresh/file?path=wiki/note.md",
+            headers=headers,
+            json={"content": "# Note"},
+        ).status_code
+        == 200
+    )
     assert (root / "ops" / "wiki" / "note.md").read_text() == "# Note"
     notes = api.get("/api/projects/fresh/wiki/all", headers=headers).json()["notes"]
     assert notes == [{"path": "note.md", "content": "# Note"}]
@@ -3860,11 +3815,16 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
         "/api/projects/fresh/artifacts?since_minutes=525600",
         headers=headers,
     ).json()["artifacts"]
-    assert any(item["path"] == "artifacts/media/images/source.png" for item in artifacts)
-    assert api.get(
-        "/api/projects/fresh/raw?path=artifacts/media/images/source.png",
-        headers=headers,
-    ).status_code == 200
+    assert any(
+        item["path"] == "artifacts/media/images/source.png" for item in artifacts
+    )
+    assert (
+        api.get(
+            "/api/projects/fresh/raw?path=artifacts/media/images/source.png",
+            headers=headers,
+        ).status_code
+        == 200
+    )
 
     design = api.post(
         "/api/projects/fresh/designs/from-image",
@@ -4051,7 +4011,9 @@ def test_archive_list_survives_unavailable_container(tmp_path: Path):
             "SELECT id FROM projects WHERE slug = 'broken'"
         ).fetchone()["id"]
     )
-    assert artifact_registry.seed_project(api.app.state.db, project_id, root / "ops") >= 1
+    assert (
+        artifact_registry.seed_project(api.app.state.db, project_id, root / "ops") >= 1
+    )
 
     shutil.rmtree(root)
 
@@ -4081,15 +4043,13 @@ def test_collision_container_keeps_legacy_ops_features_available(tmp_path: Path)
         "# Description: legacy script\n", encoding="utf-8"
     )
     (root / "ops" / "wiki").mkdir(parents=True)
-    (root / "ops" / "wiki" / "collision.md").write_text(
-        "# Collision", encoding="utf-8"
-    )
+    (root / "ops" / "wiki" / "collision.md").write_text("# Collision", encoding="utf-8")
     conn.close()
 
     api, headers = _api(tmp_path, db_path)
-    notes = api.get(
-        "/api/projects/legacy-api/wiki/all", headers=headers
-    ).json()["notes"]
+    notes = api.get("/api/projects/legacy-api/wiki/all", headers=headers).json()[
+        "notes"
+    ]
     assert notes == [{"path": "note.md", "content": "# Legacy"}]
     artifacts = api.get(
         "/api/projects/legacy-api/artifacts?since_minutes=525600",
@@ -4097,14 +4057,16 @@ def test_collision_container_keeps_legacy_ops_features_available(tmp_path: Path)
     ).json()["artifacts"]
     assert any(item["path"] == "artifacts/keep.txt" for item in artifacts)
     assert any(
-        item["type"] == "design"
-        and item["path"] == "artifacts/design/legacy"
+        item["type"] == "design" and item["path"] == "artifacts/design/legacy"
         for item in artifacts
     )
-    assert api.get(
-        "/api/projects/legacy-api/raw?path=artifacts/keep.txt",
-        headers=headers,
-    ).content == b"legacy artifact"
+    assert (
+        api.get(
+            "/api/projects/legacy-api/raw?path=artifacts/keep.txt",
+            headers=headers,
+        ).content
+        == b"legacy artifact"
+    )
     archive = api.get(
         "/api/archive?project=legacy-api",
         headers=headers,

@@ -22,16 +22,28 @@ class FakeAcpProcess:
     async def new_session(self, cwd):
         return "acp-test-1"
 
-    async def prompt(self, session_id, text, on_update, on_permission=None, timeout=600, images=None):
+    async def prompt(
+        self, session_id, text, on_update, on_permission=None, timeout=600, images=None
+    ):
         if self.behavior == "fail":
             raise Exception("boom from runner")
         if self.behavior == "timeout":
             # Simulate a wedged agent turn: streams a little, then never returns,
             # so the worker's asyncio.wait_for fires a TimeoutError.
-            on_update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "partial..."}})
+            on_update(
+                {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "partial..."},
+                }
+            )
             raise asyncio.TimeoutError()
         if self.behavior == "stream":
-            on_update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hello world"}})
+            on_update(
+                {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "hello world"},
+                }
+            )
         return "end_turn"
 
     def cancel(self, session_id):
@@ -64,10 +76,19 @@ class RecoverableHistoryProcess(FakeAcpProcess):
     async def new_session(self, cwd):
         return "acp-recovered"
 
-    async def prompt(self, session_id, text, on_update, on_permission=None, timeout=600, images=None):
+    async def prompt(
+        self, session_id, text, on_update, on_permission=None, timeout=600, images=None
+    ):
         if self.first:
-            raise Exception("[property_name_above_max_length] Invalid property name in 'input[48].arguments': '{{d...(' is too long")
-        on_update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "recovered ok"}})
+            raise Exception(
+                "[property_name_above_max_length] Invalid property name in 'input[48].arguments': '{{d...(' is too long"
+            )
+        on_update(
+            {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "recovered ok"},
+            }
+        )
         return "end_turn"
 
 
@@ -86,7 +107,9 @@ class CancelBeforeFailProcess(FakeAcpProcess):
         super().__init__("fail")
         self.app = app
 
-    async def prompt(self, session_id, text, on_update, on_permission=None, timeout=600, images=None):
+    async def prompt(
+        self, session_id, text, on_update, on_permission=None, timeout=600, images=None
+    ):
         with self.app.state.db_lock:
             row = self.app.state.worker_db.execute(
                 "SELECT id FROM runs WHERE status = 'running' ORDER BY id DESC LIMIT 1"
@@ -109,18 +132,22 @@ class CancelBeforeFailManager(FakeAcpManager):
 
 
 def _setup(tmp_path, behavior):
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+        }
+    )
     app.state.acp_manager = FakeAcpManager(behavior)
     client = TestClient(app)
     token = client.post("/auth/auto").json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
     session = client.post("/api/sessions", headers=headers, json={"title": "x"}).json()
-    client.post(f"/api/sessions/{session['id']}/runs", headers=headers, json={"message": "hi"})
+    client.post(
+        f"/api/sessions/{session['id']}/runs", headers=headers, json={"message": "hi"}
+    )
 
     async def run_once():
         run = app.state.worker.claim_run()
@@ -133,20 +160,26 @@ def _setup(tmp_path, behavior):
 
 def test_failed_run_stores_error_message(tmp_path):
     client, headers, session = _setup(tmp_path, "fail")
-    msgs = client.get(f"/api/sessions/{session['id']}/messages", headers=headers).json()["messages"]
+    msgs = client.get(
+        f"/api/sessions/{session['id']}/messages", headers=headers
+    ).json()["messages"]
     err = [m for m in msgs if m["role"] == "error"]
     assert err and err[-1]["content"].startswith("Run failed")
-    events = client.get(f"/api/sessions/{session['id']}/events", headers=headers).json()["events"]
+    events = client.get(
+        f"/api/sessions/{session['id']}/events", headers=headers
+    ).json()["events"]
     assert any(e["type"] == "run.failed" for e in events)
 
 
 def test_setup_failure_immediately_fails_claimed_run(tmp_path):
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+        }
+    )
     c = TestClient(app)
     token = c.post("/auth/auto").json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -183,7 +216,9 @@ def test_setup_failure_immediately_fails_claimed_run(tmp_path):
     persisted = c.get(f"/api/runs/{run_id}", headers=headers).json()
     assert persisted["status"] == "failed"
     assert persisted["error"]
-    events = c.get(f"/api/sessions/{session['id']}/events", headers=headers).json()["events"]
+    events = c.get(f"/api/sessions/{session['id']}/events", headers=headers).json()[
+        "events"
+    ]
     assert any(e["type"] == "run.failed" and e["run_id"] == run_id for e in events)
 
 
@@ -207,13 +242,15 @@ def _project_session_run(
     slug: str = "lease-setup",
     message: str = "hi",
 ):
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-        "feature_repo_worktrees": True,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+            "feature_repo_worktrees": True,
+        }
+    )
     app.state.acp_manager = FakeAcpManager("stream")
     client = TestClient(app)
     token = client.post("/auth/auto").json()["token"]
@@ -247,12 +284,14 @@ def _project_session_run(
 
 def test_setup_failure_releases_project_activity_lease(tmp_path):
     """Broken project path after lease acquire must not block quiescence."""
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+        }
+    )
     c = TestClient(app)
     token = c.post("/auth/auto").json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -520,20 +559,26 @@ def test_timed_out_run_recycles_agent_process(tmp_path):
     # next message in the project gets "Queued for the next turn" forever against
     # the still-wedged Hermes session.
     client, headers, session = _setup(tmp_path, "timeout")
-    events = client.get(f"/api/sessions/{session['id']}/events", headers=headers).json()["events"]
+    events = client.get(
+        f"/api/sessions/{session['id']}/events", headers=headers
+    ).json()["events"]
     failed = [e for e in events if e["type"] == "run.failed"]
     assert failed and "timed out" in str(failed[-1]["payload"]).lower()
     # The whole point of the fix: the wedged process is evicted from the cache.
-    assert client.app.state.acp_manager.recycled, "timed-out run did not recycle the agent process"
+    assert client.app.state.acp_manager.recycled, (
+        "timed-out run did not recycle the agent process"
+    )
 
 
 def test_recoverable_agent_history_error_resets_acp_session_and_retries(tmp_path):
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+        }
+    )
     app.state.acp_manager = RecoverableHistoryManager()
     c = TestClient(app)
     tok = c.post("/auth/auto").json()["token"]
@@ -560,23 +605,29 @@ def test_recoverable_agent_history_error_resets_acp_session_and_retries(tmp_path
 
 
 def test_claim_run_reaps_stale_run_blocking_queued_turn(tmp_path):
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-        "run_stale_seconds": 60,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+            "run_stale_seconds": 60,
+        }
+    )
     c = TestClient(app)
     tok = c.post("/auth/auto").json()["token"]
     h = {"Authorization": f"Bearer {tok}"}
     sess = c.post("/api/sessions", headers=h, json={"title": "blocked"}).json()
-    old_run = c.post(f"/api/sessions/{sess['id']}/runs", headers=h, json={"message": "old"}).json()["run_id"]
+    old_run = c.post(
+        f"/api/sessions/{sess['id']}/runs", headers=h, json={"message": "old"}
+    ).json()["run_id"]
     app.state.worker_db.execute(
         "UPDATE runs SET status = 'running', started_at = datetime('now','-10 minutes'), heartbeat_at = datetime('now','-10 minutes') WHERE id = ?",
         (old_run,),
     )
-    new_run = c.post(f"/api/sessions/{sess['id']}/runs", headers=h, json={"message": "new"}).json()["run_id"]
+    new_run = c.post(
+        f"/api/sessions/{sess['id']}/runs", headers=h, json={"message": "new"}
+    ).json()["run_id"]
 
     claimed = app.state.worker.claim_run()
 
@@ -591,12 +642,14 @@ def test_claim_run_reaps_stale_run_blocking_queued_turn(tmp_path):
 
 
 def test_timeout_finalizer_does_not_overwrite_concurrent_cancel(tmp_path):
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+        }
+    )
     app.state.acp_manager = FakeAcpManager("timeout")
     c = TestClient(app)
     tok = c.post("/auth/auto").json()["token"]
@@ -623,12 +676,14 @@ def test_timeout_finalizer_does_not_overwrite_concurrent_cancel(tmp_path):
 
 
 def test_exception_finalizer_does_not_overwrite_concurrent_cancel(tmp_path):
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+        }
+    )
     app.state.acp_manager = CancelBeforeFailManager(app)
     c = TestClient(app)
     tok = c.post("/auth/auto").json()["token"]
@@ -646,19 +701,25 @@ def test_exception_finalizer_does_not_overwrite_concurrent_cancel(tmp_path):
 
 
 def _goal_app(tmp_path):
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+        }
+    )
     app.state.acp_manager = FakeAcpManager("stream")
     c = TestClient(app)
     tok = c.post("/auth/auto").json()["token"]
     h = {"Authorization": f"Bearer {tok}"}
     sess = c.post("/api/sessions", headers=h, json={"title": "g"}).json()
     pid = c.get("/api/profiles", headers=h).json()["profiles"][0]["id"]
-    c.post(f"/api/sessions/{sess['id']}/goal", headers=h, json={"objective": "do x", "max_iter": 5, "profile_id": pid})
+    c.post(
+        f"/api/sessions/{sess['id']}/goal",
+        headers=h,
+        json={"objective": "do x", "max_iter": 5, "profile_id": pid},
+    )
     return app, c, h, sess["id"]
 
 
@@ -672,8 +733,12 @@ def test_cancel_during_post_prompt_window_is_not_resurrected_and_stops_goal(tmp_
 
     async def cancel_then_title(*a, **k):
         with app.state.db_lock:
-            app.state.worker_db.execute("UPDATE runs SET status = 'cancelled', finished_at = CURRENT_TIMESTAMP WHERE id = ?", (rid,))
+            app.state.worker_db.execute(
+                "UPDATE runs SET status = 'cancelled', finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (rid,),
+            )
         return "Some Title"
+
     app.state.worker._generate_title = cancel_then_title
     asyncio.run(app.state.worker.execute_run(run))
 
@@ -681,7 +746,9 @@ def test_cancel_during_post_prompt_window_is_not_resurrected_and_stops_goal(tmp_
     events = c.get(f"/api/sessions/{sid}/events", headers=h).json()["events"]
     assert not any(e["type"] == "run.completed" for e in events)
     # no continuation turn was enqueued
-    n = app.state.worker_db.execute("SELECT COUNT(*) AS c FROM runs WHERE session_id = ?", (sid,)).fetchone()["c"]
+    n = app.state.worker_db.execute(
+        "SELECT COUNT(*) AS c FROM runs WHERE session_id = ?", (sid,)
+    ).fetchone()["c"]
     assert n == 1
 
 
@@ -690,7 +757,9 @@ def test_cancel_goal_marks_active_run_cancelled(tmp_path):
     # won't execute one more goal turn after the user cancelled.
     app, c, h, sid = _goal_app(tmp_path)
     c.post(f"/api/sessions/{sid}/goal/cancel", headers=h)
-    last = app.state.worker_db.execute("SELECT status FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1", (sid,)).fetchone()
+    last = app.state.worker_db.execute(
+        "SELECT status FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1", (sid,)
+    ).fetchone()
     assert last["status"] == "cancelled"
     assert app.state.worker.claim_run() is None
 
@@ -700,7 +769,11 @@ def test_cancel_goal_cancels_all_queued_session_runs(tmp_path):
     # them should survive and execute after the goal is cancelled.
     app, c, h, sid = _goal_app(tmp_path)
     pid = c.get("/api/profiles", headers=h).json()["profiles"][0]["id"]
-    c.post(f"/api/sessions/{sid}/goal", headers=h, json={"objective": "do y", "max_iter": 5, "profile_id": pid})
+    c.post(
+        f"/api/sessions/{sid}/goal",
+        headers=h,
+        json={"objective": "do y", "max_iter": 5, "profile_id": pid},
+    )
 
     c.post(f"/api/sessions/{sid}/goal/cancel", headers=h)
 
@@ -725,30 +798,43 @@ def test_late_stream_events_after_cancel_are_ignored(tmp_path):
     )
 
     app.state.worker.add_event(rid, sid, None, "message.delta", {"text": "late"})
-    app.state.worker.add_event(rid, sid, None, "approval.request", {"request_id": "late"})
+    app.state.worker.add_event(
+        rid, sid, None, "approval.request", {"request_id": "late"}
+    )
     app.state.worker.add_event(rid, sid, None, "run.cancelled", {})
 
     events = c.get(f"/api/sessions/{sid}/events", headers=h).json()["events"]
-    assert [e["type"] for e in events if e["run_id"] == rid] == ["goal.update", "run.queued", "run.started", "run.cancelled"]
+    assert [e["type"] for e in events if e["run_id"] == rid] == [
+        "goal.update",
+        "run.queued",
+        "run.started",
+        "run.cancelled",
+    ]
 
 
 def test_streamed_run_persists_assistant_message_and_acp_session(tmp_path):
     client, headers, session = _setup(tmp_path, "stream")
-    msgs = client.get(f"/api/sessions/{session['id']}/messages", headers=headers).json()["messages"]
+    msgs = client.get(
+        f"/api/sessions/{session['id']}/messages", headers=headers
+    ).json()["messages"]
     asst = [m for m in msgs if m["role"] == "assistant"]
     assert asst and asst[-1]["content"] == "hello world"
-    events = client.get(f"/api/sessions/{session['id']}/events", headers=headers).json()["events"]
+    events = client.get(
+        f"/api/sessions/{session['id']}/events", headers=headers
+    ).json()["events"]
     assert any(e["type"] == "message.delta" for e in events)
     assert any(e["type"] == "run.completed" for e in events)
 
 
 def test_auto_title_does_not_overwrite_manual_rename_during_first_run(tmp_path):
-    app = create_app({
-        "database_path": str(tmp_path / "proxima.db"),
-        "workspace_root": str(tmp_path / "ws"),
-        "projectctl_path": "/usr/bin/true",
-        "start_worker": False,
-    })
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": False,
+        }
+    )
     app.state.acp_manager = FakeAcpManager("stream")
     c = TestClient(app)
     tok = c.post("/auth/auto").json()["token"]
@@ -765,4 +851,7 @@ def test_auto_title_does_not_overwrite_manual_rename_during_first_run(tmp_path):
     app.state.worker._generate_title = rename_then_title
     asyncio.run(app.state.worker.execute_run(run))
 
-    assert c.get("/api/sessions", headers=h).json()["sessions"][0]["title"] == "Manual Name"
+    assert (
+        c.get("/api/sessions", headers=h).json()["sessions"][0]["title"]
+        == "Manual Name"
+    )

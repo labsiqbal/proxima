@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from proxima_api import terminal as terminal_module
 from proxima_api.container_activity import acquire_container_activity_lease
 from proxima_api.db import connect, init_db
 from proxima_api.terminal import TerminalSession
@@ -234,5 +233,3 @@ def test_guarded_terminal_close_kills_descendants_and_releases_lease(tmp_path):
         pass
     else:
         raise AssertionError("guarded terminal descendant survived close")
-
-

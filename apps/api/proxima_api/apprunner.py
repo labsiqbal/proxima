@@ -33,11 +33,6 @@ from .preview_output import (
     cgroup_is_within,
     process_start_time,
 )
-from .process_containment import (
-    pid_namespace_argv,
-    process_tree_pids,
-    terminate_process_tree,
-)
 from .runners import subprocess_env
 
 PROLONGED_START_SECONDS = 15
@@ -256,11 +251,7 @@ def _socket_ownership(
         # launcher process group while remaining under the tracked pid tree.
         if managed_group or descendants:
             return PortOwnership.VERIFIED
-        return (
-            PortOwnership.DETACHED
-            if lineage_matches
-            else PortOwnership.FOREIGN
-        )
+        return PortOwnership.DETACHED if lineage_matches else PortOwnership.FOREIGN
     if not managed_group and not descendants and not lineage_matches:
         return PortOwnership.FOREIGN
     if (
@@ -1158,11 +1149,14 @@ class AppManager:
             "output_broker": broker,
             "stop_lock": asyncio.Lock(),
             "stopped": False,
-            "proc_pid": int(proc.pid) if getattr(proc, "pid", None) is not None else None,
+            "proc_pid": int(proc.pid)
+            if getattr(proc, "pid", None) is not None
+            else None,
             "proc_start_identity": None,
         }
         if app["proc_pid"] is not None:
             from .container_activity import process_start_identity
+
             app["proc_start_identity"] = process_start_identity(app["proc_pid"])
         app["writer_tree"] = None
         if app.get("effect_lease") is not None:

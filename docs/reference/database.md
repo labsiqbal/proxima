@@ -997,6 +997,7 @@ SQLite (WAL mode). 57 tables. Applied migration version: **55**. This is the exa
 | `message_id` | INTEGER | NO |  | → `messages.id` (ON DELETE CASCADE) |
 | `session_id` | INTEGER | NO |  | → `sessions.id` (ON DELETE CASCADE) |
 | `entries_json` | TEXT | NO |  |  |
+| `root_semantics` | TEXT | NO | `'container-v1'` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
 **Indexes:** `idx_turn_file_journals_session` - (session_id, id)

@@ -52,15 +52,11 @@ def _container_data(
             (container,),
         ).fetchone()
         if row is None:
-            raise ContainerBoundaryError(
-                f"Container {container} does not exist"
-            )
+            raise ContainerBoundaryError(f"Container {container} does not exist")
         return dict(row)
     data = dict(container)
     if "id" not in data or "path" not in data:
-        raise ContainerBoundaryError(
-            "Container row must include id and path"
-        )
+        raise ContainerBoundaryError("Container row must include id and path")
     return data
 
 
@@ -156,9 +152,7 @@ def _acquire_file_lock(
 ) -> int:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.parent.is_symlink() or not path.parent.is_dir():
-        raise ContainerBoundaryError(
-            "Container mutation lock directory is unsafe"
-        )
+        raise ContainerBoundaryError("Container mutation lock directory is unsafe")
     flags = os.O_CREAT | os.O_RDWR
     flags |= getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -255,15 +249,11 @@ class _ContainerActivityState:
         timeout: float | None = None,
     ) -> None:
         with self.condition:
-            deadline = (
-                None if timeout is None else time.monotonic() + timeout
-            )
+            deadline = None if timeout is None else time.monotonic() + timeout
 
             def wait() -> None:
                 remaining = (
-                    None
-                    if deadline is None
-                    else max(0.0, deadline - time.monotonic())
+                    None if deadline is None else max(0.0, deadline - time.monotonic())
                 )
                 if remaining == 0.0 or not self.condition.wait(remaining):
                     raise ContainerBoundaryError(
@@ -366,11 +356,7 @@ class GuardedWriterTree:
                 start = _process_start_identity(pid)
                 if start:
                     identities[pid] = start
-        if (
-            launcher_pid is not None
-            and launcher_start
-            and int(launcher_pid) > 1
-        ):
+        if launcher_pid is not None and launcher_start and int(launcher_pid) > 1:
             identities.setdefault(int(launcher_pid), str(launcher_start))
         return cls(
             launcher_pid=launcher_pid,
@@ -389,9 +375,7 @@ class GuardedWriterTree:
                 record_stat.st_mode
             ):
                 return None
-            return json.loads(
-                self.guardian_record.read_text(encoding="utf-8")
-            )
+            return json.loads(self.guardian_record.read_text(encoding="utf-8"))
         except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
             return None
 
@@ -423,10 +407,13 @@ class GuardedWriterTree:
 
         roots: list[int] = []
         if self.launcher_pid is not None and self.launcher_start:
-            if _process_has_identity(
-                self.launcher_pid,
-                self.launcher_start,
-            ) is True:
+            if (
+                _process_has_identity(
+                    self.launcher_pid,
+                    self.launcher_start,
+                )
+                is True
+            ):
                 roots.append(self.launcher_pid)
         sentinel = self._sentinel_identity()
         if sentinel is not None:
@@ -543,11 +530,7 @@ class GuardedWriterTree:
                 # Arm descendant identities while the root is still live so a
                 # later sentinel crash cannot orphan writers unobserved.
                 first = process_tree_pids(pid)
-                second = (
-                    process_tree_pids(pid)
-                    if first is not None
-                    else None
-                )
+                second = process_tree_pids(pid) if first is not None else None
                 if first is not None and second == first:
                     complete = True
                     observed_non_root = False
@@ -730,15 +713,11 @@ def _process_start_identity(pid: int) -> str | None:
                 ctypes.byref(user),
             ):
                 return None
-            return str(
-                (int(created.high) << 32) | int(created.low)
-            )
+            return str((int(created.high) << 32) | int(created.low))
         finally:
             close_handle(handle)
     try:
-        fields = Path(f"/proc/{pid}/stat").read_text(
-            encoding="utf-8"
-        ).split()
+        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
     except OSError:
         return None
     return fields[21] if len(fields) > 21 else None
@@ -875,16 +854,11 @@ def _verified_guardian(
         return None
     if sys.platform.startswith("linux"):
         try:
-            command = Path(f"/proc/{pid}/cmdline").read_bytes().split(
-                b"\0"
-            )
+            command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
             executable = Path(f"/proc/{pid}/exe").resolve()
         except OSError:
             return None
-        if (
-            os.fsencode(str(guardian)) not in command
-            or executable != expected_python
-        ):
+        if os.fsencode(str(guardian)) not in command or executable != expected_python:
             return None
     elif os.name == "nt":
         executable = _windows_process_executable(pid)
@@ -898,9 +872,7 @@ def _verified_guardian(
 
 
 def _terminate_windows_job(job_name: str) -> bool:
-    if os.name != "nt" or not job_name.startswith(
-        "Local\\ProximaActivity-"
-    ):
+    if os.name != "nt" or not job_name.startswith("Local\\ProximaActivity-"):
         return False
     from ctypes import wintypes
 
@@ -922,9 +894,7 @@ def _terminate_windows_job(job_name: str) -> bool:
     if not handle:
         return False
     try:
-        return bool(
-            terminate_job(ctypes.c_void_p(handle), 143)
-        )
+        return bool(terminate_job(ctypes.c_void_p(handle), 143))
     finally:
         close_handle(handle)
 
@@ -972,9 +942,7 @@ class ContainerActivityLease:
             or not stat.S_ISREG(guardian_stat.st_mode)
             or guardian.resolve().parent != package_root
         ):
-            raise ContainerBoundaryError(
-                "trusted activity guardian is unsafe"
-            )
+            raise ContainerBoundaryError("trusted activity guardian is unsafe")
         owner_start = _process_start_identity(os.getpid())
         if owner_start is None or self._guardian_id is None:
             raise ContainerBoundaryError(
@@ -1158,11 +1126,7 @@ def acquire_container_activity_lease(
         raise
     guardian_id = secrets.token_hex(16) if shared else None
     guardian_record = (
-        lock_dir
-        / (
-            f"{int(data['id'])}.activity."
-            f"{guardian_id}.guardian.json"
-        )
+        lock_dir / (f"{int(data['id'])}.activity.{guardian_id}.guardian.json")
         if shared and lock_dir is not None
         else None
     )
@@ -1186,11 +1150,7 @@ def _guardian_records_present(
     and must keep exclusive work blocked (flock alone is not proof).
     """
     data, _, lock_dir = _lock_key(conn, container)
-    if (
-        lock_dir is None
-        or not lock_dir.is_dir()
-        or lock_dir.is_symlink()
-    ):
+    if lock_dir is None or not lock_dir.is_dir() or lock_dir.is_symlink():
         return False
     pattern = f"{int(data['id'])}.activity.*.guardian.json"
     try:
@@ -1274,9 +1234,7 @@ def _reconcile_recovered_guardian_record(tree: GuardedWriterTree) -> bool:
 
     try:
         record_stat = record.lstat()
-        if stat.S_ISLNK(record_stat.st_mode) or not stat.S_ISREG(
-            record_stat.st_mode
-        ):
+        if stat.S_ISLNK(record_stat.st_mode) or not stat.S_ISREG(record_stat.st_mode):
             return False
         record.unlink()
     except FileNotFoundError:
@@ -1317,11 +1275,7 @@ def container_mutation_lock(
     container: int | sqlite3.Row | Mapping[str, Any],
 ) -> Iterator[None]:
     data, key, lock_dir = _lock_key(conn, container)
-    lock_path = (
-        lock_dir / f"{int(data['id'])}.lock"
-        if lock_dir is not None
-        else None
-    )
+    lock_path = lock_dir / f"{int(data['id'])}.lock" if lock_dir is not None else None
     with _LOCKS_GUARD:
         local_lock = _MUTATION_LOCKS.setdefault(
             key,
@@ -1339,11 +1293,7 @@ def container_mutation_lock(
             finally:
                 depths[key] -= 1
             return
-        fd = (
-            _acquire_file_lock(lock_path)
-            if lock_path is not None
-            else None
-        )
+        fd = _acquire_file_lock(lock_path) if lock_path is not None else None
         depths[key] = 1
         try:
             yield
@@ -1368,15 +1318,9 @@ def recover_container_activity_guardians(
     ``unresolved == 0``; flock acquisition alone is not proof.
     """
     data, _, lock_dir = _lock_key(conn, container)
-    if (
-        lock_dir is None
-        or not lock_dir.is_dir()
-        or lock_dir.is_symlink()
-    ):
+    if lock_dir is None or not lock_dir.is_dir() or lock_dir.is_symlink():
         return ContainerActivityRecovery()
-    guardian = Path(__file__).resolve().with_name(
-        "activity_guardian.py"
-    )
+    guardian = Path(__file__).resolve().with_name("activity_guardian.py")
     recovered = 0
     waiting: list[tuple[int, str, GuardedWriterTree]] = []
     pattern = f"{int(data['id'])}.activity.*.guardian.json"
@@ -1385,15 +1329,9 @@ def recover_container_activity_guardians(
         try:
             record_prefix = f"{container_id}.activity."
             record_suffix = ".guardian.json"
-            guardian_id = record.name[
-                len(record_prefix) : -len(record_suffix)
-            ]
-            if (
-                len(guardian_id) != 32
-                or any(
-                    character not in "0123456789abcdef"
-                    for character in guardian_id
-                )
+            guardian_id = record.name[len(record_prefix) : -len(record_suffix)]
+            if len(guardian_id) != 32 or any(
+                character not in "0123456789abcdef" for character in guardian_id
             ):
                 continue
             record_stat = record.lstat()
@@ -1404,8 +1342,7 @@ def recover_container_activity_guardians(
             payload = json.loads(record.read_text(encoding="utf-8"))
             if (
                 _platform_is_windows()
-                and payload.get("job_name")
-                != f"Local\\ProximaActivity-{guardian_id}"
+                and payload.get("job_name") != f"Local\\ProximaActivity-{guardian_id}"
             ):
                 continue
             verified = _verified_guardian(payload, guardian)
@@ -1432,9 +1369,8 @@ def recover_container_activity_guardians(
             else:
                 # Incomplete / sentinel-only observation must not signal or
                 # clear - retain the durable blocker for owner intervention.
-                if (
-                    not tree.members_observed
-                    or not _has_identity_proven_descendants(tree)
+                if not tree.members_observed or not _has_identity_proven_descendants(
+                    tree
                 ):
                     continue
                 try:
@@ -1490,15 +1426,9 @@ def recover_container_activity_guardians(
         try:
             record_prefix = f"{container_id}.activity."
             record_suffix = ".guardian.json"
-            guardian_id = record.name[
-                len(record_prefix) : -len(record_suffix)
-            ]
-            if (
-                len(guardian_id) != 32
-                or any(
-                    character not in "0123456789abcdef"
-                    for character in guardian_id
-                )
+            guardian_id = record.name[len(record_prefix) : -len(record_suffix)]
+            if len(guardian_id) != 32 or any(
+                character not in "0123456789abcdef" for character in guardian_id
             ):
                 unresolved += 1
                 continue
@@ -1511,8 +1441,7 @@ def recover_container_activity_guardians(
             payload = json.loads(record.read_text(encoding="utf-8"))
             if (
                 _platform_is_windows()
-                and payload.get("job_name")
-                != f"Local\\ProximaActivity-{guardian_id}"
+                and payload.get("job_name") != f"Local\\ProximaActivity-{guardian_id}"
             ):
                 unresolved += 1
                 continue

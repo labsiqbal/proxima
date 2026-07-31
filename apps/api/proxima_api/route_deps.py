@@ -3,6 +3,7 @@
 The route modules still consume the historical string-keyed dependency dict, but
 its helper implementations live here instead of inside create_app.
 """
+
 from __future__ import annotations
 
 import logging
@@ -86,7 +87,11 @@ def build_route_deps(
                 "INSERT INTO users(username, os_user, role, password_hash, password_set_at) VALUES (?, ?, 'environment_admin', NULL, ?)",
                 (name, name, iso_now()),
             )
-            user = dict(db().execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone())
+            user = dict(
+                db()
+                .execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,))
+                .fetchone()
+            )
         try:
             ensure_default_profile(user)
             provision_user_workspace(db(), cfg, user)
@@ -115,14 +120,20 @@ def build_route_deps(
         token = authorization.removeprefix("Bearer ").strip() if authorization else None
         token = token or proxima_session
         if token:
-            row = db().execute(
-                "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id "
-                "WHERE s.token_hash=? AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)",
-                (hash_token(token), iso_now()),
-            ).fetchone()
+            row = (
+                db()
+                .execute(
+                    "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id "
+                    "WHERE s.token_hash=? AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)",
+                    (hash_token(token), iso_now()),
+                )
+                .fetchone()
+            )
             if row:
                 return dict(row)
-        raise http_exception(status_code=status_module.HTTP_401_UNAUTHORIZED, detail="login required")
+        raise http_exception(
+            status_code=status_module.HTTP_401_UNAUTHORIZED, detail="login required"
+        )
 
     def current_user_strict_token(
         authorization: str | None = header(default=None),
@@ -134,16 +145,25 @@ def build_route_deps(
         token = authorization.removeprefix("Bearer ").strip() if authorization else None
         token = token or proxima_session
         if token:
-            row = db().execute(
-                "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id "
-                "WHERE s.token_hash=? AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)",
-                (hash_token(token), iso_now()),
-            ).fetchone()
+            row = (
+                db()
+                .execute(
+                    "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id "
+                    "WHERE s.token_hash=? AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)",
+                    (hash_token(token), iso_now()),
+                )
+                .fetchone()
+            )
             if row:
                 return dict(row)
-            raise http_exception(status_code=status_module.HTTP_401_UNAUTHORIZED, detail="invalid or expired token")
+            raise http_exception(
+                status_code=status_module.HTTP_401_UNAUTHORIZED,
+                detail="invalid or expired token",
+            )
         if owner.get("password_hash"):
-            raise http_exception(status_code=status_module.HTTP_401_UNAUTHORIZED, detail="login required")
+            raise http_exception(
+                status_code=status_module.HTTP_401_UNAUTHORIZED, detail="login required"
+            )
         return owner
 
     def admin_user(user: dict[str, Any] = depends(current_user)) -> dict[str, Any]:
@@ -151,13 +171,22 @@ def build_route_deps(
         return user
 
     def public_user(user: dict[str, Any]) -> dict[str, Any]:
-        return {"id": user["id"], "username": user["username"], "role": user["role"], "os_user": user["os_user"]}
+        return {
+            "id": user["id"],
+            "username": user["username"],
+            "role": user["role"],
+            "os_user": user["os_user"],
+        }
 
     def create_token(user_id: int) -> str:
         token = new_token()
         db().execute(
             "INSERT INTO auth_sessions(token_hash, user_id, expires_at) VALUES (?, ?, ?)",
-            (hash_token(token), user_id, expiry(int(cfg.get("auth_token_ttl_hours") or 0))),
+            (
+                hash_token(token),
+                user_id,
+                expiry(int(cfg.get("auth_token_ttl_hours") or 0)),
+            ),
         )
         return token
 
@@ -166,7 +195,11 @@ def build_route_deps(
         the configured source_hermes_home override; others use the spec default."""
         if spec.id == "hermes":
             return Path(cfg["source_hermes_home"])
-        return Path(os.path.expanduser(spec.source_dir or "")) if spec.source_dir else Path("/nonexistent")
+        return (
+            Path(os.path.expanduser(spec.source_dir or ""))
+            if spec.source_dir
+            else Path("/nonexistent")
+        )
 
     def _cap_source_override(spec) -> str | None:
         """Capability detection reads the same host dir as credential seeding; only
@@ -207,6 +240,7 @@ def build_route_deps(
             # (selection None) so the host's skills AND the bundled skills work
             # out of the box.
             from . import app_settings as _app_settings
+
             apply_capabilities(
                 spec,
                 home,
@@ -216,12 +250,27 @@ def build_route_deps(
                 custom_roots=_app_settings.get_custom_skill_roots(db()),
             )
         if is_default:
-            db().execute("UPDATE profiles SET is_default = 0 WHERE user_id = ?", (user["id"],))
+            db().execute(
+                "UPDATE profiles SET is_default = 0 WHERE user_id = ?", (user["id"],)
+            )
         cur = db().execute(
             "INSERT INTO profiles(user_id, slug, name, hermes_home, runner_id, default_model, instructions, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (user["id"], slug, name, str(home), runner_id, default_model, instructions, 1 if is_default else 0),
+            (
+                user["id"],
+                slug,
+                name,
+                str(home),
+                runner_id,
+                default_model,
+                instructions,
+                1 if is_default else 0,
+            ),
         )
-        return dict(db().execute("SELECT * FROM profiles WHERE id = ?", (cur.lastrowid,)).fetchone())
+        return dict(
+            db()
+            .execute("SELECT * FROM profiles WHERE id = ?", (cur.lastrowid,))
+            .fetchone()
+        )
 
     def apply_profile_capabilities(profile: dict[str, Any]) -> dict[str, list[str]]:
         """(Re)activate a profile's selected skills/MCP into its home. Reads the
@@ -238,6 +287,7 @@ def build_route_deps(
             return {"skills": [], "mcp": []}
         selection = parse_selection(profile.get("capabilities"))
         from . import app_settings as _app_settings
+
         return apply_capabilities(
             spec,
             home,
@@ -248,20 +298,31 @@ def build_route_deps(
         )
 
     def ensure_default_profile(user: dict[str, Any]) -> dict[str, Any]:
-        row = db().execute(
-            "SELECT * FROM profiles WHERE user_id = ? AND is_default = 1 "
-            "AND COALESCE(system_kind, '') = '' ORDER BY id LIMIT 1", (user["id"],)
-        ).fetchone()
+        row = (
+            db()
+            .execute(
+                "SELECT * FROM profiles WHERE user_id = ? AND is_default = 1 "
+                "AND COALESCE(system_kind, '') = '' ORDER BY id LIMIT 1",
+                (user["id"],),
+            )
+            .fetchone()
+        )
         if row:
             return dict(row)
-        row = db().execute(
-            "SELECT * FROM profiles WHERE user_id = ? AND COALESCE(system_kind, '') = '' ORDER BY id LIMIT 1",
-            (user["id"],),
-        ).fetchone()
+        row = (
+            db()
+            .execute(
+                "SELECT * FROM profiles WHERE user_id = ? AND COALESCE(system_kind, '') = '' ORDER BY id LIMIT 1",
+                (user["id"],),
+            )
+            .fetchone()
+        )
         if row:
             if maintenance.fenced():
                 return dict(row)
-            db().execute("UPDATE profiles SET is_default = 1 WHERE id = ?", (row["id"],))
+            db().execute(
+                "UPDATE profiles SET is_default = 1 WHERE id = ?", (row["id"],)
+            )
             return dict(row)
         if maintenance.fenced():
             raise http_exception(
@@ -270,31 +331,45 @@ def build_route_deps(
             )
         return create_profile_for(user, "default", "Default", is_default=True)
 
-    def profile_for_user(profile_id: int | None, user: dict[str, Any]) -> dict[str, Any]:
+    def profile_for_user(
+        profile_id: int | None, user: dict[str, Any]
+    ) -> dict[str, Any]:
         if profile_id is None:
             return ensure_default_profile(user)
-        row = db().execute(
-            "SELECT * FROM profiles WHERE id = ? AND user_id = ? AND COALESCE(system_kind, '') = ''",
-            (profile_id, user["id"]),
-        ).fetchone()
+        row = (
+            db()
+            .execute(
+                "SELECT * FROM profiles WHERE id = ? AND user_id = ? AND COALESCE(system_kind, '') = ''",
+                (profile_id, user["id"]),
+            )
+            .fetchone()
+        )
         if not row:
             raise http_exception(status_code=404, detail="profile not found")
         return dict(row)
 
     def visible_project(slug: str, user: dict[str, Any]) -> dict[str, Any]:
         # Single-user: every non-archived project belongs to the owner.
-        row = db().execute(
-            "SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p "
-            "JOIN users u ON u.id = p.owner_user_id WHERE p.slug = ? AND p.archived_at IS NULL",
-            (slug,),
-        ).fetchone()
+        row = (
+            db()
+            .execute(
+                "SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p "
+                "JOIN users u ON u.id = p.owner_user_id WHERE p.slug = ? AND p.archived_at IS NULL",
+                (slug,),
+            )
+            .fetchone()
+        )
         if not row:
             raise http_exception(status_code=404, detail="project not found")
         return dict(row)
 
     def session_for_user(session_id: int, user: dict[str, Any]) -> dict[str, Any]:
         # Single-user: every session belongs to the owner.
-        row = db().execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        row = (
+            db()
+            .execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
+            .fetchone()
+        )
         if not row:
             raise http_exception(status_code=404, detail="session not found")
         return dict(row)
@@ -333,10 +408,14 @@ def build_route_deps(
             "name": row["name"],
             "runner_id": row["runner_id"],
             "default_model": row["default_model"],
-            "instructions": row["instructions"] if "instructions" in row.keys() else None,
+            "instructions": row["instructions"]
+            if "instructions" in row.keys()
+            else None,
             "is_default": bool(row["is_default"]),
             "hermes_home": row["hermes_home"],
-            "capabilities": _cap_parse(row["capabilities"]) if "capabilities" in row.keys() else None,
+            "capabilities": _cap_parse(row["capabilities"])
+            if "capabilities" in row.keys()
+            else None,
         }
 
     def session_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -495,15 +574,11 @@ def build_route_deps(
                     "(SELECT id FROM jobs WHERE project_id = ?)",
                     (project["id"], project["id"]),
                 )
-                conn.execute(
-                    "DELETE FROM jobs WHERE project_id = ?", (project["id"],)
-                )
+                conn.execute("DELETE FROM jobs WHERE project_id = ?", (project["id"],))
                 conn.execute(
                     "DELETE FROM sessions WHERE project_id = ?", (project["id"],)
                 )
-                conn.execute(
-                    "DELETE FROM projects WHERE id = ?", (project["id"],)
-                )
+                conn.execute("DELETE FROM projects WHERE id = ?", (project["id"],))
                 conn.execute("COMMIT")
             except Exception:
                 if conn.in_transaction:
@@ -562,7 +637,9 @@ def build_route_deps(
         # Single-user: everything belongs to the owner.
         return True
 
-    def _member_project_id(project_id: int | None, project_slug: str | None, user: dict[str, Any]) -> int | None:
+    def _member_project_id(
+        project_id: int | None, project_slug: str | None, user: dict[str, Any]
+    ) -> int | None:
         """Resolve a project ref (slug or raw id) to an id. Single-user: no membership check."""
         if project_slug:
             return visible_project(project_slug, user)["id"]
@@ -596,12 +673,18 @@ def build_route_deps(
 
     def user_from_token_query(token: str) -> dict[str, Any]:
         with app.state.db_lock:
-            row = db().execute(
-                "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)",
-                (hash_token(token), iso_now()),
-            ).fetchone()
+            row = (
+                db()
+                .execute(
+                    "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)",
+                    (hash_token(token), iso_now()),
+                )
+                .fetchone()
+            )
         if not row:
-            raise http_exception(status_code=status_module.HTTP_401_UNAUTHORIZED, detail="invalid token")
+            raise http_exception(
+                status_code=status_module.HTTP_401_UNAUTHORIZED, detail="invalid token"
+            )
         return dict(row)
 
     return {

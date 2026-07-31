@@ -1339,7 +1339,10 @@ and physical path states, exact physical-root entries, conflicts, and which Ops 
 remain usable. Owners can reveal either side through an explicit Container-root
 read-only target and refresh read-only validation. Recovery inspection has only tree
 and file-read operations; its Files tree removes mutation controls, opens files
-read-only, and visibly expands and marks directory targets. Backend-declared root
+read-only, and visibly expands and marks directory targets. An already-dirty ordinary
+Files buffer stays mounted and read-only across the inspection adapter swap and path
+browses; inspection never discards those unsaved project bytes, and write returns only
+with the ordinary virtual root. Backend-declared root
 inspectability disables unavailable or unsafe reveal actions with an accessible
 reason. Closing inspection,
 changing Projects, or opening Files normally restores the ordinary virtual writable

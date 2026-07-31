@@ -5,6 +5,7 @@ Design Studio's own surface (gated by PROXIMA_FEATURE_DESIGN_STUDIO). They reach
 the shared filesystem + provider settings, but live in their own module so the
 feature can be reasoned about (and eventually toggled) as a unit.
 """
+
 from __future__ import annotations
 
 import json
@@ -57,7 +58,11 @@ def register(app, deps):
         return {"items": moodboard.read_items(root)}
 
     @app.post("/api/projects/{slug}/design/moodboard")
-    def add_moodboard_item(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
+    def add_moodboard_item(
+        slug: str,
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Add a URL preview or an already-uploaded screenshot to the Moodboard.
 
         URL preview fetches are best-effort. A reachable page without usable OG
@@ -68,7 +73,9 @@ def register(app, deps):
         raw_url = str(data.get("url") or "").strip()
         image_path = str(data.get("imagePath") or "").strip()
         if not raw_url and not image_path:
-            raise HTTPException(status_code=400, detail="Give a URL or an uploaded screenshot.")
+            raise HTTPException(
+                status_code=400, detail="Give a URL or an uploaded screenshot."
+            )
         item_id = f"mb-{int(time.time() * 1000)}-{secrets.token_hex(3)}"
         warning = ""
         title = str(data.get("title") or "").strip()[:240]
@@ -146,7 +153,12 @@ def register(app, deps):
         return {"item": item, "warning": warning or None}
 
     @app.patch("/api/projects/{slug}/design/moodboard/{item_id}")
-    def update_moodboard_item(slug: str, item_id: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
+    def update_moodboard_item(
+        slug: str,
+        item_id: str,
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Edit a Moodboard note/tags or select it for design-run context."""
         features.require(cfg, features.DESIGN_STUDIO)
         data = payload or {}
@@ -158,7 +170,9 @@ def register(app, deps):
         if "useAsReference" in data:
             patch["useAsReference"] = bool(data.get("useAsReference"))
         if not patch:
-            raise HTTPException(status_code=400, detail="No editable Moodboard fields were provided.")
+            raise HTTPException(
+                status_code=400, detail="No editable Moodboard fields were provided."
+            )
         with _project_mutation(slug, user):
             root = _ops_root(slug, user)
             item = moodboard.patch_item(root, item_id, patch)
@@ -174,7 +188,9 @@ def register(app, deps):
         return {"item": item}
 
     @app.delete("/api/projects/{slug}/design/moodboard/{item_id}")
-    def remove_moodboard_item(slug: str, item_id: str, user: dict[str, Any] = Depends(current_user)):
+    def remove_moodboard_item(
+        slug: str, item_id: str, user: dict[str, Any] = Depends(current_user)
+    ):
         """Delete a Moodboard card and its private cached/uploaded image."""
         features.require(cfg, features.DESIGN_STUDIO)
         with _project_mutation(slug, user):
@@ -192,7 +208,11 @@ def register(app, deps):
         return {"ok": True, "id": item_id}
 
     @app.post("/api/projects/{slug}/design/brand-guide")
-    def generate_brand_guide(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
+    def generate_brand_guide(
+        slug: str,
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Kick off an agent run that synthesises a project's brand guideline into
         <project>/design.md from reference URLs (crawled here), uploaded reference
         images (vision), and free-text notes. The generated design.md is then
@@ -201,7 +221,9 @@ def register(app, deps):
         and reloads design.md when it finishes."""
         features.require(cfg, features.DESIGN_STUDIO)
         data = payload or {}
-        urls = [u for u in (data.get("urls") or []) if isinstance(u, str) and u.strip()][:8]
+        urls = [
+            u for u in (data.get("urls") or []) if isinstance(u, str) and u.strip()
+        ][:8]
         notes = (data.get("notes") or "").strip()[:4000]
         image_rels: list[str] = []
         root = _ops_root(slug, user)
@@ -214,7 +236,10 @@ def register(app, deps):
             except fsapi.FsError:
                 continue
         if not urls and not image_rels and not notes:
-            raise HTTPException(status_code=400, detail="Give at least one reference URL, image, or a note to generate from.")
+            raise HTTPException(
+                status_code=400,
+                detail="Give at least one reference URL, image, or a note to generate from.",
+            )
 
         digests = [brand_extract.fetch_url_digest(u) for u in urls]
         parts = [
@@ -233,9 +258,17 @@ def register(app, deps):
             "even from thin references; where the references conflict, pick one deliberate direction.",
         ]
         if digests:
-            parts += ["", "## Reference URLs (crawled)", *[brand_extract.digest_to_markdown(d) for d in digests]]
+            parts += [
+                "",
+                "## Reference URLs (crawled)",
+                *[brand_extract.digest_to_markdown(d) for d in digests],
+            ]
         if image_rels:
-            parts += ["", "## Reference images", "The attached image(s) are visual references — read their palette, mood, composition, and type."]
+            parts += [
+                "",
+                "## Reference images",
+                "The attached image(s) are visual references — read their palette, mood, composition, and type.",
+            ]
         if notes:
             parts += ["", "## Owner's notes / preferences", notes]
         prompt = "\n".join(parts)
@@ -251,19 +284,49 @@ def register(app, deps):
             (title, project["id"], user["id"], profile["id"], profile["runner_id"]),
         )
         session_id = int(cur.lastrowid)
-        db().execute("INSERT INTO messages(session_id, role, content, author) VALUES (?, 'user', ?, ?)", (session_id, "Generate design.md brand guideline from the provided references.", user["username"]))
+        db().execute(
+            "INSERT INTO messages(session_id, role, content, author) VALUES (?, 'user', ?, ?)",
+            (
+                session_id,
+                "Generate design.md brand guideline from the provided references.",
+                user["username"],
+            ),
+        )
         run = db().execute(
             "INSERT INTO runs(session_id, project_id, user_id, profile_id, runner_id, status, prompt, model, hermes_home, kind) "
             "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, 'brand_guide')",
-            (session_id, project["id"], user["id"], profile["id"], profile["runner_id"], prompt, profile["default_model"], profile["hermes_home"]),
+            (
+                session_id,
+                project["id"],
+                user["id"],
+                profile["id"],
+                profile["runner_id"],
+                prompt,
+                profile["default_model"],
+                profile["hermes_home"],
+            ),
         )
         run_id = int(run.lastrowid)
-        app.state.worker.add_event(run_id, session_id, project["id"], "run.queued", {"runner": profile["runner_id"], "kind": "brand_guide"})
+        app.state.worker.add_event(
+            run_id,
+            session_id,
+            project["id"],
+            "run.queued",
+            {"runner": profile["runner_id"], "kind": "brand_guide"},
+        )
         _audit_fs(user, "design.brand_guide", slug, "design.md")
-        return {"run_id": run_id, "session_id": session_id, "urls": [{"url": d["url"], "ok": d.get("ok", False)} for d in digests]}
+        return {
+            "run_id": run_id,
+            "session_id": session_id,
+            "urls": [{"url": d["url"], "ok": d.get("ok", False)} for d in digests],
+        }
 
     @app.post("/api/projects/{slug}/designs/from-image")
-    def design_from_image(slug: str, payload: dict[str, Any] | None = None, user: dict[str, Any] = Depends(current_user)):
+    def design_from_image(
+        slug: str,
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Seed a new Design Studio scene containing an existing project image as a
         full-bleed layer — the 'edit this image in Design Studio' bridge from chat."""
         features.require(cfg, features.DESIGN_STUDIO)
@@ -310,14 +373,22 @@ def register(app, deps):
         return {"ok": True, "id": design_id, "title": scene["title"], "path": f"artifacts/design/{design_id}"}
 
     @app.post("/api/projects/{slug}/design/image")
-    async def design_image(slug: str, payload: ImageGenRequest, user: dict[str, Any] = Depends(current_user)):
+    async def design_image(
+        slug: str,
+        payload: ImageGenRequest,
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Generate (text→image) or edit (image+prompt→image) via the configured
         provider (Settings); save the result into the project's shared design
         asset library and return its path."""
         features.require(cfg, features.DESIGN_STUDIO)
         prov = media_settings.resolve_image_gen(db())
         # Source/reference images — the multi-image list wins over the single `image`.
-        src_paths = payload.images if payload.images else ([payload.image] if payload.image else [])
+        src_paths = (
+            payload.images
+            if payload.images
+            else ([payload.image] if payload.image else [])
+        )
         sources: list[tuple[bytes, str]] = []
         with _project_mutation(slug, user):
             root = _ops_root(slug, user)
@@ -345,10 +416,19 @@ def register(app, deps):
         # is text-to-image only, fall back to xAI OAuth (single image) if connected.
         if sources and caps.get("imageEdit") is False:
             if image_providers.xai_oauth_ready().get("ready"):
-                prov = {**prov, "provider": "xai-oauth", "apiKey": None, "baseUrl": None, "model": None}
+                prov = {
+                    **prov,
+                    "provider": "xai-oauth",
+                    "apiKey": None,
+                    "baseUrl": None,
+                    "model": None,
+                }
                 caps = image_providers.get_provider("xai-oauth").capabilities or {}
             else:
-                raise HTTPException(status_code=400, detail="The selected image provider is text-to-image only and no edit-capable fallback is connected. Switch the provider in Settings → Image generation (e.g. xAI OAuth) to edit or use reference images.")
+                raise HTTPException(
+                    status_code=400,
+                    detail="The selected image provider is text-to-image only and no edit-capable fallback is connected. Switch the provider in Settings → Image generation (e.g. xAI OAuth) to edit or use reference images.",
+                )
         # Only referenceImages-capable providers get multiple images; others use the first.
         if len(sources) > 1 and not caps.get("referenceImages"):
             sources = sources[:1]
@@ -360,7 +440,8 @@ def register(app, deps):
             model = media_settings.resolve_higgsfield_settings(db()).get("imageModel")
         try:
             raw = image_providers.generate(
-                prov["provider"], prov.get("apiKey"),
+                prov["provider"],
+                prov.get("apiKey"),
                 prompt=payload.prompt,
                 model=model,
                 size=payload.size,
@@ -372,7 +453,9 @@ def register(app, deps):
         except image_providers.ImageProviderError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not raw:
-            raise HTTPException(status_code=502, detail="provider returned no image data")
+            raise HTTPException(
+                status_code=502, detail="provider returned no image data"
+            )
         # Every provider returns bytes — persist them here (the out_path shortcut was
         # dead: generate() never wrote files itself).
         with _project_mutation(slug, user):
@@ -400,12 +483,27 @@ def register(app, deps):
         if spec.kind == "codex":
             return {"models": [], "configured": True, "kind": "codex"}
         if spec.kind == "auto":
-            return {"models": [], "configured": True, "kind": "auto", "model": prov.get("model")}
+            return {
+                "models": [],
+                "configured": True,
+                "kind": "auto",
+                "model": prov.get("model"),
+            }
         if spec.kind == "higgsfield":
             readiness = image_providers.readiness_snapshot(
                 enabled=not maintenance.fenced(),
                 higgsfield_cli=True,
             )
             hstatus = readiness["higgsfield"] or {}
-            return {"models": [], "configured": bool(hstatus.get("ready")), "kind": "higgsfield", "model": prov.get("model")}
-        return {"models": [], "configured": bool(prov.get("apiKey")), "kind": "http", "model": prov.get("model")}
+            return {
+                "models": [],
+                "configured": bool(hstatus.get("ready")),
+                "kind": "higgsfield",
+                "model": prov.get("model"),
+            }
+        return {
+            "models": [],
+            "configured": bool(prov.get("apiKey")),
+            "kind": "http",
+            "model": prov.get("model"),
+        }

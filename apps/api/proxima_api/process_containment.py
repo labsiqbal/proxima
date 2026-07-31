@@ -262,9 +262,7 @@ async def terminate_and_verify(
         except Exception:
             pass
         if tree.exited() is not True:
-            raise RuntimeError(
-                f"{label} process tree did not exit after kill"
-            )
+            raise RuntimeError(f"{label} process tree did not exit after kill")
         return
 
     if process is None or process.returncode is not None:
@@ -272,11 +270,7 @@ async def terminate_and_verify(
         # available. Callers that wrap guardians must pass ``tree``.
         return
     pid = getattr(process, "pid", None)
-    use_tree = (
-        pid is not None
-        and os.name != "nt"
-        and sys.platform.startswith("linux")
-    )
+    use_tree = pid is not None and os.name != "nt" and sys.platform.startswith("linux")
     if use_tree:
         grace = max(0.05, float(timeout) * 0.65)
         kill_wait = max(0.05, float(timeout) - grace)
@@ -299,16 +293,12 @@ async def terminate_and_verify(
             try:
                 await asyncio.wait_for(process.wait(), timeout=0.5)
             except asyncio.TimeoutError:
-                raise RuntimeError(
-                    f"{label} process did not exit after kill"
-                ) from exc
+                raise RuntimeError(f"{label} process did not exit after kill") from exc
             # Post-kill wait succeeded - continue verification below.
         if process.returncode is None:
             raise RuntimeError(f"{label} process exit was not verified")
         if not tree_done:
-            raise RuntimeError(
-                f"{label} process tree did not exit after kill"
-            )
+            raise RuntimeError(f"{label} process tree did not exit after kill")
         return
 
     try:

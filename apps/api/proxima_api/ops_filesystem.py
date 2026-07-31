@@ -21,12 +21,7 @@ def directory_open_flags() -> int:
         raise OpsMigrationCollision(
             "this platform cannot guarantee stable no-follow directory access"
         )
-    return (
-        os.O_RDONLY
-        | os.O_DIRECTORY
-        | os.O_NOFOLLOW
-        | getattr(os, "O_CLOEXEC", 0)
-    )
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
 
 def directory_fd_path(fd: int) -> Path:
@@ -112,17 +107,13 @@ def windows_directory_identity(
             ctypes.get_last_error(),
             f"cannot inspect directory: {display}",
         )
-    if (
-        not information.attributes & 0x00000010
-        or information.attributes & 0x00000400
-    ):
+    if not information.attributes & 0x00000010 or information.attributes & 0x00000400:
         raise ContainerBoundaryError(
             f"directory is missing or is a reparse point: {display}"
         )
     return (
         int(information.volume_serial),
-        (int(information.file_index_high) << 32)
-        | int(information.file_index_low),
+        (int(information.file_index_high) << 32) | int(information.file_index_low),
     )
 
 
@@ -232,11 +223,7 @@ def windows_create_directory_at(
     create_file.restype = ctypes.c_long
     status = create_file(
         ctypes.byref(handle),
-        0x00100000
-        | 0x00000001
-        | 0x00000002
-        | 0x00000004
-        | 0x00000080,
+        0x00100000 | 0x00000001 | 0x00000002 | 0x00000004 | 0x00000080,
         ctypes.byref(attributes),
         ctypes.byref(status_block),
         None,
@@ -382,22 +369,13 @@ def windows_read_file_at(
         error = ctypes.get_last_error()
         windows_close_handle(int(handle.value))
         raise OSError(error, f"cannot inspect file: {name}")
-    if (
-        information.attributes & 0x00000010
-        or information.attributes & 0x00000400
-    ):
+    if information.attributes & 0x00000010 or information.attributes & 0x00000400:
         windows_close_handle(int(handle.value))
-        raise ContainerBoundaryError(
-            f"file is missing or is a reparse point: {name}"
-        )
-    size = (
-        int(information.size_high) << 32
-    ) | int(information.size_low)
+        raise ContainerBoundaryError(f"file is missing or is a reparse point: {name}")
+    size = (int(information.size_high) << 32) | int(information.size_low)
     if size > max_bytes:
         windows_close_handle(int(handle.value))
-        raise ContainerBoundaryError(
-            f"file is too large: {name}"
-        )
+        raise ContainerBoundaryError(f"file is too large: {name}")
     fd = msvcrt.open_osfhandle(
         int(handle.value),
         os.O_RDONLY,
@@ -410,9 +388,7 @@ def windows_read_file_at(
         ):
             content.extend(chunk)
             if len(content) > max_bytes:
-                raise ContainerBoundaryError(
-                    f"file is too large: {name}"
-                )
+                raise ContainerBoundaryError(f"file is too large: {name}")
         return bytes(content)
     finally:
         os.close(fd)
@@ -441,16 +417,17 @@ def publish_open_regular_file(
         ctypes.c_int,
     ]
     linkat.restype = ctypes.c_int
-    source_path = os.fsencode(
-        f"/proc/self/fd/{source_fd}"
-    )
-    if linkat(
-        -100,
-        source_path,
-        destination_fd,
-        os.fsencode(name),
-        0x400,
-    ) == 0:
+    source_path = os.fsencode(f"/proc/self/fd/{source_fd}")
+    if (
+        linkat(
+            -100,
+            source_path,
+            destination_fd,
+            os.fsencode(name),
+            0x400,
+        )
+        == 0
+    ):
         return
     error_number = ctypes.get_errno()
     if error_number == errno.EEXIST:
@@ -469,22 +446,12 @@ def rename_noreplace(
     source_dir_fd: int | None = None,
     destination_dir_fd: int | None = None,
 ) -> None:
-    source_bytes = os.fsencode(
-        source.name if source_dir_fd is not None else source
-    )
+    source_bytes = os.fsencode(source.name if source_dir_fd is not None else source)
     destination_bytes = os.fsencode(
-        destination.name
-        if destination_dir_fd is not None
-        else destination
+        destination.name if destination_dir_fd is not None else destination
     )
-    source_at = (
-        source_dir_fd if source_dir_fd is not None else -100
-    )
-    destination_at = (
-        destination_dir_fd
-        if destination_dir_fd is not None
-        else -100
-    )
+    source_at = source_dir_fd if source_dir_fd is not None else -100
+    destination_at = destination_dir_fd if destination_dir_fd is not None else -100
     if sys.platform.startswith("linux"):
         libc = ctypes.CDLL(None, use_errno=True)
         renameat2 = getattr(libc, "renameat2", None)
@@ -530,10 +497,7 @@ def rename_noreplace(
             4,
         )
     elif os.name == "nt":
-        if (
-            source_dir_fd is not None
-            or destination_dir_fd is not None
-        ):
+        if source_dir_fd is not None or destination_dir_fd is not None:
             raise OpsMigrationCollision(
                 "this platform cannot guarantee stable no-clobber migration"
             )
@@ -552,9 +516,7 @@ def rename_noreplace(
         return
     error_number = ctypes.get_errno()
     if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
-        raise OpsMigrationCollision(
-            f"destination already exists: {destination.name}"
-        )
+        raise OpsMigrationCollision(f"destination already exists: {destination.name}")
     raise OSError(
         error_number,
         os.strerror(error_number),

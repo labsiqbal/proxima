@@ -626,10 +626,7 @@ def test_acp_start_failure_retains_activity_lease_when_tree_unproven(
         )
 
     asyncio.run(recycle_noop())
-    if (
-        recycle_verified
-        and not getattr(activity, "_retained_for_writer_tree", False)
-    ):
+    if recycle_verified and not getattr(activity, "_retained_for_writer_tree", False):
         activity.release()
     assert activity.released is False
 
@@ -806,7 +803,6 @@ def test_acp_initialize_failure_retains_activity_and_blocks_quiescence(
     from proxima_api.container_activity import (
         ContainerBoundaryError,
         acquire_container_activity_lease,
-        container_quiescence_lock,
     )
     from proxima_api.db import connect, init_db
 
@@ -869,10 +865,7 @@ def test_acp_initialize_failure_retains_activity_and_blocks_quiescence(
         )
 
     asyncio.run(recycle_noop())
-    if (
-        recycle_verified
-        and not getattr(activity, "_retained_for_writer_tree", False)
-    ):
+    if recycle_verified and not getattr(activity, "_retained_for_writer_tree", False):
         activity.release()
     assert getattr(activity, "_released", False) is False
 
@@ -901,10 +894,7 @@ def test_acp_initialize_failure_retains_activity_and_blocks_quiescence(
     except ChildProcessError:
         pass
     deadline = time_mod.monotonic() + 3
-    while (
-        time_mod.monotonic() < deadline
-        and not getattr(activity, "_released", False)
-    ):
+    while time_mod.monotonic() < deadline and not getattr(activity, "_released", False):
         time_mod.sleep(0.05)
     assert getattr(activity, "_released", False) is True
 
@@ -1070,13 +1060,10 @@ def test_worker_recycle_cancellation_retains_exact_tree_and_reraise():
             recycle_error = exc
             recycle_tree = getattr(exc, "writer_tree", None)
         if project_activity_lease is not None:
-            if (
-                recycle_verified
-                and not getattr(
-                    project_activity_lease,
-                    "_retained_for_writer_tree",
-                    False,
-                )
+            if recycle_verified and not getattr(
+                project_activity_lease,
+                "_retained_for_writer_tree",
+                False,
             ):
                 project_activity_lease.release()
             elif not recycle_verified:

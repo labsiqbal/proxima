@@ -18,9 +18,7 @@ from .ops_filesystem import (
 def hash_open_regular_file(fd: int) -> str:
     before = os.fstat(fd)
     if not stat.S_ISREG(before.st_mode):
-        raise OpsMigrationCollision(
-            "migration source is not a regular file"
-        )
+        raise OpsMigrationCollision("migration source is not a regular file")
     os.lseek(fd, 0, os.SEEK_SET)
     digest = hashlib.sha256()
     while chunk := os.read(fd, 1024 * 1024):
@@ -32,9 +30,7 @@ def hash_open_regular_file(fd: int) -> str:
         or before.st_mtime_ns != after.st_mtime_ns
         or before.st_ctime_ns != after.st_ctime_ns
     ):
-        raise OpsMigrationCollision(
-            "migration source changed while being read"
-        )
+        raise OpsMigrationCollision("migration source changed while being read")
     return digest.hexdigest()
 
 
@@ -48,11 +44,7 @@ def publish_bound_file_at(
     *,
     publish_open_file: Callable[[int, int, str], None],
 ) -> None:
-    flags = (
-        os.O_RDONLY
-        | os.O_NOFOLLOW
-        | getattr(os, "O_CLOEXEC", 0)
-    )
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     source_fd = os.open(
         source_name,
         flags,
@@ -67,9 +59,7 @@ def publish_bound_file_at(
             )
             or hash_open_regular_file(source_fd) != expected_hash
         ):
-            raise OpsMigrationCollision(
-                f"migration source changed: {source_name}"
-            )
+            raise OpsMigrationCollision(f"migration source changed: {source_name}")
         try:
             publish_open_file(
                 source_fd,
@@ -89,8 +79,7 @@ def publish_bound_file_at(
                         source_stat,
                         destination_stat,
                     )
-                    or hash_open_regular_file(destination_fd)
-                    != expected_hash
+                    or hash_open_regular_file(destination_fd) != expected_hash
                 ):
                     raise OpsMigrationCollision(
                         f"destination already exists: {destination_name}"
@@ -152,9 +141,8 @@ def _bound_destination_directory(
         dir_fd=parent_fd,
         follow_symlinks=False,
     )
-    if (
-        not identity_matches(expected_identity, current)
-        or not same_identity(current, named)
+    if not identity_matches(expected_identity, current) or not same_identity(
+        current, named
     ):
         os.close(destination_fd)
         raise OpsMigrationCollision(
@@ -185,9 +173,7 @@ def publish_bound_directory_at(
             entry["identity"],
             os.fstat(source_fd),
         ):
-            raise OpsMigrationCollision(
-                f"migration source changed: {source_name}"
-            )
+            raise OpsMigrationCollision(f"migration source changed: {source_name}")
         identities = publication.get("destination_directories")
         if not isinstance(identities, dict):
             raise OpsMigrationCollision(
@@ -217,47 +203,33 @@ def publish_bound_directory_at(
             prefix: str,
         ) -> None:
             source_names = sorted(os.listdir(current_source_fd))
-            destination_names = set(
-                os.listdir(current_destination_fd)
-            )
+            destination_names = set(os.listdir(current_destination_fd))
             unexpected = destination_names - set(source_names)
             if unexpected:
                 raise OpsMigrationCollision(
-                    "destination contains unplanned content: "
-                    f"{sorted(unexpected)[0]}"
+                    f"destination contains unplanned content: {sorted(unexpected)[0]}"
                 )
             for child_name in source_names:
-                rel = (
-                    f"{prefix}/{child_name}"
-                    if prefix
-                    else child_name
-                )
+                rel = f"{prefix}/{child_name}" if prefix else child_name
                 expected_node = expected_nodes.get(rel)
                 if expected_node is None:
                     raise OpsMigrationCollision(
-                        "migration source contains unplanned content: "
-                        f"{rel}"
+                        f"migration source contains unplanned content: {rel}"
                     )
                 source_stat = os.stat(
                     child_name,
                     dir_fd=current_source_fd,
                     follow_symlinks=False,
                 )
-                if (
-                    not identity_matches(
-                        expected_node["identity"],
-                        source_stat,
-                    )
-                    or stat.S_ISLNK(source_stat.st_mode)
-                ):
-                    raise OpsMigrationCollision(
-                        f"migration source changed: {rel}"
-                    )
+                if not identity_matches(
+                    expected_node["identity"],
+                    source_stat,
+                ) or stat.S_ISLNK(source_stat.st_mode):
+                    raise OpsMigrationCollision(f"migration source changed: {rel}")
                 if expected_node["kind"] == "directory":
                     if not stat.S_ISDIR(source_stat.st_mode):
                         raise OpsMigrationCollision(
-                            "migration source changed type: "
-                            f"{rel}"
+                            f"migration source changed type: {rel}"
                         )
                     child_source_fd = os.open(
                         child_name,
@@ -272,14 +244,12 @@ def publish_bound_directory_at(
                             raise OpsMigrationCollision(
                                 f"migration source changed: {rel}"
                             )
-                        child_destination_fd = (
-                            _bound_destination_directory(
-                                current_destination_fd,
-                                child_name,
-                                rel,
-                                identities,
-                                persist_manifest,
-                            )
+                        child_destination_fd = _bound_destination_directory(
+                            current_destination_fd,
+                            child_name,
+                            rel,
+                            identities,
+                            persist_manifest,
                         )
                         try:
                             publish_directory(
