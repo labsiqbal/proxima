@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import http.server
 import json
 import os
 import shutil
@@ -11,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -91,6 +94,7 @@ subjectAltName = @names
 [names]
 DNS.1 = proxima.tailnet.test
 DNS.2 = *.preview.test
+DNS.3 = coop-control.test
 """.strip(),
         encoding="utf-8",
     )
@@ -122,6 +126,53 @@ DNS.2 = *.preview.test
             completed.stderr or completed.stdout or "TLS certificate creation failed"
         )
     return certificate, private_key
+
+
+class _CoopControlHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path != "/coop-control.html":
+            self.send_error(404)
+            return
+        body = (
+            b"<!doctype html><script>"
+            b"globalThis.__proximaPreviewExecuted=true;"
+            b"</script><main>COOP EXECUTED</main>"
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+@contextlib.contextmanager
+def _coop_control_server(
+    certificate: Path,
+    private_key: Path,
+):
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(certificate, private_key)
+    server = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        _CoopControlHandler,
+    )
+    server.socket = tls.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield (
+            f"https://coop-control.test:{server.server_address[1]}"
+            "/coop-control.html"
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def _build_web() -> None:
@@ -722,7 +773,6 @@ def _browser_expression() -> str:
           ? image
           : null;
       });
-      window.__canonicalCoopSuccessUrl = image.src;
     } else if (kind === "html") {
       await until(`${name} isolated HTML preview`, () => {
         const frame = overlay.querySelector("iframe.av-frame");
@@ -756,6 +806,7 @@ def _browser_expression() -> str:
       if (cleanLocation.includes("__proxima_cap")) {
         throw new Error("Area capability remained in the clean preview URL");
       }
+      window.__targetPreviewCleanUrl = `${previewOrigin}${cleanLocation}`;
       const crossSiteScript = await new Promise(resolve => {
         const script = document.createElement("script");
         const timer = setTimeout(() => resolve("timeout"), 3000);
@@ -920,6 +971,7 @@ def _http_preview_expression(*, relay: bool = False) -> str:
   if (cleanLocation.includes("__proxima_cap")) {
     throw new Error("HTTP Area capability remained in the clean URL");
   }
+  window.__targetPreviewCleanUrl = `${origin}${cleanLocation}`;
   for (const probe of [
     "target-preview-module",
     "target-preview-worker",
@@ -981,15 +1033,36 @@ def _top_level_preview_probe(name: str) -> dict[str, object]:
     }
 
 
-def _coop_success_probe() -> dict[str, object]:
+def _clean_top_level_preview_probe(name: str) -> dict[str, object]:
+    return {
+        "action": "popup_response",
+        "name": name,
+        "timeout": 15,
+        "url_expression": "window.__targetPreviewCleanUrl",
+        "request_headers": {
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "document",
+        },
+        "expected_status": 403,
+        "expected_final_origin_expression": "window.__targetPreviewOrigin",
+        "expected_final_path": "/site/index.html",
+        "expected_capability_query": False,
+        "expected_executed": False,
+        "expected_body": "preview request metadata is invalid",
+    }
+
+
+def _coop_success_probe(url: str) -> dict[str, object]:
     return {
         "action": "popup_response",
         "name": "COOP success response control",
         "timeout": 15,
-        "url_expression": "window.__canonicalCoopSuccessUrl",
+        "url_expression": json.dumps(url),
         "expected_status": 200,
         "expected_capability_query": False,
-        "expected_executed": False,
+        "expected_executed": True,
+        "expected_body": "COOP EXECUTED",
     }
 
 
@@ -1115,58 +1188,66 @@ def main() -> None:
                 )
                 if evidence_dir is not None:
                     evidence_dir.mkdir(parents=True, exist_ok=True)
-                scenario = {
-                    "name": "canonical-file-targets",
-                    "authenticated": True,
-                    "steps": [
-                        {
-                            "action": "script",
-                            "name": "canonical file identity browser flow",
-                            "timeout": 45,
-                            "expression": _browser_expression(),
-                        },
-                        _top_level_preview_probe(
-                            "HTTPS top-level Area navigation rejection"
-                        ),
-                        _coop_success_probe(),
-                        *(
-                            [
-                                {
-                                    "action": "script",
-                                    "name": "wait for PDF renderer",
-                                    "timeout": 5,
-                                    "expression": """
+                with _coop_control_server(
+                    certificate,
+                    private_key,
+                ) as coop_control_url:
+                    scenario = {
+                        "name": "canonical-file-targets",
+                        "authenticated": True,
+                        "steps": [
+                            {
+                                "action": "script",
+                                "name": "canonical file identity browser flow",
+                                "timeout": 45,
+                                "expression": _browser_expression(),
+                            },
+                            _top_level_preview_probe(
+                                "HTTPS top-level Area navigation rejection"
+                            ),
+                            _clean_top_level_preview_probe(
+                                "HTTPS clean top-level Area rejection"
+                            ),
+                            _coop_success_probe(coop_control_url),
+                            *(
+                                [
+                                    {
+                                        "action": "script",
+                                        "name": "wait for PDF renderer",
+                                        "timeout": 5,
+                                        "expression": """
 new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
 """,
-                                },
-                                {
-                                    "action": "screenshot",
-                                    "path": str(
-                                        evidence_dir
-                                        / "after-archive-ops-pdf.png"
-                                    ),
-                                }
-                            ]
-                            if evidence_dir is not None
-                            else []
+                                    },
+                                    {
+                                        "action": "screenshot",
+                                        "path": str(
+                                            evidence_dir
+                                            / "after-archive-ops-pdf.png"
+                                        ),
+                                    }
+                                ]
+                                if evidence_dir is not None
+                                else []
+                            ),
+                        ],
+                    }
+                    transcript = run_scenario(
+                        executable=browser_executable,
+                        base_url=base_url,
+                        scenario=scenario,
+                        profile=fixture / "browser-profile",
+                        auth_token=token,
+                        drop_prefix=[],
+                        host_resolver_rules=(
+                            f"MAP *.preview.test:443 127.0.0.1:{port}, "
+                            "MAP *.preview.test 127.0.0.1, "
+                            "MAP proxima.tailnet.test 127.0.0.1, "
+                            "MAP coop-control.test 127.0.0.1, "
+                            "EXCLUDE 127.0.0.1"
                         ),
-                    ],
-                }
-                transcript = run_scenario(
-                    executable=browser_executable,
-                    base_url=base_url,
-                    scenario=scenario,
-                    profile=fixture / "browser-profile",
-                    auth_token=token,
-                    drop_prefix=[],
-                    host_resolver_rules=(
-                        f"MAP *.preview.test:443 127.0.0.1:{port}, "
-                        "MAP *.preview.test 127.0.0.1, "
-                        "MAP proxima.tailnet.test 127.0.0.1, "
-                        "EXCLUDE 127.0.0.1"
-                    ),
-                    ignore_certificate_errors=True,
-                )
+                        ignore_certificate_errors=True,
+                    )
                 print(
                     json.dumps(
                         {
@@ -1238,6 +1319,9 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                                 _top_level_preview_probe(
                                     "HTTP named-local top-level rejection"
                                 ),
+                                _clean_top_level_preview_probe(
+                                    "HTTP named-local clean top-level rejection"
+                                ),
                             ],
                         }
                         http_transcript = run_scenario(
@@ -1277,6 +1361,9 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                                 },
                                 _top_level_preview_probe(
                                     "HTTP relay top-level rejection"
+                                ),
+                                _clean_top_level_preview_probe(
+                                    "HTTP relay clean top-level rejection"
                                 ),
                             ],
                         }

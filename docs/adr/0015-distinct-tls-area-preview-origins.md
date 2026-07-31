@@ -46,13 +46,11 @@ ancestor. HTTP same-site relays retain `SameSite=Strict`. Native module workers 
 same-origin Area URLs. A cross-origin Area entry must carry the signed capability
 on an iframe or frame navigation request. Host-routed HTTPS and named-local HTTP
 exchanges return a server-owned bootstrap that sets the cookie and enter the clean
-same-origin URL. One manager-owned dispatch gate applies capability and Fetch
-Metadata admission to named hosts, plain HTTP relays, TLS hosts, and clean redirects.
-The clean frame navigation may use that validated host-scoped cookie and remains
-bound by the signed frame ancestor. Top-level, malformed-entry,
+same-origin URL. The clean frame navigation may use that validated host-scoped
+cookie and remains bound by the signed frame ancestor. Top-level, malformed-entry,
 missing-entry-metadata, cross-origin script, image, fetch, and worker requests are
-rejected before file service. Named-local HTTP uses a Secure `SameSite=None` cookie
-under the browser's trustworthy-localhost exception.
+rejected before Area dispatch. Named-local HTTP uses a Secure `SameSite=None`
+cookie under the browser's trustworthy-localhost exception.
 
 Named local origins and plain HTTP Area relays retain the same isolated-host model.
 When an HTTPS installation has no distinct TLS Area origin, active preview entry

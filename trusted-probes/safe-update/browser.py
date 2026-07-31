@@ -279,17 +279,34 @@ def _popup_response_step(
         for item in _debug_pages(debug_port)
         if isinstance(item.get("id"), str)
     }
-    opened = _evaluation(
-        connection,
-        (
-            "(() => {"
-            f"const popup=window.open({json.dumps(url)},'_blank');"
-            "return {ok:Boolean(popup)};"
-            "})()"
-        ),
-    )
-    if not isinstance(opened, dict) or opened.get("ok") is not True:
-        raise BrowserProbeError("browser popup could not open")
+    request_headers = step.get("request_headers")
+    target_id: str | None = None
+    if request_headers is not None:
+        if not isinstance(request_headers, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in request_headers.items()
+        ):
+            raise BrowserProbeError("browser popup request headers are invalid")
+        created = connection.call(
+            "Target.createTarget",
+            {"url": "about:blank"},
+        )
+        candidate_id = created.get("targetId")
+        if not isinstance(candidate_id, str):
+            raise BrowserProbeError("browser popup target could not open")
+        target_id = candidate_id
+    else:
+        opened = _evaluation(
+            connection,
+            (
+                "(() => {"
+                f"const popup=window.open({json.dumps(url)},'_blank');"
+                "return {ok:Boolean(popup)};"
+                "})()"
+            ),
+        )
+        if not isinstance(opened, dict) or opened.get("ok") is not True:
+            raise BrowserProbeError("browser popup could not open")
 
     deadline = time.monotonic() + float(step.get("timeout", 10))
     target: dict | None = None
@@ -299,7 +316,11 @@ def _popup_response_step(
                 item
                 for item in _debug_pages(debug_port)
                 if item.get("type") == "page"
-                and item.get("id") not in before
+                and (
+                    item.get("id") == target_id
+                    if target_id is not None
+                    else item.get("id") not in before
+                )
                 and isinstance(item.get("webSocketDebuggerUrl"), str)
             ),
             None,
@@ -316,6 +337,12 @@ def _popup_response_step(
         popup.call("Page.enable")
         popup.call("Runtime.enable")
         popup.call("Network.enable")
+        if request_headers is not None:
+            popup.call(
+                "Network.setExtraHTTPHeaders",
+                {"headers": request_headers},
+            )
+            popup.call("Page.navigate", {"url": url})
         marker = json.dumps(
             step.get("execution_marker", "__proximaPreviewExecuted")
         )

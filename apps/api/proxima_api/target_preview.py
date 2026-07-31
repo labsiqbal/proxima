@@ -252,14 +252,22 @@ class _PreviewFetchMetadata:
     def admits_area_request(self, *, capability_present: bool) -> bool:
         if self.opaque_origin:
             return False
+        if self.destination == "document":
+            return False
+        if self.mode == "navigate":
+            return (
+                self.destination in {"iframe", "frame"}
+                and (
+                    self.site == "same-origin"
+                    or (
+                        self.site in {"same-site", "cross-site"}
+                        and capability_present
+                    )
+                )
+            )
         if self.site == "same-origin":
             return True
-        return (
-            self.site in {"same-site", "cross-site"}
-            and self.mode == "navigate"
-            and self.destination in {"iframe", "frame"}
-            and capability_present
-        )
+        return False
 
 
 def _scope_origin(scope: Scope) -> str:
