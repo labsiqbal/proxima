@@ -1282,16 +1282,21 @@ A repo at `.` is the one intentional containment case; its local git exclude kee
 `/ops/` out of that repo.
 
 Existing Containers whose Ops row is `.` migrate at startup. The migration first
-builds and hashes a dry-run manifest, including the exact generated
-`ops/container.md` bytes, then uses atomic same-filesystem moves for only known
-Ops-owned paths. Its durable marker resumes safely after interruption. Any collision,
-changed content, unsupported file type, or ambiguity stops only that Container,
-opens an owner-visible Attention item, and leaves the legacy row active. Every
-resumed marker rechecks current code-Area ownership across the complete physical Ops
-root and every path type, symlink, content hash, and filesystem constraint immediately
-before applying any remaining move. An existing generated document must match the
-manifest exactly. A repaired physical layout with an open Attention item can use the
-same explicit retry boundary to recheck the layout and resolve the item without
+builds and hashes a dry-run manifest. An owner-authored legacy `container.md` is
+hash-bound and moved byte-for-byte; a generated document is planned only when the
+legacy document is absent. Atomic no-clobber creation and same-filesystem renames
+move only known Ops-owned paths, while one cross-process per-Container lock serializes
+the filesystem and durable marker boundary with every supported Area mutation. Its
+durable marker resumes safely after interruption. Version 1 markers upgrade only
+when the legacy and physical document state is unambiguous; otherwise every candidate
+is preserved for owner intervention. Any collision, changed content, unsupported file
+type, or ambiguity stops only that Container, opens an owner-visible Attention item,
+and leaves the legacy row active. Every resumed marker rechecks current code-Area
+ownership across the complete physical Ops root and every path type, symlink, content
+hash, and filesystem constraint immediately before applying any remaining move.
+Existing generated content must match its manifest exactly, and a late destination
+can never be replaced. A repaired physical layout with an open Attention item can use
+the same explicit retry boundary to recheck the layout and resolve the item without
 moving content.
 The Attention item links to a durable Project settings detail route. That surface
 shows the affected Project, exact stored owner-safe reason, migration phase, legacy

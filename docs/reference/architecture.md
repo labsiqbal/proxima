@@ -343,10 +343,15 @@ stays fail-closed. The intentional repo-at-root plus `ops/` containment is permi
 and `/ops/` is added to the root repo's local git exclude.
 
 Legacy Ops rows at `.` remain usable until migration succeeds. Startup creates a
-dry-run manifest with content hashes and the exact generated `ops/container.md`
-content, rejects collisions or ambiguous types before moving anything, and atomically
-renames only known Ops-owned paths on the same filesystem. A durable `moving` marker
-supports restart after any completed rename.
+dry-run manifest with content hashes. It includes an existing owner-authored
+`container.md` as a byte-preserving move, or binds exact generated content only when
+that legacy document is absent. It rejects collisions or ambiguous types before
+moving anything and uses atomic no-clobber creation and rename primitives for only
+known Ops-owned paths on the same filesystem. A durable `moving` marker supports
+restart after any completed rename. Version 1 moving markers upgrade in memory and
+are persisted at the current version only when legacy and physical document state
+identifies one safe continuation; ambiguous candidates remain untouched for owner
+intervention.
 Failures open a `container_ops_migration` Attention item and retain the legacy row;
 per-Container migration failures are isolated so one unhealthy Container (missing
 drive, deleted Area folder) never aborts control-plane startup.
@@ -359,7 +364,9 @@ same-filesystem migration routine used at startup. Immediately before every mani
 application, that boundary rechecks current code-Area ownership plus path type,
 symlink, hash, and filesystem constraints, including ownership of the complete
 physical Ops root and an exact match for any existing manifest-bound
-`ops/container.md`. A repaired already-physical layout with open migration Attention
+`ops/container.md`. Migration planning, apply, durable state updates, and supported
+Area mutations share a cross-process per-Container lock, and late destinations fail
+without replacement. A repaired already-physical layout with open migration Attention
 becomes explicitly retryable; the same boundary revalidates it and resolves Attention
 without moving content. It does not add merge, overwrite, delete, cross-device move,
 symlink-following, or content-authority behavior.

@@ -451,47 +451,48 @@ def register(app, deps):
         (not-yet-`git init`'d code is a valid code area). A manual row is never
         clobbered by re-detection; re-adding a removed area revives it."""
         project = visible_project(slug, user)
-        try:
-            root = container_registry.container_root(project)
-        except container_registry.ContainerBoundaryError:
-            raise HTTPException(status_code=400, detail="project folder is missing on disk")
-        try:
-            target = fsapi.resolve_in_project(root, payload.rel_path)
-        except fsapi.FsError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not target.is_dir():
-            raise HTTPException(status_code=400, detail="not a directory inside the project")
-        rel = "." if target == root else target.relative_to(root).as_posix()
-        existing = db().execute(
-            "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'code' AND rel_path = ?",
-            (project["id"], rel),
-        ).fetchone()
-        db().execute("BEGIN")
-        try:
-            if existing:
-                area_id = existing["id"]
+        with container_registry.container_mutation_lock(db(), project):
+            try:
+                root = container_registry.container_root(project)
+            except container_registry.ContainerBoundaryError:
+                raise HTTPException(status_code=400, detail="project folder is missing on disk")
+            try:
+                target = fsapi.resolve_in_project(root, payload.rel_path)
+            except fsapi.FsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not target.is_dir():
+                raise HTTPException(status_code=400, detail="not a directory inside the project")
+            rel = "." if target == root else target.relative_to(root).as_posix()
+            existing = db().execute(
+                "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'code' AND rel_path = ?",
+                (project["id"], rel),
+            ).fetchone()
+            db().execute("BEGIN")
+            try:
+                if existing:
+                    area_id = existing["id"]
+                    db().execute(
+                        "UPDATE project_areas SET source = 'manual', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (area_id,),
+                    )
+                else:
+                    area_id = db().execute(
+                        "INSERT INTO project_areas(project_id, kind, rel_path, source) VALUES (?, 'code', ?, 'manual')",
+                        (project["id"], rel),
+                    ).lastrowid
+                container_registry.validated_area_roots(db(), project, deep_ops_scan=True)
                 db().execute(
-                    "UPDATE project_areas SET source = 'manual', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (area_id,),
+                    "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
+                    "VALUES (?, 'project.area.add', 'project', ?, ?)",
+                    (user["id"], slug, json.dumps({"rel_path": rel})),
                 )
-            else:
-                area_id = db().execute(
-                    "INSERT INTO project_areas(project_id, kind, rel_path, source) VALUES (?, 'code', ?, 'manual')",
-                    (project["id"], rel),
-                ).lastrowid
-            container_registry.validated_area_roots(db(), project, deep_ops_scan=True)
-            db().execute(
-                "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
-                "VALUES (?, 'project.area.add', 'project', ?, ?)",
-                (user["id"], slug, json.dumps({"rel_path": rel})),
-            )
-            db().execute("COMMIT")
-        except container_registry.ContainerBoundaryError as exc:
-            db().execute("ROLLBACK")
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except Exception:
-            db().execute("ROLLBACK")
-            raise
+                db().execute("COMMIT")
+            except container_registry.ContainerBoundaryError as exc:
+                db().execute("ROLLBACK")
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except Exception:
+                db().execute("ROLLBACK")
+                raise
         if area_id is not None:
             _notify_code_graphs(
                 owner_user_id=int(user["id"]),
@@ -509,39 +510,40 @@ def register(app, deps):
         connector is BYO - Proxima pushes with the host's own git, so there
         is no remote to configure in-app. Turning it OFF always works."""
         project = visible_project(slug, user)
-        row = db().execute(
-            "SELECT id, kind, source, rel_path, push_on_merge FROM project_areas WHERE id = ? AND project_id = ?",
-            (area_id, project["id"]),
-        ).fetchone()
-        if not row or row["kind"] != "code" or row["source"] == "excluded":
-            raise HTTPException(status_code=404, detail="code area not found")
-        remote = None
-        if payload.push_on_merge:
-            try:
-                repo = container_registry.resolve_area_root(
-                    db(), project, int(row["id"])
-                )
-            except container_registry.ContainerBoundaryError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            remote = repo_remote.detect_remote(repo)
-            if remote is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="this code area has no git remote - add one with your own git (git remote add ...) and re-open settings",
-                )
-        # Enabling PINS the remote URL the owner is opting into (audit F3):
-        # the push-time target must still match it, so an agent rewriting the
-        # repo's own .git/config cannot silently redirect a later push.
-        # Disabling clears the pin - re-enabling re-reads and re-pins.
-        pinned_url = remote["url"] if payload.push_on_merge and remote else None
-        db().execute(
-            "UPDATE project_areas SET push_on_merge = ?, push_remote_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (1 if payload.push_on_merge else 0, pinned_url, area_id),
-        )
-        db().execute(
-            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.push_on_merge', 'project', ?, ?)",
-            (user["id"], slug, json.dumps({"rel_path": row["rel_path"], "push_on_merge": payload.push_on_merge, "push_remote_url": pinned_url})),
-        )
+        with container_registry.container_mutation_lock(db(), project):
+            row = db().execute(
+                "SELECT id, kind, source, rel_path, push_on_merge FROM project_areas WHERE id = ? AND project_id = ?",
+                (area_id, project["id"]),
+            ).fetchone()
+            if not row or row["kind"] != "code" or row["source"] == "excluded":
+                raise HTTPException(status_code=404, detail="code area not found")
+            remote = None
+            if payload.push_on_merge:
+                try:
+                    repo = container_registry.resolve_area_root(
+                        db(), project, int(row["id"])
+                    )
+                except container_registry.ContainerBoundaryError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                remote = repo_remote.detect_remote(repo)
+                if remote is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="this code area has no git remote - add one with your own git (git remote add ...) and re-open settings",
+                    )
+            # Enabling PINS the remote URL the owner is opting into (audit F3):
+            # the push-time target must still match it, so an agent rewriting the
+            # repo's own .git/config cannot silently redirect a later push.
+            # Disabling clears the pin - re-enabling re-reads and re-pins.
+            pinned_url = remote["url"] if payload.push_on_merge and remote else None
+            db().execute(
+                "UPDATE project_areas SET push_on_merge = ?, push_remote_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (1 if payload.push_on_merge else 0, pinned_url, area_id),
+            )
+            db().execute(
+                "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.push_on_merge', 'project', ?, ?)",
+                (user["id"], slug, json.dumps({"rel_path": row["rel_path"], "push_on_merge": payload.push_on_merge, "push_remote_url": pinned_url})),
+            )
         return {"id": area_id, "rel_path": row["rel_path"], "push_on_merge": payload.push_on_merge, "push_remote_url": pinned_url, "remote": remote}
 
     @app.delete("/api/projects/{slug}/areas/{area_id}")
@@ -551,14 +553,15 @@ def register(app, deps):
         explicitly removed; the tombstone is garbage-collected once the folder
         stops being detectable."""
         project = visible_project(slug, user)
-        row = db().execute(
-            "SELECT id, kind, source, rel_path FROM project_areas WHERE id = ? AND project_id = ?",
-            (area_id, project["id"]),
-        ).fetchone()
-        if not row or row["kind"] != "code" or row["source"] == "excluded":
-            raise HTTPException(status_code=404, detail="code area not found")
-        db().execute("UPDATE project_areas SET source = 'excluded', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (area_id,))
-        db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.remove', 'project', ?, ?)", (user["id"], slug, json.dumps({"rel_path": row["rel_path"]})))
+        with container_registry.container_mutation_lock(db(), project):
+            row = db().execute(
+                "SELECT id, kind, source, rel_path FROM project_areas WHERE id = ? AND project_id = ?",
+                (area_id, project["id"]),
+            ).fetchone()
+            if not row or row["kind"] != "code" or row["source"] == "excluded":
+                raise HTTPException(status_code=404, detail="code area not found")
+            db().execute("UPDATE project_areas SET source = 'excluded', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (area_id,))
+            db().execute("INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, 'project.area.remove', 'project', ?, ?)", (user["id"], slug, json.dumps({"rel_path": row["rel_path"]})))
         return {"ok": True, "id": area_id}
 
     @app.post("/api/projects/{slug}/areas/detect")
@@ -566,8 +569,9 @@ def register(app, deps):
         """Re-run code-area auto-detection on demand. Only auto rows follow the
         filesystem; manual and excluded rows are never clobbered."""
         project = visible_project(slug, user)
-        ensure_ops_area(db(), project["id"])
-        summary = sync_code_areas(db(), project["id"], project["path"])
+        with container_registry.container_mutation_lock(db(), project):
+            ensure_ops_area(db(), project["id"])
+            summary = sync_code_areas(db(), project["id"], project["path"])
         _notify_code_graphs(
             owner_user_id=int(user["id"]),
             container_slug=slug,

@@ -328,8 +328,10 @@ the detail is open, its Project pins the shell scope across session refreshes an
 project switcher is locked. Reveal actions open Files with explicit Container-root
 targets for the chosen side through a read-only Files adapter with no create, save,
 rename, or delete controls. Revealed directories expand and receive the active-row
-marker. Closing that inspection, changing Projects, or opening Files normally clears
-the Container-root target and restores the ordinary virtual Files view. Changing
+marker. Per-path inspection uses each side's actual file or directory state, and
+missing, symlinked, unavailable, or unsupported targets remain visibly disabled.
+Closing that inspection, changing Projects, or opening Files normally clears the
+Container-root target and restores the ordinary virtual Files view. Changing
 Projects or leaving the Projects Settings section clears the durable detail hash,
 while changing directly between recovery routes clears stale detail data before
 loading the next Project. Validation refresh is read-only, and guarded retry remains

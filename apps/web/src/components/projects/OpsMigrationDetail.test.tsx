@@ -144,6 +144,43 @@ describe('OpsMigrationDetail', () => {
     window.removeEventListener('proxima:reveal-file', listener)
   })
 
+  it('uses each side actual kind and disables unsafe collision targets', async () => {
+    vi.mocked(getOpsMigration).mockResolvedValue({
+      ...collision,
+      legacy_owned_paths: [
+        {
+          ...collision.legacy_owned_paths[0],
+          legacy_state: 'file',
+          physical_state: 'directory',
+        },
+        {
+          path: 'artifacts',
+          destination: 'ops/artifacts',
+          expected_kind: 'directory',
+          legacy_state: 'symlink',
+          physical_state: 'unavailable',
+          layout: 'both',
+          usable_from_active_ops: false,
+        },
+      ],
+    })
+    const events: unknown[] = []
+    const listener = (event: Event) => events.push((event as CustomEvent).detail)
+    window.addEventListener('proxima:reveal-file', listener)
+    const user = userEvent.setup()
+    render(<OpsMigrationDetail token="token" project={project} onBack={vi.fn()} onChanged={vi.fn()} />)
+
+    await user.click(await screen.findByRole('button', { name: 'Reveal legacy wiki' }))
+    await user.click(screen.getByRole('button', { name: 'Reveal physical ops/wiki' }))
+    expect(events).toEqual([
+      { path: 'wiki', pathKind: 'file', projectSlug: project.slug, rootSide: 'container' },
+      { path: 'ops/wiki', pathKind: 'directory', projectSlug: project.slug, rootSide: 'container' },
+    ])
+    expect(screen.getByRole('button', { name: 'Reveal legacy artifacts' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Reveal physical ops/artifacts' })).toBeDisabled()
+    window.removeEventListener('proxima:reveal-file', listener)
+  })
+
   it('clears the previous project payload while the next request fails', async () => {
     const nextProject = { ...project, slug: 'next-project', name: 'Next project' }
     vi.mocked(getOpsMigration).mockImplementation((_token, slug) => {
@@ -171,6 +208,7 @@ describe('OpsMigrationDetail', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Refresh validation' }))
     expect(await screen.findByText('Validation is safe. Retry is now available.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reveal physical ops/' })).toBeDisabled()
     const retry = screen.getByRole('button', { name: 'Retry migration' })
     expect(retry).toBeEnabled()
     await user.click(retry)

@@ -4,6 +4,9 @@ import type { OpsMigrationDetail as OpsMigrationDetailPayload, Project } from '.
 import { confirmDialog } from '../ui/Dialog'
 
 const stateLabel = (state: string) => state.replaceAll('_', ' ')
+const inspectableKind = (state: string): 'directory' | 'file' | null => (
+  state === 'directory' || state === 'file' ? state : null
+)
 
 export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
   token: string
@@ -110,6 +113,10 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
   const phase = detail?.phase || 'loading'
   const safe = !!detail?.retry_safe
   const unavailable = detail?.what_remains_usable.unavailable_paths || []
+  const physicalRootKind = detail
+    && (detail.physical_ops.state === 'empty' || detail.physical_ops.state === 'populated')
+    ? 'directory'
+    : null
 
   return <section className="ops-migration-detail" aria-labelledby="ops-migration-title">
     <header className="ops-migration-head">
@@ -167,7 +174,13 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
         </div>
         <div className="ops-migration-actions">
           <button type="button" className="ghost-button" disabled={!!busy} onClick={() => reveal('', 'root')}>Reveal legacy side</button>
-          <button type="button" className="ghost-button" disabled={!!busy} onClick={() => reveal('ops', 'directory')}>Reveal physical ops/</button>
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={!!busy || !physicalRootKind}
+            title={physicalRootKind ? undefined : 'Physical ops/ is unavailable for inspection'}
+            onClick={() => { if (physicalRootKind) reveal('ops', physicalRootKind) }}
+          >Reveal physical ops/</button>
           <button type="button" className="ghost-button" disabled={!!busy} onClick={() => void refreshValidation()}>
             {busy === 'validate' ? 'Refreshing...' : 'Refresh validation'}
           </button>
@@ -194,16 +207,34 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
           : <div className="ops-migration-table-wrap"><table className="ops-migration-table">
               <caption>Legacy and physical state for each planned Ops-owned path</caption>
               <thead><tr><th scope="col">Path</th><th scope="col">Legacy</th><th scope="col">Physical</th><th scope="col">Usable</th><th scope="col">Inspect</th></tr></thead>
-              <tbody>{detail.legacy_owned_paths.map(path => <tr key={path.path}>
-                <th scope="row"><code>{path.path}</code></th>
-                <td>{stateLabel(path.legacy_state)}</td>
-                <td><code>{path.destination}</code><small>{stateLabel(path.physical_state)}</small></td>
-                <td>{path.usable_from_active_ops ? 'Yes' : 'Not from active Ops'}</td>
-                <td><div className="ops-migration-row-actions">
-                  {path.legacy_state !== 'missing' && <button type="button" className="text-button" onClick={() => reveal(path.path, path.expected_kind)} aria-label={`Reveal legacy ${path.path}`}>Legacy</button>}
-                  {path.physical_state !== 'missing' && <button type="button" className="text-button" onClick={() => reveal(path.destination, path.expected_kind)} aria-label={`Reveal physical ${path.destination}`}>Physical</button>}
-                </div></td>
-              </tr>)}</tbody>
+              <tbody>{detail.legacy_owned_paths.map(path => {
+                const legacyKind = inspectableKind(path.legacy_state)
+                const physicalKind = inspectableKind(path.physical_state)
+                return <tr key={path.path}>
+                  <th scope="row"><code>{path.path}</code></th>
+                  <td>{stateLabel(path.legacy_state)}</td>
+                  <td><code>{path.destination}</code><small>{stateLabel(path.physical_state)}</small></td>
+                  <td>{path.usable_from_active_ops ? 'Yes' : 'Not from active Ops'}</td>
+                  <td><div className="ops-migration-row-actions">
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={!legacyKind}
+                      title={legacyKind ? undefined : `Cannot inspect ${stateLabel(path.legacy_state)} content`}
+                      onClick={() => { if (legacyKind) reveal(path.path, legacyKind) }}
+                      aria-label={`Reveal legacy ${path.path}`}
+                    >Legacy</button>
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={!physicalKind}
+                      title={physicalKind ? undefined : `Cannot inspect ${stateLabel(path.physical_state)} content`}
+                      onClick={() => { if (physicalKind) reveal(path.destination, physicalKind) }}
+                      aria-label={`Reveal physical ${path.destination}`}
+                    >Physical</button>
+                  </div></td>
+                </tr>
+              })}</tbody>
             </table></div>}
       </article>
 

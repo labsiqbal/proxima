@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 import hashlib
 import shutil
+import subprocess
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -53,6 +58,43 @@ def _database(tmp_path: Path):
     return conn
 
 
+def _v1_manifest(root: Path, *names: str) -> dict:
+    entries = []
+    for name in names:
+        path = root / name
+        digest, files = container_registry._hash_entry(path)
+        entries.append(
+            {
+                "name": name,
+                "kind": "directory" if path.is_dir() else "file",
+                "sha256": digest,
+                "files": files,
+            }
+        )
+    return {
+        "version": 1,
+        "container_root": str(root),
+        "ops_root": str(root / "ops"),
+        "entries": entries,
+    }
+
+
+def _store_moving_manifest(conn, container_id: int, manifest: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO container_ops_migrations(
+          container_id, migration_version, status, manifest_json, manifest_hash,
+          started_at, updated_at
+        ) VALUES (?, 1, 'moving', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        (
+            container_id,
+            json.dumps(manifest, sort_keys=True),
+            container_registry._manifest_digest(manifest),
+        ),
+    )
+
+
 def test_clean_legacy_ops_migration_preserves_bytes_and_is_idempotent(tmp_path: Path):
     conn = _database(tmp_path)
     root = tmp_path / "legacy"
@@ -90,6 +132,7 @@ def test_clean_legacy_ops_migration_preserves_bytes_and_is_idempotent(tmp_path: 
     assert all(entry["sha256"] for entry in manifest["entries"])
     planned_doc = manifest["container_doc"]
     assert planned_doc["path"] == "container.md"
+    assert planned_doc["strategy"] == "generate"
     assert planned_doc["sha256"] == hashlib.sha256(
         planned_doc["content"].encode("utf-8")
     ).hexdigest()
@@ -109,6 +152,141 @@ def test_clean_legacy_ops_migration_preserves_bytes_and_is_idempotent(tmp_path: 
         if path.is_file()
     }
     assert after == before
+
+
+@pytest.mark.parametrize("moved", [(), ("wiki",)])
+def test_v1_moving_manifest_upgrades_unambiguous_partial_layouts(
+    tmp_path: Path,
+    moved: tuple[str, ...],
+):
+    conn = _database(tmp_path)
+    root = tmp_path / f"v1-partial-{len(moved)}"
+    container_id = _legacy_container(conn, root, f"v1-partial-{len(moved)}")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+    manifest = _v1_manifest(root, "wiki", "artifacts")
+    if moved:
+        (root / "ops").mkdir()
+        for name in moved:
+            (root / name).rename(root / "ops" / name)
+        (root / "ops" / "container.md").write_text(
+            container_registry._container_doc_text(
+                f"V1-Partial-{len(moved)}"
+            ),
+            encoding="utf-8",
+        )
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is True
+    assert (root / "ops" / "wiki" / "data.txt").read_text(
+        encoding="utf-8"
+    ) == "wiki"
+    assert (root / "ops" / "artifacts" / "data.txt").read_text(
+        encoding="utf-8"
+    ) == "artifact"
+    marker = conn.execute(
+        "SELECT migration_version, manifest_json FROM container_ops_migrations "
+        "WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    assert marker["migration_version"] == container_registry.OPS_MIGRATION_VERSION
+    upgraded = json.loads(marker["manifest_json"])
+    assert upgraded["version"] == container_registry.OPS_MIGRATION_VERSION
+    assert upgraded["container_doc"]["strategy"] == "generate"
+
+
+def test_v1_completed_moves_upgrade_only_with_exact_generated_document(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "v1-completed"
+    container_id = _legacy_container(conn, root, "v1-completed")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "data.txt").write_text("wiki", encoding="utf-8")
+    manifest = _v1_manifest(root, "wiki")
+    (root / "ops").mkdir()
+    (root / "wiki").rename(root / "ops" / "wiki")
+    generated = container_registry._container_doc_text("V1-Completed")
+    (root / "ops" / "container.md").write_text(generated, encoding="utf-8")
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is True
+    assert (root / "ops" / "container.md").read_text(
+        encoding="utf-8"
+    ) == generated
+
+
+def test_v1_planned_document_metadata_upgrades_partial_move(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "v1-planned-document"
+    container_id = _legacy_container(conn, root, "v1-planned-document")
+    for name in ("wiki", "artifacts"):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(name, encoding="utf-8")
+    manifest = _v1_manifest(root, "wiki", "artifacts")
+    generated = container_registry._container_doc_text("V1-Planned-Document")
+    manifest["container_doc"] = {
+        "path": "container.md",
+        "content": generated,
+        "sha256": hashlib.sha256(generated.encode("utf-8")).hexdigest(),
+    }
+    (root / "ops").mkdir()
+    (root / "wiki").rename(root / "ops" / "wiki")
+    (root / "ops" / "container.md").write_text(generated, encoding="utf-8")
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is True
+    assert (root / "ops" / "artifacts" / "data.txt").read_text(
+        encoding="utf-8"
+    ) == "artifacts"
+
+
+def test_v1_upgrade_preserves_ambiguous_container_documents_for_owner(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "v1-ambiguous-docs"
+    container_id = _legacy_container(conn, root, "v1-ambiguous-docs")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "data.txt").write_text("wiki", encoding="utf-8")
+    manifest = _v1_manifest(root, "wiki")
+    (root / "ops").mkdir()
+    legacy = b"# Owner legacy document\n"
+    physical = b"# Physical candidate\n"
+    (root / "container.md").write_bytes(legacy)
+    (root / "ops" / "container.md").write_bytes(physical)
+    _store_moving_manifest(conn, container_id, manifest)
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "container.md").read_bytes() == legacy
+    assert (root / "ops" / "container.md").read_bytes() == physical
+    assert (root / "wiki" / "data.txt").read_text(encoding="utf-8") == "wiki"
+
+
+def test_legacy_owner_container_document_is_hash_bound_and_migrated(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "legacy-owner-document"
+    container_id = _legacy_container(conn, root, "legacy-owner-document")
+    owner_document = b"---\r\nidentity: Owner\r\n---\r\n\r\n# Exact bytes\r\n"
+    (root / "container.md").write_bytes(owner_document)
+
+    assert migrate_container_ops(conn, container_id) is True
+    assert not (root / "container.md").exists()
+    assert (root / "ops" / "container.md").read_bytes() == owner_document
+    marker = conn.execute(
+        "SELECT manifest_json FROM container_ops_migrations WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    manifest = json.loads(marker["manifest_json"])
+    assert manifest["container_doc"] == {
+        "path": "container.md",
+        "strategy": "move",
+        "sha256": hashlib.sha256(owner_document).hexdigest(),
+    }
+    assert any(
+        entry["name"] == "container.md"
+        and entry["sha256"] == hashlib.sha256(owner_document).hexdigest()
+        for entry in manifest["entries"]
+    )
 
 
 def test_collision_leaves_legacy_row_and_every_file_unchanged(tmp_path: Path):
@@ -211,7 +389,7 @@ def test_partial_move_recovers_from_durable_manifest(tmp_path: Path, monkeypatch
         (root / dirname).mkdir()
         (root / dirname / "data.bin").write_bytes(data)
 
-    real_replace = container_registry.os.replace
+    real_replace = container_registry._rename_noreplace
     moves = 0
 
     class SimulatedProcessDeath(BaseException):
@@ -225,7 +403,7 @@ def test_partial_move_recovers_from_durable_manifest(tmp_path: Path, monkeypatch
                 raise SimulatedProcessDeath
         return real_replace(source, destination)
 
-    monkeypatch.setattr(container_registry.os, "replace", die_after_one_move)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", die_after_one_move)
     with pytest.raises(SimulatedProcessDeath):
         migrate_container_ops(conn, container_id)
 
@@ -235,7 +413,7 @@ def test_partial_move_recovers_from_durable_manifest(tmp_path: Path, monkeypatch
     ).fetchone()
     assert marker["status"] == "moving"
     assert marker["manifest_json"]
-    monkeypatch.setattr(container_registry.os, "replace", real_replace)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
 
     assert migrate_container_ops(conn, container_id) is True
     assert (root / "ops" / "wiki" / "data.bin").read_bytes() == b"wiki"
@@ -455,7 +633,7 @@ def test_interrupted_move_is_visible_and_owner_retry_resolves_attention(
         (root / name).mkdir()
         (root / name / "data.txt").write_text(content, encoding="utf-8")
 
-    real_replace = container_registry.os.replace
+    real_replace = container_registry._rename_noreplace
     moves = 0
 
     def interrupt_second_move(source, destination):
@@ -466,9 +644,9 @@ def test_interrupted_move_is_visible_and_owner_retry_resolves_attention(
                 raise OSError("simulated interrupted move")
         return real_replace(source, destination)
 
-    monkeypatch.setattr(container_registry.os, "replace", interrupt_second_move)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
     assert migrate_container_ops(api.app.state.db, container_id) is False
-    monkeypatch.setattr(container_registry.os, "replace", real_replace)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
 
     detail = api.get(
         "/api/projects/interrupted-layout/ops-migration",
@@ -512,7 +690,7 @@ def test_interrupted_retry_rechecks_late_code_area_before_any_remaining_move(
         (root / name).mkdir()
         (root / name / "data.txt").write_text(content, encoding="utf-8")
 
-    real_replace = container_registry.os.replace
+    real_replace = container_registry._rename_noreplace
     moves = 0
 
     def interrupt_second_move(source, destination):
@@ -523,9 +701,9 @@ def test_interrupted_retry_rechecks_late_code_area_before_any_remaining_move(
                 raise OSError("simulated interrupted move")
         return real_replace(source, destination)
 
-    monkeypatch.setattr(container_registry.os, "replace", interrupt_second_move)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
     assert migrate_container_ops(api.app.state.db, container_id) is False
-    monkeypatch.setattr(container_registry.os, "replace", real_replace)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
 
     registered = api.post(
         "/api/projects/late-overlap-layout/areas",
@@ -562,7 +740,7 @@ def test_interrupted_retry_rejects_late_physical_ops_root_area_before_any_move(
         (root / name).mkdir()
         (root / name / "data.txt").write_text(content, encoding="utf-8")
 
-    real_replace = container_registry.os.replace
+    real_replace = container_registry._rename_noreplace
     moves = 0
 
     def interrupt_second_move(source, destination):
@@ -573,9 +751,9 @@ def test_interrupted_retry_rejects_late_physical_ops_root_area_before_any_move(
                 raise OSError("simulated interrupted move")
         return real_replace(source, destination)
 
-    monkeypatch.setattr(container_registry.os, "replace", interrupt_second_move)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
     assert migrate_container_ops(api.app.state.db, container_id) is False
-    monkeypatch.setattr(container_registry.os, "replace", real_replace)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
 
     registered = api.post(
         "/api/projects/late-ops-root-overlap/areas",
@@ -612,7 +790,7 @@ def test_interrupted_retry_rejects_container_doc_symlink_before_remaining_move(
         (root / name).mkdir()
         (root / name / "data.txt").write_text(content, encoding="utf-8")
 
-    real_replace = container_registry.os.replace
+    real_replace = container_registry._rename_noreplace
     moves = 0
 
     def interrupt_second_move(source, destination):
@@ -623,9 +801,9 @@ def test_interrupted_retry_rejects_container_doc_symlink_before_remaining_move(
                 raise OSError("simulated interrupted move")
         return real_replace(source, destination)
 
-    monkeypatch.setattr(container_registry.os, "replace", interrupt_second_move)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
     assert migrate_container_ops(api.app.state.db, container_id) is False
-    monkeypatch.setattr(container_registry.os, "replace", real_replace)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
 
     outside = tmp_path / "outside-container.md"
     outside.write_text("outside", encoding="utf-8")
@@ -663,7 +841,7 @@ def test_interrupted_retry_rejects_changed_container_doc_before_remaining_move(
         (root / name).mkdir()
         (root / name / "data.txt").write_text(content, encoding="utf-8")
 
-    real_replace = container_registry.os.replace
+    real_replace = container_registry._rename_noreplace
     moves = 0
 
     def interrupt_second_move(source, destination):
@@ -674,9 +852,9 @@ def test_interrupted_retry_rejects_changed_container_doc_before_remaining_move(
                 raise OSError("simulated interrupted move")
         return real_replace(source, destination)
 
-    monkeypatch.setattr(container_registry.os, "replace", interrupt_second_move)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
     assert migrate_container_ops(api.app.state.db, container_id) is False
-    monkeypatch.setattr(container_registry.os, "replace", real_replace)
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
 
     (root / "ops" / "container.md").write_text(
         "# Unplanned authority\n",
@@ -702,6 +880,181 @@ def test_interrupted_retry_rejects_changed_container_doc_before_remaining_move(
     assert (root / "ops" / "container.md").read_text(
         encoding="utf-8"
     ) == "# Unplanned authority\n"
+
+
+def test_retry_serializes_late_area_registration_before_manifest_apply(
+    tmp_path: Path,
+    monkeypatch,
+):
+    api, headers = _api(tmp_path)
+    root = tmp_path / "serialized-area-registration"
+    container_id = _owned_api_legacy(api, root, "serialized-area-registration")
+    for name, content in (("wiki", "wiki"), ("artifacts", "artifact")):
+        (root / name).mkdir()
+        (root / name / "data.txt").write_text(content, encoding="utf-8")
+
+    real_replace = container_registry._rename_noreplace
+    moves = 0
+
+    def interrupt_second_move(source, destination):
+        nonlocal moves
+        if Path(source).parent == root:
+            moves += 1
+            if moves == 2:
+                raise OSError("simulated interrupted move")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(container_registry, "_rename_noreplace", interrupt_second_move)
+    assert migrate_container_ops(api.app.state.db, container_id) is False
+    monkeypatch.setattr(container_registry, "_rename_noreplace", real_replace)
+
+    real_hash_entry = container_registry._hash_entry
+    apply_entered = threading.Event()
+    release_apply = threading.Event()
+    artifact_hashes = 0
+
+    def pause_manifest_apply(path: Path):
+        nonlocal artifact_hashes
+        result = real_hash_entry(path)
+        if path == root / "artifacts":
+            artifact_hashes += 1
+            if artifact_hashes == 2:
+                apply_entered.set()
+                assert release_apply.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(container_registry, "_hash_entry", pause_manifest_apply)
+    area_finished = threading.Event()
+
+    def add_area():
+        try:
+            return api.post(
+                "/api/projects/serialized-area-registration/areas",
+                headers=headers,
+                json={"rel_path": "ops"},
+            )
+        finally:
+            area_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        retry_future = pool.submit(
+            lambda: api.post(
+                "/api/projects/serialized-area-registration/ops-migration/retry",
+                headers=headers,
+            )
+        )
+        assert apply_entered.wait(timeout=5)
+        area_future = pool.submit(add_area)
+        area_was_blocked = not area_finished.wait(timeout=0.25)
+        release_apply.set()
+        retry = retry_future.result(timeout=5)
+        area = area_future.result(timeout=5)
+
+    assert area_was_blocked is True
+    assert retry.status_code == 200, retry.text
+    assert area.status_code == 409, area.text
+    assert (root / "ops" / "artifacts" / "data.txt").read_text(
+        encoding="utf-8"
+    ) == "artifact"
+
+
+def test_container_mutation_lock_excludes_another_process(tmp_path: Path):
+    conn = _database(tmp_path)
+    root = tmp_path / "multi-process-lock"
+    container_id = _legacy_container(conn, root, "multi-process-lock")
+    database = tmp_path / "proxima.db"
+    attempted = tmp_path / "attempted"
+    acquired = tmp_path / "acquired"
+    script = "\n".join(
+        (
+            "import sys",
+            "from pathlib import Path",
+            "from proxima_api.container_registry import container_mutation_lock",
+            "from proxima_api.db import connect",
+            "db_path, container_id, attempted, acquired = sys.argv[1:]",
+            "Path(attempted).write_text('attempted', encoding='utf-8')",
+            "with container_mutation_lock(connect(db_path), int(container_id)):",
+            "    Path(acquired).write_text('acquired', encoding='utf-8')",
+        )
+    )
+    api_root = Path(__file__).resolve().parents[1]
+
+    with container_registry.container_mutation_lock(conn, container_id):
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(database),
+                str(container_id),
+                str(attempted),
+                str(acquired),
+            ],
+            cwd=api_root,
+        )
+        deadline = time.monotonic() + 5
+        while not attempted.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert attempted.exists()
+        time.sleep(0.2)
+        assert not acquired.exists()
+
+    assert process.wait(timeout=5) == 0
+    assert acquired.read_text(encoding="utf-8") == "acquired"
+
+
+def test_generated_container_doc_creation_never_clobbers_late_content(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "late-container-doc"
+    container_id = _legacy_container(conn, root, "late-container-doc")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "keep.md").write_text("keep", encoding="utf-8")
+    real_mkstemp = container_registry.tempfile.mkstemp
+    injected = False
+
+    def inject_destination(*args, **kwargs):
+        nonlocal injected
+        result = real_mkstemp(*args, **kwargs)
+        if not injected and Path(kwargs["dir"]) == root / "ops":
+            injected = True
+            (root / "ops" / "container.md").write_bytes(b"late owner content")
+        return result
+
+    monkeypatch.setattr(container_registry.tempfile, "mkstemp", inject_destination)
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "ops" / "container.md").read_bytes() == b"late owner content"
+    assert (root / "wiki" / "keep.md").read_text(encoding="utf-8") == "keep"
+
+
+def test_manifest_rename_never_clobbers_late_destination(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "late-manifest-destination"
+    container_id = _legacy_container(conn, root, "late-manifest-destination")
+    (root / "design.md").write_bytes(b"legacy design")
+    real_hash_entry = container_registry._hash_entry
+    design_hashes = 0
+
+    def inject_destination(path: Path):
+        nonlocal design_hashes
+        result = real_hash_entry(path)
+        if path == root / "design.md":
+            design_hashes += 1
+            if design_hashes == 3:
+                (root / "ops" / "design.md").write_bytes(b"late destination")
+        return result
+
+    monkeypatch.setattr(container_registry, "_hash_entry", inject_destination)
+
+    assert migrate_container_ops(conn, container_id) is False
+    assert (root / "design.md").read_bytes() == b"legacy design"
+    assert (root / "ops" / "design.md").read_bytes() == b"late destination"
 
 
 def test_repaired_physical_layout_can_retry_to_resolve_open_attention(tmp_path: Path):

@@ -6,16 +6,21 @@ Container and Area roots.
 """
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import logging
 import os
 import sqlite3
 import stat
+import sys
 import tempfile
+import threading
 from collections.abc import Mapping
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 
 from .auth import iso_now
 from .directory_handles import directory_backend
@@ -25,7 +30,7 @@ _directory_backend = directory_backend()
 
 OPS_RELPATH = "ops"
 CONTAINER_DOC = "container.md"
-OPS_MIGRATION_VERSION = 1
+OPS_MIGRATION_VERSION = 2
 KNOWN_OPS_DIRS = (
     "wiki",
     "artifacts",
@@ -35,12 +40,16 @@ KNOWN_OPS_DIRS = (
     "tasks",
     "uploads",
 )
-KNOWN_OPS_FILES = ("design.md",)
-OPS_VIRTUAL_NAMES = frozenset((*KNOWN_OPS_DIRS, *KNOWN_OPS_FILES, CONTAINER_DOC))
+KNOWN_OPS_FILES = (CONTAINER_DOC, "design.md")
+OPS_VIRTUAL_NAMES = frozenset((*KNOWN_OPS_DIRS, *KNOWN_OPS_FILES))
 DEFAULT_STARTER_DIRS = ("wiki", "tasks", "artifacts")
 MAX_CONTAINER_DOC_BYTES = 64 * 1024
 MAX_IDENTITY_LABEL_CHARS = 120
 MAX_SUMMARY_CHARS = 500
+
+_CONTAINER_LOCKS_GUARD = threading.Lock()
+_CONTAINER_LOCKS: dict[str, Any] = {}
+_CONTAINER_LOCK_DEPTH = threading.local()
 
 
 class ContainerBoundaryError(ValueError):
@@ -49,6 +58,98 @@ class ContainerBoundaryError(ValueError):
 
 class OpsMigrationCollision(ContainerBoundaryError):
     """A legacy Ops layout cannot be moved without owner intervention."""
+
+
+def _database_path(conn: sqlite3.Connection) -> Path | None:
+    for row in conn.execute("PRAGMA database_list").fetchall():
+        name = row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        raw = row["file"] if isinstance(row, sqlite3.Row) else row[2]
+        if name == "main" and raw:
+            return Path(str(raw)).resolve()
+    return None
+
+
+def _acquire_file_lock(path: Path) -> int:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise ContainerBoundaryError("Container mutation lock directory is unsafe")
+    flags = os.O_CREAT | os.O_RDWR
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+                os.fsync(fd)
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _release_file_lock(fd: int) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def container_mutation_lock(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+) -> Iterator[None]:
+    data = get_container(conn, container)
+    database = _database_path(conn)
+    if database is None:
+        key = f"memory:{data['id']}:{data['path']}"
+        lock_path = None
+    else:
+        key = f"{database}:{data['id']}"
+        lock_path = (
+            database.parent
+            / f".{database.name}.container-locks"
+            / f"{int(data['id'])}.lock"
+        )
+    with _CONTAINER_LOCKS_GUARD:
+        local_lock = _CONTAINER_LOCKS.setdefault(key, threading.RLock())
+    with local_lock:
+        depths = getattr(_CONTAINER_LOCK_DEPTH, "values", None)
+        if depths is None:
+            depths = {}
+            _CONTAINER_LOCK_DEPTH.values = depths
+        if depths.get(key, 0):
+            depths[key] += 1
+            try:
+                yield
+            finally:
+                depths[key] -= 1
+            return
+        fd = _acquire_file_lock(lock_path) if lock_path is not None else None
+        depths[key] = 1
+        try:
+            yield
+        finally:
+            depths.pop(key, None)
+            if fd is not None:
+                _release_file_lock(fd)
 
 
 def _as_dict(row: sqlite3.Row | Mapping[str, Any]) -> dict[str, Any]:
@@ -295,23 +396,88 @@ def _container_doc_text(name: str) -> str:
 
 
 def _atomic_write_if_missing(path: Path, text: str) -> None:
-    if path.exists():
+    if path.exists() or path.is_symlink():
         if path.is_symlink() or not path.is_file():
             raise OpsMigrationCollision(f"{path.name} exists but is not a regular file")
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise OpsMigrationCollision(f"{path.parent.name} is not a safe directory")
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(text.encode("utf-8"))
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_name, path)
+        try:
+            os.link(temp_name, path, follow_symlinks=False)
+        except FileExistsError:
+            if path.is_symlink() or not path.is_file():
+                raise OpsMigrationCollision(
+                    f"{path.name} exists but is not a regular file"
+                )
     finally:
         try:
             Path(temp_name).unlink()
         except FileNotFoundError:
             pass
+
+
+def _rename_noreplace(source: Path, destination: Path) -> None:
+    source_bytes = os.fsencode(source)
+    destination_bytes = os.fsencode(destination)
+    if sys.platform.startswith("linux"):
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = getattr(libc, "renameat2", None)
+        if renameat2 is None:
+            raise OpsMigrationCollision(
+                "this platform cannot guarantee a no-clobber Ops migration"
+            )
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(
+            -100,
+            source_bytes,
+            -100,
+            destination_bytes,
+            1,
+        )
+    elif sys.platform == "darwin":
+        libc = ctypes.CDLL(None, use_errno=True)
+        renamex_np = getattr(libc, "renamex_np", None)
+        if renamex_np is None:
+            raise OpsMigrationCollision(
+                "this platform cannot guarantee a no-clobber Ops migration"
+            )
+        renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        renamex_np.restype = ctypes.c_int
+        result = renamex_np(source_bytes, destination_bytes, 4)
+    elif os.name == "nt":
+        try:
+            os.rename(source, destination)
+        except FileExistsError as exc:
+            raise OpsMigrationCollision(
+                f"destination already exists: {destination.name}"
+            ) from exc
+        return
+    else:
+        raise OpsMigrationCollision(
+            "this platform cannot guarantee a no-clobber Ops migration"
+        )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise OpsMigrationCollision(
+            f"destination already exists: {destination.name}"
+        )
+    raise OSError(error_number, os.strerror(error_number), str(source))
 
 
 def create_physical_ops_root(
@@ -465,19 +631,32 @@ def _build_manifest(
                 "files": files,
             }
         )
-    container_doc = _container_doc_text(
-        str(container.get("name") or container.get("slug") or "Container")
+    owner_doc = next(
+        (entry for entry in entries if entry["name"] == CONTAINER_DOC),
+        None,
     )
+    if owner_doc is not None:
+        container_doc: dict[str, Any] = {
+            "path": CONTAINER_DOC,
+            "strategy": "move",
+            "sha256": owner_doc["sha256"],
+        }
+    else:
+        content = _container_doc_text(
+            str(container.get("name") or container.get("slug") or "Container")
+        )
+        container_doc = {
+            "path": CONTAINER_DOC,
+            "strategy": "generate",
+            "content": content,
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        }
     return {
         "version": OPS_MIGRATION_VERSION,
         "container_root": str(root),
         "ops_root": str(physical),
         "entries": entries,
-        "container_doc": {
-            "path": CONTAINER_DOC,
-            "content": container_doc,
-            "sha256": hashlib.sha256(container_doc.encode("utf-8")).hexdigest(),
-        },
+        "container_doc": container_doc,
     }
 
 
@@ -599,7 +778,7 @@ def _apply_manifest(manifest: Mapping[str, Any]) -> Path:
                 raise OpsMigrationCollision(
                     f"source and destination are on different filesystems: {entry['name']}"
                 )
-            os.replace(source, destination)
+            _rename_noreplace(source, destination)
             moved_digest, _ = _hash_entry(destination)
             if moved_digest != entry["sha256"]:
                 raise OpsMigrationCollision(
@@ -1088,24 +1267,187 @@ def _validate_manifest_area_ownership(
                 )
 
 
-def _manifest_container_doc(manifest: Mapping[str, Any]) -> tuple[str, str]:
+def _upgrade_manifest(
+    container: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    version = manifest.get("version")
+    if version == OPS_MIGRATION_VERSION:
+        return dict(manifest)
+    if version != 1:
+        raise OpsMigrationCollision(
+            "stored Ops migration manifest has an unsupported version"
+        )
+    upgraded = json.loads(json.dumps(manifest))
+    entries = upgraded.get("entries")
+    if not isinstance(entries, list):
+        raise OpsMigrationCollision("stored Ops migration manifest has invalid entries")
+    if any(
+        isinstance(entry, Mapping) and entry.get("name") == CONTAINER_DOC
+        for entry in entries
+    ):
+        raise OpsMigrationCollision(
+            "version 1 Ops migration manifest has ambiguous container.md ownership"
+        )
+    root = Path(str(upgraded.get("container_root") or ""))
+    physical = Path(str(upgraded.get("ops_root") or ""))
+    legacy_doc = root / CONTAINER_DOC
+    physical_doc = physical / CONTAINER_DOC
+    legacy_state = _path_state(legacy_doc)
+    physical_state = _path_state(physical_doc)
+    if legacy_state not in {"missing", "file"}:
+        raise OpsMigrationCollision(
+            "legacy container.md is not an unambiguous regular file"
+        )
+    if physical_state not in {"missing", "file"}:
+        raise OpsMigrationCollision(
+            "ops/container.md is not an unambiguous regular file"
+        )
+    if legacy_state == "file" and physical_state == "file":
+        raise OpsMigrationCollision(
+            "both legacy and physical container.md exist; owner intervention is required"
+        )
+
+    prior = upgraded.get("container_doc")
+    if isinstance(prior, Mapping):
+        content = prior.get("content")
+        expected_hash = prior.get("sha256")
+        if (
+            prior.get("path") != CONTAINER_DOC
+            or not isinstance(content, str)
+            or not isinstance(expected_hash, str)
+            or hashlib.sha256(content.encode("utf-8")).hexdigest() != expected_hash
+        ):
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest has an invalid planned container.md"
+            )
+        if legacy_state == "file":
+            raise OpsMigrationCollision(
+                "legacy container.md appeared after migration planning"
+            )
+        if physical_state == "file" and _hash_file(physical_doc) != expected_hash:
+            raise OpsMigrationCollision(
+                "ops/container.md changed after migration planning"
+            )
+        planned_doc: dict[str, Any] = {
+            "path": CONTAINER_DOC,
+            "strategy": "generate",
+            "content": content,
+            "sha256": expected_hash,
+        }
+    elif legacy_state == "file":
+        digest, files = _hash_entry(legacy_doc)
+        entries.append(
+            {
+                "name": CONTAINER_DOC,
+                "kind": "file",
+                "sha256": digest,
+                "files": files,
+            }
+        )
+        planned_doc = {
+            "path": CONTAINER_DOC,
+            "strategy": "move",
+            "sha256": digest,
+        }
+    else:
+        content = _container_doc_text(
+            str(container.get("name") or container.get("slug") or "Container")
+        )
+        expected_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if physical_state == "file" and _hash_file(physical_doc) != expected_hash:
+            raise OpsMigrationCollision(
+                "existing ops/container.md has ambiguous authority"
+            )
+        planned_doc = {
+            "path": CONTAINER_DOC,
+            "strategy": "generate",
+            "content": content,
+            "sha256": expected_hash,
+        }
+    upgraded["version"] = OPS_MIGRATION_VERSION
+    upgraded["container_doc"] = planned_doc
+    return upgraded
+
+
+def _manifest_container_doc(
+    manifest: Mapping[str, Any],
+) -> tuple[str, str | None, str]:
+    if manifest.get("version") != OPS_MIGRATION_VERSION:
+        raise OpsMigrationCollision(
+            "stored Ops migration manifest has an unsupported version"
+        )
     planned = manifest.get("container_doc")
     if not isinstance(planned, Mapping):
         raise OpsMigrationCollision(
             "stored Ops migration manifest has no planned container.md"
         )
+    strategy = planned.get("strategy")
     content = planned.get("content")
     expected_hash = planned.get("sha256")
     if (
         planned.get("path") != CONTAINER_DOC
-        or not isinstance(content, str)
+        or strategy not in {"generate", "move"}
         or not isinstance(expected_hash, str)
-        or hashlib.sha256(content.encode("utf-8")).hexdigest() != expected_hash
     ):
         raise OpsMigrationCollision(
             "stored Ops migration manifest has an invalid planned container.md"
         )
-    return content, expected_hash
+    doc_entries = [
+        entry
+        for entry in manifest.get("entries") or []
+        if isinstance(entry, Mapping) and entry.get("name") == CONTAINER_DOC
+    ]
+    if strategy == "generate":
+        if (
+            not isinstance(content, str)
+            or hashlib.sha256(content.encode("utf-8")).hexdigest() != expected_hash
+            or doc_entries
+        ):
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest has an invalid generated container.md"
+            )
+        return strategy, content, expected_hash
+    if content is not None or len(doc_entries) != 1:
+        raise OpsMigrationCollision(
+            "stored Ops migration manifest has an invalid owner container.md"
+        )
+    entry = doc_entries[0]
+    if entry.get("kind") != "file" or entry.get("sha256") != expected_hash:
+        raise OpsMigrationCollision(
+            "stored Ops migration manifest does not bind owner container.md"
+        )
+    return strategy, None, expected_hash
+
+
+def _validate_manifest_entries(manifest: Mapping[str, Any]) -> None:
+    entries = manifest.get("entries")
+    if not isinstance(entries, list):
+        raise OpsMigrationCollision("stored Ops migration manifest has invalid entries")
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest has an invalid entry"
+            )
+        name = entry.get("name")
+        digest = entry.get("sha256")
+        if (
+            not isinstance(name, str)
+            or not name
+            or "/" in name
+            or "\\" in name
+            or name in {".", ".."}
+            or name in seen
+            or entry.get("kind") not in {"directory", "file"}
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest has an invalid entry"
+            )
+        seen.add(name)
 
 
 def _validated_retry_manifest(
@@ -1133,9 +1475,11 @@ def _validated_retry_manifest(
             raise OpsMigrationCollision(
                 "stored Ops migration manifest no longer matches this Container"
             )
+        manifest = _upgrade_manifest(container, manifest)
     else:
         manifest = _build_manifest(conn, container)
 
+    _validate_manifest_entries(manifest)
     validated_area_roots(conn, container, deep_ops_scan=True)
     _validate_manifest_area_ownership(conn, container, manifest)
 
@@ -1166,7 +1510,9 @@ def _validated_retry_manifest(
                 f"physical Ops root contains unplanned content: {unexpected[0]}"
             )
 
-    _, expected_container_doc_hash = _manifest_container_doc(manifest)
+    container_doc_strategy, _, expected_container_doc_hash = _manifest_container_doc(
+        manifest
+    )
     container_doc_path = physical / CONTAINER_DOC
     container_doc_state = _path_state(container_doc_path)
     if container_doc_state == "symlink":
@@ -1178,6 +1524,13 @@ def _validated_retry_manifest(
         and _hash_file(container_doc_path) != expected_container_doc_hash
     ):
         raise OpsMigrationCollision("ops/container.md changed after migration planning")
+    if (
+        container_doc_strategy == "generate"
+        and _path_state(root / CONTAINER_DOC) != "missing"
+    ):
+        raise OpsMigrationCollision(
+            "legacy container.md appeared after migration planning"
+        )
 
     destination_device = (
         _path_device(physical) if physical_state == "directory" else _path_device(root)
@@ -1436,7 +1789,7 @@ def inspect_ops_migration(
     }
 
 
-def migrate_container_ops(
+def _migrate_container_ops_locked(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
 ) -> bool:
@@ -1507,19 +1860,25 @@ def migrate_container_ops(
             data,
             dict(current_marker) if current_marker is not None else None,
         )
-        container_doc, expected_container_doc_hash = _manifest_container_doc(manifest)
-        _atomic_write_if_missing(
-            Path(str(manifest["ops_root"])) / CONTAINER_DOC,
-            container_doc,
+        _upsert_marker(conn, int(data["id"]), "moving", manifest)
+        strategy, container_doc, expected_container_doc_hash = (
+            _manifest_container_doc(manifest)
         )
-        if (
-            _hash_file(Path(str(manifest["ops_root"])) / CONTAINER_DOC)
-            != expected_container_doc_hash
-        ):
+        physical_container_doc = (
+            Path(str(manifest["ops_root"])) / CONTAINER_DOC
+        )
+        if strategy == "generate":
+            assert container_doc is not None
+            _atomic_write_if_missing(physical_container_doc, container_doc)
+            if _hash_file(physical_container_doc) != expected_container_doc_hash:
+                raise OpsMigrationCollision(
+                    "ops/container.md changed after migration planning"
+                )
+        _apply_manifest(manifest)
+        if _hash_file(physical_container_doc) != expected_container_doc_hash:
             raise OpsMigrationCollision(
-                "ops/container.md changed after migration planning"
+                "ops/container.md changed during migration"
             )
-        physical = _apply_manifest(manifest)
         exclude_ops_from_root_repo(container_root(data))
         conn.execute("BEGIN")
         try:
@@ -1549,6 +1908,15 @@ def migrate_container_ops(
         _attention(conn, data, reason)
         return False
     return True
+
+
+def migrate_container_ops(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+) -> bool:
+    """Migrate one legacy ``.`` Ops Area. Returns True only when complete."""
+    with container_mutation_lock(conn, container):
+        return _migrate_container_ops_locked(conn, container)
 
 
 def migrate_legacy_ops_containers(conn: sqlite3.Connection) -> dict[str, int]:

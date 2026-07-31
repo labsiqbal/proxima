@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .container_registry import (
     OPS_RELPATH,
+    container_mutation_lock,
     create_physical_ops_root,
     exclude_ops_from_root_repo,
     validated_area_roots,
@@ -76,6 +77,16 @@ def ensure_ops_area(
     migrations may explicitly request ``.`` so the resumable filesystem
     migration can move known content after the schema transaction commits.
     """
+    with container_mutation_lock(conn, project_id):
+        _ensure_ops_area_locked(conn, project_id, rel_path=rel_path)
+
+
+def _ensure_ops_area_locked(
+    conn: sqlite3.Connection,
+    project_id: int,
+    *,
+    rel_path: str,
+) -> None:
     existing = conn.execute(
         "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops'",
         (project_id,),
@@ -116,6 +127,22 @@ def sync_code_areas(
     repo marker is gone has nothing left to block and is garbage-collected.
     A missing/unreadable root simply detects nothing - valid (zero code areas).
     """
+    with container_mutation_lock(conn, project_id):
+        return _sync_code_areas_locked(
+            conn,
+            project_id,
+            root,
+            validate=validate,
+        )
+
+
+def _sync_code_areas_locked(
+    conn: sqlite3.Connection,
+    project_id: int,
+    root: str | Path,
+    *,
+    validate: bool,
+) -> dict:
     root = Path(root)
     detected = set(detect_code_areas(root)) if root.is_dir() else set()
     if "." in detected:
