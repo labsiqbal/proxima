@@ -13,6 +13,7 @@ import {
 	workRouteDesignOpenSync,
 	workRouteFocusedItemIds,
 	workRouteSessionId,
+	planOpenMasterConversation,
 } from "./App";
 import type { ChatSession, Project } from "./types";
 import { createJob, deleteJob, linkJobRun, startJob } from "./api/jobs";
@@ -1182,6 +1183,22 @@ describe("Shell project selection", () => {
 				sessionEnabled: enabled,
 			}),
 		).toEqual({ project: betaProject, session: beta });
+	});
+
+	it("routes Open Master conversation through Delegate and keeps a valid origin focus id", () => {
+		expect(planOpenMasterConversation(21)).toEqual({
+			enterDelegate: true,
+			pendingMasterMessageId: 21,
+		});
+		expect(planOpenMasterConversation(null)).toEqual({
+			enterDelegate: true,
+			pendingMasterMessageId: null,
+		});
+		expect(planOpenMasterConversation(-1)).toEqual({
+			enterDelegate: true,
+			pendingMasterMessageId: null,
+		});
+		expect(planOpenMasterConversation(21, false)).toBeNull();
 	});
 });
 

@@ -271,7 +271,7 @@ def settle_open_decisions_for_job(
     """Close unresolved decisions when their Task leaves review without an answer.
 
     Runs inside the caller's write transaction. Returns settled decision ids so
-    the caller can project them after commit.
+    the caller can project them while the Task row still exists.
     """
     rows = conn.execute(
         "SELECT * FROM master_decisions WHERE requesting_job_id = ? "
@@ -284,6 +284,7 @@ def settle_open_decisions_for_job(
     response = {
         "value": TASK_LEFT_REVIEW_RESPONSE_VALUE,
         "label": f"Closed because the Task left review ({reason_label})",
+        "task_id": int(job_id),
     }
     response_json = json.dumps(
         response, ensure_ascii=False, separators=(",", ":")
@@ -328,12 +329,57 @@ def settle_open_decisions_for_job(
     return settled
 
 
-def project_settled_decisions(app: Any, decision_ids: list[int]) -> None:
+def settle_open_decisions_for_jobs(
+    conn: sqlite3.Connection,
+    *,
+    job_ids: list[int],
+    actor_user_id: int | None,
+    reason: str,
+) -> list[int]:
+    """Settle every open decision linked to the given Tasks, in id order."""
+    settled: list[int] = []
+    for job_id in sorted({int(job_id) for job_id in job_ids if int(job_id) > 0}):
+        settled.extend(
+            settle_open_decisions_for_job(
+                conn,
+                job_id=job_id,
+                actor_user_id=actor_user_id,
+                reason=reason,
+            )
+        )
+    return settled
+
+
+def project_settled_decisions(
+    app: Any,
+    decision_ids: list[int],
+    *,
+    conn: sqlite3.Connection | None = None,
+    external_transaction: bool = False,
+) -> list[int]:
+    """Project settled decisions into Master.
+
+    When ``external_transaction`` is true, writes on ``conn`` inside the caller's
+    transaction and returns master session ids the caller must notify after commit.
+    """
     projection = getattr(app.state, "master_projection", None)
-    if projection is None:
-        return
+    if projection is None or not decision_ids:
+        return []
+    notify_sessions: list[int] = []
     for decision_id in decision_ids:
+        if external_transaction:
+            if conn is None:
+                raise ValueError("external decision projection requires a connection")
+            row = projection.project_decision(
+                decision_id,
+                conn=conn,
+                external_transaction=True,
+            )
+            if row is not None:
+                notify_sessions.append(int(row["master_session_id"]))
+            continue
         projection.safe_project_decision(decision_id)
+    return notify_sessions
 
 
 def create_decision(

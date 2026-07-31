@@ -467,6 +467,38 @@ describe('MasterScreen', () => {
     expect(screen.queryByRole('button', { name: /work panel/i })).not.toBeInTheDocument()
   })
 
+  it('focuses the durable origin message once after Master mounts', async () => {
+    const onFocusMessageConsumed = vi.fn()
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      messages: [
+        {
+          id: 21,
+          role: 'user',
+          content: 'Need a rollout window',
+          author: 'owner',
+        },
+      ],
+    } as never)
+
+    render(
+      <MasterScreen
+        token="token"
+        runners={runners as never}
+        onOpenJob={vi.fn()}
+        focusMessageId={21}
+        onFocusMessageConsumed={onFocusMessageConsumed}
+      />,
+    )
+
+    expect(await screen.findByText('Need a rollout window')).toBeInTheDocument()
+    expect(document.querySelector('[data-message-id="21"]')).not.toBeNull()
+    await vi.waitFor(() => {
+      expect(onFocusMessageConsumed).toHaveBeenCalledTimes(1)
+    })
+    expect(actions.setHistory).toHaveBeenCalledWith({ kind: 'roving' })
+  })
+
   it('restores durable decision context with Task and conversation cross-links', async () => {
     const onOpenJob = vi.fn()
     vi.mocked(useMasterState).mockReturnValue({

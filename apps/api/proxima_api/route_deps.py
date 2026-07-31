@@ -26,7 +26,7 @@ from .container_registry import (
 )
 from .profile_seed import seed_agent_home
 from .master_runtime import ensure_master_identity
-from . import features, master_focus
+from . import features, master_decisions, master_focus
 from .project_areas import areas_payload
 from .provisioning import provision_user_workspace
 from .runner_specs import default_runner, runner_spec
@@ -464,6 +464,27 @@ def build_route_deps(
                 # so remove internal dependency edges, then the Container's jobs.
                 # Incoming edges from another Container were refused before any
                 # filesystem change.
+                job_ids = [
+                    int(row["id"])
+                    for row in conn.execute(
+                        "SELECT id FROM jobs WHERE project_id = ? ORDER BY id",
+                        (project["id"],),
+                    ).fetchall()
+                ]
+                settled_decision_ids = master_decisions.settle_open_decisions_for_jobs(
+                    conn,
+                    job_ids=job_ids,
+                    actor_user_id=project.get("owner_user_id"),
+                    reason="Container deleted",
+                )
+                focus_notifications.extend(
+                    master_decisions.project_settled_decisions(
+                        app,
+                        settled_decision_ids,
+                        conn=conn,
+                        external_transaction=True,
+                    )
+                )
                 conn.execute(
                     "DELETE FROM task_dependencies WHERE "
                     "task_id IN (SELECT id FROM jobs WHERE project_id = ?) "

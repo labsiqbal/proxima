@@ -1304,10 +1304,22 @@ class MasterProjectionService:
             return None
 
     def safe_project_decision(
-        self, decision_id: int
+        self,
+        decision_id: int,
+        *,
+        conn: sqlite3.Connection | None = None,
+        connection: sqlite3.Connection | None = None,
+        external_transaction: bool = False,
+        notify_sessions: set[int] | None = None,
     ) -> dict[str, Any] | None:
         try:
-            return self.project_decision(decision_id)
+            return self.project_decision(
+                decision_id,
+                conn=conn,
+                connection=connection,
+                external_transaction=external_transaction,
+                notify_sessions=notify_sessions,
+            )
         except Exception:
             log.exception(
                 "Master decision projection failed for decision %s",
@@ -1968,7 +1980,6 @@ class MasterProjectionService:
             (owner_user_id, projection_key),
         ).fetchone()
         return dict(row) if row else {}
-
     def _task(
         self,
         job_id: int,
@@ -2398,8 +2409,18 @@ class MasterProjectionService:
             },
         )
 
-    def project_decision(self, decision_id: int) -> dict[str, Any] | None:
-        row = self.conn.execute(
+    def project_decision(
+        self,
+        decision_id: int,
+        *,
+        conn: sqlite3.Connection | None = None,
+        connection: sqlite3.Connection | None = None,
+        external_transaction: bool = False,
+        notify_sessions: set[int] | None = None,
+    ) -> dict[str, Any] | None:
+        write_conn = connection if connection is not None else conn
+        read_conn = write_conn if write_conn is not None else self.conn
+        row = read_conn.execute(
             "SELECT decision.*, attention.kind AS attention_kind, "
             "job.project_id, job.target_area_id "
             "FROM master_decisions decision "
@@ -2440,6 +2461,15 @@ class MasterProjectionService:
             "toast_key": f"decision:{decision_id}:{row['state']}",
             "closed_without_owner_response": closed_without_owner_response,
         }
+        deferred = notify_sessions
+        if external_transaction:
+            if write_conn is None:
+                raise ValueError(
+                    "external decision projection requires a connection"
+                )
+            if deferred is None:
+                # Caller notifies from the returned row after commit.
+                deferred = set()
         return self._insert(
             owner_user_id=_as_int(row["owner_user_id"]),
             master_session_id=_as_int(row["master_session_id"]),
@@ -2451,6 +2481,8 @@ class MasterProjectionService:
             origin_message_id=row["origin_message_id"],
             content=_safe_projection_content(projection_type, payload),
             payload=payload,
+            connection=write_conn,
+            notify_sessions=deferred,
         )
 
     def observe_worker_event(

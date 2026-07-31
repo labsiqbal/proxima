@@ -332,6 +332,21 @@ export function isDelegateDestination(view: View): boolean {
   return view === 'master' || view === 'activity' || view === 'artifacts' || view === 'task'
 }
 
+/** Plan Work-mode Open Master conversation: always enter Delegate, then focus. */
+export function planOpenMasterConversation(
+  originMessageId?: number | null,
+  masterOrchestrator = true,
+): { enterDelegate: true; pendingMasterMessageId: number | null } | null {
+  if (!masterOrchestrator) return null
+  const pendingMasterMessageId =
+    typeof originMessageId === 'number' &&
+    Number.isSafeInteger(originMessageId) &&
+    originMessageId > 0
+      ? originMessageId
+      : null
+  return { enterDelegate: true, pendingMasterMessageId }
+}
+
 function ViewFallback({ label = 'Loading...' }: { label?: string }) {
   return <section className="placeholder-view"><div className="assistant-bubble compact"><p className="muted">{label}</p></div></section>
 }
@@ -588,28 +603,6 @@ export function App() {
     }))
     setView('design')
   }, [])
-  const openMasterConversation = React.useCallback((originMessageId?: number | null) => {
-    clearPendingNavigation()
-    clearDeepStack()
-    if (typeof originMessageId === 'number' && Number.isSafeInteger(originMessageId) && originMessageId > 0) {
-      setPendingMasterMessageId(originMessageId)
-    } else {
-      setPendingMasterMessageId(null)
-    }
-    if (features.masterOrchestrator) setView('master')
-  }, [clearPendingNavigation, clearDeepStack, features.masterOrchestrator])
-  const openAttentionTarget = React.useCallback((target: { view?: string; job_id?: number; engine?: string; origin_message_id?: number }) => {
-    if (target.job_id != null) {
-      openJobByEngine(target.job_id, target.engine, view)
-      return
-    }
-    if (target.view === 'master' || target.view === 'alpha') {
-      openMasterConversation(target.origin_message_id)
-      return
-    }
-    if (target.view === 'settings') { clearPendingNavigation(); clearDeepStack(); setView('settings'); return }
-    if (target.view === 'activity') { clearPendingNavigation(); clearDeepStack(); setView('activity') }
-  }, [clearPendingNavigation, clearDeepStack, openJobByEngine, openMasterConversation, view])
   const viewEnabled = React.useCallback((v: View) => isFeatureViewEnabled(v, features), [features])
   // When GraphScreen reports stage=editor from an in-surface open (library → plan),
   // ensure chrome Back + project lock know about the deep frame.
@@ -712,6 +705,26 @@ export function App() {
     setShellMode(mode)
     if (!options?.fromUrl) pushWorkHistory()
   }, [clearDeepStack, clearPendingNavigation, features.masterOrchestrator, pushWorkHistory, view])
+  const openMasterConversation = React.useCallback((originMessageId?: number | null) => {
+    const plan = planOpenMasterConversation(originMessageId, features.masterOrchestrator)
+    if (!plan) return
+    // Shared Delegate transition clears pending navigation; install the focus
+    // target afterward so Work-mode Attention/Task cross-links still land.
+    changeShellMode('delegate')
+    setPendingMasterMessageId(plan.pendingMasterMessageId)
+  }, [changeShellMode, features.masterOrchestrator])
+  const openAttentionTarget = React.useCallback((target: { view?: string; job_id?: number; engine?: string; origin_message_id?: number }) => {
+    if (target.job_id != null) {
+      openJobByEngine(target.job_id, target.engine, view)
+      return
+    }
+    if (target.view === 'master' || target.view === 'alpha') {
+      openMasterConversation(target.origin_message_id)
+      return
+    }
+    if (target.view === 'settings') { clearPendingNavigation(); clearDeepStack(); setView('settings'); return }
+    if (target.view === 'activity') { clearPendingNavigation(); clearDeepStack(); setView('activity') }
+  }, [clearPendingNavigation, clearDeepStack, openJobByEngine, openMasterConversation, view])
   const goView = (v: View) => {
     if (v === 'master') {
       changeShellMode('delegate')

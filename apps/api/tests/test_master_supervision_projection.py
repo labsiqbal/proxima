@@ -3043,6 +3043,154 @@ def test_reject_settles_unresolved_master_decision(tmp_path: Path):
     assert repeated.json()["detail"]["code"] == "decision_not_pending"
 
 
+def test_delete_job_settles_and_projects_master_decision(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    desk, job_id, created, _origin = _create_review_decision(
+        app, client, project, key="delete-settles-decision"
+    )
+    assert created["ok"] is True
+    decision_id = created["result"]["decision_id"]
+    master_session_id = desk["session"]["id"]
+
+    deleted = client.delete(f"/api/jobs/{job_id}")
+    assert deleted.status_code == 200
+    assert deleted.json() == {"ok": True, "id": job_id}
+
+    decision = app.state.db.execute(
+        "SELECT state, response_json, requesting_job_id FROM master_decisions "
+        "WHERE id = ?",
+        (decision_id,),
+    ).fetchone()
+    assert decision["state"] == "resolved"
+    assert decision["requesting_job_id"] is None
+    response = json.loads(decision["response_json"])
+    assert response["value"] == master_decisions.TASK_LEFT_REVIEW_RESPONSE_VALUE
+    assert response["task_id"] == job_id
+    assert app.state.db.execute(
+        "SELECT status FROM attention_items WHERE id = ?",
+        (created["result"]["attention_id"],),
+    ).fetchone()["status"] == "resolved"
+
+    projection = app.state.db.execute(
+        "SELECT projection_type, task_id, payload_json, message_id "
+        "FROM master_projections "
+        "WHERE projection_key = ? AND master_session_id = ?",
+        (f"decision:{decision_id}:resolved", master_session_id),
+    ).fetchone()
+    assert projection is not None
+    assert projection["projection_type"] == "master.decision.resolved"
+    # FK is nulled after job delete; immutable identity lives in the payload.
+    assert projection["task_id"] is None
+    payload = json.loads(projection["payload_json"])
+    assert payload["task_id"] == job_id
+    assert payload["decision_id"] == decision_id
+    assert payload["closed_without_owner_response"] is True
+    message = app.state.db.execute(
+        "SELECT content FROM messages WHERE id = ?",
+        (projection["message_id"],),
+    ).fetchone()
+    assert message["content"] == (
+        f"Decision #{decision_id} for Task #{job_id} "
+        "was closed because the Task left review."
+    )
+    # After delete the live FK is gone, so catch-up cannot double-insert;
+    # the durable outbox row already carries immutable task identity.
+    assert app.state.master_projection.project_decision(decision_id) is None
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections "
+        "WHERE projection_key = ?",
+        (f"decision:{decision_id}:resolved",),
+    ).fetchone()[0] == 1
+
+
+def test_delete_job_rolls_back_settle_when_projection_fails(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, job_id, created, _origin = _create_review_decision(
+        app, client, project, key="delete-rollback-decision"
+    )
+    assert created["ok"] is True
+    decision_id = created["result"]["decision_id"]
+    attention_id = created["result"]["attention_id"]
+
+    original = app.state.master_projection.project_decision
+
+    def _boom(decision_id_arg, **kwargs):
+        raise RuntimeError("projection exploded")
+
+    app.state.master_projection.project_decision = _boom  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="projection exploded"):
+            client.delete(f"/api/jobs/{job_id}")
+    finally:
+        app.state.master_projection.project_decision = original  # type: ignore[method-assign]
+
+    # Whole delete transaction rolled back: job, decision, and Attention remain.
+    assert app.state.db.execute(
+        "SELECT id FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone() is not None
+    decision = app.state.db.execute(
+        "SELECT state, requesting_job_id FROM master_decisions WHERE id = ?",
+        (decision_id,),
+    ).fetchone()
+    assert decision["state"] == "pending"
+    assert decision["requesting_job_id"] == job_id
+    assert app.state.db.execute(
+        "SELECT status FROM attention_items WHERE id = ?", (attention_id,)
+    ).fetchone()["status"] == "open"
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_projections "
+        "WHERE projection_key = ?",
+        (f"decision:{decision_id}:resolved",),
+    ).fetchone()[0] == 0
+
+
+def test_project_delete_settles_open_decisions_and_projects(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    desk, job_id, created, _origin = _create_review_decision(
+        app, client, project, key="project-delete-settles"
+    )
+    assert created["ok"] is True
+    decision_id = created["result"]["decision_id"]
+    master_session_id = desk["session"]["id"]
+
+    deleted = client.delete(f"/api/projects/{project['slug']}")
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+
+    decision = app.state.db.execute(
+        "SELECT state, response_json, requesting_job_id FROM master_decisions "
+        "WHERE id = ?",
+        (decision_id,),
+    ).fetchone()
+    assert decision is not None
+    assert decision["state"] == "resolved"
+    assert decision["requesting_job_id"] is None
+    assert json.loads(decision["response_json"])["task_id"] == job_id
+    assert app.state.db.execute(
+        "SELECT status FROM attention_items WHERE id = ?",
+        (created["result"]["attention_id"],),
+    ).fetchone()["status"] == "resolved"
+    projection = app.state.db.execute(
+        "SELECT payload_json, message_id FROM master_projections "
+        "WHERE projection_key = ? AND master_session_id = ?",
+        (f"decision:{decision_id}:resolved", master_session_id),
+    ).fetchone()
+    assert projection is not None
+    payload = json.loads(projection["payload_json"])
+    assert payload["task_id"] == job_id
+    assert payload["closed_without_owner_response"] is True
+    assert app.state.db.execute(
+        "SELECT content FROM messages WHERE id = ?",
+        (projection["message_id"],),
+    ).fetchone()["content"] == (
+        f"Decision #{decision_id} for Task #{job_id} "
+        "was closed because the Task left review."
+    )
+    assert app.state.db.execute(
+        "SELECT id FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone() is None
+
+
 def test_graph_task_rejects_master_decision_creation_and_guards_approve(
     tmp_path: Path,
 ):

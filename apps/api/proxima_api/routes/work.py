@@ -856,15 +856,24 @@ def register(app, deps):
         except worktrees.WorktreeError:
             logging.getLogger("proxima.worktrees").exception("job %s worktree cleanup failed (job deleted anyway)", job_id)
         conn = db()
-        settled_decision_ids: list[int] = []
+        notify_sessions: list[int] = []
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                # Settle + project while the Task row still exists so the durable
+                # Master audit payload materializes task identity before the
+                # requesting_job FK is nulled by ON DELETE SET NULL.
                 settled_decision_ids = master_decisions.settle_open_decisions_for_job(
                     conn,
                     job_id=job_id,
                     actor_user_id=user.get("id"),
                     reason="Task deleted",
+                )
+                notify_sessions = master_decisions.project_settled_decisions(
+                    app,
+                    settled_decision_ids,
+                    conn=conn,
+                    external_transaction=True,
                 )
                 conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
                 conn.execute("COMMIT")
@@ -872,7 +881,8 @@ def register(app, deps):
                 if conn.in_transaction:
                     conn.execute("ROLLBACK")
                 raise
-        master_decisions.project_settled_decisions(app, settled_decision_ids)
+        for session_id in set(notify_sessions):
+            app.state.hub.notify(session_id)
         return {"ok": True, "id": job_id}
 
     # --- Schedules (recurring workflow triggers / cron) ---
