@@ -33,6 +33,15 @@ _PROJECTABLE_TASK_STATUSES = {
     "failed",
     "cancelled",
 }
+_PROJECTION_STATES = {
+    "none",
+    "started",
+    "review",
+    "completed",
+    "failed",
+    "cancelled",
+    "blocked",
+}
 
 
 class RecoveryAttributionError(ValueError):
@@ -94,6 +103,76 @@ def task_projection_epoch(
     return _as_int(row["projection_epoch"])
 
 
+def task_projection_state(
+    status: str,
+    *,
+    blocked_reason: Any = None,
+    queued_is_blocked: bool = False,
+) -> str:
+    normalized = str(status).lower()
+    if normalized == "running":
+        return "started"
+    if normalized == "review":
+        return "review"
+    if normalized == "done":
+        return "completed"
+    if normalized == "failed":
+        return "failed"
+    if normalized == "cancelled":
+        return "cancelled"
+    if normalized == "queued" and (
+        queued_is_blocked
+        or str(blocked_reason or "").startswith("Blocked by prerequisite")
+    ):
+        return "blocked"
+    if normalized == "queued":
+        return "none"
+    raise ValueError("Task projection status is invalid")
+
+
+def claim_task_projection_generation(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    status: str,
+    blocked_reason: Any = None,
+    queued_is_blocked: bool = False,
+) -> tuple[int, str, bool]:
+    state = task_projection_state(
+        status,
+        blocked_reason=blocked_reason,
+        queued_is_blocked=queued_is_blocked,
+    )
+    if state not in _PROJECTION_STATES:
+        raise ValueError("Task projection state is invalid")
+    row = conn.execute(
+        "SELECT projection_revision, projection_state FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("Task is unavailable")
+    revision = _as_int(row["projection_revision"])
+    if revision < 0:
+        raise ValueError("Task projection revision is invalid")
+    if str(row["projection_state"]) == state:
+        return revision, state, False
+    revision += 1
+    changed = conn.execute(
+        "UPDATE jobs SET projection_revision = ?, projection_state = ? "
+        "WHERE id = ? AND projection_revision = ? AND projection_state = ?",
+        (
+            revision,
+            state,
+            job_id,
+            _as_int(row["projection_revision"]),
+            str(row["projection_state"]),
+        ),
+    )
+    if changed.rowcount != 1:
+        raise RuntimeError("Task projection generation changed concurrently")
+    return revision, state, True
+
+
 def append_task_update(
     conn: sqlite3.Connection,
     *,
@@ -135,11 +214,19 @@ def append_task_update(
                 connection=conn,
             )["run_projection"]["status"]
         )
-        projectable = task_status in _PROJECTABLE_TASK_STATUSES or (
-            task_status == "queued"
-            and str(job["blocked_reason"] or "").startswith("Blocked by prerequisite")
+        projection_revision, projection_state, changed = (
+            claim_task_projection_generation(
+                conn,
+                job_id=job_id,
+                status=task_status,
+                blocked_reason=job["blocked_reason"],
+            )
         )
-        if projectable:
+        projectable = (
+            task_status in _PROJECTABLE_TASK_STATUSES
+            or projection_state == "blocked"
+        )
+        if projectable and changed:
             outbox = conn.execute(
                 "INSERT INTO task_projection_outbox("
                 "job_id, task_event_id, projection_epoch, projection_revision, "
@@ -154,7 +241,7 @@ def append_task_update(
                         session_id=session_id,
                         through_event_id=event_id,
                     ),
-                    _as_int(job["projection_revision"]),
+                    projection_revision,
                     task_status,
                     mutation,
                 ),
@@ -283,8 +370,7 @@ def enqueue_master_recovery(
     safe_recovery = _bounded_recovery(recovery)
     job_id = _as_int(safe_recovery["job_id"])
     job = conn.execute(
-        "SELECT origin_master_session_id, projection_revision FROM jobs "
-        "WHERE id = ?",
+        "SELECT origin_master_session_id FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
     if job is None or job["origin_master_session_id"] is None:
@@ -300,27 +386,18 @@ def enqueue_master_recovery(
         "UPDATE task_projection_outbox SET state = 'superseded', "
         "projection_id = NULL, superseded_by_event_id = ?, "
         "updated_at = CURRENT_TIMESTAMP "
-        "WHERE job_id = ? AND task_event_id < ? "
-        "AND state IN ('pending', 'failed_attribution')",
-        (task_event_id, job_id, task_event_id),
-    )
-    conn.execute(
-        "UPDATE task_recovery_outbox SET state = 'superseded', "
-        "message_id = NULL, event_id = NULL, superseded_by_event_id = ?, "
-        "updated_at = CURRENT_TIMESTAMP "
-        "WHERE job_id = ? AND task_event_id < ? "
+        "WHERE job_id = ? AND task_event_id <= ? "
         "AND state IN ('pending', 'failed_attribution')",
         (task_event_id, job_id, task_event_id),
     )
     cursor = conn.execute(
         "INSERT INTO task_recovery_outbox("
-        "job_id, task_event_id, projection_revision, recovery_json, state, "
+        "job_id, task_event_id, recovery_json, state, "
         "master_session_id, failure_code"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ") VALUES (?, ?, ?, ?, ?, ?)",
         (
             job_id,
             task_event_id,
-            _as_int(job["projection_revision"]),
             encode_bounded_event_payload(safe_recovery),
             state,
             _as_int(job["origin_master_session_id"]),

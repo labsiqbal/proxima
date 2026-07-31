@@ -2627,6 +2627,218 @@ def _order_task_projection_delivery(conn: sqlite3.Connection) -> None:
     assert_task_projection_outbox(conn, require_ordered=True)
 
 
+def _separate_task_projection_generations(conn: sqlite3.Connection) -> None:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if not {
+        "jobs",
+        "master_projections",
+        "task_projection_outbox",
+        "task_recovery_outbox",
+    }.issubset(tables):
+        return
+    for trigger in (
+        "jobs_projection_revision_update",
+        "node_states_projection_revision_insert",
+        "node_states_projection_revision_update",
+        "node_states_projection_revision_delete",
+    ):
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    job_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+    }
+    if "projection_state" not in job_columns:
+        conn.execute(
+            "ALTER TABLE jobs ADD COLUMN projection_state "
+            "TEXT NOT NULL DEFAULT 'none' CHECK ("
+            "projection_state IN ("
+            "'none', 'started', 'review', 'completed', "
+            "'failed', 'cancelled', 'blocked'"
+            "))"
+        )
+
+    revisions: dict[int, int] = {}
+    states: dict[int, tuple[int, str]] = {}
+    state_by_status = {
+        "running": "started",
+        "review": "review",
+        "done": "completed",
+        "failed": "failed",
+        "cancelled": "cancelled",
+        "queued": "blocked",
+    }
+    state_by_type = {
+        "master.task.started": "started",
+        "master.task.review_ready": "review",
+        "master.task.completed": "completed",
+        "master.task.failed": "failed",
+        "master.task.cancelled": "cancelled",
+        "master.task.blocked": "blocked",
+    }
+
+    def record(
+        job_id: int,
+        revision: int,
+        state: str | None,
+        *,
+        authoritative: bool,
+    ) -> None:
+        revisions[job_id] = max(revisions.get(job_id, 0), revision)
+        if not authoritative or state is None:
+            return
+        current = states.get(job_id)
+        if current is None or revision >= current[0]:
+            states[job_id] = (revision, state)
+
+    for row in conn.execute(
+        "SELECT source_id, projection_key, projection_type "
+        "FROM master_projections WHERE source_table = 'jobs' "
+        "ORDER BY id"
+    ).fetchall():
+        job_id = int(row["source_id"])
+        key = str(row["projection_key"])
+        revision = 0
+        marker = f"task:{job_id}:revision:"
+        if key.startswith(marker):
+            try:
+                revision = int(key[len(marker) :].split(":", 1)[0])
+            except (TypeError, ValueError):
+                continue
+        record(
+            job_id,
+            revision,
+            state_by_type.get(str(row["projection_type"])),
+            authoritative=True,
+        )
+    for row in conn.execute(
+        "SELECT job_id, projection_revision, task_status, state "
+        "FROM task_projection_outbox ORDER BY task_event_id"
+    ).fetchall():
+        record(
+            int(row["job_id"]),
+            int(row["projection_revision"]),
+            state_by_status.get(str(row["task_status"])),
+            authoritative=str(row["state"]) != "superseded",
+        )
+
+    conn.execute(
+        "UPDATE jobs SET projection_revision = 0, projection_state = 'none'"
+    )
+    for job_id, revision in revisions.items():
+        state_record = states.get(job_id)
+        state = (
+            state_record[1]
+            if state_record is not None and state_record[0] == revision
+            else "none"
+        )
+        conn.execute(
+            "UPDATE jobs SET projection_revision = ?, projection_state = ? "
+            "WHERE id = ?",
+            (revision, state, job_id),
+        )
+    conn.execute(
+        "UPDATE jobs SET projection_state = 'none' "
+        "WHERE status = 'queued' "
+        "AND COALESCE(blocked_reason, '') "
+        "NOT LIKE 'Blocked by prerequisite%'"
+    )
+
+    recovery_columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(task_recovery_outbox)"
+        ).fetchall()
+    }
+    if {
+        "projection_revision",
+        "superseded_by_event_id",
+    } & recovery_columns:
+        conn.execute(
+            "ALTER TABLE task_recovery_outbox "
+            "RENAME TO task_recovery_outbox_v45"
+        )
+        conn.execute(
+            """
+            CREATE TABLE task_recovery_outbox (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+              task_event_id INTEGER NOT NULL
+                REFERENCES events(id) ON DELETE CASCADE,
+              recovery_json TEXT NOT NULL CHECK (
+                length(recovery_json) BETWEEN 2 AND 16384
+              ),
+              state TEXT NOT NULL DEFAULT 'pending' CHECK (
+                state IN ('pending', 'projected', 'failed_attribution')
+              ),
+              master_session_id INTEGER
+                REFERENCES sessions(id) ON DELETE SET NULL,
+              message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
+              event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
+              failure_code TEXT CHECK (
+                failure_code IS NULL OR failure_code IN (
+                  'focus_attribution_unavailable',
+                  'projection_scope_unavailable',
+                  'projection_failed'
+                )
+              ),
+              attempt_count INTEGER NOT NULL DEFAULT 0
+                CHECK (attempt_count >= 0),
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE(task_event_id),
+              CHECK (
+                (state = 'pending' AND message_id IS NULL
+                  AND event_id IS NULL AND (
+                    failure_code IS NULL OR failure_code = 'projection_failed'
+                  ))
+                OR
+                (state = 'projected' AND message_id IS NOT NULL
+                  AND event_id IS NOT NULL AND failure_code IS NULL)
+                OR
+                (state = 'failed_attribution' AND message_id IS NULL
+                  AND event_id IS NULL AND failure_code IN (
+                    'focus_attribution_unavailable',
+                    'projection_scope_unavailable'
+                  ))
+              )
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO task_recovery_outbox("
+            "id, job_id, task_event_id, recovery_json, state, "
+            "master_session_id, message_id, event_id, failure_code, "
+            "attempt_count, created_at, updated_at"
+            ") SELECT id, job_id, task_event_id, recovery_json, "
+            "CASE WHEN state = 'superseded' THEN "
+            "  CASE WHEN failure_code IN ("
+            "    'focus_attribution_unavailable', "
+            "    'projection_scope_unavailable'"
+            "  ) THEN 'failed_attribution' ELSE 'pending' END "
+            "ELSE state END, "
+            "master_session_id, message_id, event_id, failure_code, "
+            "attempt_count, created_at, updated_at "
+            "FROM task_recovery_outbox_v45"
+        )
+        conn.execute("DROP TABLE task_recovery_outbox_v45")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_recovery_outbox_state "
+        "ON task_recovery_outbox(state, task_event_id)"
+    )
+
+    from .master_projection import assert_task_projection_outbox
+
+    assert_task_projection_outbox(
+        conn,
+        require_ordered=True,
+        require_state_generation=True,
+    )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -2736,6 +2948,11 @@ MIGRATIONS: list[Migration] = [
         46,
         "order Task transition delivery and add recovery projection intents",
         _order_task_projection_delivery,
+    ),
+    (
+        47,
+        "separate Task status generations from append-only recovery audits",
+        _separate_task_projection_generations,
     ),
 ]
 

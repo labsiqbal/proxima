@@ -425,13 +425,13 @@ def test_checkpoint_restore_starts_a_new_projection_lifecycle(
             "WHERE id = ?",
             (status, job_id),
         )
+        app.state.master_projection.project_task(job_id)
         revisions.append(
             app.state.db.execute(
                 "SELECT projection_revision FROM jobs WHERE id = ?",
                 (job_id,),
             ).fetchone()["projection_revision"]
         )
-        app.state.master_projection.project_task(job_id)
 
     restored = client.post(
         f"/api/jobs/{job_id}/checkpoint/restore",
@@ -446,13 +446,13 @@ def test_checkpoint_restore_starts_a_new_projection_lifecycle(
             "WHERE id = ?",
             (status, job_id),
         )
+        app.state.master_projection.project_task(job_id)
         revisions.append(
             app.state.db.execute(
                 "SELECT projection_revision FROM jobs WHERE id = ?",
                 (job_id,),
             ).fetchone()["projection_revision"]
         )
-        app.state.master_projection.project_task(job_id)
 
     rows = app.state.db.execute(
         "SELECT projection_key, projection_type "
@@ -549,6 +549,127 @@ def test_running_review_running_uses_distinct_transition_revisions(
         "SELECT COUNT(*) FROM master_projections WHERE task_id = ?",
         (job_id,),
     ).fetchone()[0] == 3
+
+
+def test_same_status_linear_progress_reuses_one_projection_generation(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="same-status-linear-progress",
+        tasks=[{
+            "key": "task",
+            "title": "Linear progress",
+            "brief": "Advance without duplicate lifecycle events",
+        }],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'running' WHERE id = ?",
+        (job_id,),
+    )
+    app.state.master_projection.project_task(job_id)
+    initial = dict(
+        app.state.db.execute(
+            "SELECT projection_revision, projection_state FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    )
+
+    for index, step_status in enumerate(("running", "done", "running")):
+        app.state.db.execute(
+            "UPDATE jobs SET status = 'running', "
+            "steps_state = json_set(steps_state, '$[0].status', ?) "
+            "WHERE id = ?",
+            (step_status, job_id),
+        )
+        task_event = append_task_update(
+            app.state.db,
+            job_id=job_id,
+            mutation=f"same_status_progress_{index}",
+        )
+        assert "projection_outbox_id" not in task_event
+        app.state.master_projection.project_task(job_id)
+
+    assert dict(
+        app.state.db.execute(
+            "SELECT projection_revision, projection_state FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    ) == initial
+    assert initial["projection_state"] == "started"
+    assert [
+        row["projection_type"]
+        for row in app.state.db.execute(
+            "SELECT projection_type FROM master_projections "
+            "WHERE task_id = ? ORDER BY id",
+            (job_id,),
+        ).fetchall()
+    ] == ["master.task.started"]
+
+
+def test_same_status_graph_progress_reuses_one_projection_generation(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="same-status-graph-progress",
+        tasks=[{
+            "key": "task",
+            "title": "Graph progress",
+            "brief": "Advance nodes without duplicate lifecycle events",
+        }],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'running', engine = 'graph', "
+        "graph = '{\"nodes\": [], \"edges\": []}', steps_state = '[]' "
+        "WHERE id = ?",
+        (job_id,),
+    )
+    app.state.master_projection.project_task(job_id)
+    initial_revision = app.state.db.execute(
+        "SELECT projection_revision FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()["projection_revision"]
+
+    app.state.db.execute(
+        "INSERT INTO node_states(job_id, node_id, status) "
+        "VALUES (?, 'work', 'queued')",
+        (job_id,),
+    )
+    app.state.master_projection.project_task(job_id)
+    app.state.db.execute(
+        "UPDATE node_states SET status = 'running' "
+        "WHERE job_id = ? AND node_id = 'work'",
+        (job_id,),
+    )
+    app.state.master_projection.project_task(job_id)
+    app.state.db.execute(
+        "UPDATE node_states SET status = 'done' "
+        "WHERE job_id = ? AND node_id = 'work'",
+        (job_id,),
+    )
+    app.state.master_projection.project_task(job_id)
+
+    assert app.state.db.execute(
+        "SELECT projection_revision FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()["projection_revision"] == initial_revision
+    assert [
+        row["projection_type"]
+        for row in app.state.db.execute(
+            "SELECT projection_type FROM master_projections "
+            "WHERE task_id = ? ORDER BY id",
+            (job_id,),
+        ).fetchall()
+    ] == ["master.task.started"]
 
 
 def test_task_outbox_retries_in_event_order_without_duplicate_delivery(
@@ -704,6 +825,81 @@ def test_checkpoint_recovery_supersedes_only_unpublished_task_transitions(
         event["type"]
         for event in _projection_events(client, desk["session"]["id"])
     ] == ["master.task.recovered"]
+
+
+def test_multiple_pending_checkpoint_recoveries_publish_once_in_event_order(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path)
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="ordered-recovery-audits",
+        tasks=[{
+            "key": "task",
+            "title": "Preserve recovery audit",
+            "brief": "Publish every restore once",
+        }],
+    )
+    job_id = jobs[0]["id"]
+    checkpoint = create_checkpoint(app.state.db, job_id)
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'failed', finished_at = CURRENT_TIMESTAMP "
+        "WHERE id = ?",
+        (job_id,),
+    )
+    app.state.db.execute(
+        "CREATE TRIGGER reject_ordered_recovery "
+        "BEFORE INSERT ON events "
+        "WHEN NEW.type = 'master.task.recovered' "
+        "BEGIN SELECT RAISE(ABORT, 'recovery delivery interrupted'); END"
+    )
+
+    first = client.post(
+        f"/api/jobs/{job_id}/checkpoint/restore",
+        json={"checkpoint_id": checkpoint["id"], "confirm": True},
+    )
+    second = client.post(
+        f"/api/jobs/{job_id}/checkpoint/restore",
+        json={"checkpoint_id": checkpoint["id"], "confirm": True},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    pending = app.state.db.execute(
+        "SELECT id, task_event_id, state, attempt_count "
+        "FROM task_recovery_outbox WHERE job_id = ? ORDER BY task_event_id",
+        (job_id,),
+    ).fetchall()
+    assert [row["state"] for row in pending] == ["pending", "pending"]
+    assert [row["attempt_count"] for row in pending] == [1, 0]
+    assert [
+        event["type"]
+        for event in _projection_events(client, desk["session"]["id"])
+    ] == []
+
+    app.state.db.execute("DROP TRIGGER reject_ordered_recovery")
+    app.state.master_projection.reconcile()
+    app.state.master_projection.reconcile()
+
+    projected = app.state.db.execute(
+        "SELECT task_event_id, state, attempt_count "
+        "FROM task_recovery_outbox WHERE job_id = ? ORDER BY task_event_id",
+        (job_id,),
+    ).fetchall()
+    assert [row["state"] for row in projected] == ["projected", "projected"]
+    assert [row["attempt_count"] for row in projected] == [2, 1]
+    recovery_events = [
+        event
+        for event in _projection_events(client, desk["session"]["id"])
+        if event["type"] == "master.task.recovered"
+    ]
+    assert len(recovery_events) == 2
+    assert [event["payload"]["prior_status"] for event in recovery_events] == [
+        "failed",
+        "queued",
+    ]
 
 
 def test_final_approval_commits_outbox_and_replays_projection_failure(
@@ -1232,8 +1428,13 @@ def test_uncaptured_legacy_checkpoint_restore_commits_repair_intent(
         f"/api/jobs/{job_id}/checkpoint/restore",
         json={"checkpoint_id": checkpoint["id"], "confirm": True},
     )
+    repeated = client.post(
+        f"/api/jobs/{job_id}/checkpoint/restore",
+        json={"checkpoint_id": checkpoint["id"], "confirm": True},
+    )
 
     assert restored.status_code == 200
+    assert repeated.status_code == 200
     assert restored.json()["restored_status"] == "queued"
     assert restored.json()["projection_repair"] == {
         "outbox_id": restored.json()["projection_repair"]["outbox_id"],
@@ -1244,23 +1445,35 @@ def test_uncaptured_legacy_checkpoint_restore_commits_repair_intent(
         "SELECT status FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()["status"] == "queued"
-    outbox = app.state.db.execute(
+    outboxes = app.state.db.execute(
         "SELECT state, failure_code, attempt_count, recovery_json "
-        "FROM task_recovery_outbox WHERE job_id = ?",
+        "FROM task_recovery_outbox WHERE job_id = ? ORDER BY task_event_id",
         (job_id,),
-    ).fetchone()
-    assert outbox["state"] == "failed_attribution"
-    assert outbox["failure_code"] == "focus_attribution_unavailable"
-    assert outbox["attempt_count"] == 1
-    assert len(outbox["recovery_json"].encode("utf-8")) < 16 * 1024
+    ).fetchall()
+    assert len(outboxes) == 2
+    assert [outbox["state"] for outbox in outboxes] == [
+        "failed_attribution",
+        "failed_attribution",
+    ]
+    assert [outbox["failure_code"] for outbox in outboxes] == [
+        "focus_attribution_unavailable",
+        "focus_attribution_unavailable",
+    ]
+    assert [outbox["attempt_count"] for outbox in outboxes] == [1, 0]
+    assert all(
+        len(outbox["recovery_json"].encode("utf-8")) < 16 * 1024
+        for outbox in outboxes
+    )
+    latest_task_event_id = app.state.db.execute(
+        "SELECT task_event_id FROM task_recovery_outbox WHERE job_id = ? "
+        "ORDER BY task_event_id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()["task_event_id"]
     expected_repair = {
         "kind": "recovery",
         "state": "failed_attribution",
         "failure_code": "focus_attribution_unavailable",
-        "task_event_id": app.state.db.execute(
-            "SELECT task_event_id FROM task_recovery_outbox WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()["task_event_id"],
+        "task_event_id": latest_task_event_id,
     }
     assert client.get(
         f"/api/jobs/{job_id}"
@@ -1288,21 +1501,28 @@ def test_uncaptured_legacy_checkpoint_restore_commits_repair_intent(
 
     repaired = app.state.db.execute(
         "SELECT state, failure_code, attempt_count "
-        "FROM task_recovery_outbox WHERE job_id = ?",
+        "FROM task_recovery_outbox WHERE job_id = ? ORDER BY task_event_id",
         (job_id,),
-    ).fetchone()
-    assert dict(repaired) == {
-        "state": "projected",
-        "failure_code": None,
-        "attempt_count": 2,
-    }
+    ).fetchall()
+    assert [dict(row) for row in repaired] == [
+        {
+            "state": "projected",
+            "failure_code": None,
+            "attempt_count": 2,
+        },
+        {
+            "state": "projected",
+            "failure_code": None,
+            "attempt_count": 1,
+        },
+    ]
     assert client.get(
         f"/api/jobs/{job_id}"
     ).json()["projection_repair"] is None
     assert [
         event["type"]
         for event in _projection_events(client, desk["session"]["id"])
-    ] == ["master.task.recovered"]
+    ] == ["master.task.recovered", "master.task.recovered"]
 
 
 def test_reconcile_continues_after_uncaptured_legacy_task(tmp_path: Path):

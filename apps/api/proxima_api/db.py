@@ -461,6 +461,11 @@ CREATE TABLE IF NOT EXISTS jobs (
   status TEXT NOT NULL DEFAULT 'queued',
   projection_revision INTEGER NOT NULL DEFAULT 0
     CHECK (projection_revision >= 0),
+  projection_state TEXT NOT NULL DEFAULT 'none' CHECK (
+    projection_state IN (
+      'none', 'started', 'review', 'completed', 'failed', 'cancelled', 'blocked'
+    )
+  ),
   current_step_idx INTEGER NOT NULL DEFAULT 0,
   input TEXT,
   steps_state TEXT NOT NULL DEFAULT '[]',
@@ -727,19 +732,16 @@ CREATE TABLE IF NOT EXISTS task_recovery_outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   task_event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-  projection_revision INTEGER NOT NULL DEFAULT 0
-    CHECK (projection_revision >= 0),
   recovery_json TEXT NOT NULL CHECK (
     length(recovery_json) BETWEEN 2 AND 16384
   ),
   state TEXT NOT NULL DEFAULT 'pending' CHECK (
-    state IN ('pending', 'projected', 'failed_attribution', 'superseded')
+    state IN ('pending', 'projected', 'failed_attribution')
   ),
   master_session_id INTEGER
     REFERENCES sessions(id) ON DELETE SET NULL,
   message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
   event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
-  superseded_by_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
   failure_code TEXT CHECK (
     failure_code IS NULL OR failure_code IN (
       'focus_attribution_unavailable',
@@ -753,20 +755,15 @@ CREATE TABLE IF NOT EXISTS task_recovery_outbox (
   UNIQUE(task_event_id),
   CHECK (
     (state = 'pending' AND message_id IS NULL AND event_id IS NULL
-      AND superseded_by_event_id IS NULL
       AND (failure_code IS NULL OR failure_code = 'projection_failed'))
     OR
     (state = 'projected' AND message_id IS NOT NULL AND event_id IS NOT NULL
-      AND failure_code IS NULL AND superseded_by_event_id IS NULL)
+      AND failure_code IS NULL)
     OR
     (state = 'failed_attribution' AND message_id IS NULL AND event_id IS NULL
-      AND superseded_by_event_id IS NULL
       AND failure_code IN (
         'focus_attribution_unavailable', 'projection_scope_unavailable'
       ))
-    OR
-    (state = 'superseded' AND message_id IS NULL AND event_id IS NULL
-      AND superseded_by_event_id IS NOT NULL)
   )
 );
 CREATE INDEX IF NOT EXISTS idx_task_recovery_outbox_state

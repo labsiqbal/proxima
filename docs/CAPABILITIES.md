@@ -617,11 +617,13 @@ Projection message, event, and ledger links commit atomically; strict startup
 validation rejects incomplete, cross-owner, malformed, or mismatched source/type
 state. Restart reconciliation safely retries missing projections without creating a
 second message or event and isolates failures per authoritative source row. A
-database-maintained Task revision advances for lifecycle, linear-step, blocker, and
-graph-node changes, so every projection-worthy transition has a monotonic idempotency
-key. Status and recovery intents process in Task-event order. Checkpoint recovery
-causally supersedes only older unpublished intents before its authoritative recovery
-event, so delayed Failed or Done delivery cannot overwrite Queued. SSE
+database-maintained Task generation advances only when canonical projected state
+changes, so ordinary step, node, timestamp, and same-status progress cannot repeat a
+lifecycle event while Running to Review to Running remains distinct. Status and
+recovery intents process in Task-event order. Checkpoint recovery causally supersedes
+only obsolete unpublished status intents before its authoritative recovery event, so
+delayed Failed or Done delivery cannot overwrite Queued. Every recovery audit intent
+remains append-only and publishes exactly once in that order. SSE
 reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).

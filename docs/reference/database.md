@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 42 tables. Applied migration version: **46**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 42 tables. Applied migration version: **47**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
@@ -224,6 +224,7 @@ SQLite (WAL mode). 42 tables. Applied migration version: **46**. This is the exa
 | `title` | TEXT | NO | `''` |  |
 | `status` | TEXT | NO | `'queued'` |  |
 | `projection_revision` | INTEGER | NO | `0` |  |
+| `projection_state` | TEXT | NO | `'none'` |  |
 | `current_step_idx` | INTEGER | NO | `0` |  |
 | `input` | TEXT | yes |  |  |
 | `steps_state` | TEXT | NO | `'[]'` |  |
@@ -726,13 +727,11 @@ SQLite (WAL mode). 42 tables. Applied migration version: **46**. This is the exa
 | `id` | INTEGER | yes |  | PK |
 | `job_id` | INTEGER | NO |  | → `jobs.id` (ON DELETE CASCADE) |
 | `task_event_id` | INTEGER | NO |  | → `events.id` (ON DELETE CASCADE) |
-| `projection_revision` | INTEGER | NO | `0` |  |
 | `recovery_json` | TEXT | NO |  |  |
 | `state` | TEXT | NO | `'pending'` |  |
 | `master_session_id` | INTEGER | yes |  | → `sessions.id` (ON DELETE SET NULL) |
 | `message_id` | INTEGER | yes |  | → `messages.id` (ON DELETE RESTRICT) |
 | `event_id` | INTEGER | yes |  | → `events.id` (ON DELETE RESTRICT) |
-| `superseded_by_event_id` | INTEGER | yes |  | → `events.id` (ON DELETE SET NULL) |
 | `failure_code` | TEXT | yes |  |  |
 | `attempt_count` | INTEGER | NO | `0` |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |

@@ -21,8 +21,10 @@ from .master_persistence import canonical_job_payload
 from .run_projection import effective_job_status_sql
 from .task_state_events import (
     RecoveryAttributionError,
+    claim_task_projection_generation,
     publish_master_recovery,
     task_projection_epoch,
+    task_projection_state,
 )
 from . import master_focus
 
@@ -431,6 +433,7 @@ def assert_task_projection_outbox(
     conn: sqlite3.Connection,
     *,
     require_ordered: bool | None = None,
+    require_state_generation: bool | None = None,
 ) -> None:
     table = conn.execute(
         "SELECT sql FROM sqlite_master "
@@ -447,6 +450,11 @@ def assert_task_projection_outbox(
         require_ordered
         if require_ordered is not None
         else _as_int(version_row["version"]) >= 45
+    )
+    state_generation = (
+        require_state_generation
+        if require_state_generation is not None
+        else _as_int(version_row["version"]) >= 46
     )
     if not ordered:
         if (
@@ -508,13 +516,37 @@ def assert_task_projection_outbox(
     recovery_schema = " ".join(
         str(recovery["sql"] or "").lower().split()
     )
-    for token in (
-        "'failed_attribution', 'superseded'",
+    recovery_columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(task_recovery_outbox)"
+        ).fetchall()
+    }
+    recovery_tokens = (
         "unique(task_event_id)",
         "state = 'projected' and message_id is not null",
-        "superseded_by_event_id is not null",
-    ):
-        if token not in recovery_schema:
+    )
+    if any(token not in recovery_schema for token in recovery_tokens):
+        raise RuntimeError("Task recovery outbox schema is incomplete")
+    if state_generation:
+        if (
+            "state in ('pending', 'projected', 'failed_attribution')"
+            not in recovery_schema
+            or "superseded_by_event_id" in recovery_columns
+            or "projection_revision" in recovery_columns
+        ):
+            raise RuntimeError("Task recovery outbox schema is incomplete")
+    else:
+        old_recovery = "superseded_by_event_id" in recovery_columns
+        if old_recovery and (
+            "'failed_attribution', 'superseded'" not in recovery_schema
+            or "superseded_by_event_id is not null" not in recovery_schema
+        ):
+            raise RuntimeError("Task recovery outbox schema is incomplete")
+        if not old_recovery and (
+            "state in ('pending', 'projected', 'failed_attribution')"
+            not in recovery_schema
+        ):
             raise RuntimeError("Task recovery outbox schema is incomplete")
     recovery_foreign_keys = {
         str(row[3]): (str(row[2]), str(row[6]).upper())
@@ -522,14 +554,19 @@ def assert_task_projection_outbox(
             "PRAGMA foreign_key_list(task_recovery_outbox)"
         ).fetchall()
     }
-    if recovery_foreign_keys != {
+    expected_recovery_foreign_keys = {
         "job_id": ("jobs", "CASCADE"),
         "task_event_id": ("events", "CASCADE"),
         "master_session_id": ("sessions", "SET NULL"),
         "message_id": ("messages", "RESTRICT"),
         "event_id": ("events", "RESTRICT"),
-        "superseded_by_event_id": ("events", "SET NULL"),
-    }:
+    }
+    if not state_generation and "superseded_by_event_id" in recovery_columns:
+        expected_recovery_foreign_keys["superseded_by_event_id"] = (
+            "events",
+            "SET NULL",
+        )
+    if recovery_foreign_keys != expected_recovery_foreign_keys:
         raise RuntimeError("Task recovery outbox foreign keys are incomplete")
     recovery_indexes = {
         str(row[1]): bool(row[2])
@@ -542,8 +579,30 @@ def assert_task_projection_outbox(
     job_columns = {
         str(row[1]) for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
     }
-    if "projection_revision" not in job_columns:
+    if "projection_revision" not in job_columns or (
+        state_generation and "projection_state" not in job_columns
+    ):
         raise RuntimeError("Task projection revision is missing")
+    if state_generation:
+        legacy_triggers = {
+            str(row["name"])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                "AND name IN ("
+                "'jobs_projection_revision_update', "
+                "'node_states_projection_revision_insert', "
+                "'node_states_projection_revision_update', "
+                "'node_states_projection_revision_delete'"
+                ")"
+            ).fetchall()
+        }
+        if legacy_triggers:
+            raise RuntimeError("Task projection revision still follows raw progress")
+        if conn.execute(
+            "SELECT 1 FROM task_recovery_outbox "
+            "WHERE state = 'superseded' LIMIT 1"
+        ).fetchone():
+            raise RuntimeError("Task recovery audit history was superseded")
     projection_indexes = {
         str(row[1])
         for row in conn.execute(
@@ -772,7 +831,7 @@ class MasterProjectionService:
                     "UPDATE task_recovery_outbox SET state = ?, "
                     "failure_code = ?, attempt_count = attempt_count + 1, "
                     "updated_at = CURRENT_TIMESTAMP "
-                    "WHERE id = ? AND state != 'superseded'",
+                    "WHERE id = ?",
                     (state, failure_code, outbox_id),
                 )
                 self.conn.execute("COMMIT")
@@ -793,7 +852,7 @@ class MasterProjectionService:
                     "SELECT * FROM task_recovery_outbox WHERE id = ?",
                     (outbox_id,),
                 ).fetchone()
-                if row is None or row["state"] == "superseded":
+                if row is None:
                     self.conn.execute("COMMIT")
                     return None
                 if (
@@ -1126,8 +1185,11 @@ class MasterProjectionService:
     def _next_unresolved_outbox(
         self,
         job_id: int,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> sqlite3.Row | None:
-        return self.conn.execute(
+        conn = connection or self.conn
+        return conn.execute(
             "SELECT kind, id, state FROM ("
             "SELECT 'status' AS kind, id, state, task_event_id "
             "FROM task_projection_outbox "
@@ -1143,9 +1205,50 @@ class MasterProjectionService:
         ).fetchone()
 
     def project_task(self, job_id: int) -> dict[str, Any] | None:
-        if self._next_unresolved_outbox(job_id) is not None:
-            return None
-        return self._project_task(job_id)
+        notify_sessions: set[int] = set()
+        with self.app.state.db_lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                if self._next_unresolved_outbox(
+                    job_id,
+                    connection=self.conn,
+                ) is not None:
+                    self.conn.execute("COMMIT")
+                    return None
+                job = self._task(job_id, connection=self.conn)
+                if job is None:
+                    self.conn.execute("COMMIT")
+                    return None
+                status = str(
+                    canonical_job_payload(
+                        dict(job),
+                        connection=self.conn,
+                    )["run_projection"]["status"]
+                )
+                revision, projection_state, _changed = (
+                    claim_task_projection_generation(
+                        self.conn,
+                        job_id=job_id,
+                        status=status,
+                        blocked_reason=job["blocked_reason"],
+                    )
+                )
+                projection = self._project_task(
+                    job_id,
+                    connection=self.conn,
+                    notify_sessions=notify_sessions,
+                    status_override=status,
+                    projection_revision_override=revision,
+                    projection_state_override=projection_state,
+                )
+                self.conn.execute("COMMIT")
+            except Exception:
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
+                raise
+        for session_id in notify_sessions:
+            self.app.state.hub.notify(session_id)
+        return projection
 
     def _project_task(
         self,
@@ -1156,6 +1259,7 @@ class MasterProjectionService:
         status_override: str | None = None,
         projection_epoch_override: int | None = None,
         projection_revision_override: int | None = None,
+        projection_state_override: str | None = None,
     ) -> dict[str, Any] | None:
         conn = connection or self.conn
         job = self._task(job_id, connection=conn)
@@ -1198,37 +1302,38 @@ class MasterProjectionService:
         if projection_revision < 0:
             raise ValueError("Task projection revision is invalid")
         reason = str(job["blocked_reason"] or "").strip()
-        projected_blocker = status == "queued" and (
-            status_override is not None
-            or reason.startswith("Blocked by prerequisite")
+        projection_state = (
+            str(projection_state_override)
+            if projection_state_override is not None
+            else task_projection_state(
+                status,
+                blocked_reason=reason,
+                queued_is_blocked=(
+                    status_override is not None and status == "queued"
+                ),
+            )
         )
+        projected_blocker = projection_state == "blocked"
         projection_type: str
         verb: str
-        key_suffix: str
-        if status == "running":
+        if projection_state == "started":
             projection_type = "master.task.started"
             verb = "Started"
-            key_suffix = "started"
-        elif status == "done":
+        elif projection_state == "completed":
             projection_type = "master.task.completed"
             verb = "Completed"
-            key_suffix = "completed"
-        elif status == "failed":
+        elif projection_state == "failed":
             projection_type = "master.task.failed"
             verb = "Failed"
-            key_suffix = "failed"
-        elif status == "cancelled":
+        elif projection_state == "cancelled":
             projection_type = "master.task.cancelled"
             verb = "Cancelled"
-            key_suffix = "cancelled"
-        elif status == "review":
+        elif projection_state == "review":
             projection_type = "master.task.review_ready"
             verb = "Ready for review"
-            key_suffix = "review"
         elif projected_blocker:
             projection_type = "master.task.blocked"
             verb = "Blocked"
-            key_suffix = "blocked"
         else:
             return None
 
@@ -1249,7 +1354,7 @@ class MasterProjectionService:
 
         projection_key = _task_projection_key(
             job_id,
-            key_suffix,
+            projection_state,
             projection_epoch,
             projection_revision,
         )

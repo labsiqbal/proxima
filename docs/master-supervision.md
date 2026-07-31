@@ -69,9 +69,10 @@ It writes:
 
 `master_projections` is not lifecycle truth. Its unique owner and projection key
 links a message and event to a source table and row. Task keys include the latest
-database-maintained transition revision. Parent lifecycle, linear-step, blocker, and
-graph-node changes advance that revision, so a restored rerun and repeated states
-within one run each have a distinct idempotency generation.
+database-maintained transition generation. Only a change in canonical projected
+state advances that generation. Ordinary step and node progress reuses it, while a
+restored rerun and a Running to Review to Running cycle each receive the required
+distinct idempotency generations.
 Source table and event type must match, links are owner-scoped, and committed rows
 must have both their message and event. Message, event, and ledger creation is one
 transaction, so rollback cannot leave partial projection state. Message and event
@@ -83,11 +84,13 @@ Master session ownership, source links, and bounded payload equality. Reconcilia
 after restart processes status and recovery rows in strict per-Task event order and
 safely retries missing current-state projections because an existing revision key
 produces no second message or event. Recovery causally supersedes only older
-unpublished rows before emitting its authoritative current transition, preventing
-delayed Failed or Done delivery from overwriting restored Queued state. Unavailable
-legacy Focus is recorded as failed attribution and can be replayed only after
-attribution becomes provable; the Task restore remains committed and no unattributed
-history is published. Each reconciliation candidate has its own
+unpublished status rows before emitting its authoritative current transition,
+preventing delayed Failed or Done delivery from overwriting restored Queued state.
+Recovery audit rows are never superseded: every restore remains durable and
+publishes exactly once in Task-event order. Unavailable legacy Focus is recorded as
+failed attribution and can be replayed only after attribution becomes provable; the
+Task restore remains committed and no unattributed history is published. Each
+reconciliation candidate has its own
 failure boundary, so one invalid legacy source does not starve later Task, Satpam, or
 Attention repair. A reused key with different ownership or source binding fails
 closed. Raw token, reasoning, and tool delta events are never projected, and

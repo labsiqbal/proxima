@@ -739,6 +739,7 @@ def canonical_job_payload(
     """
     normalized = dict(payload)
     normalized.pop("projection_revision", None)
+    normalized.pop("projection_state", None)
     legacy_origin = normalized.pop(LEGACY_ORIGIN_COLUMN, None)
     master_origin = normalized.get(ORIGIN_MASTER_COLUMN)
     if (
