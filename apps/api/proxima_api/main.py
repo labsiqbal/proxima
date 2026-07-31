@@ -31,6 +31,7 @@ from .preview_proxy import (
     mint_preview_token,
     valid_preview_token,
 )
+from .platform_support import support_payload
 from .runners import augmented_path
 from .settings import (
     DEFAULT_CONFIG,
@@ -559,6 +560,7 @@ def _create_app(
             "product": "proxima",
             "service": "proxima",
             "version": app.version,
+            "platform_support": support_payload()["server"],
             "database": "ok",
             "worker": "enabled" if cfg.get("start_worker", True) else "disabled",
         }
@@ -598,7 +600,11 @@ def _create_app(
     # secret; expose it without auth so the frontend can read it early.
     @app.get("/api/config")
     def public_config():
-        return {"apps_domain": cfg.get("apps_domain"), "features": public_flags(cfg)}
+        return {
+            "apps_domain": cfg.get("apps_domain"),
+            "features": public_flags(cfg),
+            "platform_support": support_payload(),
+        }
 
     preview_secret = secrets.token_bytes(32)
 

@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import Depends
 
+from ..platform_support import current_platform
 from ..run_state import active_run_clause, stale_params
 from ..settings import systemd_user_unit
 
@@ -35,34 +36,61 @@ def register(app, deps):
         log_hint = ""
         cfg = getattr(app.state, "config", {}) or {}
         unit = systemd_user_unit(cfg.get("service_name"))
+        platform_support = current_platform()
+        service_manager = {
+            "linux": "systemd",
+            "macos": "launchd",
+            "windows": "task-scheduler",
+        }.get(platform_support["key"], "unsupported")
 
-        try:
-            proc = subprocess.run(
-                [
-                    "journalctl",
-                    "--user",
-                    "-u",
-                    unit,
-                    "-n",
-                    str(line_limit),
-                    "--no-pager",
-                    "--output",
-                    "short-iso",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=5,
+        if platform_support["key"] == "linux":
+            try:
+                proc = subprocess.run(
+                    [
+                        "journalctl",
+                        "--user",
+                        "-u",
+                        unit,
+                        "-n",
+                        str(line_limit),
+                        "--no-pager",
+                        "--output",
+                        "short-iso",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                log_text = (proc.stdout or "")[-120_000:]
+                log_error = (proc.stderr or "").strip()
+                if proc.returncode != 0 and not log_error:
+                    log_error = f"journalctl exited with code {proc.returncode}"
+            except Exception as exc:
+                log_error = str(exc)
+        elif platform_support["key"] == "macos":
+            log_hint = (
+                "macOS diagnostics are experimental. Read "
+                "~/Library/Logs/proxima.log or use launchctl list and the configured "
+                "PROXIMA_LAUNCHD_LABEL."
             )
-            log_text = (proc.stdout or "")[-120_000:]
-            log_error = (proc.stderr or "").strip()
-            if proc.returncode != 0 and not log_error:
-                log_error = f"journalctl exited with code {proc.returncode}"
-        except Exception as exc:
-            log_error = str(exc)
+        elif platform_support["key"] == "windows":
+            log_hint = (
+                "Windows diagnostics are experimental. Read the install log under "
+                "%LOCALAPPDATA%\\proxima\\logs and inspect the Proxima Scheduled Task."
+            )
+        else:
+            log_hint = (
+                "This server platform is unsupported. Move the data backup to a "
+                "supported Linux host before attempting service actions."
+            )
 
         stripped = log_text.strip()
-        if not log_error and (not stripped or stripped == "-- No entries --"):
+        if (
+            platform_support["key"] == "linux"
+            and not log_error
+            and (not stripped or stripped == "-- No entries --")
+        ):
             log_hint = (
                 f"No journal entries for user unit {unit}. "
                 "If Proxima runs under a different systemd unit, set PROXIMA_SERVICE_NAME "
@@ -129,6 +157,8 @@ def register(app, deps):
             "logError": log_error,
             "logHint": log_hint,
             "serviceUnit": unit,
+            "serviceManager": service_manager,
+            "platformSupport": platform_support,
             "runs": [dict(r) for r in runs],
             "rawActiveSessionIds": [r["session_id"] for r in active_rows],
             "activeRuns": [dict(r) for r in active_run_rows],

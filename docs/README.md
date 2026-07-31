@@ -34,6 +34,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [master-supervision.md](master-supervision.md) | Master queue-start authority, durable Task/Satpam chat projection, and session event contract | by hand |
 | [master-persistence-migration.md](master-persistence-migration.md) | In-place Alpha-to-Master identity, compatibility, invariants, and recovery matrix | by hand |
 | [master-integrated-acceptance.md](master-integrated-acceptance.md) | Final Master-orchestrator requirement matrix and disposable-fixture acceptance evidence | by hand |
+| [linux-daily-driver-acceptance.md](linux-daily-driver-acceptance.md) | Linux Mint server and CachyOS/Tailscale daily-driver support matrix | by hand |
 | [runner-conformance.md](runner-conformance.md) | Runner contracts and the fail-closed chat-only Master boundary | by hand |
 | [adding-workflow-node-type.md](adding-workflow-node-type.md) | Extension playbook and invariants for node execution/output contracts | by hand |
 | [adding-safe-updater-adapter.md](adding-safe-updater-adapter.md) | Qualification and extension contract for external updater service adapters | by hand |
@@ -44,6 +45,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [../bundled-skills/README.md](../bundled-skills/README.md) | The shipped capability bundle: bundled skills, opt-out, recommended-tools list | by hand |
 | [tour.md](tour.md) | Visual tour — screenshots of every surface | by hand |
 | [evidence/auth-onboarding-accessibility/README.md](evidence/auth-onboarding-accessibility/README.md) | Disposable real-browser auth/onboarding pass, redacted GET-only Tailscale entry check, Lighthouse report, and before/after screenshots | `npm --prefix apps/web run test:accessibility` |
+| [evidence/linux-daily-driver/README.md](evidence/linux-daily-driver/README.md) | Disposable real-browser platform labels, Master/Safe-Update state, and validated PNG evidence | `scripts/capture-linux-daily-driver-evidence.mjs` |
 
 **Operations & contributing:** [installation.md](installation.md) ·
 [backup.md](backup.md) · [development-tools.md](development-tools.md) ·

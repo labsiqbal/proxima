@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Executable Linux-first daily-driver acceptance matrix.
+# Every case uses pytest fixtures, temporary directories, fake service managers,
+# or loopback-only processes. It does not target an installed Proxima service.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON="$ROOT/apps/api/.venv/bin/python"
+
+if [[ "$(uname -s)" != "Linux" ]]; then
+  echo "linux-daily-driver-acceptance: Linux is required." >&2
+  echo "macOS and Windows remain experimental and are not qualified by this matrix." >&2
+  exit 1
+fi
+if [[ ! -x "$PYTHON" ]]; then
+  echo "linux-daily-driver-acceptance: missing $PYTHON" >&2
+  echo "Run: (cd apps/api && uv sync)" >&2
+  exit 1
+fi
+
+export PROXIMA_FEATURE_MASTER_ORCHESTRATOR=1
+export PROXIMA_FEATURE_SAFE_SELF_UPDATE=0
+export PROXIMA_UPDATE_CHECK=0
+
+cat <<'EOF'
+Linux daily-driver acceptance matrix
+
+  PLATFORM     public Linux supported and macOS/Windows experimental labels
+  INSTALL      isolated systemd user install and wrong-platform refusal
+  LIFECYCLE    fake-manager status, restart, stop, and unsupported fail-closed path
+  PTY          real Linux PTY shell round trip and descendant cleanup
+  BACKUP       online SQLite backup, integrity check, and isolated restore
+  DIAGNOSTICS  systemd journal targeting and experimental-platform guidance
+  PREVIEW      loopback/tailnet bind selection, auth relay, assets, and WebSocket HMR
+  ACCESS       local and synthetic Tailscale HTTPS reverse-proxy entry
+  UPGRADE      inert update path with Master on and Safe Self-Update off
+EOF
+
+cd "$ROOT/apps/api"
+"$PYTHON" -m pytest -q \
+  tests/test_platform_support.py \
+  tests/test_install_user.py \
+  tests/test_linux_daily_driver_acceptance.py \
+  tests/test_terminal.py \
+  tests/test_debug_logs_route.py \
+  tests/test_preview_bind.py \
+  tests/test_preview_relay.py \
+  tests/test_updates.py::test_apply_is_inert_and_never_spawns_legacy_live_checkout_updater \
+  tests/test_safe_update_api.py::test_safe_update_routes_are_disabled_by_default
+
+echo "Linux daily-driver acceptance matrix: PASS"

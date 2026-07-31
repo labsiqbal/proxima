@@ -4,6 +4,10 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
 $ErrorActionPreference = "Stop"
 
+if (-not $IsWindows -and $env:OS -ne "Windows_NT") {
+  Write-Error "install-windows.ps1 requires Windows and remains experimental. On Linux use scripts/install-user, the supported daily-driver path. Nothing was changed."
+}
+
 $Root   = (Resolve-Path "$PSScriptRoot\..").Path
 $ApiDir = Join-Path $Root "apps\api"
 $WebDir = Join-Path $Root "apps\web"

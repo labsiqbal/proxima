@@ -6,6 +6,7 @@ import { debugLogLineLabel, getDebugLogs, reapOrphanedJobs, type DebugLogs } fro
 import { cancelRun } from '../api/runs'
 import { changePassword } from '../api/auth'
 import { ApiError } from '../api/client'
+import { getPlatformSupport, type PlatformSupport } from '../api/platformSupport'
 import {
   getCollaborationSettings,
   getImageGenSettings,
@@ -293,6 +294,36 @@ export function settingsMenuItemAriaLabel(label: string, hint: string): string {
   const l = (label || '').trim()
   const h = (hint || '').trim()
   return h ? `${l}. ${h}` : l
+}
+
+export function PlatformSupportPanel() {
+  const [support, setSupport] = React.useState<PlatformSupport | null>(null)
+  const [error, setError] = React.useState('')
+
+  React.useEffect(() => {
+    let alive = true
+    getPlatformSupport()
+      .then(value => { if (alive) setSupport(value) })
+      .catch(() => { if (alive) setError('Platform support could not be loaded. See the Linux daily-driver acceptance guide.') })
+    return () => { alive = false }
+  }, [])
+
+  return <div className="panel platform-support-panel">
+    <div className="panel-head">
+      <h3>Platform support</h3>
+      <span>{support ? `${support.server.label} server` : 'detecting server'}</span>
+    </div>
+    <p className="muted">Qualified daily-driver target: Linux Mint server with a Linux browser client, including CachyOS, over local access or Tailscale.</p>
+    {support && <div className="platform-support-list" aria-label="Platform support levels">
+      {support.platforms.map(item => <div className="platform-support-row" key={item.key}>
+        <strong>{item.label}</strong>
+        <span className={`platform-support-tier ${item.tier}`}>{item.tier === 'supported' ? 'Supported' : 'Experimental'}</span>
+        <p>{item.summary}</p>
+      </div>)}
+    </div>}
+    {support && <p className="platform-support-current">This server: <strong>{support.server.label}</strong> <span>{support.server.tier}</span></p>}
+    {error && <p className="error-text" role="alert">{error}</p>}
+  </div>
 }
 
 /** Theme swatch name with selected state for assistive tech. */
@@ -805,7 +836,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
           ? <RemoteAccessGuide />
           : effectiveSection === 'help'
             ? <HelpToursPanel token={token} features={features} />
-            : <>{updatesPanel}<DebugLogsPanel token={token} /><AuditPanel token={token} /></>
+            : <><PlatformSupportPanel />{updatesPanel}<DebugLogsPanel token={token} /><AuditPanel token={token} /></>
 
   return <section className="settings-view">
     <aside className="settings-menu" aria-label="Settings sections">

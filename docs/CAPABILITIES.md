@@ -1577,7 +1577,10 @@ never a double-encoded string under `path`. The modal pretty-prints metadata
 default `proxima` → `proxima.service`), and lists active/stale runs and orphaned jobs.
 Empty journals return a `logHint` naming the unit and how to point `PROXIMA_SERVICE_NAME`
 at staging/preview units; the panel head uses correct singular/plural line counts and
-shows the unit under the description.
+shows the unit under the description. The Platform support panel projects the
+canonical server catalog from `/api/config`: Linux is supported, while macOS and
+Windows are experimental. Diagnostics do not attempt `journalctl` on non-Linux
+hosts; they return service-manager-specific experimental guidance instead.
 **Endpoints:** `GET /api/debug/logs`, `POST /api/debug/reap-orphaned-jobs`.
 
 ## 20. Reliability (cross-cutting)
@@ -1590,6 +1593,16 @@ auto-continuation for job runs, and daily DB backup (`proxima-backup` timer with
 `VACUUM INTO`). Setup failures are finalized immediately instead of waiting for the
 reaper. Run completion is status-guarded: cancellation cannot be overwritten by a late
 media result, message-review result, collaboration synthesis, draft, or graph update.
+
+Linux daily-driver reliability is release-gated by
+`scripts/linux-daily-driver-acceptance`. The executable matrix covers install,
+service status/restart/stop, POSIX PTY behavior, online backup and isolated restore,
+diagnostics, preview, local and synthetic Tailscale HTTPS entry, and fail-closed
+upgrade readiness. All cases use temporary roots, fake managers, or loopback
+fixtures. Master is enabled and Safe Self-Update remains disabled inside the
+acceptance process. See
+[Linux Daily-Driver Acceptance](linux-daily-driver-acceptance.md) and
+[ADR-0028](adr/0028-linux-first-daily-driver-support.md).
 
 ## 21. Updates (version check + disabled safe-update fixtures)
 

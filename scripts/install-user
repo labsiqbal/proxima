@@ -16,6 +16,13 @@ case "${1:-}" in
   *) echo "usage: $0 [--dry-run]" >&2; exit 2 ;;
 esac
 
+if [[ "$(uname -s)" != "Linux" ]]; then
+  echo "install-user: unsupported host; the supported systemd installer requires Linux." >&2
+  echo "On macOS use scripts/install-macos (experimental). On Windows use scripts/install-windows.ps1 (experimental)." >&2
+  echo "No dependencies, config, units, services, or runtime data were changed." >&2
+  exit 1
+fi
+
 run() {
   if [[ "$DRY_RUN" == 1 ]]; then
     printf '+ '

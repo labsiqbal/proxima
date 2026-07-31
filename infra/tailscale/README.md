@@ -12,6 +12,11 @@ tailscale serve --bg https / http://127.0.0.1:8765
 
 Then open the HTTPS MagicDNS URL on a device joined to the same tailnet and install the PWA from the browser.
 
+The qualified daily-driver target is a Linux Mint Proxima server and a current
+browser on a Linux client such as CachyOS. `scripts/linux-daily-driver-acceptance`
+tests the HTTPS reverse-proxy contract with isolated fixtures; it never runs
+`tailscale set` or changes Serve state.
+
 ## Notes
 
 - Tailscale is the access boundary. Proxima is single-user and treats anyone who

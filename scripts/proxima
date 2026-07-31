@@ -14,6 +14,36 @@ WEB_DIR="$ROOT/apps/web"
 DATA_DIR="${PROXIMA_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/proxima}"
 CONFIG_FILE="${PROXIMA_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/proxima/proxima.env}"
 
+platform_key() {
+  case "$(uname -s)" in
+    Linux) printf 'linux\n' ;;
+    Darwin) printf 'macos\n' ;;
+    MINGW*|MSYS*|CYGWIN*) printf 'windows\n' ;;
+    *) printf 'unsupported\n' ;;
+  esac
+}
+
+require_runtime_platform() {
+  local action="$1"
+  local host
+  host="$(platform_key)"
+  case "$host" in
+    linux|macos) return 0 ;;
+    windows)
+      echo "$action: the Bash wrapper is unavailable on experimental Windows installs." >&2
+      echo "Use the Scheduled Task and PowerShell commands printed by scripts/install-windows.ps1." >&2
+      echo "No service, config, database, or runtime data was changed." >&2
+      return 1
+      ;;
+    *)
+      echo "$action: unsupported host platform." >&2
+      echo "Use a supported Linux host. macOS and Windows packaging remain experimental." >&2
+      echo "No service, config, database, or runtime data was changed." >&2
+      return 1
+      ;;
+  esac
+}
+
 load_config() {
   if [[ -f "$CONFIG_FILE" ]]; then
     # shellcheck disable=SC1090
@@ -41,11 +71,17 @@ load_config() {
 # launchd on macOS, else systemd (user, then system with sudo).
 svc() {
   local action="$1"
+  require_runtime_platform "proxima $action" || return 1
   load_config
   local service="${PROXIMA_SERVICE_NAME:-proxima}"
   local launchd_label="${PROXIMA_LAUNCHD_LABEL:-com.minarflow.proxima}"
   local plist="$HOME/Library/LaunchAgents/$launchd_label.plist"
-  if [[ "$(uname -s)" == "Darwin" && -f "$plist" ]]; then
+  if [[ "$(platform_key)" == "macos" ]]; then
+    if [[ ! -f "$plist" ]]; then
+      echo "no Proxima LaunchAgent found at $plist" >&2
+      echo "Run scripts/install-macos first; macOS support remains experimental." >&2
+      return 1
+    fi
     case "$action" in
       restart) launchctl unload "$plist" 2>/dev/null || true; launchctl load "$plist" ;;
       stop)    launchctl unload "$plist" ;;
@@ -68,6 +104,7 @@ svc() {
 cmd="${1:-help}"; shift || true
 case "$cmd" in
   init-config)
+    require_runtime_platform "proxima init-config"
     umask 077
     mkdir -p "$(dirname "$CONFIG_FILE")" "$DATA_DIR"
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -108,6 +145,19 @@ EOF
   doctor)
     load_config
     ok=1
+    case "$(platform_key)" in
+      linux) echo "ok: platform Linux (supported)" ;;
+      macos) echo "warn: platform macOS (experimental; Linux is the supported daily-driver host)" ;;
+      windows)
+        echo "unsupported: use the Windows PowerShell diagnostics printed by scripts/install-windows.ps1" >&2
+        exit 1
+        ;;
+      *)
+        echo "unsupported: no qualified Proxima runtime for $(uname -s)" >&2
+        echo "Use a supported Linux host. No service or runtime data was changed." >&2
+        exit 1
+        ;;
+    esac
     for bin in uv npm python3; do command -v "$bin" >/dev/null 2>&1 && echo "ok: $bin" || { echo "missing: $bin"; ok=0; }; done
     command -v hermes >/dev/null 2>&1 && echo "ok: hermes ($(command -v hermes))" || echo "warn: hermes not found; install/login Hermes before real runs"
     [[ -f "$API_DIR/scripts/serve.py" ]] && echo "ok: API serve.py" || { echo "missing API serve.py"; ok=0; }
@@ -117,6 +167,7 @@ EOF
     [[ "$ok" == 1 ]] || exit 1
     ;;
   build)
+    require_runtime_platform "proxima build"
     exec "$ROOT/scripts/build" "$@"
     ;;
   update)
@@ -128,8 +179,9 @@ EOF
   stop)    svc stop && echo "✅ stopped" ;;
   status)  svc status "$@" ;;
   logs)
+    require_runtime_platform "proxima logs"
     load_config
-    if [[ "$(uname -s)" == "Darwin" ]]; then
+    if [[ "$(platform_key)" == "macos" ]]; then
       tail -f "$HOME/Library/Logs/proxima.log"
     else
       SERVICE="${PROXIMA_SERVICE_NAME:-proxima}"
@@ -137,6 +189,7 @@ EOF
     fi
     ;;
   serve)
+    require_runtime_platform "proxima serve"
     load_config
     mkdir -p "$PROXIMA_WORKSPACE_ROOT" "$PROXIMA_HERMES_PROFILES_ROOT" "$(dirname "$PROXIMA_DB_PATH")"
     exec "$API_DIR/.venv/bin/python" "$API_DIR/scripts/serve.py" "$@"
