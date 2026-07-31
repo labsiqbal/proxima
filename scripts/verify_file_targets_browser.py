@@ -299,6 +299,25 @@ worker.onerror = () => parent.postMessage({
   probe: "target-preview-worker",
   value: "blocked"
 }, "*");
+if (location.protocol === "https:") {
+  const paintWorklet = globalThis.CSS?.paintWorklet;
+  if (!paintWorklet) {
+    parent.postMessage({
+      probe: "target-preview-worklet",
+      value: "unsupported"
+    }, "*");
+  } else {
+    paintWorklet.addModule("paint-worklet.js")
+      .then(() => parent.postMessage({
+        probe: "target-preview-worklet",
+        value: "loaded"
+      }, "*"))
+      .catch(() => parent.postMessage({
+        probe: "target-preview-worklet",
+        value: "blocked"
+      }, "*"));
+  }
+}
 navigator.serviceWorker.register("worker.js", {scope: "./"})
   .then(() => parent.postMessage({
     probe: "target-preview-service-worker",
@@ -369,6 +388,14 @@ fetch("data.json")
   })
   .then(() => postMessage("exfiltrated"))
   .catch(() => postMessage("loaded"));
+""".strip(),
+        encoding="utf-8",
+    )
+    (ops / "site" / "paint-worklet.js").write_text(
+        """
+registerPaint("canonical-probe", class {
+  paint() {}
+});
 """.strip(),
         encoding="utf-8",
     )
@@ -839,6 +866,7 @@ def _browser_expression() -> str:
       for (const probe of [
         "target-preview-module",
         "target-preview-worker",
+        "target-preview-worklet",
         "target-preview-font",
         "target-preview-fetch",
       ]) {
@@ -850,6 +878,7 @@ def _browser_expression() -> str:
         }
       }
       checks.push("https-area-native-module-worker");
+      checks.push("https-area-cors-paint-worklet");
       const serviceWorker = await until(
         `${name} service worker rejection`,
         () => previewMessages["target-preview-service-worker"]

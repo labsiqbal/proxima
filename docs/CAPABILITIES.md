@@ -1325,6 +1325,16 @@ unknown, contradictory, active-document, malformed-entry, and cross-origin
 subresource metadata is rejected before file service. Named-local HTTP uses a Secure
 `SameSite=None` cookie under the browser's trustworthy-localhost exception; plain
 HTTP relays use `SameSite=Strict`.
+The tuple matrix follows the
+[Fetch destination types](https://fetch.spec.whatwg.org/#concept-request-destination)
+and the
+[HTML module request algorithm](https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script):
+worklets remain `cors`, while only top-level worker, shared-worker, and
+service-worker module requests switch to `same-origin`. Each `Sec-Fetch-Site`,
+`Sec-Fetch-Mode`, and `Sec-Fetch-Dest` must be one canonical Structured Field
+token, and optional `Sec-Fetch-User` must be the canonical `?1` boolean on a
+navigation. Duplicate, comma-combined, non-ASCII, differently cased, or
+whitespace-padded fields fail closed.
 Every resource still crosses the canonical resolver and realpath jail. Dedicated
 worker responses restrict outbound connections, Service Worker scripts are rejected,
 external ancestors cannot frame a preview, and embedded same-site or cross-site

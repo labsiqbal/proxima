@@ -294,6 +294,15 @@ destination token with `cors`, `no-cors`, or `same-origin`. Missing, unknown,
 contradictory, active-document, malformed-entry, and cross-origin subresource
 metadata is rejected before file service. Named-local HTTP uses a Secure
 `SameSite=None` cookie under the browser's trustworthy-localhost exception.
+The matrix follows the
+[Fetch destination types](https://fetch.spec.whatwg.org/#concept-request-destination)
+and the
+[HTML module request algorithm](https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script).
+Worklets remain `cors`; only top-level worker, shared-worker, and service-worker
+module requests switch to `same-origin`. The dispatch gate accepts exactly one
+canonical Structured Field occurrence for site, mode, destination, and optional
+user activation. Duplicate, combined, non-ASCII, differently cased, and
+whitespace-padded metadata fails before dispatch.
 The token's signed Proxima origin is enforced by the exact `frame-ancestors` policy
 on every document-viewable response. The Area host retains
 same-origin identity only because its router exposes the validated Area and no
