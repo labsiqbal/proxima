@@ -486,21 +486,37 @@ def add_artifact_targets(
 ) -> list[dict[str, Any]]:
     data = container_registry.get_container(conn, container)
     resolved_context = _context_for(conn, data, context)
-    ops_root = resolved_context.ops_root()
     enriched: list[dict[str, Any]] = []
     for item in items:
         try:
-            resolved = resolve_from_root(
-                resolved_context,
-                ops_root,
-                str(item.get("path") or ""),
+            enriched.append(
+                add_artifact_target(
+                    conn,
+                    data,
+                    item,
+                    context=resolved_context,
+                )
             )
         except FileTargetError:
             continue
-        enriched.append(
-            {
-                **item,
-                "target": resolved.locator.payload(),
-            }
-        )
     return enriched
+
+
+def add_artifact_target(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+    item: Mapping[str, Any],
+    *,
+    context: FileTargetContext | None = None,
+) -> dict[str, Any]:
+    data = container_registry.get_container(conn, container)
+    resolved_context = _context_for(conn, data, context)
+    resolved = resolve_from_root(
+        resolved_context,
+        resolved_context.ops_root(),
+        str(item.get("path") or ""),
+    )
+    return {
+        **dict(item),
+        "target": resolved.locator.payload(),
+    }

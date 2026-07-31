@@ -270,19 +270,30 @@ as traversal enters that Area, so cross-Area aliases are rejected.
 Display names never select a physical root. Path-only callers remain a compatibility
 input, with historical virtual Ops names and physical `ops/...` support; legacy
 Ops-at-dot keeps `ops/...` as an Area-relative literal instead of stripping it.
-Targeted previews use the disjoint
-`/api/target-preview/{slug}/{kind}/{id}/{path}` namespace. Targeted HTML responses
-also apply an opaque-origin script sandbox and a Content Security Policy that permits
-local resources only below that exact Area prefix. Arbitrary parent normalization
-therefore cannot load the legacy path-only preview route. Markdown resources resolve
-relative to both the source document directory and its target. A validated target
-context is reused throughout each tree or Archive request while each path still
-crosses the realpath jail. Design reply locator fields are treated as untrusted:
+`/api/target-preview/{slug}/{kind}/{id}/{path}` is an authenticated entry route
+for targeted previews. It validates the locator and redirects through a short-lived,
+Area-bound capability to a dedicated origin whose router exposes only files from
+that authoritative Area. Named localhost installs use an Area-specific `.localhost`
+host, apps-domain installs use a provisioned one-label Area host, and IP-based or
+other remote installs use one relay port per Area and interface. The capability is
+exchanged for an HttpOnly host-scoped cookie and removed from the URL. Every
+same-origin resource and relative navigation remains on the Area-only origin and
+still crosses the canonical resolver and realpath jail, so
+arbitrary parent normalization cannot reach the legacy path-only route or any
+Proxima application route. Same-Area modules, workers, fonts, fetch, styles, images,
+media, and frames remain same-origin under the HTML sandbox and response policy.
+The legacy `/api/preview` route rejects canonical target parameters, and path-only
+HTML viewers retain an opaque script sandbox.
+Markdown resources resolve relative to both the source document directory and its
+target. A validated target context is reused throughout each tree, Archive, or
+message-list request while each path still crosses the realpath jail. Artifact links
+whose Area context or individual path cannot be validated are omitted rather than
+downgraded to a path-only identity. Design reply locator fields are treated as untrusted:
 an existing image or frame target survives only when both the layer id and source
 remain unchanged, and model-supplied targets are otherwise removed. See
 [ADR-0010](../adr/0010-canonical-file-targets.md),
 [ADR-0011](../adr/0011-area-scoped-artifact-media.md), and
-[ADR-0012](../adr/0012-sandboxed-target-preview-resources.md).
+[ADR-0013](../adr/0013-area-bound-file-preview-origins.md).
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).

@@ -1299,11 +1299,20 @@ Historical virtual paths such as `wiki/...`, `artifacts/...`, `scripts/...`, and
 canonical Ops root, while repo files continue to resolve from the Container root.
 Path-only clients remain compatible, including explicit `ops/...` paths for physical
 layouts. For a legacy Ops Area at `.`, `ops/...` remains literal Area-relative input
-and is not stripped or reinterpreted. Targeted previews use the disjoint
-`/api/target-preview` namespace. Targeted HTML runs in an opaque-origin script
-sandbox with a response policy that permits local resources only below its exact
-Area prefix, so arbitrary parent traversal cannot load legacy path-only preview.
-Markdown siblings resolve from the source document's Area and directory.
+and is not stripped or reinterpreted. `/api/target-preview` validates a canonical
+target, then redirects through a short-lived Area-bound capability to a dedicated
+origin. That origin's router exposes only the validated Area and resolves every
+resource through the realpath jail. Parent traversal and scripted navigation
+therefore cannot reach legacy preview or application routes, while same-Area module
+scripts, workers, fonts, fetch, styles, images, media, and frames remain same-origin.
+Named localhost installs use an Area-specific `.localhost` host; IP-based installs
+use an Area-specific same-host relay origin so browser cookie-site rules remain intact.
+The capability is exchanged for an HttpOnly host-scoped cookie and removed from the
+visible URL. The legacy `/api/preview` route remains path-only and rejects target
+parameters; path-only HTML viewers retain an opaque script sandbox. Markdown siblings
+resolve from the source document's Area and directory.
+Artifact lists and chat messages omit links that cannot be assigned a validated
+canonical target instead of returning a path-only fallback.
 These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge, chat attachments, and `@`

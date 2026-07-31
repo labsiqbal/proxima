@@ -1,11 +1,12 @@
-"""Cloudflare API: per-app preview hostnames.
+"""Cloudflare API: isolated preview hostnames.
 
-When a project app starts, we expose it at `<slug>.<apps_domain>` by (idempotently):
+Preview origins are exposed under `<apps_domain>` by:
   1. adding a tunnel ingress rule  <hostname> → the main app service,
   2. creating a proxied DNS CNAME   <hostname> → <tunnel-id>.cfargotunnel.com,
   3. removing any stale per-host Cloudflare Access app, because embedded previews
      authenticate with Proxima's short-lived preview cookie instead.
-On app stop we remove the ingress rule and DNS record. All calls are no-ops if
+App hosts are removed on app stop. File Area hosts remain inert if their
+database binding disappears. All calls are no-ops if
 `apps_domain`/`cf_*` config is missing.
 """
 from __future__ import annotations
@@ -34,6 +35,18 @@ def hostname_for(cfg: dict[str, Any], slug: str) -> str:
     return f"preview-{slug}.{cfg['apps_domain']}"
 
 
+def file_preview_hostname_for(
+    cfg: dict[str, Any],
+    project_id: int,
+    area_kind: str,
+    area_id: int | None,
+) -> str:
+    return (
+        f"file-{project_id}-{area_kind}-{area_id or 0}."
+        f"{cfg['apps_domain']}"
+    )
+
+
 def _headers(cfg: dict[str, Any]) -> dict[str, str]:
     return {"Authorization": f"Bearer {cfg['cf_api_token']}", "Content-Type": "application/json"}
 
@@ -59,10 +72,9 @@ async def _put_tunnel_config(cfg, client, config: dict[str, Any]) -> None:
     r.raise_for_status()
 
 
-async def ensure_preview_hostname(cfg: dict[str, Any], slug: str) -> None:
+async def _ensure_hostname(cfg: dict[str, Any], host: str) -> None:
     if not configured(cfg):
         return
-    host = hostname_for(cfg, slug)
     async with httpx.AsyncClient(timeout=20, headers=_headers(cfg)) as client:
         # 1. Tunnel ingress rule (insert before the catch-all).
         config = await _tunnel_config(cfg, client)
@@ -94,6 +106,27 @@ async def ensure_preview_hostname(cfg: dict[str, Any], slug: str) -> None:
         for a in apps:
             if a.get("domain") == host:
                 await client.delete(f"{_API}/accounts/{cfg['cf_account_id']}/access/apps/{a['id']}")
+
+
+async def ensure_preview_hostname(cfg: dict[str, Any], slug: str) -> None:
+    await _ensure_hostname(cfg, hostname_for(cfg, slug))
+
+
+async def ensure_file_preview_hostname(
+    cfg: dict[str, Any],
+    project_id: int,
+    area_kind: str,
+    area_id: int | None,
+) -> None:
+    await _ensure_hostname(
+        cfg,
+        file_preview_hostname_for(
+            cfg,
+            project_id,
+            area_kind,
+            area_id,
+        ),
+    )
 
 
 async def provision(cfg: dict[str, Any], slug: str) -> None:

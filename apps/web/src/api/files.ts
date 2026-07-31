@@ -26,8 +26,9 @@ async function responseError(res: Response, fallback: string): Promise<Error> {
   return new Error(`${fallback} (${res.status}${res.statusText ? ` ${res.statusText}` : ''})${detail ? `: ${detail}` : ''}`)
 }
 
-// Raw-file URL usable directly as <img>/<video> src. Auth via the proxima_session
-// cookie (sent same-origin) — no token in the URL.
+// Raw-file URL usable directly as <img>/<video> src. Path-only previews use the
+// owner session. Canonical previews enter through the API and redirect to an
+// Area-bound capability origin.
 export const previewUrl = (slug: string, path: string, target?: FileTarget) =>
   target
     ? `/api/target-preview/${q(slug)}/${q(target.area.kind)}/${target.area.id ?? 'root'}/${encodedPath(target.path)}`
