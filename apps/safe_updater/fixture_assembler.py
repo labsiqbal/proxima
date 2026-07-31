@@ -26,11 +26,13 @@ _SCHEMA_TYPES = ("table", "index", "trigger", "view")
 
 
 def _schema_statements(conn: sqlite3.Connection) -> list[str]:
+    # Views before triggers: INSTEAD OF triggers can target views
+    # (e.g. task_recovery_history_capture_apply).
     rows = conn.execute(
         "SELECT type, name, sql FROM sqlite_master "
         "WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' "
         "ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 "
-        "WHEN 'trigger' THEN 2 ELSE 3 END, name"
+        "WHEN 'view' THEN 2 WHEN 'trigger' THEN 3 ELSE 4 END, name"
     ).fetchall()
     result: list[str] = []
     for kind, _name, sql in rows:
