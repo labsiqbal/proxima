@@ -1,6 +1,12 @@
 import React from 'react'
 import { projectFs } from '../api/fsAdapter'
-import { deleteSessionArtifact, fileUrl, listSessionArtifacts, type Artifact } from '../api/files'
+import { deleteSessionArtifact, fileUrl, isSvgPath, listSessionArtifacts, rawUrl, retargetFile, type Artifact } from '../api/files'
+import {
+  collectArtboardMediaRefs,
+  mergeProjectMediaRefs,
+  resolveProjectMediaSrc,
+} from '../api/projectMedia'
+import { useProjectMediaUrls } from '../hooks/useProjectMediaUrls'
 import { listMessages } from '../api/sessions'
 import { cancelRun, deleteRun } from '../api/runs'
 import { getWorkflow, updateWorkflow, type StepInput } from '../api/workflows'
@@ -11,7 +17,7 @@ import { AppRunner } from '../components/files/AppRunner'
 import { MessageContent } from '../components/chat/MessageContent'
 import { formatRunError } from '../components/chat/runError'
 import { confirmDialog } from '../components/ui/Dialog'
-import type { ChatMessage, RunEvent, WorkflowStep } from '../types'
+import type { ChatMessage, FileTarget, RunEvent, WorkflowStep } from '../types'
 
 type DesignCard = { id: string; title: string; type: string; path: string; w: number; h: number; art?: any }
 const blankStep = (): WorkflowStep => ({ id: Math.random().toString(36).slice(2, 10), name: '', instruction: '', expected_output: '', type: 'other', rules: null, skill_ids: null, review_required: false, depends_on: null })
@@ -42,7 +48,12 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
   const [arts, setArts] = React.useState<Artifact[]>([])   // non-design artifacts
   const [tab, setTab] = React.useState<'recipe' | 'result'>('recipe')
   const [runnerOpen, setRunnerOpen] = React.useState(false)
-  const [doc, setDoc] = React.useState<{ title: string; content: string } | null>(null)
+  const [doc, setDoc] = React.useState<{
+    title: string
+    content: string
+    sourcePath: string
+    target?: Artifact['target']
+  } | null>(null)
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [events, setEvents] = React.useState<RunEvent[]>([])
   const [error, setError] = React.useState('')
@@ -57,7 +68,15 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
   const [deletingArtifact, setDeletingArtifact] = React.useState<string | null>(null)
   const mountedRef = React.useRef(true)
   const projFs = React.useMemo(() => projectSlug ? projectFs(token, projectSlug, '') : null, [token, projectSlug])
-  const resolveSrc = React.useCallback((s: string) => /^(https?:|data:|blob:)/.test(s) ? s : (projectSlug ? fileUrl(projectSlug, s) : s), [projectSlug])
+  const designMediaRefs = React.useMemo(
+    () => mergeProjectMediaRefs(...designs.map(design => collectArtboardMediaRefs(design.art))),
+    [designs],
+  )
+  const designMediaUrls = useProjectMediaUrls(token, projectSlug || undefined, designMediaRefs)
+  const resolveSrc = React.useCallback(
+    (s: string, target?: FileTarget) => resolveProjectMediaSrc(s, target, projectSlug, designMediaUrls),
+    [projectSlug, designMediaUrls],
+  )
 
   React.useEffect(() => {
     mountedRef.current = true
@@ -96,7 +115,16 @@ export function IterateStage({ token, workflowId, sessionId, projectSlug, runnin
     // Enrich designs with their artboard for the live thumbnail.
     const dCards = (await Promise.all(designArts.map(async a => {
       if (!activeFs) return null
-      try { const f = await activeFs.read(`${a.path}/scene.json`); const s = JSON.parse(f.content); const ab = s.artboards?.[0] || {}; return { id: a.id || s.id, title: a.title, type: s.type || 'graphic', path: a.path, w: ab.width || 1080, h: ab.height || 1080, art: ab } as DesignCard } catch { return null }
+      try {
+        const scenePath = `${a.path}/scene.json`
+        const sceneRef = a.target
+          ? retargetFile(a.target, `${a.target.path.replace(/\/$/, '')}/scene.json`)
+          : scenePath
+        const f = await activeFs.read(sceneRef)
+        const s = JSON.parse(f.content)
+        const ab = s.artboards?.[0] || {}
+        return { id: a.id || s.id, title: a.title, type: s.type || 'graphic', path: a.path, w: ab.width || 1080, h: ab.height || 1080, art: ab } as DesignCard
+      } catch { return null }
     }))).filter(Boolean) as DesignCard[]
     if (!mountedRef.current || seq !== resultSeq.current) return
     setDesigns(dCards); setArts(others)
@@ -191,11 +219,35 @@ Finish with a short result summary and artifact/file links if created.`, label, 
     if (!activeFs) return
     const seq = ++docSeq.current
     try {
-      const f = await activeFs.read(a.path)
-      if (mountedRef.current && seq === docSeq.current) setDoc({ title: a.title, content: f.content })
+      const f = await activeFs.read(a.target || a.path)
+      if (mountedRef.current && seq === docSeq.current) {
+        setDoc({
+          title: a.title,
+          content: f.content,
+          sourcePath: a.target?.path || a.path,
+          target: a.target,
+        })
+      }
     } catch { /* ignore */ }
   }
-  const openFile = (a: Artifact) => { if (projectSlug) window.open(fileUrl(projectSlug, a.type === 'design' ? `${a.path.replace(/\/$/, '')}/scene.json` : a.path), '_blank') }
+  const openFile = (a: Artifact) => {
+    if (!projectSlug) return
+    const path = a.type === 'design'
+      ? `${a.path.replace(/\/$/, '')}/scene.json`
+      : a.path
+    const target = a.target
+      ? retargetFile(
+          a.target,
+          a.type === 'design'
+            ? `${a.target.path.replace(/\/$/, '')}/scene.json`
+            : a.target.path,
+        )
+      : undefined
+    const url = isSvgPath(path)
+      ? rawUrl(projectSlug, path, target)
+      : fileUrl(projectSlug, path, target)
+    window.open(url, '_blank')
+  }
   const openArtifact = (a: Artifact) => {
     if (a.type === 'doc') void openDoc(a)
     else if (a.type === 'design' && a.id && designStudioEnabled) onOpenDesign?.(a.id)
@@ -216,7 +268,7 @@ Finish with a short result summary and artifact/file links if created.`, label, 
     setError('')
     setDeletingArtifact(a.path)
     try {
-      await deleteSessionArtifact(token, sessionId, a.path)
+      await deleteSessionArtifact(token, sessionId, a.target || a.path)
       dropArtifactRefs(a.path)
       await loadResult()
       window.dispatchEvent(new CustomEvent('proxima:files-changed'))
@@ -252,7 +304,16 @@ Finish with a short result summary and artifact/file links if created.`, label, 
     const addArtifacts = (label: string, links?: Artifact[]) => {
       if (!links?.length) return
       const bucket = artifactsByLabel.get(label) || new Map<string, Artifact>()
-      for (const a of links) bucket.set(`${a.type}:${a.path}`, a)
+      for (const a of links) {
+        const key = `${a.type}:${a.path}`
+        const existing = bucket.get(key)
+        bucket.set(
+          key,
+          !a.target && existing?.target
+            ? { ...a, target: existing.target }
+            : a,
+        )
+      }
       artifactsByLabel.set(label, bucket)
     }
     for (let i = 0; i < messages.length; i++) {
@@ -456,7 +517,7 @@ Finish with a short result summary and artifact/file links if created.`, label, 
     {doc && <div className="art-doc-scrim" onClick={() => setDoc(null)}>
       <div className="art-doc" onClick={e => e.stopPropagation()}>
         <header className="art-doc-head"><strong>{doc.title}</strong><button className="icon-btn" onClick={() => setDoc(null)}>✕</button></header>
-        <div className="art-doc-body"><MessageContent content={doc.content} token={token} slug={projectSlug || undefined} /></div>
+        <div className="art-doc-body"><MessageContent content={doc.content} token={token} slug={projectSlug || undefined} sourcePath={doc.sourcePath} fileTarget={doc.target} /></div>
       </div>
     </div>}
   </section>

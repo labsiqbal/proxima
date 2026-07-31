@@ -12,7 +12,8 @@ import { QuestionForm } from "./QuestionForm";
 import { splitOnQuestionForms } from "./questionForm";
 import { respondPermission } from "../../api/runs";
 import { previewTurnRestore, restoreTurn } from "../../api/sessions";
-import { designFromImage, previewUrl } from "../../api/files";
+import { designFromImage, isSvgPath, previewUrl } from "../../api/files";
+import { useRawBlobUrl } from "../../hooks/useRawBlobUrl";
 import { ApiError } from "../../api/client";
 import { IconArrowDown } from "../shell/icons";
 import { MessageReviewSidecar } from "./MessageReviewSidecar";
@@ -447,6 +448,30 @@ export function resultCardAriaLabel(link: Pick<OutputLink, "type" | "title" | "p
 	return `Open ${kind}, ${title}`;
 }
 
+function ResultImage({
+	token,
+	slug,
+	path,
+	target,
+}: {
+	token: string;
+	slug: string;
+	path: string;
+	target?: OutputLink["target"];
+}) {
+	const blob = useRawBlobUrl(
+		isSvgPath(path) ? token : undefined,
+		isSvgPath(path) ? slug : undefined,
+		path,
+		target,
+	);
+	const src = isSvgPath(path)
+		? blob.url || ""
+		: previewUrl(slug, path, target);
+	if (!src) return null;
+	return <img src={src} alt="" loading="lazy" />;
+}
+
 function ResultCards({
 	links,
 	onOpen,
@@ -467,7 +492,8 @@ function ResultCards({
 	const projectOf = (link: OutputLink) => link.project_slug || slug;
 	const mediaSrc = (link: OutputLink): string => {
 		const project = projectOf(link);
-		return token && project ? previewUrl(project, link.path) : "";
+		if (!token || !project || isSvgPath(link.path)) return "";
+		return previewUrl(project, link.path, link.target);
 	};
 	// Bridge a generated image into a fresh Design Studio scene (full-bleed layer).
 	const toDesignStudio = async (link: OutputLink) => {
@@ -476,7 +502,13 @@ function ResultCards({
 		setBusy(`design:${link.path}`);
 		setActionError("");
 		try {
-			const d = await designFromImage(token, project, link.path, link.title);
+				const d = await designFromImage(
+					token,
+					project,
+					link.path,
+					link.title,
+					link.target,
+				);
 			onOpen?.({ type: "design", id: d.id, title: d.title, path: d.path, project_slug: project });
 		} catch (e) {
 			setActionError(String(e));
@@ -493,7 +525,7 @@ function ResultCards({
 					const canEditDesign = bridges.design;
 				return (
 					<div className="result-item" key={`${link.type}:${link.path}:${i}`}>
-						{link.type === "image" && src && (
+						{link.type === "image" && token && projectOf(link) && (src || isSvgPath(link.path)) && (
 							<button
 								type="button"
 								className="result-media"
@@ -502,7 +534,12 @@ function ResultCards({
 								title={link.path}
 								aria-label={resultCardAriaLabel(link)}
 							>
-								<img src={src} alt="" loading="lazy" />
+								<ResultImage
+									token={token}
+									slug={projectOf(link)!}
+									path={link.path}
+									target={link.target}
+								/>
 							</button>
 						)}
 						{link.type === "video-file" && src && (

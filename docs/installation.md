@@ -410,6 +410,13 @@ tailscale serve --bg 8765
 tailscale serve status
 ```
 
+Canonical HTML file previews on an HTTPS remote entry require a configured
+TLS-capable apps domain that provides a distinct Area hostname. A Tailscale Serve
+entry without that preview domain keeps Proxima available but returns 503 for HTML
+preview entry in both passive and trusted active mode instead of running project
+content on the application origin or redirecting to plaintext HTTP. Non-HTML passive
+media remains available through the authenticated application route.
+
 Cloudflare Access deployments should route to the local bind address and restrict
 access before traffic reaches Proxima.
 

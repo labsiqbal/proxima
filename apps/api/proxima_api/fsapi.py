@@ -65,7 +65,10 @@ def resolve_in_project(root: Path, rel: str) -> Path:
     Rejects absolute paths and any path that escapes the project root
     (including via .. or symlinks).
     """
-    root = Path(root).resolve()
+    try:
+        root = Path(root).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise FsError("cannot resolve project root") from exc
     rel = (rel or "").strip()
     if "\x00" in rel:
         raise FsError("invalid path")
@@ -73,7 +76,10 @@ def resolve_in_project(root: Path, rel: str) -> Path:
     if rel and Path(rel).is_absolute():
         raise FsError("path escapes project root")
     rel = rel.lstrip("/")
-    target = (root / rel).resolve()
+    try:
+        target = (root / rel).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise FsError("cannot resolve project path") from exc
     if target != root and root not in target.parents:
         raise FsError("path escapes project root")
     return target

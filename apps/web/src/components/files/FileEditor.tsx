@@ -9,6 +9,7 @@ import { json } from '@codemirror/lang-json'
 import { html } from '@codemirror/lang-html'
 import { css } from '@codemirror/lang-css'
 import type { FsAdapter } from '../../api/fsAdapter'
+import type { FileTarget } from '../../types'
 
 function langFor(path: string) {
   const ext = path.split('.').pop()?.toLowerCase()
@@ -24,7 +25,7 @@ function langFor(path: string) {
   }
 }
 
-export function FileEditor({ fs, path, onClose }: { fs: FsAdapter; path: string; onClose: () => void }) {
+export function FileEditor({ fs, path, target, onClose }: { fs: FsAdapter; path: string; target?: FileTarget; onClose: () => void }) {
   const [content, setContent] = React.useState('')
   const [dirty, setDirty] = React.useState(false)
   const [status, setStatus] = React.useState<string>('loading')
@@ -45,7 +46,7 @@ export function FileEditor({ fs, path, onClose }: { fs: FsAdapter; path: string;
   React.useEffect(() => {
     const seq = ++requestSeq.current
     setStatus('loading'); setDirty(false)
-    fs.read(path)
+    fs.read(target || path)
       .then(b => {
         if (!mountedRef.current || seq !== requestSeq.current) return
         setContent(b.content)
@@ -54,7 +55,7 @@ export function FileEditor({ fs, path, onClose }: { fs: FsAdapter; path: string;
       .catch(e => {
         if (mountedRef.current && seq === requestSeq.current) setStatus(String(e))
       })
-  }, [fs, path])
+  }, [fs, path, target])
 
   const save = React.useCallback(async () => {
     if (status === 'loading' || status === 'saving') return
@@ -62,14 +63,14 @@ export function FileEditor({ fs, path, onClose }: { fs: FsAdapter; path: string;
     const savedEditVersion = editVersion.current
     setStatus('saving')
     try {
-      await fs.write(path, content)
+      await fs.write(target || path, content)
       if (!mountedRef.current || seq !== requestSeq.current || editVersion.current !== savedEditVersion) return
       setDirty(false)
       setStatus('saved')
     } catch (e) {
       if (mountedRef.current && seq === requestSeq.current) setStatus(String(e))
     }
-  }, [fs, path, content, status])
+  }, [fs, path, target, content, status])
   saveRef.current = () => void save()
 
   const saveKey = React.useMemo(() => keymap.of([{ key: 'Mod-s', preventDefault: true, run: () => { saveRef.current(); return true } }]), [])

@@ -289,7 +289,10 @@ class PreviewSupervisor:
                 pass
 
     def _prepare_app_cgroup(self) -> Path | None:
-        if not sys.platform.startswith("linux"):
+        if (
+            not sys.platform.startswith("linux")
+            or not os.environ.get("INVOCATION_ID")
+        ):
             return None
         identity = _cgroup_identity(os.getpid())
         if not isinstance(identity, str):

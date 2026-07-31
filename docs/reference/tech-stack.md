@@ -27,6 +27,7 @@ it ships no model and no credentials of its own.
 | Package manager | **uv** (`uv.lock`) | `uv run …`, `uv sync` |
 | Tests | **pytest** (`>=8.3`) | `apps/api/tests/` |
 | Lint | **Ruff** (`>=0.15`) | `F` rules run locally and in CI to catch undefined names and dead imports/locals |
+| Canonical-file browser fixture | Chromium or Google Chrome, OpenSSL | disposable TLS and named-local Area hosts plus the plain HTTP relay |
 | Disabled safe-update fixtures | stdlib Python external controller, Bubblewrap, Chromium or Google Chrome, POSIX `ps` | isolated candidate gate plus disposable A/B switch and rollback model; frozen evidence, hash-chained fsynced journal, and immutable layout; no app-owned production promotion authority or activation |
 
 **No ORM** — SQLite is accessed with hand-written SQL through a thin per-thread

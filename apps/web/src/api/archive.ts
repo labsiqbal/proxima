@@ -1,4 +1,5 @@
 import { api } from './client'
+import type { FileTarget } from '../types'
 
 // The Archive registry (Phase-1 slice 8, T4): durable deliverable records with
 // lineage and ONE approval status. The scanner feeds it; it never forgets.
@@ -26,6 +27,7 @@ export type ArchiveRecord = {
   project_id: number
   project_slug: string
   project_name: string
+  target: FileTarget | null
   session_title: string | null
   job_title: string | null
   job_engine: string | null

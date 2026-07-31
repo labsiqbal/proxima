@@ -179,7 +179,10 @@ expiry + audit event. Not implemented; noted so it isn't assumed to exist.
 - runner subprocess env omits unrelated service secrets;
 - app subprocess env omits provider/service secrets unless allowlisted;
 - preview capability is not the owner session and is tamper-evident;
-- generated HTML does not receive `allow-same-origin`.
+- generated HTML never executes on the Proxima origin; an Area-only origin may retain
+  `allow-same-origin` because that router exposes no Proxima routes, binds framing to
+  the authenticated Proxima origin, and rejects Service Workers;
+- HTTPS preview entry fails closed when a distinct TLS Area origin is unavailable.
 
 ## Current status
 

@@ -388,7 +388,91 @@ Browser SSE and WebSocket endpoints accept the HttpOnly `proxima_session` cookie
 The legacy `?token=` fallback remains available for compatible clients, but new
 clients should use the cookie because URL credentials can be observed by proxies
 and diagnostics. Proxima's Uvicorn configuration redacts `token` query values from
-both HTTP access logs and WebSocket/error logs before they reach the journal.
+both HTTP access logs and WebSocket/error logs before they reach the journal. Canonical
+file-preview capability values are likewise redacted in query strings, retired
+gateway paths, and capability cookies. The filter is installed for configured
+launchers and plain `uvicorn proxima_api.main:app` startup.
+
+## Canonical file preview
+
+Canonical file previews bind a short-lived capability to one validated Area and the
+authenticated Proxima frame origin. Named local and apps-domain deployments use an
+Area-only origin. Plain HTTP remote deployments use an Area-only relay. HTTPS remote
+deployments require a TLS-capable Area-only hostname under the configured apps
+domain. Without one, HTML preview entry fails with 503 rather than sharing the
+Proxima origin or using a plaintext relay. That includes the default passive,
+script-free HTML mode as well as trusted active mode. Non-HTML passive media
+(images, video, PDF) remains on the authenticated route with an exact framing
+policy. TLS exchange uses a Secure, host-scoped `SameSite=None` capability cookie
+so Tailscale and apps-domain origins can remain distinct; the capability's signed
+Proxima origin is the exact permitted external frame ancestor. Same-Area frames may
+name the Area origin itself only while trusted active mode is enabled. HTTP
+same-site relays retain `SameSite=Strict`. The dedicated origin lets native module
+workers use same-origin Area URLs without gaining Proxima authority.
+Host-routed HTTPS and named-local HTTP exchanges use a server-owned bootstrap to
+enter the clean same-origin URL. A shared Area dispatch gate applies capability and
+Fetch Metadata admission to named hosts, plain HTTP relays, TLS hosts, and clean
+redirects. Cross-origin Area entry requires a capability-bearing iframe or frame
+navigation; the clean frame may use the validated host-scoped cookie and remains
+bound by the signed frame ancestor. Top-level document navigation is rejected before
+same-origin or capability trust, including a clean URL with an ambient Area cookie.
+Same-origin non-document resources and proven frame navigations remain available.
+Resource requests must match an explicit browser-valid mode and destination tuple;
+fetch and XHR may use the `empty` destination token with `cors`, `no-cors`, or
+`same-origin`. Missing, unknown, contradictory, active-document, malformed-entry,
+and cross-origin subresource metadata is rejected before file service. Named-local
+HTTP uses a Secure `SameSite=None` cookie under the browser's trustworthy-localhost
+exception.
+The accepted tuple set follows the
+[Fetch destination types](https://fetch.spec.whatwg.org/#concept-request-destination)
+plus the HTML request algorithms for
+[manifests](https://html.spec.whatwg.org/multipage/links.html#link-type-manifest),
+[tracks](https://html.spec.whatwg.org/multipage/media.html#attr-track-src), and
+[HTML module request algorithm](https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script):
+manifest and worklet requests remain `cors`; a same-origin track without a CORS
+setting uses `same-origin`; and only top-level worker, shared-worker, and
+service-worker module requests switch to `same-origin`. Site, mode, and destination
+must each be one canonical Structured Field token; optional user activation must be
+the canonical `?1` boolean on a navigation. Duplicate lines, comma-combined values,
+non-ASCII bytes, noncanonical casing, and surrounding whitespace fail closed before
+admission. A syntactically valid tuple does not grant mode authority: passive mode
+still rejects active destinations, and every mode rejects Service Workers and Shared
+Workers.
+
+HTML is passive and script-free by default, including legacy HTML upgraded into the
+canonical Area origin. Its sandbox permits static same-Area styles, images, fonts,
+and media while denying scripts, workers, fetch, forms, objects, and nested frames.
+Unknown prior state always means passive. Artifact Review visibly labels this mode.
+
+The owner may explicitly enable trusted active mode for one authenticated owner
+session, canonical Area, and mounted viewer. The mutation requires the bearer token,
+not an ambient cookie. Before confirmation the UI states that active content may run
+scripts and dedicated module workers, use network access, navigate within the
+preview, and send any data in that Area externally. Proxima therefore makes no
+confidentiality guarantee for the selected Area while active mode is enabled. The
+content remains origin-isolated from Proxima and every other Area.
+
+The server keeps an opaque active generation and checks it, the Area, viewer session,
+and live owner authentication on every active request. Active mode permits
+capability-bound same-Area nested frames; only then does `frame-ancestors` contain
+both the signed Proxima origin and the same Area origin. Passive mode names only the
+signed Proxima origin. Disabling removes the generation before reloading passive
+content. Closing the viewer or changing Areas also revokes it. Stale cookies, worker
+requests, frames, and URLs fail generation validation. Dedicated workers die with
+the reloaded document; Service Workers and Shared Workers are always rejected.
+
+Legacy active files never execute on the Proxima origin. Active XML and SVG download,
+main-origin HTML denies framing, and Fetch Metadata and opaque-origin checks reject
+embedded requests that try to leave the preview boundary for Proxima routes.
+Same-Area resources still cross the canonical resolver and realpath jail. Every
+document-viewable response, including PDF, receives the mode-appropriate exact
+frame-ancestor allowlist. Successful file responses expose a non-secret
+capability-generation hash. Browser evidence correlates that hash and a strong
+request nonce with exactly one admission record written after canonical resolution;
+capability values and unvalidated query fields are not recorded. See
+[ADR-0036](adr/0036-active-file-preview-is-explicit-trusted-mode.md).
+Design Studio obtains targeted canvas and export pixels through authenticated raw
+bytes and temporary blob URLs rather than through preview-origin CORS.
 
 ## Project app preview
 

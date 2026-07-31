@@ -251,6 +251,63 @@ the projection immediately when it writes `container.md`; a five-second backgrou
 cycle catches direct owner edits without adding filesystem work to Fleet requests.
 `container_ops_migrations` stores the versioned, hash-bound, resumable migration
 marker for legacy root-level Ops data.
+`file_targets.py` defines the public file identity used after an entry has crossed the
+API boundary: `(project slug, authoritative Area kind/id, Area-relative path)`. The
+server constructs these targets for merged tree entries, artifact scan results, task
+and chat run outputs, and Archive records. Scanned paths are resolved from the
+validated Ops scan root back through physical ownership, so a nested Code Area under
+an Ops-at-dot layout remains Code-owned; enrichment is per entry, so an unsafe
+symlink is omitted without discarding other scan results. File tree traversal,
+read/write, mutation, raw/preview,
+Archive presence refresh, and ArtifactViewer use the same resolver, which revalidates
+the project/Area relationship before applying `fsapi` realpath jailing. The resolver
+then requires the target Area to be the authoritative owner of the resolved path:
+the most specific active Area wins, Ops wins a legacy same-root tie with Code, and a
+Container target is valid only outside active Areas. Each merged tree child crosses
+the active-root realpath jail before ownership is assigned. Safe in-Container
+symlinks receive the target of their resolved authoritative Area, while broken or
+escaping symlinks are omitted. Merged tree entries switch to an Ops or Code target
+as traversal enters that Area, so cross-Area aliases are rejected.
+Display names never select a physical root. Path-only callers remain a compatibility
+input, with historical virtual Ops names and physical `ops/...` support; legacy
+Ops-at-dot keeps `ops/...` as an Area-relative literal instead of stripping it.
+`target_preview.py` owns targeted preview transport. The authenticated
+`/api/target-preview/{slug}/{kind}/{id}/{path}` entry validates the locator and asks
+`TargetPreviewManager` for an Area-only origin: a named local host, an apps-domain
+host, or a plain HTTP relay. HTTPS remote HTML entry fails with 503 when no distinct
+TLS Area origin is configured, in both passive and trusted active mode.
+`TargetPreviewMiddleware` routes Area hosts before the
+application and applies one capability and Fetch Metadata admission gate to every
+transport. Each admitted resource is resolved again through `file_targets.py`.
+HTML enters that origin with a passive, script-free capability by default. Artifact
+Review can create an active generation only after a bearer-authenticated owner
+confirmation that is scoped to one owner session, canonical Area, and mounted viewer.
+The server revalidates that generation and owner session on every active resource.
+Disabling, closing the viewer, changing Areas, or restarting the server revokes or
+forgets the generation and reloads passive content; a stale cookie or URL cannot
+restore it. Active responses allow dedicated module workers and outbound network
+requests after the trust warning, while Service Workers and Shared Workers remain
+unavailable.
+`cf_hostnames.py` serializes and verifies apps-domain ingress updates, while
+`logging_config.py` redacts preview capabilities before access logging. The complete
+admission, cookie, framing, worker, and response-policy contract lives in
+[Security boundaries](../security-boundaries.md#canonical-file-preview).
+Markdown resources resolve relative to both the source document directory and its
+target. A validated target context is reused throughout each tree, Archive, or
+message-list request while each path still crosses the realpath jail. Artifact links
+whose Area context or individual path cannot be validated are omitted rather than
+downgraded to a path-only identity. Design canvas, thumbnail, Moodboard, and export
+images with a canonical target, plus SVG pixels on those surfaces, are hydrated from
+authenticated raw bytes into managed blob URLs, which are revoked with component
+lifetime. Design reply locator fields are treated as untrusted:
+an existing image or frame target survives only when both the layer id and source
+remain unchanged, and model-supplied targets are otherwise removed. See
+[ADR-0029](../adr/0029-canonical-file-targets.md),
+[ADR-0030](../adr/0030-area-scoped-artifact-media.md), and
+[ADR-0034](../adr/0034-distinct-tls-area-preview-origins.md), with frame admission
+extended by [ADR-0035](../adr/0035-frame-bound-area-preview-admission.md) and the
+explicit trust transition recorded in
+[ADR-0036](../adr/0036-active-file-preview-is-explicit-trusted-mode.md).
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
@@ -320,7 +377,10 @@ superseded`) both approval doors write, an automatic version chain
 (new producer at the same identity ⇒ v(n+1), prior versions superseded), and a
 permanent per-project slug. The scanner (`artifacts.py`) only discovers; the
 registry (`artifact_registry.py`) remembers - records survive file moves/deletion
-via `file_missing`. Fed at the one seam every run's outputs pass through
+via `file_missing`. Archive presence derives each record's canonical target from its
+validated scan root, including a nested Code owner, so a same-name Container file
+cannot hide a missing deliverable. Workspace discovery
+does not itself create registry rows. Fed at the one seam every run's outputs pass through
 (`run_outputs.save_assistant_message`); seeded from the scanner by migration 23.
 Migration 26 introduced the original orchestrator foundation. Migration 31
 converts that durable identity in place to Master: `profiles.system_kind='alpha'`
@@ -531,6 +591,16 @@ image/video/PDF/HTML/Markdown/JSON/CSV/text renderers with a normalized point-an
 layer and review panel. Unsaved review notes live browser-side per `(project, path)`;
 unknown, binary, and directory-like paths bypass text loading and render the download
 fallback immediately.
+Every renderer uses an artifact's canonical file target when present. Markdown text,
+image/video media, PDF/HTML frames, and download links therefore resolve the same Area
+identity returned by the server instead of re-deriving a root from a display path.
+HTML frames use the Area-stable preview namespace, and Markdown sibling resources
+inherit the source document's Area and directory. Chat and task result media,
+Iterate and Archive Markdown, session deletion, and the Design Studio image bridge
+retain the same target. Design scene image layers persist the target beside the
+source path, and canvas, gallery, Moodboard, Archive thumbnail, image-frame, and
+export renderers pass it to the media resolver. SVG display uses authenticated raw
+bytes rather than preview-origin document rendering.
 
 **Add feedback to chat** resolves the record's existing `session_id` (or the chat that
 opened the artifact), returns to that session, and seeds the ordinary `Composer` with

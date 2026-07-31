@@ -18,7 +18,9 @@ re-litigate one.
 
 ## Dev setup
 
-Prerequisites: Linux, `uv`, `npm`, and (for real agent runs) an authenticated supported CLI: Claude Code, Codex, Grok, Hermes, or Pi.
+Prerequisites: Linux, `uv`, `npm`, and (for the real TLS browser fixture)
+Chromium or Google Chrome plus OpenSSL. Real agent runs also require an
+authenticated supported CLI: Claude Code, Codex, Grok, Hermes, or Pi.
 
 ```bash
 git clone https://github.com/labsiqbal/proxima

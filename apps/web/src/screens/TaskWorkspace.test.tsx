@@ -61,7 +61,16 @@ const job = {
 			finished_at: "2026-01-01",
 			error: null,
 			produced_artifacts: [
-				{ type: "file", title: "report.md", path: "artifacts/report.md" },
+				{
+					type: "file",
+					title: "report.md",
+					path: "artifacts/report.md",
+					target: {
+						project: "master",
+						area: { kind: "ops", id: 7 },
+						path: "artifacts/report.md",
+					},
+				},
 			],
 		},
 	],
@@ -94,7 +103,11 @@ describe("TaskWorkspace", () => {
 		).toBeInTheDocument();
 		expect(screen.getByText("Report completed.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: /report.md/ }));
-		expect(onOpenFile).toHaveBeenCalledWith("master", "artifacts/report.md");
+		expect(onOpenFile).toHaveBeenCalledWith(
+			"master",
+			"artifacts/report.md",
+			job.steps_state[0].produced_artifacts[0].target,
+		);
 	});
 
 	it("approves final review from the task workspace", async () => {

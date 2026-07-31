@@ -86,3 +86,11 @@ Supersedes / superseded-by / links to feature docs.
 | [0026](0026-preview-supervision-upgrades-require-a-drained-legacy-generation.md) | Preview supervision upgrades require a drained legacy generation | Accepted |
 | [0027](0027-durable-task-reconciliation-protocol.md) | Durable Task reconciliation protocol | Accepted |
 | [0028](0028-linux-first-daily-driver-support.md) | Linux-first daily-driver support | Accepted |
+| [0029](0029-canonical-file-targets.md) | Canonical file targets preserve Area identity | Accepted |
+| [0030](0030-area-scoped-artifact-media.md) | Area-scoped artifact media and preview routing | Accepted |
+| [0031](0031-sandboxed-target-preview-resources.md) | Targeted HTML previews use a sandboxed resource scope | Superseded by ADR-0032 |
+| [0032](0032-area-bound-file-preview-origins.md) | Canonical file previews use Area-bound capability origins | Superseded by ADR-0033 |
+| [0033](0033-capability-scoped-file-preview-gateways.md) | File previews use capability-scoped execution boundaries | Superseded by ADR-0034 |
+| [0034](0034-distinct-tls-area-preview-origins.md) | Active file previews require distinct TLS Area origins | Accepted |
+| [0035](0035-frame-bound-area-preview-admission.md) | Area preview admission is frame-bound | Accepted |
+| [0036](0036-active-file-preview-is-explicit-trusted-mode.md) | Active file preview is an explicit trusted mode | Accepted |

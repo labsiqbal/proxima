@@ -1328,9 +1328,44 @@ limit, plus an authenticated raw/preview
 route (for images and embedded previews). A separate bounded, path-only reference index
 powers `@` autocomplete without returning file contents; produced artifacts from the
 project artifact scan are merged into the same picker on the client.
+Merged tree entries and produced/Archive artifacts carry a server-owned file target:
+the project slug, authoritative Container Area kind/id, and Area-relative path. Tree,
+read/write, raw/preview, file mutation, Archive presence checks, and ArtifactViewer all
+resolve that target through the same jailed resolver. Merged traversal changes to the
+authoritative Ops or Code identity when it enters an Area, so direct physical Ops files
+stay distinct from same-name Container files. Broken, escaping, or otherwise invalid
+tree and artifact entries are omitted individually instead of weakening the jail or
+discarding the rest of the response.
 Historical virtual paths such as `wiki/...`, `artifacts/...`, `scripts/...`, and
 `uploads/...` remain stable at the API boundary. The server maps those paths to the
 canonical Ops root, while repo files continue to resolve from the Container root.
+Path-only clients remain compatible, including explicit `ops/...` paths for physical
+layouts. For a legacy Ops Area at `.`, `ops/...` remains literal Area-relative input
+and is not stripped or reinterpreted.
+
+Session and Task results, Archive records, ArtifactViewer, Markdown sibling media,
+deletion, and Design Studio retain the server target. Design scenes persist image
+targets, but agent replies cannot create or replace that trusted metadata. Artifact
+lists and chat messages omit links that cannot be assigned a validated target.
+Workspace discovery alone does not create Archive records.
+
+HTML previews run passively and script-free by default on an Area-only origin selected
+from a named local host, an apps-domain host, or a plain HTTP relay. Artifact Review
+labels that state and requires an explicit owner confirmation before enabling trusted
+active content for one owner session, Area, and viewer. The warning states that
+scripts, dedicated module workers, network access, and navigation can send selected
+Area data externally, so Proxima provides no Area-confidentiality guarantee in active
+mode. Active content remains origin-isolated from Proxima and every other Area.
+Disabling, closing, changing Areas, or restarting revokes the active generation and
+reloads passive content; stale cookies and URLs cannot restore it. Service Workers and
+Shared Workers remain unavailable. An HTTPS remote install without a distinct TLS
+Area origin returns 503 for HTML preview entry in both passive and trusted active
+mode; non-HTML passive media remains available through the authenticated route.
+The security contract and deployment
+matrix are owned by [Security boundaries](security-boundaries.md#canonical-file-preview);
+the locator and request flow are detailed in [Architecture](reference/architecture.md),
+[ADR-0029](adr/0029-canonical-file-targets.md), and
+[ADR-0036](adr/0036-active-file-preview-is-explicit-trusted-mode.md).
 These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge, chat attachments, and `@`
@@ -1340,7 +1375,8 @@ name (`New file name`, `New folder name`, or `Rename <entry>`) and a create
 placeholder (`file-name` / `folder-name`) so the empty field is not a dead unlabeled
 box — Enter commits, Escape or empty blur cancels.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
-`/reference-files`, `/artifacts`, `/api/preview/{slug}/{path}`.
+`/reference-files`, `/artifacts`, `/preview-mode`, `/api/preview/{slug}/{path}`,
+`/api/target-preview/{slug}/{kind}/{id}/{path}`.
 
 ## 12. Run & Preview app
 
@@ -1539,7 +1575,8 @@ Chat result cards and the iterate Result view keep using the live scan
 
 **Native rich review (ArtifactViewer v2):** opening an ordinary artifact keeps the
 existing image, video, PDF, Markdown, HTML, JSON, CSV, and text renderers, but wraps
-them in one review workspace. The owner can pin numbered notes directly onto the
+them in one review workspace. HTML uses the passive Area preview from §11 until the
+owner enables trusted active mode for that viewer. The owner can pin numbered notes directly onto the
 rendered artifact, add overall feedback, and choose **Add feedback to chat**. Review
 notes are browser-local until that action; Proxima then opens the artifact's producing
 chat session and places an editable, path-linked review brief in the normal composer.

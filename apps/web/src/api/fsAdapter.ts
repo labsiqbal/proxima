@@ -1,26 +1,29 @@
 import * as files from './files'
 import type { FileEntry } from '../types'
+import type { FileRef } from './files'
 
 // A uniform filesystem interface so the tree + editor can operate on any source
 // (a project's files, a project's wiki subfolder, or the personal wiki).
 export type FsAdapter = {
-  list: (path: string) => Promise<{ entries: FileEntry[] }>
-  read: (path: string) => Promise<{ content: string }>
-  write: (path: string, content: string) => Promise<unknown>
-  mkdir: (path: string) => Promise<unknown>
-  rename: (from: string, to: string) => Promise<unknown>
-  remove: (path: string) => Promise<unknown>
+  list: (ref: FileRef) => Promise<{ entries: FileEntry[] }>
+  read: (ref: FileRef) => Promise<{ content: string }>
+  write: (ref: FileRef, content: string) => Promise<unknown>
+  mkdir: (ref: FileRef) => Promise<unknown>
+  rename: (from: FileRef, to: FileRef) => Promise<unknown>
+  remove: (ref: FileRef) => Promise<unknown>
 }
 
 const join = (base: string, p: string) => (base ? (p ? `${base}/${p}` : base) : p)
+const scoped = (base: string, ref: FileRef): FileRef =>
+  typeof ref === 'string' ? join(base, ref) : ref
 
 export function projectFs(token: string, slug: string, base = ''): FsAdapter {
   return {
-    list: p => files.listTree(token, slug, join(base, p)),
-    read: p => files.readFile(token, slug, join(base, p)),
-    write: (p, c) => files.writeFile(token, slug, join(base, p), c),
-    mkdir: p => files.mkdir(token, slug, join(base, p)),
-    rename: (f, t) => files.renamePath(token, slug, join(base, f), join(base, t)),
-    remove: p => files.deletePath(token, slug, join(base, p))
+    list: ref => files.listTree(token, slug, scoped(base, ref)),
+    read: ref => files.readFile(token, slug, scoped(base, ref)),
+    write: (ref, content) => files.writeFile(token, slug, scoped(base, ref), content),
+    mkdir: ref => files.mkdir(token, slug, scoped(base, ref)),
+    rename: (from, to) => files.renamePath(token, slug, scoped(base, from), scoped(base, to)),
+    remove: ref => files.deletePath(token, slug, scoped(base, ref))
   }
 }

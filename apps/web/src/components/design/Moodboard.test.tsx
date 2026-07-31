@@ -11,6 +11,11 @@ import {
 } from '../../api/files'
 import { Moodboard } from './Moodboard'
 
+const blobMocks = vi.hoisted(() => ({
+  states: new Map<string, { url: string | null; status: 'idle' | 'loading' | 'ready' | 'error'; retry: () => void }>(),
+  revoke: vi.fn(),
+}))
+
 vi.mock('../../api/files', () => ({
   listMoodboard: vi.fn(),
   addMoodboardItem: vi.fn(),
@@ -18,6 +23,17 @@ vi.mock('../../api/files', () => ({
   deleteMoodboardItem: vi.fn().mockResolvedValue({ ok: true, id: 'one' }),
   uploadFile: vi.fn(),
   fileUrl: (_slug: string, path: string) => `/preview/${path}`,
+  isSvgPath: (path: string) => /\.svg$/i.test(path),
+}))
+vi.mock('../../hooks/useRawBlobUrl', () => ({
+  useRawBlobUrl: (_token: string | undefined, _slug: string | undefined, path: string) => {
+    if (!path) return { url: null, status: 'idle' as const, retry: () => undefined }
+    return blobMocks.states.get(path) || {
+      url: `blob:${path}`,
+      status: 'ready' as const,
+      retry: () => undefined,
+    }
+  },
 }))
 vi.mock('../ui/Dialog', () => ({
   confirmDialog: vi.fn().mockResolvedValue(true),
@@ -149,5 +165,59 @@ describe('Moodboard', () => {
       },
     ))
     expect(await screen.findByText('screen')).toBeInTheDocument()
+  })
+
+  it('renders SVG references from authenticated raw blob urls, not preview entries', async () => {
+    const user = userEvent.setup()
+    const retry = vi.fn()
+    const svgItem: MoodboardItem = {
+      id: 'svg',
+      kind: 'upload',
+      url: null,
+      imagePath: 'artifacts/moodboard/images/mark.svg',
+      title: 'Brand mark',
+      siteName: 'Uploaded screenshot',
+      faviconUrl: null,
+      note: '',
+      tags: ['logo'],
+      useAsReference: false,
+      createdAt: '2026-07-26T00:00:00Z',
+      updatedAt: '2026-07-26T00:00:00Z',
+    }
+    blobMocks.states.set(svgItem.imagePath, {
+      url: null,
+      status: 'loading',
+      retry,
+    })
+    vi.mocked(listMoodboard).mockResolvedValue({ items: [svgItem] })
+    const { rerender } = render(<Moodboard token="token" slug="demo" />)
+
+    expect(await screen.findByText('Loading…')).toBeInTheDocument()
+
+    blobMocks.states.set(svgItem.imagePath, {
+      url: null,
+      status: 'error',
+      retry,
+    })
+    rerender(<Moodboard token="token" slug="demo" />)
+    expect(await screen.findByLabelText(/Brand mark failed to load/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(retry).toHaveBeenCalled()
+
+    blobMocks.states.set(svgItem.imagePath, {
+      url: 'blob:moodboard-svg',
+      status: 'ready',
+      retry,
+    })
+    rerender(<Moodboard token="token" slug="demo" />)
+    const image = await screen.findByRole('img', { name: 'Brand mark' })
+    expect(image).toHaveAttribute('src', 'blob:moodboard-svg')
+    expect(image).not.toHaveAttribute('src', expect.stringContaining('/preview/'))
+  })
+
+  it('keeps raster moodboard shots on the preview file url path', async () => {
+    render(<Moodboard token="token" slug="demo" />)
+    const image = await screen.findByRole('img', { name: 'Linear hero' })
+    expect(image).toHaveAttribute('src', '/preview/artifacts/moodboard/images/one.png')
   })
 })

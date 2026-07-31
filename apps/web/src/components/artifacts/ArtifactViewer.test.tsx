@@ -4,17 +4,36 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import { ArtifactViewer } from './ArtifactViewer'
+import { previewUrl, rawUrl } from '../../api/files'
 
 const fsRead = vi.fn()
+const setTargetPreviewMode = vi.fn()
+const fetchRawBlobMock = vi.fn()
 
 vi.mock('../../api/files', () => ({
-  previewUrl: vi.fn((_slug: string, path: string) => `/preview/${path}`),
+  previewUrl: vi.fn((_slug: string, path: string, _target?: unknown, active?: { generation: string }) => `/preview/${path}${active ? `?generation=${active.generation}` : ''}`),
+  rawUrl: vi.fn((slug: string, path: string, target?: { path?: string }) => (
+    target
+      ? `/api/projects/${slug}/raw?target=${encodeURIComponent(JSON.stringify(target))}`
+      : `/api/projects/${slug}/raw?path=${encodeURIComponent(path)}`
+  )),
+  isSvgPath: (path: string) => /\.svg$/i.test(path),
+  fetchRawBlob: (...args: unknown[]) => fetchRawBlobMock(...args),
+  setTargetPreviewMode: (...args: unknown[]) => setTargetPreviewMode(...args),
 }))
 vi.mock('../../api/fsAdapter', () => ({
   projectFs: vi.fn(() => ({ read: (...args: unknown[]) => fsRead(...args) })),
 }))
 vi.mock('../chat/MessageContent', () => ({
-  MessageContent: ({ content }: { content: string }) => <div>{content}</div>,
+  MessageContent: ({ content, sourcePath, fileTarget }: {
+    content: string
+    sourcePath?: string
+    fileTarget?: unknown
+  }) => <div
+    data-testid="message-content"
+    data-source-path={sourcePath}
+    data-file-target={JSON.stringify(fileTarget)}
+  >{content}</div>,
 }))
 vi.mock('./MermaidDiagram', () => ({
   MermaidDiagram: ({ source, onEdit }: { source: string; onEdit: () => void }) => <button type="button" onClick={onEdit}>Edit diagram {source}</button>,
@@ -28,6 +47,9 @@ vi.mock('./ExcalidrawWhiteboard', () => ({
 
 beforeEach(() => {
   fsRead.mockReset()
+  setTargetPreviewMode.mockReset()
+  fetchRawBlobMock.mockReset()
+  fetchRawBlobMock.mockResolvedValue('blob:svg-preview')
   window.localStorage.clear()
 })
 
@@ -152,6 +174,171 @@ describe('ArtifactViewer v2 review flow', () => {
     }))
   })
 
+  it('uses the artifact target for text and media resolution instead of its display path', async () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'brief.md',
+    }
+    fsRead.mockResolvedValue({ content: '# Ops brief' })
+    const item = {
+      type: 'doc',
+      title: 'brief.md',
+      path: 'brief.md',
+      target,
+    } as Parameters<typeof ArtifactViewer>[0]['items'][number]
+    const { unmount } = render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[item]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    expect(await screen.findByText('# Ops brief')).toBeInTheDocument()
+    expect(fsRead).toHaveBeenCalledWith(target)
+    unmount()
+
+    const image = {
+      ...item,
+      type: 'image',
+      title: 'visual.png',
+      path: 'visual.png',
+      target: { ...target, path: 'visual.png' },
+    } as Parameters<typeof ArtifactViewer>[0]['items'][number]
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[image]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    expect(previewUrl).toHaveBeenCalledWith('master', 'visual.png', image.target)
+  })
+
+  it('passes the originating Area and document path to Markdown resources', async () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'reports/brief.md',
+    }
+    fsRead.mockResolvedValue({ content: '![Chart](images/chart.png)' })
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'doc', title: 'Brief', path: 'brief.md', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    const markdown = await screen.findByTestId('message-content')
+    expect(markdown).toHaveAttribute('data-source-path', 'reports/brief.md')
+    expect(JSON.parse(markdown.getAttribute('data-file-target') || '{}')).toEqual(target)
+  })
+
+  it('renders targeted HTML passive and script-free by default', () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'site/index.html',
+    }
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'page', title: 'Site', path: 'site/index.html', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    expect(screen.getByTitle('index.html')).toHaveAttribute('sandbox', '')
+    expect(screen.getByText('Passive preview')).toBeInTheDocument()
+    expect(previewUrl).toHaveBeenCalledWith(
+      'master',
+      'site/index.html',
+      target,
+      undefined,
+    )
+  })
+
+  it('keeps legacy HTML passive without offering unscoped active mode', () => {
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'page', title: 'Legacy', path: 'legacy.html' }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    const frame = screen
+      .getAllByTitle('legacy.html')
+      .find(node => node.tagName === 'IFRAME')
+    expect(frame).toHaveAttribute('sandbox', '')
+    expect(screen.queryByRole('button', { name: 'Enable active preview' })).not.toBeInTheDocument()
+  })
+
+  it('requires explicit trust consent and revokes active mode back to passive', async () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'site/index.html',
+    }
+    setTargetPreviewMode
+      .mockResolvedValueOnce({ active: true, generation: 'g'.repeat(43) })
+      .mockResolvedValueOnce({ active: false, generation: null })
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'page', title: 'Site', path: 'site/index.html', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Enable active preview' }))
+    const consent = screen.getByRole('alertdialog', { name: 'Enable trusted active content?' })
+    expect(consent).toHaveTextContent('run scripts and module workers')
+    expect(consent).toHaveTextContent('send any data from this Area to external services')
+    expect(consent).toHaveTextContent('cannot guarantee Area confidentiality')
+    expect(setTargetPreviewMode).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Enable trusted active mode' }))
+    await waitFor(() => expect(screen.getByText('Active preview')).toBeInTheDocument())
+    expect(screen.getByTitle('index.html')).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin')
+    expect(setTargetPreviewMode).toHaveBeenNthCalledWith(
+      1,
+      'token',
+      'master',
+      target,
+      expect.stringMatching(/^[A-Za-z0-9_-]{32,128}$/),
+      true,
+    )
+    expect(previewUrl).toHaveBeenLastCalledWith(
+      'master',
+      'site/index.html',
+      target,
+      expect.objectContaining({ generation: 'g'.repeat(43) }),
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Disable active preview' }))
+    await waitFor(() => expect(screen.getByText('Passive preview')).toBeInTheDocument())
+    expect(screen.getByTitle('index.html')).toHaveAttribute('sandbox', '')
+    expect(setTargetPreviewMode).toHaveBeenNthCalledWith(
+      2,
+      'token',
+      'master',
+      target,
+      expect.stringMatching(/^[A-Za-z0-9_-]{32,128}$/),
+      false,
+      'g'.repeat(43),
+    )
+  })
+
   it('shows an actionable fallback instead of loading forever for a directory or unknown binary', () => {
     render(<ArtifactViewer
       token="token"
@@ -167,7 +354,7 @@ describe('ArtifactViewer v2 review flow', () => {
     expect(screen.getAllByRole('link', { name: 'Download' })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          href: expect.stringContaining('/preview/artifacts/starter-app'),
+          href: expect.stringContaining('/api/projects/master/raw?path=artifacts%2Fstarter-app'),
         }),
       ]),
     )
@@ -232,5 +419,91 @@ describe('ArtifactViewer v2 review flow', () => {
       sessionId: 9,
       text: expect.stringContaining('[flow.excalidraw](artifacts/whiteboards/flow.excalidraw)'),
     }))
+  })
+
+  it('downloads active media through the authenticated raw endpoint', () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'site/index.html',
+    }
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'page', title: 'Site', path: 'site/index.html', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    const download = screen.getByRole('link', { name: 'Download' })
+    expect(download).toHaveAttribute(
+      'href',
+      `/api/projects/master/raw?target=${encodeURIComponent(JSON.stringify(target))}`,
+    )
+    expect(download).toHaveAttribute('download', 'index.html')
+    expect(rawUrl).toHaveBeenCalledWith('master', 'site/index.html', target)
+    expect(previewUrl).toHaveBeenCalledWith(
+      'master',
+      'site/index.html',
+      target,
+      undefined,
+    )
+    expect(String(download.getAttribute('href'))).not.toContain('/api/target-preview/')
+    expect(String(download.getAttribute('href'))).not.toContain('/preview/')
+  })
+
+  it('renders SVG through authenticated raw bytes instead of the preview entry', async () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'brand/logo.svg',
+    }
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'image', title: 'Logo', path: 'brand/logo.svg', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    const image = await screen.findByRole('img', { name: 'logo.svg' })
+    expect(image).toHaveAttribute('src', 'blob:svg-preview')
+    expect(fetchRawBlobMock).toHaveBeenCalledWith('token', 'master', 'brand/logo.svg', target)
+    expect(previewUrl).not.toHaveBeenCalledWith('master', 'brand/logo.svg', target)
+
+    const download = screen.getByRole('link', { name: 'Download' })
+    expect(download).toHaveAttribute(
+      'href',
+      `/api/projects/master/raw?target=${encodeURIComponent(JSON.stringify(target))}`,
+    )
+    expect(download).toHaveAttribute('download', 'logo.svg')
+  })
+
+  it('surfaces a retryable error when SVG raw bytes fail to load', async () => {
+    fetchRawBlobMock.mockRejectedValue(new Error('missing'))
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'brand/logo.svg',
+    }
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'image', title: 'Logo', path: 'brand/logo.svg', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    expect(await screen.findByText(/Could not load this image/i)).toBeInTheDocument()
+    expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
+
+    fetchRawBlobMock.mockResolvedValueOnce('blob:svg-retry')
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    const image = await screen.findByRole('img', { name: 'logo.svg' })
+    expect(image).toHaveAttribute('src', 'blob:svg-retry')
+    expect(fetchRawBlobMock).toHaveBeenCalledTimes(2)
   })
 })

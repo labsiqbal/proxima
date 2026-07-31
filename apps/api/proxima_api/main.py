@@ -21,6 +21,7 @@ from .container_registry import (
     migrate_legacy_ops_containers,
     refresh_registry_projections,
 )
+from . import cf_hostnames
 from .acp import AcpManager
 from .apprunner import AppManager
 from .preview_proxy import (
@@ -32,6 +33,7 @@ from .preview_proxy import (
     valid_preview_token,
 )
 from .platform_support import support_payload
+from .target_preview import TargetPreviewManager, TargetPreviewMiddleware
 from .runners import augmented_path
 from .settings import (
     DEFAULT_CONFIG,
@@ -47,6 +49,7 @@ from .updates import (
 )
 from .safe_updates import SafeUpdateCoordinator
 from .maintenance_status import MaintenanceBoundary
+from .logging_config import install_uvicorn_redaction
 from .provisioning import backfill
 from .event_hub import EventHub
 from .graph_context import GraphContextService
@@ -87,6 +90,7 @@ from .routes import (
 from .routes import graph as routes_graph  # pyright: ignore[reportAttributeAccessIssue]
 
 logger = logging.getLogger("proxima.api")
+install_uvicorn_redaction()
 
 
 def _as_int(value: Any) -> int:
@@ -311,6 +315,7 @@ async def _lifespan_impl(app: FastAPI) -> AsyncIterator[None]:
     await app.state.acp_manager.shutdown()
     await app.state.app_manager.shutdown()
     await app.state.preview_relays.shutdown()
+    await app.state.target_previews.shutdown()
 
 
 @asynccontextmanager
@@ -666,6 +671,26 @@ def _create_app(
         maintenance=maintenance,
     )
 
+    async def _provision_file_preview(area) -> None:
+        await cf_hostnames.ensure_file_preview_hostname(
+            cfg,
+            area.project_id,
+            area.kind,
+            area.area_id,
+        )
+
+    app.state.target_previews = TargetPreviewManager(
+        database_path=cfg["database_path"],
+        apps_domain=cfg.get("apps_domain"),
+        bind_host=cfg.get("preview_bind_host"),
+        maintenance=maintenance,
+        provision_hostname=(
+            _provision_file_preview
+            if cf_hostnames.configured(cfg)
+            else None
+        ),
+    )
+
     # Host-based reverse proxy for per-app remote previews (<slug>.<apps_domain> → that
     # app's dev port, HTTP + WebSocket). Gated by the proxima_preview cookie (no CF Access on
     # these subdomains, so they can be iframed). No-op when apps_domain is unset.
@@ -675,6 +700,10 @@ def _create_app(
         apps_domain=cfg.get("apps_domain"),
         validate_token=_valid_preview_token,
         maintenance=maintenance,
+    )
+    app.add_middleware(
+        TargetPreviewMiddleware,
+        manager=app.state.target_previews,
     )
 
     return app

@@ -1,23 +1,37 @@
-"""Cloudflare API: per-app preview hostnames.
+"""Cloudflare API: isolated preview hostnames.
 
-When a project app starts, we expose it at `<slug>.<apps_domain>` by (idempotently):
+Preview origins are exposed under `<apps_domain>` by:
   1. adding a tunnel ingress rule  <hostname> → the main app service,
   2. creating a proxied DNS CNAME   <hostname> → <tunnel-id>.cfargotunnel.com,
   3. removing any stale per-host Cloudflare Access app, because embedded previews
      authenticate with Proxima's short-lived preview cookie instead.
-On app stop we remove the ingress rule and DNS record. All calls are no-ops if
+App hosts are removed on app stop. File Area hosts remain inert if their
+database binding disappears. All calls are no-ops if
 `apps_domain`/`cf_*` config is missing.
 """
 from __future__ import annotations
 
+import asyncio
+import copy
+import hashlib
 import logging
-from typing import Any
+import os
+import stat
+import tempfile
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, AsyncIterator, Callable
 
 import httpx
 
 _LOG = logging.getLogger("proxima.cf_hostnames")
 _API = "https://api.cloudflare.com/client/v4"
 _FALLBACK_SERVICE = "http://127.0.0.1:8766"
+_INGRESS_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def _owner_id() -> int:
+    return int(getattr(os, "getuid", lambda: 0)())
 
 
 def configured(cfg: dict[str, Any]) -> bool:
@@ -32,6 +46,18 @@ def hostname_for(cfg: dict[str, Any], slug: str) -> str:
     # (`*.example.com`) — no ACM / Total TLS needed. The `preview-` prefix also
     # namespaces them away from real subdomains.
     return f"preview-{slug}.{cfg['apps_domain']}"
+
+
+def file_preview_hostname_for(
+    cfg: dict[str, Any],
+    project_id: int,
+    area_kind: str,
+    area_id: int | None,
+) -> str:
+    return (
+        f"file-{project_id}-{area_kind}-{area_id or 0}."
+        f"{cfg['apps_domain']}"
+    )
 
 
 def _headers(cfg: dict[str, Any]) -> dict[str, str]:
@@ -51,6 +77,74 @@ def _existing_service(ingress: list[dict[str, Any]]) -> str:
     return _FALLBACK_SERVICE
 
 
+def _with_ingress_hostname(
+    ingress: list[dict[str, Any]],
+    host: str,
+) -> list[dict[str, Any]]:
+    updated = copy.deepcopy(ingress)
+    existing_index = next(
+        (
+            index
+            for index, rule in enumerate(updated)
+            if rule.get("hostname") == host
+        ),
+        None,
+    )
+    if existing_index is None:
+        host_rule = {
+            "hostname": host,
+            "service": _existing_service(updated),
+        }
+    else:
+        host_rule = updated.pop(existing_index)
+    if (
+        not updated
+        or updated[-1].get("hostname")
+        or updated[-1].get("path")
+    ):
+        updated.append({"service": "http_status:404"})
+    insert_at = next(
+        (
+            index
+            for index, rule in enumerate(updated)
+            if not rule.get("hostname")
+        ),
+        len(updated),
+    )
+    updated.insert(
+        insert_at,
+        host_rule,
+    )
+    return updated
+
+
+def _hostname_precedes_unscoped(
+    ingress: list[dict[str, Any]],
+    host: str,
+) -> bool:
+    host_index = next(
+        (
+            index
+            for index, rule in enumerate(ingress)
+            if rule.get("hostname") == host
+        ),
+        None,
+    )
+    unscoped_index = next(
+        (
+            index
+            for index, rule in enumerate(ingress)
+            if not rule.get("hostname")
+        ),
+        None,
+    )
+    return (
+        host_index is not None
+        and unscoped_index is not None
+        and host_index < unscoped_index
+    )
+
+
 async def _put_tunnel_config(cfg, client, config: dict[str, Any]) -> None:
     r = await client.put(
         f"{_API}/accounts/{cfg['cf_account_id']}/cfd_tunnel/{cfg['cf_tunnel_id']}/configurations",
@@ -59,21 +153,163 @@ async def _put_tunnel_config(cfg, client, config: dict[str, Any]) -> None:
     r.raise_for_status()
 
 
-async def ensure_preview_hostname(cfg: dict[str, Any], slug: str) -> None:
-    if not configured(cfg):
-        return
-    host = hostname_for(cfg, slug)
-    async with httpx.AsyncClient(timeout=20, headers=_headers(cfg)) as client:
-        # 1. Tunnel ingress rule (insert before the catch-all).
+def _ingress_lock(cfg: dict[str, Any]) -> asyncio.Lock:
+    key = (str(cfg["cf_account_id"]), str(cfg["cf_tunnel_id"]))
+    return _INGRESS_LOCKS.setdefault(key, asyncio.Lock())
+
+
+def _ingress_lock_path(cfg: dict[str, Any]) -> Path:
+    root = Path(
+        str(
+            cfg.get("cf_ingress_lock_dir")
+            or os.environ.get("XDG_RUNTIME_DIR")
+            or tempfile.gettempdir()
+        )
+    )
+    digest = hashlib.sha256(
+        f"{cfg['cf_account_id']}:{cfg['cf_tunnel_id']}".encode()
+    ).hexdigest()
+    return root / f".proxima-cf-ingress-{_owner_id()}-{digest}.lock"
+
+
+def _acquire_ingress_file_lock(cfg: dict[str, Any]) -> int:
+    path = _ingress_lock_path(cfg)
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or (
+                hasattr(metadata, "st_uid")
+                and metadata.st_uid != _owner_id()
+            )
+        ):
+            raise RuntimeError("Cloudflare ingress lock is unsafe")
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        elif os.name == "nt":
+            import msvcrt
+
+            if metadata.st_size == 0:
+                os.write(descriptor, b"\0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+        else:
+            raise RuntimeError("cross-process file locking is unavailable")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _release_ingress_file_lock(descriptor: int) -> None:
+    try:
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        elif os.name == "nt":
+            import msvcrt
+
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    finally:
+        os.close(descriptor)
+
+
+async def _finish_lock_acquisition(
+    acquisition: asyncio.Task[int],
+) -> int:
+    while True:
+        try:
+            return await asyncio.shield(acquisition)
+        except asyncio.CancelledError:
+            continue
+
+
+async def _acquire_ingress_file_lock_cancellable(
+    cfg: dict[str, Any],
+) -> int:
+    acquisition = asyncio.create_task(
+        asyncio.to_thread(_acquire_ingress_file_lock, cfg)
+    )
+    try:
+        return await asyncio.shield(acquisition)
+    except asyncio.CancelledError:
+        try:
+            descriptor = await _finish_lock_acquisition(acquisition)
+        except BaseException:
+            pass
+        else:
+            _release_ingress_file_lock(descriptor)
+        raise
+
+
+@asynccontextmanager
+async def _tunnel_mutation_lock(
+    cfg: dict[str, Any],
+) -> AsyncIterator[None]:
+    async with _ingress_lock(cfg):
+        descriptor = await _acquire_ingress_file_lock_cancellable(cfg)
+        try:
+            yield
+        finally:
+            _release_ingress_file_lock(descriptor)
+
+
+def _matches_ingress(
+    actual: list[dict[str, Any]],
+    expected: list[dict[str, Any]],
+) -> bool:
+    return actual == expected
+
+
+async def _mutate_tunnel_ingress(
+    cfg: dict[str, Any],
+    client,
+    mutate: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
+    complete: Callable[[list[dict[str, Any]]], bool],
+) -> None:
+    async with _tunnel_mutation_lock(cfg):
         config = await _tunnel_config(cfg, client)
         ingress = config.get("ingress") or [{"service": "http_status:404"}]
-        if not any(r.get("hostname") == host for r in ingress):
-            service = _existing_service(ingress)
-            catchall = ingress[-1:] if ingress and not ingress[-1].get("hostname") else [{"service": "http_status:404"}]
-            body = [r for r in ingress if r.get("hostname")]
-            body.append({"hostname": host, "service": service})
-            config["ingress"] = body + catchall
-            await _put_tunnel_config(cfg, client, config)
+        if complete(ingress):
+            return
+        updated = mutate(copy.deepcopy(ingress))
+        next_config = {**config, "ingress": updated}
+        await _put_tunnel_config(cfg, client, next_config)
+        for _ in range(5):
+            refreshed = await _tunnel_config(cfg, client)
+            refreshed_ingress = refreshed.get("ingress") or []
+            if (
+                complete(refreshed_ingress)
+                and _matches_ingress(refreshed_ingress, updated)
+            ):
+                return
+            await asyncio.sleep(0)
+        raise RuntimeError("Cloudflare tunnel ingress update did not converge")
+
+
+async def _ensure_hostname(cfg: dict[str, Any], host: str) -> None:
+    if not configured(cfg):
+        return
+    async with httpx.AsyncClient(timeout=20, headers=_headers(cfg)) as client:
+        def add_host(ingress: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return _with_ingress_hostname(ingress, host)
+
+        await _mutate_tunnel_ingress(
+            cfg,
+            client,
+            add_host,
+            lambda ingress: _hostname_precedes_unscoped(ingress, host),
+        )
 
         # 2. Proxied DNS CNAME → the tunnel.
         got = await client.get(f"{_API}/zones/{cfg['cf_zone_id']}/dns_records", params={"name": host})
@@ -94,6 +330,27 @@ async def ensure_preview_hostname(cfg: dict[str, Any], slug: str) -> None:
         for a in apps:
             if a.get("domain") == host:
                 await client.delete(f"{_API}/accounts/{cfg['cf_account_id']}/access/apps/{a['id']}")
+
+
+async def ensure_preview_hostname(cfg: dict[str, Any], slug: str) -> None:
+    await _ensure_hostname(cfg, hostname_for(cfg, slug))
+
+
+async def ensure_file_preview_hostname(
+    cfg: dict[str, Any],
+    project_id: int,
+    area_kind: str,
+    area_id: int | None,
+) -> None:
+    await _ensure_hostname(
+        cfg,
+        file_preview_hostname_for(
+            cfg,
+            project_id,
+            area_kind,
+            area_id,
+        ),
+    )
 
 
 async def provision(cfg: dict[str, Any], slug: str) -> None:
@@ -117,11 +374,16 @@ async def remove_preview_hostname(cfg: dict[str, Any], slug: str) -> None:
     host = hostname_for(cfg, slug)
     async with httpx.AsyncClient(timeout=20, headers=_headers(cfg)) as client:
         try:
-            config = await _tunnel_config(cfg, client)
-            ingress = config.get("ingress") or []
-            if any(r.get("hostname") == host for r in ingress):
-                config["ingress"] = [r for r in ingress if r.get("hostname") != host]
-                await _put_tunnel_config(cfg, client, config)
+            await _mutate_tunnel_ingress(
+                cfg,
+                client,
+                lambda ingress: [
+                    rule for rule in ingress if rule.get("hostname") != host
+                ],
+                lambda ingress: not any(
+                    rule.get("hostname") == host for rule in ingress
+                ),
+            )
         except Exception:
             _LOG.exception("remove tunnel ingress failed for %s", host)
         try:

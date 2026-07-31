@@ -53,6 +53,21 @@ class AppStatusResponse(BaseModel):
     broad_bind: bool | None = None
 
 
+class PreviewModeRequest(BaseModel):
+    active: bool
+    preview_session: str = Field(
+        min_length=32,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    generation: str | None = Field(
+        default=None,
+        min_length=32,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+
+
 class PermissionResponse(BaseModel):
     request_id: str
     option_id: str
@@ -452,10 +467,13 @@ class FileWriteRequest(BaseModel):
 
 class FsPathRequest(BaseModel):
     path: str = Field(min_length=1)
+    target: dict[str, Any] | None = None
 
 
 class FsRenameRequest(BaseModel):
     from_: str = Field(min_length=1, alias="from")
     to: str = Field(min_length=1)
+    from_target: dict[str, Any] | None = None
+    to_target: dict[str, Any] | None = None
 
     model_config = {"populate_by_name": True}
