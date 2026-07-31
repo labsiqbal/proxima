@@ -6,9 +6,11 @@ import '@testing-library/jest-dom/vitest'
 const mocks = vi.hoisted(() => ({
   fsRead: vi.fn(),
   fileUrl: vi.fn(),
+  rawUrl: vi.fn(),
   listArtifacts: vi.fn(),
   listMessages: vi.fn(),
   polling: new Map<number, () => Promise<unknown>>(),
+  open: vi.fn(),
 }))
 
 vi.mock('../api/fsAdapter', () => ({
@@ -19,6 +21,8 @@ vi.mock('../api/fsAdapter', () => ({
 vi.mock('../api/files', () => ({
   deleteSessionArtifact: vi.fn(),
   fileUrl: (...args: unknown[]) => mocks.fileUrl(...args),
+  rawUrl: (...args: unknown[]) => mocks.rawUrl(...args),
+  isSvgPath: (path: string) => /\.svg$/i.test(path),
   listSessionArtifacts: (...args: unknown[]) => mocks.listArtifacts(...args),
   retargetFile: (target: object, path: string) => ({ ...target, path }),
 }))
@@ -95,9 +99,16 @@ describe('IterateStage canonical artifact targets', () => {
       (_slug: string, path: string, target?: { area?: { kind?: string; id?: number } }) =>
         `/file/${target?.area?.kind || 'legacy'}/${target?.area?.id || 'root'}/${path}`,
     )
+    mocks.rawUrl.mockImplementation(
+      (slug: string, path: string, target?: object) =>
+        target
+          ? `/api/projects/${slug}/raw?target=${encodeURIComponent(JSON.stringify(target))}`
+          : `/api/projects/${slug}/raw?path=${encodeURIComponent(path)}`,
+    )
     mocks.fsRead.mockResolvedValue({
       content: '![Chart](images/chart.png)',
     })
+    vi.stubGlobal('open', mocks.open)
   })
 
   it('keeps the source target when rendering a Markdown result', async () => {
@@ -206,6 +217,45 @@ describe('IterateStage canonical artifact targets', () => {
       'identity',
       'visual.png',
       imageTarget,
+    )
+  })
+
+  it('opens SVG results through the authenticated raw endpoint', async () => {
+    const target = {
+      project: 'identity',
+      area: { kind: 'ops', id: 42 },
+      path: 'brand/mark.svg',
+    }
+    mocks.listArtifacts.mockResolvedValue({
+      artifacts: [
+        {
+          type: 'file',
+          title: 'Mark',
+          path: 'brand/mark.svg',
+          target,
+        },
+      ],
+    })
+    render(
+      <IterateStage
+        token="token"
+        workflowId={3}
+        sessionId={7}
+        projectSlug="identity"
+      />,
+    )
+
+    await act(async () => {
+      await mocks.polling.get(4000)?.()
+    })
+    await userEvent.click(screen.getByRole('button', { name: /Result/ }))
+    await userEvent.click(screen.getByRole('button', { name: /Mark/ }))
+
+    expect(mocks.rawUrl).toHaveBeenCalledWith('identity', 'brand/mark.svg', target)
+    expect(mocks.fileUrl).not.toHaveBeenCalledWith('identity', 'brand/mark.svg', target)
+    expect(mocks.open).toHaveBeenCalledWith(
+      `/api/projects/identity/raw?target=${encodeURIComponent(JSON.stringify(target))}`,
+      '_blank',
     )
   })
 })

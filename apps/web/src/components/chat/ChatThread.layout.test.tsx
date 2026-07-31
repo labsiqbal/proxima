@@ -23,7 +23,11 @@ vi.mock("../../api/runs", () => ({
 }));
 vi.mock("../../api/files", () => ({
 	designFromImage: vi.fn(),
+	isSvgPath: (path: string) => /\.svg$/i.test(path),
 	previewUrl: vi.fn(() => "/stable-preview"),
+}));
+vi.mock("../../hooks/useRawBlobUrl", () => ({
+	useRawBlobUrl: vi.fn(() => null),
 }));
 vi.mock("../ui/Dialog", () => ({
 	confirmDialog: vi.fn(async () => true),

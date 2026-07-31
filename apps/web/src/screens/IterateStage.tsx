@@ -1,6 +1,6 @@
 import React from 'react'
 import { projectFs } from '../api/fsAdapter'
-import { deleteSessionArtifact, fileUrl, listSessionArtifacts, retargetFile, type Artifact } from '../api/files'
+import { deleteSessionArtifact, fileUrl, isSvgPath, listSessionArtifacts, rawUrl, retargetFile, type Artifact } from '../api/files'
 import { listMessages } from '../api/sessions'
 import { cancelRun, deleteRun } from '../api/runs'
 import { getWorkflow, updateWorkflow, type StepInput } from '../api/workflows'
@@ -229,7 +229,10 @@ Finish with a short result summary and artifact/file links if created.`, label, 
             : a.target.path,
         )
       : undefined
-    window.open(fileUrl(projectSlug, path, target), '_blank')
+    const url = isSvgPath(path)
+      ? rawUrl(projectSlug, path, target)
+      : fileUrl(projectSlug, path, target)
+    window.open(url, '_blank')
   }
   const openArtifact = (a: Artifact) => {
     if (a.type === 'doc') void openDoc(a)

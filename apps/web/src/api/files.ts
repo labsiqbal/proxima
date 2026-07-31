@@ -79,15 +79,14 @@ export const setTargetPreviewMode = (
   },
 )
 
-export function relativeFileUrl(
-  slug: string,
-  reference: string,
-  sourcePath: string,
-  target?: FileTarget,
-): string {
+export const isSvgPath = (path: string) => {
+  const bare = path.split(/[?#]/, 1)[0] || path
+  return /\.svg$/i.test(bare)
+}
+
+export function resolveRelativeReference(reference: string, sourcePath: string): string {
   const suffixIndex = reference.search(/[?#]/)
   const relative = suffixIndex >= 0 ? reference.slice(0, suffixIndex) : reference
-  const suffix = suffixIndex >= 0 ? reference.slice(suffixIndex) : ''
   const parts = sourcePath.split('/').filter(Boolean)
   if (relative) {
     parts.pop()
@@ -101,13 +100,34 @@ export function relativeFileUrl(
       }
     }
   }
-  const resolvedPath = parts.join('/')
+  return parts.join('/')
+}
+
+function relativeResourceUrl(
+  build: (slug: string, path: string, target?: FileTarget) => string,
+  slug: string,
+  reference: string,
+  sourcePath: string,
+  target?: FileTarget,
+): string {
+  const suffixIndex = reference.search(/[?#]/)
+  const suffix = suffixIndex >= 0 ? reference.slice(suffixIndex) : ''
+  const resolvedPath = resolveRelativeReference(reference, sourcePath)
   if (!resolvedPath) return ''
-  return `${previewUrl(
+  return `${build(
     slug,
     resolvedPath,
     target ? retargetFile(target, resolvedPath) : undefined,
   )}${suffix}`
+}
+
+export function relativeFileUrl(
+  slug: string,
+  reference: string,
+  sourcePath: string,
+  target?: FileTarget,
+): string {
+  return relativeResourceUrl(previewUrl, slug, reference, sourcePath, target)
 }
 
 // Seed a new Design Studio scene containing an existing project image (full-bleed).
@@ -128,6 +148,15 @@ export const projectWikiAll = (token: string, slug: string) =>
 export const rawUrl = (slug: string, path: string, target?: FileTarget) => {
   const query = target ? `target=${targetParam(target)}` : `path=${q(path)}`
   return `/api/projects/${q(slug)}/raw?${query}`
+}
+
+export function relativeRawUrl(
+  slug: string,
+  reference: string,
+  sourcePath: string,
+  target?: FileTarget,
+): string {
+  return relativeResourceUrl(rawUrl, slug, reference, sourcePath, target)
 }
 
 export async function fetchRawFile(token: string, slug: string, path: string, target?: FileTarget): Promise<Blob> {

@@ -1,12 +1,14 @@
 import React from 'react'
 import { createPortal } from 'react-dom'
 import {
+  isSvgPath,
   previewUrl,
   rawUrl,
   setTargetPreviewMode,
   type Artifact,
 } from '../../api/files'
 import { projectFs } from '../../api/fsAdapter'
+import { useRawBlobUrl } from '../../hooks/useRawBlobUrl'
 import type { FileTarget } from '../../types'
 import { MessageContent } from '../chat/MessageContent'
 import { MermaidDiagram } from './MermaidDiagram'
@@ -163,6 +165,13 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
   const activeForCurrentArea = activePreview?.areaKey === currentAreaKey
     ? activePreview
     : null
+  const svgImage = kind === 'image' && isSvgPath(path)
+  const svgBlobUrl = useRawBlobUrl(
+    svgImage ? token : undefined,
+    svgImage ? slug : undefined,
+    path,
+    item?.target,
+  )
 
   React.useLayoutEffect(() => {
     triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -271,7 +280,11 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
   }
 
   const stage = () => {
-    if (kind === 'image') return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={previewUrl(slug, path, item.target)} alt={name} onClick={() => { if (!annotating) setZoom(current => !current) }} title={zoom ? 'Fit to screen' : 'Actual size'} />
+    if (kind === 'image') {
+      const src = svgImage ? (svgBlobUrl || '') : previewUrl(slug, path, item.target)
+      if (svgImage && !svgBlobUrl) return <div className="av-msg muted">Loading...</div>
+      return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={src} alt={name} onClick={() => { if (!annotating) setZoom(current => !current) }} title={zoom ? 'Fit to screen' : 'Actual size'} />
+    }
     if (kind === 'video') return <video className="av-video" src={previewUrl(slug, path, item.target)} controls autoPlay playsInline />
     if (kind === 'pdf') return <iframe className="av-frame" title={name} src={previewUrl(slug, path, item.target)} />
     if (kind === 'html') {

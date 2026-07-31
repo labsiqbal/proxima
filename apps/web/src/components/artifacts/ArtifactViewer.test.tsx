@@ -8,6 +8,7 @@ import { previewUrl, rawUrl } from '../../api/files'
 
 const fsRead = vi.fn()
 const setTargetPreviewMode = vi.fn()
+const fetchRawBlobMock = vi.fn()
 
 vi.mock('../../api/files', () => ({
   previewUrl: vi.fn((_slug: string, path: string, _target?: unknown, active?: { generation: string }) => `/preview/${path}${active ? `?generation=${active.generation}` : ''}`),
@@ -16,6 +17,8 @@ vi.mock('../../api/files', () => ({
       ? `/api/projects/${slug}/raw?target=${encodeURIComponent(JSON.stringify(target))}`
       : `/api/projects/${slug}/raw?path=${encodeURIComponent(path)}`
   )),
+  isSvgPath: (path: string) => /\.svg$/i.test(path),
+  fetchRawBlob: (...args: unknown[]) => fetchRawBlobMock(...args),
   setTargetPreviewMode: (...args: unknown[]) => setTargetPreviewMode(...args),
 }))
 vi.mock('../../api/fsAdapter', () => ({
@@ -45,6 +48,8 @@ vi.mock('./ExcalidrawWhiteboard', () => ({
 beforeEach(() => {
   fsRead.mockReset()
   setTargetPreviewMode.mockReset()
+  fetchRawBlobMock.mockReset()
+  fetchRawBlobMock.mockResolvedValue('blob:svg-preview')
   window.localStorage.clear()
 })
 
@@ -446,5 +451,33 @@ describe('ArtifactViewer v2 review flow', () => {
     )
     expect(String(download.getAttribute('href'))).not.toContain('/api/target-preview/')
     expect(String(download.getAttribute('href'))).not.toContain('/preview/')
+  })
+
+  it('renders SVG through authenticated raw bytes instead of the preview entry', async () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'brand/logo.svg',
+    }
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'image', title: 'Logo', path: 'brand/logo.svg', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    const image = await screen.findByRole('img', { name: 'logo.svg' })
+    expect(image).toHaveAttribute('src', 'blob:svg-preview')
+    expect(fetchRawBlobMock).toHaveBeenCalledWith('token', 'master', 'brand/logo.svg', target)
+    expect(previewUrl).not.toHaveBeenCalledWith('master', 'brand/logo.svg', target)
+
+    const download = screen.getByRole('link', { name: 'Download' })
+    expect(download).toHaveAttribute(
+      'href',
+      `/api/projects/master/raw?target=${encodeURIComponent(JSON.stringify(target))}`,
+    )
+    expect(download).toHaveAttribute('download', 'logo.svg')
   })
 })

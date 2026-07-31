@@ -9,9 +9,11 @@ vi.mock('./client', () => ({
 import {
   deleteSessionArtifact,
   fetchRawFile,
+  isSvgPath,
   previewUrl,
   rawUrl,
   relativeFileUrl,
+  relativeRawUrl,
   setTargetPreviewMode,
 } from './files'
 import type { FileTarget } from '../types'
@@ -148,5 +150,33 @@ describe('canonical file URLs', () => {
     expect(rawUrl('identity', 'site/index.html', activeHtml)).not.toContain(
       '/api/target-preview/',
     )
+  })
+
+  it('resolves Markdown sibling downloads onto the raw endpoint', () => {
+    expect(
+      relativeRawUrl(
+        'identity',
+        'export/report.html',
+        target.path,
+        target,
+      ),
+    ).toBe(
+      `/api/projects/identity/raw?target=${encodeURIComponent(JSON.stringify({
+        ...target,
+        path: 'reports/export/report.html',
+      }))}`,
+    )
+    expect(
+      relativeRawUrl('identity', '../../escape.html', target.path, target),
+    ).toBe('')
+    expect(relativeRawUrl('identity', 'diagram.svg', target.path, target)).not.toContain(
+      '/api/target-preview/',
+    )
+  })
+
+  it('detects SVG paths including query suffixes', () => {
+    expect(isSvgPath('brand/logo.svg')).toBe(true)
+    expect(isSvgPath('brand/logo.SVG?v=2')).toBe(true)
+    expect(isSvgPath('brand/logo.png')).toBe(false)
   })
 })
