@@ -491,9 +491,9 @@ def test_v48_retains_published_successor_ordering_gap(tmp_path: Path):
         recovery_json=_recovery_payload(ids["job_id"], 2),
     )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 53
+    assert current_version(conn) == 54
     gap = dict(
         conn.execute(
             "SELECT id, task_event_id, recovery_json, state, "
@@ -630,7 +630,7 @@ def test_v48_keeps_unpublished_recoveries_strictly_orderable(
             ),
         )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54]
     assert [
         tuple(row)
         for row in conn.execute(
@@ -727,9 +727,9 @@ def test_v50_schema_separates_markers_and_recovery_coverage(
         "schema-46-final-contract.db",
     )
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 53
+    assert current_version(conn) == 54
     assert {
         row[1]
         for row in conn.execute(
@@ -908,7 +908,7 @@ def test_v49_detects_reversals_and_aggregates_corrections_per_task(
         ).fetchall()
     ]
 
-    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53]
+    assert run_migrations(conn, str(db_path)) == [47, 48, 49, 50, 51, 52, 53, 54]
     assert run_migrations(conn, str(db_path)) == []
     assert [
         tuple(row)
@@ -1074,7 +1074,7 @@ def test_v50_preserves_multiple_delivered_v47_markers_before_v48(
     conn.commit()
 
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54]
     assert run_migrations(conn, str(db_path)) == []
     after_corrections = [
         tuple(row)
@@ -1179,7 +1179,7 @@ def test_v50_recovers_multiple_delivered_markers_from_v48_history(
         ).fetchall()
     ] == sorted(correction_ids)
 
-    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53]
+    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53, 54]
     assert [
         int(row["id"])
         for row in conn.execute(
@@ -1253,7 +1253,7 @@ def test_v50_records_pre_staging_identity_loss_without_inventing_markers(
     )
     conn.execute("DROP TABLE task_recovery_delivered_marker_staging")
 
-    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53]
+    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53, 54]
     assert conn.execute(
         "SELECT COUNT(*) FROM task_recovery_corrections"
     ).fetchone()[0] == 0
@@ -1297,7 +1297,7 @@ def test_recovery_audit_identity_survives_task_source_deletion(
         for index, correction_id in enumerate(correction_ids, start=1)
     ]
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54]
     source_before = [
         (int(row["id"]), int(row["task_event_id"]))
         for row in conn.execute(
@@ -1433,7 +1433,7 @@ def test_recovery_source_identity_survives_event_and_later_cascades(
         "recovery-source-event-cascade.db",
     )
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54]
     source_before = [
         (int(row["id"]), int(row["task_event_id"]))
         for row in conn.execute(
@@ -1558,7 +1558,7 @@ def test_v52_completes_partial_recovery_tombstone_atomically(
         (ids["job_id"],),
     ).fetchone()[0] == 0
 
-    assert run_migrations(conn, str(db_path)) == [52, 53]
+    assert run_migrations(conn, str(db_path)) == [52, 53, 54]
     assert run_migrations(conn, str(db_path)) == []
     tombstone = dict(
         conn.execute(
@@ -1660,7 +1660,7 @@ def test_v53_repairs_v51_node_session_guess_from_event_provenance(
         (ids["job_id"],),
     ).fetchone()[0] == node_session_id
 
-    assert run_migrations(conn, str(db_path)) == [53]
+    assert run_migrations(conn, str(db_path)) == [53, 54]
     assert run_migrations(conn, str(db_path)) == []
     assert conn.execute(
         "SELECT task_session_id FROM task_recovery_history_tombstones "
@@ -1744,7 +1744,7 @@ def test_v53_never_promotes_mixed_graph_sessions_to_task_identity(
         (job_id,),
     ).fetchone()[0] == node_session_ids[0]
 
-    assert run_migrations(conn, str(db_path)) == [53]
+    assert run_migrations(conn, str(db_path)) == [53, 54]
     assert conn.execute(
         "SELECT task_session_id FROM task_recovery_history_tombstones "
         "WHERE job_id = ?",
@@ -1944,6 +1944,182 @@ def test_v50_aggregates_only_uncovered_gaps_atomically(
     ).fetchone()[0] == event_before
 
 
+def test_v54_backfills_schedule_timezone_project_and_disables_missing_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("TZ", "Asia/Jakarta")
+    db_path = tmp_path / "schema-53-schedules.db"
+    conn = connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE schema_migrations(
+          version INTEGER PRIMARY KEY,
+          description TEXT,
+          applied_at TEXT NOT NULL
+        );
+        CREATE TABLE workflows(
+          id INTEGER PRIMARY KEY,
+          project_id INTEGER,
+          inputs TEXT,
+          graph TEXT
+        );
+        CREATE TABLE schedules(
+          id INTEGER PRIMARY KEY,
+          workflow_id INTEGER,
+          project_id INTEGER,
+          input TEXT,
+          enabled INTEGER,
+          updated_at TEXT
+        );
+        INSERT INTO schema_migrations(version, description, applied_at)
+        VALUES (53, 'schema 53', CURRENT_TIMESTAMP);
+        INSERT INTO workflows(id, project_id, inputs, graph)
+        VALUES (
+          7,
+          11,
+          '[]',
+          '{"nodes":[{"id":"trigger","type":"trigger","trigger_kind":"manual",'
+          || '"name":"When I run it","output_kind":"json","inputs":['
+          || '{"id":"topic","label":"Topic","kind":"text","required":true}]}],'
+          || '"edges":[]}'
+        );
+        INSERT INTO schedules(
+          id, workflow_id, project_id, input, enabled, updated_at
+        ) VALUES (9, 7, 22, '{}', 1, CURRENT_TIMESTAMP);
+        """
+    )
+
+    assert run_migrations(conn, str(db_path), migrations=[MIGRATIONS[-1]]) == [54]
+    row = conn.execute(
+        "SELECT project_id, timezone, enabled FROM schedules WHERE id = 9"
+    ).fetchone()
+
+    assert dict(row) == {
+        "project_id": 11,
+        "timezone": "Asia/Jakarta",
+        "enabled": 0,
+    }
+
+
+def test_v54_rewrites_legacy_last_run_minute_so_current_minute_cannot_double_fire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from datetime import datetime, timezone
+
+    from fastapi.testclient import TestClient
+
+    from proxima_api import main
+    from proxima_api.main import create_app
+    from proxima_api.migrations import _rewrite_legacy_last_run_minute
+    from proxima_api.schedule_policy import minute_claim_key, schedule_local_time
+
+    monkeypatch.setenv("TZ", "Asia/Jakarta")
+    db_path = tmp_path / "schema-53-claim.db"
+    conn = connect(db_path)
+    tick = datetime(2026, 6, 22, 2, 0, tzinfo=timezone.utc)
+    local_now = schedule_local_time(tick, "Asia/Jakarta")
+    legacy_key = local_now.strftime("%Y-%m-%dT%H:%M")
+    expected_key = minute_claim_key(local_now, "Asia/Jakarta")
+    conn.executescript(
+        """
+        CREATE TABLE schema_migrations(
+          version INTEGER PRIMARY KEY,
+          description TEXT,
+          applied_at TEXT NOT NULL
+        );
+        CREATE TABLE workflows(
+          id INTEGER PRIMARY KEY,
+          project_id INTEGER,
+          inputs TEXT,
+          graph TEXT
+        );
+        CREATE TABLE schedules(
+          id INTEGER PRIMARY KEY,
+          workflow_id INTEGER,
+          project_id INTEGER,
+          cron TEXT NOT NULL,
+          input TEXT,
+          overlap_policy TEXT NOT NULL DEFAULT 'skip',
+          enabled INTEGER NOT NULL DEFAULT 1,
+          last_run_minute TEXT,
+          updated_at TEXT
+        );
+        INSERT INTO schema_migrations(version, description, applied_at)
+        VALUES (53, 'schema 53', CURRENT_TIMESTAMP);
+        INSERT INTO workflows(id, project_id, inputs, graph)
+        VALUES (7, 11, '[]', '{"nodes":[],"edges":[]}');
+        INSERT INTO schedules(
+          id, workflow_id, project_id, cron, input, overlap_policy, enabled,
+          last_run_minute, updated_at
+        ) VALUES (
+          9, 7, 11, '0 9 * * *', '{}', 'skip', 1,
+          '"""
+        + legacy_key
+        + """', CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+    assert run_migrations(conn, str(db_path), migrations=[MIGRATIONS[-1]]) == [54]
+    rewritten = conn.execute(
+        "SELECT last_run_minute, timezone, enabled FROM schedules WHERE id = 9"
+    ).fetchone()
+    assert dict(rewritten) == {
+        "last_run_minute": expected_key,
+        "timezone": "Asia/Jakarta",
+        "enabled": 1,
+    }
+    assert legacy_key != expected_key
+    conn.close()
+
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "live-claim.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "seed_users": [
+                {"username": "owner", "role": "member", "os_user": "owner"}
+            ],
+            "start_worker": False,
+        }
+    )
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    workflow_id = client.post(
+        "/api/workflows",
+        json={"name": "Nightly", "steps": [{"name": "A", "instruction": "a"}]},
+    ).json()["id"]
+    schedule = client.post(
+        "/api/schedules",
+        json={
+            "workflow_id": workflow_id,
+            "cron": "0 9 * * *",
+            "timezone": "Asia/Jakarta",
+            "enabled": True,
+        },
+    ).json()
+    live = app.state.db
+    live.execute(
+        "UPDATE schedules SET last_run_minute = ? WHERE id = ?",
+        (legacy_key, schedule["id"]),
+    )
+    live.commit()
+    _rewrite_legacy_last_run_minute(
+        live, "Asia/Jakarta", int(schedule["id"]), legacy_key
+    )
+    live.commit()
+    assert (
+        live.execute(
+            "SELECT last_run_minute FROM schedules WHERE id = ?",
+            (schedule["id"],),
+        ).fetchone()["last_run_minute"]
+        == expected_key
+    )
+    assert main._scheduler_tick(app, now=tick) == []
+    assert client.get("/api/jobs").json()["items"] == []
+
+
 def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
     tmp_path: Path,
 ):
@@ -1960,10 +2136,10 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
 
     assert run_migrations(conn, str(db_path)) == [
         32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
-        49, 50, 51, 52, 53,
+        49, 50, 51, 52, 53, 54,
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 53
+    assert current_version(conn) == 54
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")
     } == {
@@ -2459,9 +2635,9 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
     assert run_migrations(conn, str(db_path)) == [
         28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
         44,
-        45, 46, 47, 48, 49, 50, 51, 52, 53
+        45, 46, 47, 48, 49, 50, 51, 52, 53, 54
     ]
-    assert current_version(conn) == 53
+    assert current_version(conn) == 54
     assert migrate_legacy_ops_containers(conn) == {
         "complete": 1,
         "attention": 0,
@@ -2504,9 +2680,9 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
 
     assert run_migrations(conn, str(db_path)) == [
         29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
-        46, 47, 48, 49, 50, 51, 52, 53
+        46, 47, 48, 49, 50, 51, 52, 53, 54
     ]
-    assert current_version(conn) == 53
+    assert current_version(conn) == 54
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -2720,10 +2896,10 @@ def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
     db_path, conn = _prepare_schema_35_graph_fixture(tmp_path)
 
     assert run_migrations(conn, str(db_path)) == [
-        36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53
+        36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 53
+    assert current_version(conn) == 54
 
     columns = {
         row[1] for row in conn.execute("PRAGMA table_info(graph_states)")
@@ -2822,9 +2998,9 @@ def test_v39_preserves_epoch_identity_and_recovers_pending_fleet(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53
+        39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54
     ]
-    assert current_version(conn) == 53
+    assert current_version(conn) == 54
     state = conn.execute(
         "SELECT pending_focus, pending_container_id "
         "FROM master_focus_state WHERE master_session_id = 3"
@@ -2922,7 +3098,7 @@ def test_v40_persists_task_focus_after_origin_message_deletion(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53
+        40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54
     ]
     captured = conn.execute(
         "SELECT origin_focus_epoch_id, origin_focus_captured "
@@ -3051,7 +3227,7 @@ def test_v42_preserves_historical_master_scope_after_container_deletion(
     )
 
     assert run_migrations(conn, str(db_path)) == [
-        42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53
+        42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54
     ]
     conn.execute("DELETE FROM projects WHERE id = 7")
     context = conn.execute(

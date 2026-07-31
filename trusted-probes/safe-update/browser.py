@@ -287,6 +287,21 @@ def _step(connection: _WebSocket, step: dict) -> dict:
         time.sleep(0.05)
 
 
+def _capture_png(connection: _WebSocket, path: Path) -> None:
+    captured = connection.call(
+        "Page.captureScreenshot",
+        {
+            "captureBeyondViewport": True,
+            "format": "png",
+            "fromSurface": True,
+        },
+    ).get("data")
+    if not isinstance(captured, str):
+        raise BrowserProbeError("browser screenshot data is unavailable")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(base64.b64decode(captured, validate=True))
+
+
 def run_scenario(
     *,
     executable: str,
@@ -296,6 +311,8 @@ def run_scenario(
     auth_token: str,
     drop_prefix: list[str],
     path: str = "/",
+    screenshot_path: Path | None = None,
+    screenshot_dir: Path | None = None,
 ) -> bytes:
     profile.mkdir(mode=0o777)
     profile.chmod(0o777)
@@ -308,6 +325,7 @@ def run_scenario(
         executable,
         "--headless=new",
         "--no-sandbox",
+        "--disable-setuid-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
         "--disable-background-networking",
@@ -321,41 +339,80 @@ def run_scenario(
         f"--user-data-dir={profile}",
         "--remote-debugging-address=127.0.0.1",
         f"--remote-debugging-port={debug_port}",
+        # Chrome 111+ rejects CDP websockets without an explicit origin allow-list.
+        "--remote-allow-origins=*",
         "--window-size=1440,1000",
         "about:blank",
     ]
+    stderr_path = profile / "chrome.stderr"
+    stderr_handle = stderr_path.open("wb")
     process = subprocess.Popen(
         command,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=stderr_handle,
         start_new_session=True,
     )
     connection: _WebSocket | None = None
     try:
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + 45
+        started = time.monotonic()
         page: dict | None = None
+        fallback: dict | None = None
         while time.monotonic() < deadline:
             if process.poll() is not None:
-                raise BrowserProbeError("browser exited before debugging was ready")
+                stderr_handle.flush()
+                detail = stderr_path.read_text(errors="replace")[-2000:]
+                raise BrowserProbeError(
+                    "browser exited before debugging was ready"
+                    + (f": {detail.strip()}" if detail.strip() else "")
+                )
             try:
                 with urlopen(
                     f"http://127.0.0.1:{debug_port}/json/list",
                     timeout=1,
                 ) as response:
                     pages = json.loads(response.read())
-                page = next(
-                    item
-                    for item in pages
-                    if item.get("type") == "page"
-                    and item.get("url") == "about:blank"
-                    and isinstance(item.get("webSocketDebuggerUrl"), str)
+                blank = next(
+                    (
+                        item
+                        for item in pages
+                        if item.get("type") == "page"
+                        and str(item.get("url") or "").startswith("about:blank")
+                        and isinstance(item.get("webSocketDebuggerUrl"), str)
+                    ),
+                    None,
                 )
-                break
+                if blank is not None:
+                    page = blank
+                    break
+                # Some CI Chrome builds expose the first target slightly before the
+                # about:blank URL settles - keep a page fallback after a short wait.
+                candidate = next(
+                    (
+                        item
+                        for item in pages
+                        if item.get("type") == "page"
+                        and isinstance(item.get("webSocketDebuggerUrl"), str)
+                    ),
+                    None,
+                )
+                if candidate is not None:
+                    fallback = candidate
+                    if time.monotonic() - started >= 2:
+                        page = fallback
+                        break
             except Exception:
                 time.sleep(0.05)
         if page is None:
-            raise BrowserProbeError("browser debugging startup timed out")
+            page = fallback
+        if page is None:
+            stderr_handle.flush()
+            detail = stderr_path.read_text(errors="replace")[-2000:]
+            raise BrowserProbeError(
+                "browser debugging startup timed out"
+                + (f": {detail.strip()}" if detail.strip() else "")
+            )
         connection = _WebSocket(page["webSocketDebuggerUrl"])
         connection.call("Page.enable")
         connection.call("Runtime.enable")
@@ -392,7 +449,24 @@ def run_scenario(
             }
         ]
         for step in scenario["steps"]:
+            if step.get("action") == "screenshot":
+                name = str(step.get("name") or "").strip()
+                if not name:
+                    raise BrowserProbeError("screenshot step requires a name")
+                if screenshot_dir is not None:
+                    path = screenshot_dir / f"{name}.png"
+                    _capture_png(connection, path)
+                    transcript.append(
+                        {"action": "screenshot", "name": name, "path": str(path)}
+                    )
+                else:
+                    transcript.append(
+                        {"action": "screenshot", "name": name, "skipped": True}
+                    )
+                continue
             transcript.append(_step(connection, step))
+        if screenshot_path is not None:
+            _capture_png(connection, screenshot_path)
         return json.dumps(
             transcript,
             sort_keys=True,
@@ -407,3 +481,7 @@ def run_scenario(
             except ProcessLookupError:
                 pass
             process.wait()
+        try:
+            stderr_handle.close()
+        except Exception:
+            pass

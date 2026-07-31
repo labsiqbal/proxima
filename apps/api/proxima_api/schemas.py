@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from .runner_specs import default_runner
+from . import schedule_policy
 
 
 class PasswordRequest(BaseModel):
@@ -160,6 +161,10 @@ class GraphNodeAnswerRequest(BaseModel):
 class ScheduleCreateRequest(BaseModel):
     workflow_id: int
     cron: str = Field(min_length=1)
+    timezone: str = Field(default_factory=schedule_policy.local_timezone_name, min_length=1)
+    bindings: dict[str, Any] | None = None
+    # Backwards-compatible request alias. New clients call these bindings because
+    # they are durable automation configuration, not per-run manual intake.
     input: dict[str, Any] | None = None
     overlap_policy: str = Field(default="skip", pattern="^(skip|allow)$")
     project_id: int | None = None
@@ -168,6 +173,8 @@ class ScheduleCreateRequest(BaseModel):
 
 class ScheduleUpdateRequest(BaseModel):
     cron: str | None = None
+    timezone: str | None = None
+    bindings: dict[str, Any] | None = None
     input: dict[str, Any] | None = None
     overlap_policy: str | None = Field(default=None, pattern="^(skip|allow)$")
     enabled: bool | None = None

@@ -141,11 +141,12 @@ cycles and invalid references, computes deterministic topological/ready sets, va
 node `type`/`trigger_kind`/`profile_id`/`x`/`y` and the entry-point rules (at most one
 trigger, no incoming edges), and validates each node's `text` / `json` / `artifact-ref`
 output contract (including JSON Schema definitions). Trigger normalization also owns
-the manual intake field declaration or the scheduled cron, overlap, and enabled
-settings. Manual intake IDs use a stable identifier grammar and may declare typed
-defaults. The same pure boundary resolves a start payload by validating required,
-number, and URL values, applying defaults, omitting blank optional fields, and
-preserving job-owned values. It performs no DB, runner, or HTTP
+the shared manual intake field declaration plus the optional schedule seed
+(cron, IANA timezone, overlap, enabled; default Off). Manual intake IDs use a stable
+identifier grammar and may declare typed defaults. The same pure boundary resolves a
+start payload by validating required, number, and URL values, applying defaults,
+omitting blank optional fields, and preserving job-owned values. It performs no DB,
+runner, or HTTP
 work. It also owns the per-job work-binding tags (Phase-1 slice 3, T1/T2): a node's
 `target` names ONE container area (a code area's rel_path or `ops`), `touches_repo` is
 always derived from it (an authored value is never trusted), and an ambiguous binding
@@ -1194,12 +1195,27 @@ stores the answer, re-runs the node with the decision in its prompt, and resumes
 
 ### 7. Schedule (cron)
 
-`schedules` rows carry a 5-field cron + overlap policy. The scheduler loop wakes each
-minute, finds _due_ schedules (matching the current minute, not a backlog), and
-materializes a `job` for each — respecting `overlap_policy` (skip / allow). A scheduled
+`schedules` rows carry a 5-field cron, IANA timezone, durable input bindings, independent
+On/Off state, and overlap policy. The scheduler loop wakes each minute, projects the UTC
+tick into each schedule's timezone, finds _due_ schedules (matching the current local
+minute, not a backlog), and materializes a `job` for each - respecting
+`overlap_policy` (skip / allow). A scheduled
 graph recipe goes through the same `bind_graph_job_repo_worktree` path as manual plan
 start (pin `target_area_id`, cut isolated worktree); a refused cut fails the job with
 an owner-facing reason instead of running unisolated.
+
+`schedule_policy.py` is the shared trust boundary for create/update, Run now, migration,
+and cron spawn. It derives the workflow input contract from the trigger (with the legacy
+column as fallback), validates schedule timezones, and resolves required inputs only from
+durable automation bindings. An unresolved row can remain Off for configuration, but
+enablement returns `schedule_missing_sources`; the scheduler independently refuses any
+legacy or drifted enabled row. Schedules inherit the workflow's project. Workflow
+availability pauses every schedule without changing their On/Off choices.
+
+Run now calls the same scheduler spawn with no minute claim, so it uses the same project,
+profile, graph snapshot, worktree policy, and resolved binding values as cron. The graph
+screen uses separate list and exact-job request generations, waits until the returned job
+is selected, verifies its owning project, and only then closes the schedule dialog.
 
 ### 8. Run & Preview app
 
@@ -1533,7 +1549,7 @@ and permissions ask by default, but this is not a filesystem sandbox. Detail + t
 
 ## Shell and task/schedule data flow
 
-`App.tsx` remains the single view owner and embeds the graph surface under the single Workflows destination (view id `workflows`). `GraphScreen` owns its remembered Drafts / Workflows / Runs home tabs and focused editor stage. A graph trigger owns the Manual / Scheduled choice: Manual exposes atomic intake fields and sends both draft and template execution through one validated Run modal, while Scheduled exposes cadence settings and promotes them to a schedule with no manual intake payload. The template list uses this trigger mode to split Manual from Scheduled tables, with existing schedule rows retained as a compatibility fallback, and mounts the schedule manager in a per-row dialog. `routes/graph.py` keeps `workflows.inputs` as a backward-compatible projection while deriving new saves from the trigger; migration 27 moves legacy graph declarations onto their trigger and inserts a no-op trigger for old graphs that had inputs but no entry node. Start requests resolve manual values at the API boundary and persist them in the same queued-to-running claim, while scheduled jobs retain their source-owned payload.
+`App.tsx` remains the single view owner and embeds the graph surface under the single Workflows destination (view id `workflows`). `GraphScreen` owns its remembered Drafts / Workflows / Runs home tabs and focused editor stage. A graph trigger owns the reusable intake contract. The explicit workflow Run action always opens that per-run intake when fields are declared, while schedule execution never opens it and resolves only durable automation bindings. A trigger-authored schedule seeds a real schedule row when the plan becomes reusable; schedule rows never rewrite the trigger contract on read. The template library uses one table: workflow Availability is separate from the joined Automation summary, and each row retains Run and Schedules actions. `ScheduleManager` exposes independent On/Off state, timezone, bindings, overlap, configure, delete, and the exact-job Run now handoff. `routes/graph.py` keeps `workflows.inputs` as a backward-compatible projection while deriving new saves from the trigger; migration 27 moves legacy graph declarations onto their trigger and inserts a no-op trigger for old graphs that had inputs but no entry node. Migration 54 adds schedule timezone and disables unresolved legacy automation.
 
 When Master is enabled, Tasks → `+ New task` opens the full Master home through the
 compatibility `home` view and seeds the shared Master composer. The explicit

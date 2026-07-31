@@ -15,7 +15,7 @@ from fastapi import FastAPI
 
 from .auth import iso_now
 from .maintenance_status import writes_fenced
-from . import features, worktrees, workflows as wf
+from . import features, schedule_policy, worktrees, workflows as wf
 from .graph import normalize_graph
 
 
@@ -60,7 +60,16 @@ def _spawn_scheduled_job(app: FastAPI, sched: dict[str, Any], minute_key: str | 
         if not wfrow or wfrow["status"] != "active" or not prof:
             _claim_minute()
             return None
-        inp = json.loads(sched["input"]) if sched["input"] else {}
+        inp = schedule_policy.decode_bindings(sched.get("input"))
+        unresolved = schedule_policy.unresolved_required_inputs(dict(wfrow), inp)
+        if unresolved:
+            logging.getLogger("proxima.scheduler").warning(
+                "schedule %s skipped because required unattended inputs are unresolved: %s",
+                sched["id"],
+                ", ".join(str(item.get("id")) for item in unresolved),
+            )
+            _claim_minute()
+            return None
 
         # A graph template's `steps` is '[]', so the linear path below would build an
         # empty steps_state and give up — scheduling a graph used to do nothing at all,
@@ -74,7 +83,7 @@ def _spawn_scheduled_job(app: FastAPI, sched: dict[str, Any], minute_key: str | 
             if not steps_state:
                 _claim_minute()
                 return None
-            project_id = sched["project_id"] if sched["project_id"] is not None else wfrow["project_id"]
+            project_id = wfrow["project_id"]
             title = wfrow["name"]
             scur = db.execute(
                 "INSERT INTO sessions(title, project_id, owner_user_id, profile_id, runner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)",
@@ -153,7 +162,7 @@ def _insert_scheduled_graph_job(
         )
         return None
 
-    project_id = sched["project_id"] if sched["project_id"] is not None else wfrow["project_id"]
+    project_id = wfrow["project_id"]
     title = wfrow["name"]
     scur = db.execute(
         "INSERT INTO sessions(title, project_id, owner_user_id, profile_id, runner_id, visibility, mode) "
@@ -222,14 +231,26 @@ def _scheduler_tick(app: FastAPI, now: datetime | None = None) -> list[int]:
     the current minute (once per minute, honoring overlap policy). Returns job ids."""
     if writes_fenced(getattr(app.state, "config", {})):
         return []
-    now = now or datetime.now()
-    minute_key = now.strftime("%Y-%m-%dT%H:%M")
+    now = now or schedule_policy.current_tick_time()
     db = app.state.worker_db
     with app.state.db_lock:
         scheds = [dict(r) for r in db.execute("SELECT * FROM schedules WHERE enabled = 1").fetchall()]
     spawned: list[int] = []
     for s in scheds:
-        if s["last_run_minute"] == minute_key or not wf.cron_matches(s["cron"], now):
+        timezone_name = s.get("timezone") or schedule_policy.local_timezone_name()
+        try:
+            local_now = schedule_policy.schedule_local_time(now, timezone_name)
+        except Exception:
+            logging.getLogger("proxima.scheduler").warning(
+                "schedule %s has invalid timezone %r; skipped",
+                s["id"],
+                timezone_name,
+            )
+            continue
+        minute_key = schedule_policy.minute_claim_key(local_now, timezone_name)
+        if s["last_run_minute"] == minute_key or not wf.cron_matches(
+            s["cron"], local_now
+        ):
             continue
         # Atomically claim this minute for this schedule BEFORE any work. A second
         # tick (or a second scheduler) that already claimed it gets rowcount 0 and

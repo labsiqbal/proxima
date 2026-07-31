@@ -24,8 +24,10 @@ opens the graph Editor directly.
 - Every node attempt runs in a fresh hidden ACP session against the selected runner.
 - Each node may name **its own agent**; nodes without one use the job's agent.
 - Independent branches execute **in parallel**, bounded by a concurrency budget.
-- An optional **trigger node** is the graph's entry point. It owns `manual` or
-  `scheduled` mode and the corresponding intake or cadence configuration.
+- An optional **trigger node** is the graph's entry point. It owns the shared
+  **intake contract** for manual Run plus optional **schedule seed** settings
+  (cron, IANA timezone, overlap, enabled default Off) that promote to independent
+  schedule rows.
 - A **script node** is a deterministic step (T6): it runs a saved script from the
   project's `scripts/` library as a subprocess — no LLM, no agent — under the same
   node state machine and dispatch budget, gated by a one-time hash-bound approval.
@@ -114,9 +116,9 @@ use `depends_on`; normalization converts it to edges and removes it from nodes.
 | Field | Meaning |
 | --- | --- |
 | `type` | `agent` (default), `trigger`, or `script`. Absent means `agent`, so graphs predating node types keep working. |
-| `trigger_kind` | Trigger nodes only. `manual` exposes intake fields; `scheduled` exposes cadence settings. |
-| `inputs` | Manual trigger only. The run intake declaration: `{id, label, kind, required, default?}` fields whose values fill `{{id}}` placeholders. IDs begin with a letter and contain only letters, numbers, and underscores. |
-| `schedule` | Scheduled trigger only. `{cron, overlap_policy, enabled}` settings promoted to the workflow's schedule row. |
+| `trigger_kind` | Trigger nodes only. Informational authoring-view label for the entry point; intake and schedule seeds are independent fields on the same trigger and survive panel toggles. |
+| `inputs` | Shared run intake declaration: `{id, label, kind, required, default?}` fields whose values fill `{{id}}` placeholders on every manual **Run**. IDs begin with a letter and contain only letters, numbers, and underscores. |
+| `schedule` | Optional schedule seed: `{cron, timezone, overlap_policy, enabled}` (enabled defaults Off; UI timezone defaults to the browser zone, API/graph omit defaults to UTC). Promoted to the workflow's schedule row whenever the object is present, regardless of `trigger_kind`. Unattended ticks resolve durable bindings rather than replacing intake. |
 | `command` | Script nodes only (required). The library script this step runs - a path relative to the Container's physical `ops/scripts/` folder, canonicalized (`scripts/x.sh` ≡ `x.sh`) and jailed at normalization: `..`, absolute paths, and backslashes are rejected when the plan is frozen, not just at run time. |
 | `args` | Script nodes only. CLI args, a list of strings; `{{var}}` placeholders fill from the job input at execution time (the same substitution instructions get). Whole-blank entries are dropped. |
 | `expected_output` | Agent nodes only. Prose for what a good result is; reaches the runner as the prompt's EXPECTED OUTPUT. |
@@ -143,13 +145,16 @@ vanishing. The whole input is still handed to the node as typed data in
 and a profile already carries its skill/MCP selection — a second picker on the node would
 be a second answer to the same question. Choosing the agent is choosing the tool surface.
 
-A manual trigger carries declared **`inputs`** as
+A trigger carries declared **`inputs`** as
 `{id, label, kind, required, default?}`. They are authored in the trigger inspector as
-the reusable intake contract. New rows are valid, complete objects from their first
-write; label, ID, and default edits stage within a stable-ID row and commit only when
-the complete row is valid. Blank, malformed, and duplicate IDs remain local with an
-actionable field error. A rejected graph PATCH leaves the previous contract intact,
-keeps the draft Not saved, and exposes Retry without allowing execution.
+the shared reusable intake contract, and every manual **Run** from that template asks for
+them first. New rows are valid, complete objects from their first write; label, ID, and
+default edits stage within a stable-ID row and commit only when the complete row is valid.
+Blank, malformed, and duplicate IDs remain local with an actionable field error. A
+rejected graph PATCH leaves the previous contract intact, keeps the draft Not saved, and
+exposes Retry without allowing execution. Optional **schedule seed** settings on the same
+trigger do not replace intake: promoting a plan may create a schedule row (default Off),
+and unattended ticks or **Run now** resolve durable schedule bindings instead of prompting.
 `workflows.inputs` remains a compatibility projection for existing RunModal and API
 consumers. New saves derive it from the trigger, while migration and read-time
 hydration move legacy declarations onto the trigger without breaking `{{var}}`
@@ -169,13 +174,15 @@ be a contradiction). Its contract is fixed rather than authored — it is forced
 
 It resolves without a runner: `dispatch_ready` completes it immediately with the
 validated, frozen **job input** as its output, so downstream nodes receive that input as
-ordinary typed upstream data rather than through a special case. A manual trigger is
-the owner pressing start and exposes its intake-form editor. Before the job can claim
+ordinary typed upstream data rather than through a special case. The trigger always
+exposes the shared intake-form editor for manual **Run**. Before the job can claim
 `running`, the start API requires every declared required value, validates number and
 URL fields, applies declared defaults, and removes blank optional values. Existing
-job-owned values are preserved. A scheduled trigger
-exposes cron, overlap, and enabled settings instead; promotion creates the schedule
-with an empty input payload, so cadence execution does not prompt a human.
+job-owned values are preserved. Optional schedule seed fields (cron, IANA timezone,
+overlap, enabled default Off; UI defaults timezone to the browser zone, API/graph omit
+defaults to UTC) sit beside intake and promote to a schedule row without carrying
+per-run intake values; unattended cadence and **Run now** resolve durable bindings so
+they never prompt a human.
 
 The point of modelling the entry point as a node is that future webhook and event
 modes can become further `trigger_kind` values here, not a second execution path.
@@ -426,10 +433,12 @@ The screen has **two stages**, Design Studio's shape: a browsable **home** and a
 focused **editor** - browsing and editing are different modes of work. Home remembers
 the last selected **Drafts**, **Workflows**, or **Runs** tab and uses tables so each list
 can grow independently. Draft rows are queued and editable, runnable, or promotable to
-a saved workflow. Workflow rows are split into **Manual (on-demand)** and
-**Scheduled** groups by trigger mode, with legacy schedule rows as a compatibility
-fallback. Manual rows open the same validated Run dialog used by drafts; Scheduled rows show
-cadence and open the schedule manager for pause, resume, Run now, editing, or deletion. Run rows show recency, status, duration, and a View
+a saved workflow. Workflow rows live in one reusable-workflow table with **Availability**
+(active or paused) separate from the joined **Automation** summary (schedules on, off, or
+needing bindings). Every row keeps Edit, manual **Run** (per-run intake when fields are
+declared), **Schedules**, availability pause/resume, and archive. The schedule dialog owns
+timezone, cron, durable bindings, overlap, per-schedule On/Off, Run now, configure, and
+delete. Run rows show recency, status, duration, and a View
 action. Opening anything lands in the editor: full-width canvas + workflow chat + node
 inspector, a ← back to home, and no rail — the editor is about one workflow at a time.
 Chat and inspector keep their **draggable widths** (persisted per panel); plan statuses
@@ -479,10 +488,10 @@ first step, with the authoring chat opened, since describing the workflow is the
 way to fill a blank canvas. (Sequential's "New workflow" retired with it; chat promotion
 must not be the only door into the editor.) Template metadata the chat proposes, such as
 name and description, rides along client-side and pre-fills the lightweight promotion
-dialog. The trigger's intake or cadence contract stays in the graph and autosaves with
-the plan. An empty Plan Chat explains this authoring relationship - graph steps,
-branches, inputs, review gates, and node tests - rather than borrowing main Chat's
-hands-on conversation and Archive guidance.
+dialog. The trigger's shared intake contract and optional schedule seeds stay in the
+graph and autosave with the plan. An empty Plan Chat explains this authoring relationship
+- graph steps, branches, inputs, review gates, and node tests - rather than borrowing
+main Chat's hands-on conversation and Archive guidance.
 
 A plan that has started is **frozen** — the job is the record of what ran, so its graph
 cannot be redrawn after the fact. Its **outputs are not**: editing a node's output and
@@ -591,21 +600,53 @@ are:
 
 ## Scheduling a graph
 
-Schedules fire only for **`status='active'`** workflows — the tick and Run-now both go
-through the same spawn, so a paused workflow runs nowhere. Scheduled workflow rows carry a
-**pause ⏸ / resume ▶** toggle (`status` draft ⇄ active over `PATCH /api/workflows`,
-which is lifecycle-only for graph rows — authoring fields 422). "This workflow needs
-fixing" is therefore one click out of rotation and one click back, with its schedules
-kept; deleting remains the destructive path and takes schedules with it.
+Schedules fire only for **`status='active'`** workflows - the tick and Run now both go
+through the same spawn, so a paused workflow runs nowhere. The Workflows library presents
+that workflow Availability separately from each schedule's **On / Off** state. Pausing a
+workflow stops all of its schedules without changing those per-schedule choices. Every
+row keeps an explicit manual **Run** action; declared trigger inputs open the per-run
+intake dialog even when automation exists. Deleting remains the destructive path and
+takes schedules with it.
+
+A schedule is unattended. It stores a five-field cron, an explicit IANA timezone,
+overlap policy, and durable bindings for workflow inputs. It never consumes a per-run
+prompt or reuses answers from a manual run. `schedule_policy.py` derives the required
+input contract from the graph trigger and is used by the API, scheduler, Run now, and
+migration. A schedule with unresolved required inputs can be saved Off for configuration,
+but cannot be turned On; the 422 `schedule_missing_sources` detail names the unresolved
+fields and tells the owner to save a durable binding in Schedules before turning it On. The
+scheduler checks again immediately before spawning so legacy or drifted unsafe rows fail
+closed.
+
+Cron matching happens in the schedule timezone. The scheduler's minute claim includes
+the local UTC offset and timezone name, preserving once-per-minute behavior across
+timezones and daylight-saving transitions. Migration 45 backfills existing rows with the
+host timezone to preserve their former wall-clock behavior, locks schedule project
+ownership to the workflow, and turns unresolved enabled schedules Off.
 
 `POST /api/schedules` accepts a workflow of **either engine** (the linear-only
 `_workflow_or_404` guard still protects the linear editor/iterate/job routes, so a graph
 template cannot be edited or run as an ordered recipe). A schedule whose workflow row
-carries a `graph` spawns an **`engine='graph'` job** — the
+carries a `graph` spawns an **`engine='graph'` job** - the
 same frozen snapshot, `node_states` and executor a manual `POST /api/graph/jobs` +
 `/start` produces, so a cron run and a manual run cannot drift apart. It used to build
 `steps_state` from the template's `steps`, which is `'[]'` for a graph, and silently spawn
 nothing.
+
+`POST /api/schedules/{id}/run` uses that same resolver and spawn path without claiming the
+cron minute. The UI awaits the returned graph job, verifies it belongs to the workflow's
+owning project, selects that exact job, and closes the schedule dialog only after the
+selection is confirmed. List refreshes and exact-job loads use separate request
+generations, so refreshing schedule summaries cannot cancel the handoff.
+
+Run the disposable Chromium regression with `npm run test:e2e:schedules`. It builds the
+web app, starts an isolated API with synthetic data and a fake runner, verifies missing
+binding refusal and reload behavior, then proves Run now opened the exact owning-project
+job with its durable binding. CI runs this scenario assertion-only. Pass
+`--screenshots <dir>` to capture the stable before/after PNGs
+(`before-missing-binding`, `after-missing-binding-refusal`, `before-run-now`,
+`after-run-now-exact-job`) and validate each as a nonempty PNG; durable evidence lives
+under `docs/evidence/scheduled-workflow-trust/`.
 
 With `PROXIMA_FEATURE_WORKFLOW_GRAPH` off, a graph schedule is **skipped with a logged
 warning** and its minute is still claimed: the executor would never dispatch the job, so

@@ -749,16 +749,21 @@ and never gate promotion. **One workflow = one project** - open plans/templates 
 `project_slug`; the shell project filter does not rebind mid-edit/run.
 **How:** authored on the **graph canvas** (see §Graph workflow engine): nodes carry
 `instruction`, `expected_output`, `rules`, an optional per-node agent and review gate;
-edges carry dependencies. The trigger node owns **Manual / Scheduled** mode. Manual
-triggers declare their intake fields (`text`, `url`, `number`, or `file`) in the node
-inspector; each field has a stable identifier, optional default, and required flag.
-Rows are created and edited as complete units, so a transient blank or duplicate ID
-never reaches persistence. Draft Run and reusable Manual Run open the same validated
-dialog, which applies defaults, omits blank optional values, and refuses missing or
-type-invalid values before execution. The API repeats that validation before claiming
-the job and freezes the resolved values into the job and trigger output. Each field's
-`{{id}}` is substituted into node text. Scheduled triggers own cron, overlap, and enabled settings instead and start with
-no human intake prompt. Existing graph workflows keep the compatibility
+edges carry dependencies. The trigger node owns the shared **intake contract** plus
+optional **schedule seed** settings. Intake fields (`text`, `url`, `number`, or `file`)
+live on the trigger and power every manual **Run**: each field has a stable identifier,
+optional default, and required flag. Rows are created and edited as complete units, so a
+transient blank or duplicate ID never reaches persistence. Draft Run and reusable Manual
+Run open the same validated dialog, which applies defaults, omits blank optional values,
+and refuses missing or type-invalid values before execution. The API repeats that
+validation before claiming the job and freezes the resolved values into the job and
+trigger output. Each field's `{{id}}` is substituted into node text. Schedule seed
+settings (cron, IANA timezone, overlap, enabled, default Off; UI timezone defaults to the
+browser zone, API/graph omit defaults to UTC) are independent of intake and of the
+Manual/Schedule authoring view - promoting a plan creates a schedule row whenever a seed
+object is present (default Off), regardless of `trigger_kind`, but unattended ticks and
+**Run now** resolve durable schedule bindings rather than prompting, and never replace the
+manual Run path. Existing graph workflows keep the compatibility
 `workflows.inputs` projection, which is migrated and hydrated onto the trigger so old
 templates and `{{id}}` references continue to work. An **authoring chat** (Plan Chat) beside the
 canvas emits `<workflow-graph>` blocks that are applied to the plan on screen, never
@@ -781,13 +786,14 @@ branches. The linear engine remains for pre-existing jobs; `IterateStage` is sti
 reachable from an old session carrying `workflow_id`, but no new linear workflow can be
 authored.
 The library home remembers its last selected **Drafts**, **Workflows**, or **Runs** tab
-and presents each as a table. The Workflows tab derives **Manual (on-demand)** and
-**Scheduled** groups from the trigger mode, with legacy schedule rows as a compatibility
-fallback. Manual rows expose Run through the same validated dialog used by drafts.
-Scheduled rows
-show cadence and pause/resume controls, with Run now and schedule maintenance available
-in the schedule dialog. Changing the trigger to Scheduled creates its cadence when the
-plan is promoted; it never carries manual intake values.
+and presents each as a table. The Workflows tab is one reusable-workflow table: each row
+shows **Availability** (active or paused) separately from the joined **Automation**
+summary (schedules on, off, or needing bindings). Every row keeps Edit, manual **Run**
+(per-run intake when fields are declared), **Schedules**, availability pause/resume, and
+archive. The schedule dialog owns timezone, five-field cron, durable input bindings,
+overlap, per-schedule On/Off, Run now, configure, and delete. Trigger-authored schedules
+seed cadence when the plan is promoted and never carry manual intake values into
+unattended runs.
 The Runs table consumes the API's canonical `run_projection` for effective status,
 start, finish, and duration. API timestamp fields are timezone-aware UTC ISO strings,
 so a new run cannot inherit the browser's local offset or disagree with Tasks and
@@ -1146,17 +1152,31 @@ restart, or escalation loop of its own.
 
 ## 9. Schedules (cron)
 
-**Why:** Recurring agents — daily report, watch-and-summarize — while you sleep.
+**Why:** Recurring agents - daily report, watch-and-summarize - while you sleep.
 **How:** `schedules` table + a 60s scheduler loop that materializes only *due* jobs
-(own 5-field cron matcher; overlap policy skip/allow). Failed step fails the job.
+(own 5-field cron matcher; overlap policy skip/allow). Every schedule stores an IANA
+timezone and its cron is evaluated in that local time. Failed step fails the job.
+Schedules are unattended and never receive the manual Run dialog's per-run answers.
+Required workflow inputs must instead have durable bindings in the schedule. An
+unresolved schedule may be saved Off, but create/update refuses to turn it On with
+`schedule_missing_sources` until the owner saves a durable binding for every required input. The
+scheduler repeats this validation before every spawn, so a legacy or drifted unsafe row
+cannot run. Migration 45 adds timezone state, preserves existing cron behavior with the
+host's local timezone, aligns schedule ownership with the workflow project, and turns
+unsafe legacy schedules Off.
+
+Workflow **Availability** (`active` or paused) and each schedule's **On / Off** state
+are independent and visible separately. Every reusable workflow keeps its explicit
+manual **Run** action, which collects that run's intake even when schedules exist.
 **Run now** fires a schedule on demand and opens the task it spawned, so the owner can
 prove a schedule before leaving it to fire unattended. It reuses the tick's own
 `_spawn_scheduled_job`, so it exercises the real cron target (workflow, project,
-profile, stored input, and repo worktree binding) instead of a lookalike; it passes no
-minute key, so a manual run cannot claim — and thereby swallow — the scheduler's slot
+profile, durable bindings, and repo worktree binding) instead of a lookalike; it passes no
+minute key, so a manual run cannot claim - and thereby swallow - the scheduler's slot
 for that minute. It works on a disabled schedule (`enabled` gates the tick, and trying a
 schedule out is exactly when it is still off) and reports an overlap skip as a 409 rather
-than silently no-op'ing.
+than silently no-op'ing. For graph jobs, the schedule dialog stays open until the exact
+returned job is fetched and selected in the workflow's owning project.
 **Endpoints:** `POST/GET/PATCH/DELETE /api/schedules[...]`, `POST /api/schedules/{id}/run`.
 
 ## 10. Projects (workspaces)
@@ -1740,7 +1760,7 @@ owner with one password/session gate; legacy invite/member tables have been drop
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. Its header carries the session and agent; Work-sidebar project context remains outside the conversation. Its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off; dynamically conforming Codex 0.145.0 or newer is supported, and every other or unavailable adapter fails closed.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
-+ The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). The Workflows table splits Manual from Scheduled rows using real schedule data. Scheduling lives in the row dialog rather than a separate mode while retaining five-field cron, overlap, enabled, Run now, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
++ The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). One reusable-workflow table shows workflow Availability separately from the joined schedule summary. Every row retains Edit, manual Run, Schedules, availability pause/resume, and archive actions. The schedule dialog owns timezone, five-field cron, durable input bindings, overlap, per-schedule On/Off, Run now, configure, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped when Project context is synchronized; the rail and panels stay suppressed during Task permalink resolution or any Task/Work Project mismatch. The rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 

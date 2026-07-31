@@ -158,8 +158,10 @@ The editor opens a blank plan canvas with trigger and first step.
 
 ![Editable plan canvas](screenshots/workflow-blank-canvas.png)
 
-Scheduled Recipes use five-field cron and an enabled toggle. Empty state is
-honest when no Recipe is saved yet.
+Schedules use five-field cron, an IANA timezone, durable input bindings, and an
+independent On/Off toggle (separate from workflow Availability). Empty state is
+honest when no Recipe is saved yet. Trust regression captures live under
+[evidence/scheduled-workflow-trust/](evidence/scheduled-workflow-trust/).
 
 ![Scheduled Recipes](screenshots/schedules.png)
 

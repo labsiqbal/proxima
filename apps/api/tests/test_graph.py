@@ -263,6 +263,29 @@ def test_trigger_intake_and_schedule_survive_normalization():
         "cron": "0 7 * * 1-5",
         "overlap_policy": "allow",
         "enabled": False,
+        "timezone": "UTC",
+    }
+
+
+def test_omitted_schedule_enabled_defaults_off():
+    graph = normalize_graph(
+        {
+            "nodes": [
+                {
+                    "id": "start",
+                    "type": "trigger",
+                    "trigger_kind": "scheduled",
+                    "schedule": {"cron": "0 9 * * *"},
+                }
+            ]
+        }
+    )
+
+    assert graph["nodes"][0]["schedule"] == {
+        "cron": "0 9 * * *",
+        "timezone": "UTC",
+        "overlap_policy": "skip",
+        "enabled": False,
     }
 
 

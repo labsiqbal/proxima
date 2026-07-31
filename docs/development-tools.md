@@ -41,6 +41,7 @@ npm --prefix apps/web run test:accessibility
 npm --prefix apps/web run test:artifact-feedback-browser
 python3 scripts/verify_preview_browser.py --evidence-dir /tmp/proxima-preview-evidence
 bash scripts/linux-daily-driver-acceptance
+npm run test:e2e:schedules
 ```
 
 `test:accessibility` owns the disposable auth/onboarding browser pass. Details and
@@ -65,6 +66,11 @@ isolated API database and Chrome profile, seeds two disposable projects plus one
 artifact lineage record, and proves dialog keyboard semantics, ordinary-close focus
 restoration, cross-project producer routing, explicit draft conflict handling, and
 composer focus. It does not read or write a live Proxima runtime.
+
+`test:e2e:schedules` owns the disposable scheduled-workflow trust browser pass
+(assertion-only by default). Details and before/after PNGs live in
+[evidence/scheduled-workflow-trust/README.md](evidence/scheduled-workflow-trust/README.md)
+and [workflow-graph.md](workflow-graph.md#scheduling-a-graph).
 
 Current local environment note:
 
@@ -118,6 +124,7 @@ apps/api/proxima_api/routes/*.py      HTTP + WebSocket handlers (chat, files, wo
 apps/api/proxima_api/route_deps.py    shared route dependencies (current_user, etc.)
 apps/api/proxima_api/worker.py        run orchestration (RunWorker); run_*.py helpers
 apps/api/proxima_api/scheduler.py     cron scheduler loop
+apps/api/proxima_api/schedule_policy.py  unattended schedule trust (timezone, bindings, enablement)
 apps/api/proxima_api/acp.py           ACP subprocess manager (agent runners)
 apps/api/proxima_api/preview_output.py preview supervisor client + delta log protocol
 apps/api/proxima_api/preview_output_broker.py per-app launch/output supervisor

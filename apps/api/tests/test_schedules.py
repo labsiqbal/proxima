@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
@@ -33,6 +33,24 @@ def _wf(c):
     return c.post("/api/workflows", json={"name": "W", "steps": [{"name": "A", "instruction": "a"}]}).json()["id"]
 
 
+def _wf_with_required_input(c):
+    return c.post(
+        "/api/workflows",
+        json={
+            "name": "Required input",
+            "inputs": [
+                {
+                    "id": "topic",
+                    "label": "Topic",
+                    "kind": "text",
+                    "required": True,
+                }
+            ],
+            "steps": [{"name": "A", "instruction": "write {{topic}}"}],
+        },
+    ).json()["id"]
+
+
 def test_cron_matches():
     dt = datetime(2026, 6, 22, 9, 30)
     assert wf.cron_matches("* * * * *", dt)
@@ -56,6 +74,130 @@ def test_schedule_crud_and_validation(tmp_path):
     assert any(x["id"] == s["id"] for x in c.get(f"/api/schedules?workflow_id={wid}").json())
     c.delete(f"/api/schedules/{s['id']}")
     assert all(x["id"] != s["id"] for x in c.get("/api/schedules").json())
+
+
+def test_enabled_schedule_requires_durable_bindings_for_manual_required_inputs(tmp_path):
+    c = _client(_app(tmp_path))
+    wid = _wf_with_required_input(c)
+
+    response = c.post(
+        "/api/schedules",
+        json={"workflow_id": wid, "cron": "0 9 * * *", "timezone": "UTC"},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "schedule_missing_sources"
+    assert detail["unresolved_inputs"] == ["topic"]
+    assert "source node" not in detail["message"]
+    assert "durable binding" in detail["message"]
+    assert "Schedules" in detail["message"]
+
+
+def test_disabled_schedule_can_be_configured_then_atomically_enabled(tmp_path):
+    c = _client(_app(tmp_path))
+    wid = _wf_with_required_input(c)
+    schedule = c.post(
+        "/api/schedules",
+        json={
+            "workflow_id": wid,
+            "cron": "0 9 * * *",
+            "timezone": "Asia/Jakarta",
+            "enabled": False,
+        },
+    ).json()
+
+    assert schedule["enabled"] is False
+    assert schedule["ready"] is False
+    assert schedule["unresolved_inputs"] == ["topic"]
+    refused = c.patch(f"/api/schedules/{schedule['id']}", json={"enabled": True})
+    assert refused.status_code == 422
+
+    enabled = c.patch(
+        f"/api/schedules/{schedule['id']}",
+        json={"bindings": {"topic": "weekly launch"}, "enabled": True},
+    ).json()
+
+    assert enabled["enabled"] is True
+    assert enabled["ready"] is True
+    assert enabled["unresolved_inputs"] == []
+    assert enabled["bindings"] == {"topic": "weekly launch"}
+    assert enabled["timezone"] == "Asia/Jakarta"
+
+
+def test_schedule_rejects_invalid_timezone(tmp_path):
+    c = _client(_app(tmp_path))
+    response = c.post(
+        "/api/schedules",
+        json={
+            "workflow_id": _wf(c),
+            "cron": "0 9 * * *",
+            "timezone": "Mars/Olympus",
+        },
+    )
+    assert response.status_code == 422
+    assert "timezone" in str(response.json()["detail"]).lower()
+
+
+def test_schedule_bindings_and_timezone_survive_api_reload(tmp_path):
+    c = _client(_app(tmp_path))
+    wid = _wf_with_required_input(c)
+    created = c.post(
+        "/api/schedules",
+        json={
+            "workflow_id": wid,
+            "cron": "0 9 * * *",
+            "timezone": "Asia/Jakarta",
+            "bindings": {"topic": "durable value"},
+        },
+    ).json()
+
+    reloaded_client = _client(_app(tmp_path))
+    reloaded = reloaded_client.get(f"/api/schedules?workflow_id={wid}").json()
+
+    assert reloaded == [created]
+    assert reloaded[0]["bindings"] == {"topic": "durable value"}
+    assert reloaded[0]["timezone"] == "Asia/Jakarta"
+
+
+def test_schedule_and_spawn_are_locked_to_the_workflow_project(tmp_path):
+    app = _app(tmp_path)
+    c = _client(app)
+    c.post("/api/projects", json={"slug": "owner", "name": "Owner"})
+    c.post("/api/projects", json={"slug": "other", "name": "Other"})
+    project_ids = {
+        row["slug"]: row["id"]
+        for row in app.state.db.execute(
+            "SELECT id, slug FROM projects WHERE slug IN ('owner', 'other')"
+        )
+    }
+    wid = c.post(
+        "/api/workflows",
+        json={
+            "name": "Owned workflow",
+            "project_id": project_ids["owner"],
+            "steps": [{"name": "A", "instruction": "a"}],
+        },
+    ).json()["id"]
+
+    refused = c.post(
+        "/api/schedules",
+        json={
+            "workflow_id": wid,
+            "project_id": project_ids["other"],
+            "cron": "0 9 * * *",
+        },
+    )
+    assert refused.status_code == 422
+    schedule = c.post(
+        "/api/schedules",
+        json={"workflow_id": wid, "cron": "0 9 * * *"},
+    ).json()
+    job = c.post(f"/api/schedules/{schedule['id']}/run").json()
+
+    assert schedule["project_id"] == project_ids["owner"]
+    assert job["project_id"] == project_ids["owner"]
+    assert job["project_slug"] == "owner"
 
 
 def test_cron_valid_and_defensive_matcher():
@@ -162,6 +304,77 @@ def test_scheduler_substitutes_inputs_in_step_snapshot(tmp_path):
     assert step["expected_output"] == "doc about weekly memo"
 
 
+def test_cron_tick_resolves_the_same_durable_bindings_as_run_now(tmp_path):
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _wf_with_required_input(c)
+    schedule = c.post(
+        "/api/schedules",
+        json={
+            "workflow_id": wid,
+            "cron": "0 9 * * *",
+            "timezone": "UTC",
+            "bindings": {"topic": "bound once"},
+            "overlap_policy": "allow",
+        },
+    ).json()
+
+    run_now = c.post(f"/api/schedules/{schedule['id']}/run").json()
+    tick_ids = main._scheduler_tick(
+        app, now=datetime(2026, 6, 22, 9, 0, tzinfo=timezone.utc)
+    )
+    tick = c.get(f"/api/jobs/{tick_ids[0]}").json()
+
+    assert run_now["input"] == tick["input"] == {"topic": "bound once"}
+    assert run_now["steps_state"][0]["instruction"] == "write bound once"
+    assert tick["steps_state"][0]["instruction"] == "write bound once"
+
+
+def test_timezone_controls_which_local_cron_minute_fires(tmp_path):
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _wf(c)
+    schedule = c.post(
+        "/api/schedules",
+        json={
+            "workflow_id": wid,
+            "cron": "0 9 * * *",
+            "timezone": "Asia/Jakarta",
+        },
+    ).json()
+
+    assert main._scheduler_tick(
+        app, now=datetime(2026, 6, 22, 1, 59, tzinfo=timezone.utc)
+    ) == []
+    spawned = main._scheduler_tick(
+        app, now=datetime(2026, 6, 22, 2, 0, tzinfo=timezone.utc)
+    )
+
+    assert len(spawned) == 1
+    refreshed = c.get(f"/api/schedules?workflow_id={wid}").json()[0]
+    assert refreshed["id"] == schedule["id"]
+    assert refreshed["last_run_minute"].endswith("+0700[Asia/Jakarta]")
+
+
+def test_legacy_enabled_schedule_with_missing_source_never_spawns(tmp_path):
+    app = _app(tmp_path)
+    c = _client(app)
+    wid = _wf_with_required_input(c)
+    owner = app.state.db.execute(
+        "SELECT id FROM users ORDER BY id LIMIT 1"
+    ).fetchone()["id"]
+    app.state.db.execute(
+        "INSERT INTO schedules(workflow_id, cron, input, enabled, overlap_policy, "
+        "timezone, created_by) VALUES (?, '* * * * *', '{}', 1, 'skip', 'UTC', ?)",
+        (wid, owner),
+    )
+
+    assert main._scheduler_tick(
+        app, now=datetime(2026, 6, 22, 9, 30, tzinfo=timezone.utc)
+    ) == []
+    assert c.get(f"/api/jobs?workflow_id={wid}").json()["items"] == []
+
+
 def test_scheduler_skips_empty_workflow_without_stuck_job(tmp_path):
     app = _app(tmp_path)
     c = _client(app)
@@ -173,7 +386,8 @@ def test_scheduler_skips_empty_workflow_without_stuck_job(tmp_path):
     assert jobs == []
     refreshed = c.get("/api/schedules").json()[0]
     assert refreshed["id"] == sch["id"]
-    assert refreshed["last_run_minute"] == "2026-06-22T09:30"
+    assert refreshed["last_run_minute"].startswith("2026-06-22T09:30")
+    assert refreshed["last_run_minute"].endswith(f"[{sch['timezone']}]")
 
 
 def test_disabled_and_nonmatching_schedules_do_not_spawn(tmp_path):
@@ -213,7 +427,9 @@ def test_run_now_does_not_swallow_the_real_tick_for_that_minute(tmp_path):
 
     spawned = main._scheduler_tick(app, now=datetime(2026, 6, 22, 9, 0))
     assert len(spawned) == 1 and spawned[0] != manual["id"]
-    assert c.get("/api/schedules").json()[0]["last_run_minute"] == "2026-06-22T09:00"
+    minute = c.get("/api/schedules").json()[0]["last_run_minute"]
+    assert minute.startswith("2026-06-22T09:00")
+    assert minute.endswith(f"[{sch['timezone']}]")
 
 
 def test_run_now_works_on_a_disabled_schedule(tmp_path):

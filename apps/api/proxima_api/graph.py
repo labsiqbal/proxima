@@ -241,8 +241,9 @@ def _parse_trigger_schedule(
     if not isinstance(value, Mapping):
         raise GraphValidationError(f"node '{node_id}' schedule must be an object")
     cron = value.get("cron")
+    timezone_name = value.get("timezone", "UTC")
     overlap = value.get("overlap_policy", "skip")
-    enabled = value.get("enabled", True)
+    enabled = value.get("enabled", False)
     if not isinstance(cron, str) or not cron.strip():
         raise GraphValidationError(f"node '{node_id}' schedule cron must not be blank")
     if overlap not in {"skip", "allow"}:
@@ -253,8 +254,13 @@ def _parse_trigger_schedule(
         raise GraphValidationError(
             f"node '{node_id}' schedule enabled must be a boolean"
         )
+    if not isinstance(timezone_name, str) or not timezone_name.strip():
+        raise GraphValidationError(
+            f"node '{node_id}' schedule timezone must not be blank"
+        )
     return {
         "cron": cron.strip(),
+        "timezone": timezone_name.strip(),
         "overlap_policy": overlap,
         "enabled": enabled,
     }

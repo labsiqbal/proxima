@@ -283,6 +283,7 @@ export type GraphTriggerKind = "manual" | "scheduled";
 
 export type GraphScheduleConfig = {
 	cron: string;
+	timezone: string;
 	overlap_policy: "skip" | "allow";
 	enabled: boolean;
 };
@@ -466,9 +467,14 @@ export type Schedule = {
 	workflow_id: number;
 	project_id: number | null;
 	cron: string;
+	timezone: string;
+	bindings: Record<string, unknown>;
 	input: any;
 	overlap_policy: "skip" | "allow";
 	enabled: boolean;
+	ready: boolean;
+	unresolved_inputs: string[];
+	unresolved_labels?: string[];
 	last_run_minute: string | null;
 	last_tick_at: string | null;
 	created_by: number | null;

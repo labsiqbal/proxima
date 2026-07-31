@@ -179,8 +179,12 @@ describe('GraphScreen workflow home tabs', () => {
 
     const workflowsTab = await screen.findByRole('tab', { name: 'Workflows 2' })
     expect(workflowsTab).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('table', { name: 'Manual workflows' })).toBeInTheDocument()
-    expect(screen.getByRole('table', { name: 'Scheduled workflows' })).toBeInTheDocument()
+    const workflows = screen.getByRole('table', { name: 'Reusable workflows' })
+    expect(within(workflows).getAllByText('Available')).toHaveLength(2)
+    expect(within(workflows).getByText('No schedules')).toBeInTheDocument()
+    expect(within(workflows).getByText('1 schedule on')).toBeInTheDocument()
+    expect(within(workflows).getAllByRole('button', { name: 'Run' })).toHaveLength(2)
+    expect(within(workflows).getAllByRole('button', { name: 'Schedules' })).toHaveLength(2)
 
     fireEvent.click(screen.getByRole('tab', { name: 'Drafts 1' }))
     const drafts = screen.getByRole('table', { name: 'Draft plans' })
@@ -307,8 +311,9 @@ it('refreshes keep-alive home Runs after checkpoint restore job.update', async (
     })
     render(<GraphScreen {...props} />)
 
-    const manual = await screen.findByRole('table', { name: 'Manual workflows' })
-    fireEvent.click(within(manual).getByRole('button', { name: 'Run' }))
+    const manual = await screen.findByRole('table', { name: 'Reusable workflows' })
+    const reportRow = within(manual).getByText('Manual report').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(reportRow).getByRole('button', { name: 'Run' }))
 
     expect(screen.getByRole('dialog', { name: 'Run Manual report' })).toBeInTheDocument()
     expect(createGraphJob).not.toHaveBeenCalled()
@@ -370,8 +375,9 @@ it('refreshes keep-alive home Runs after checkpoint restore job.update', async (
       })
 
     render(<GraphScreen {...props} />)
-    const manual = await screen.findByRole('table', { name: 'Manual workflows' })
-    fireEvent.click(within(manual).getByRole('button', { name: 'Run' }))
+    const manual = await screen.findByRole('table', { name: 'Reusable workflows' })
+    const reportRow = within(manual).getByText('Manual report').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(reportRow).getByRole('button', { name: 'Run' }))
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Campaign' }), {
       target: { value: 'Launch week' },
@@ -469,4 +475,25 @@ it('refreshes keep-alive home Runs after checkpoint restore job.update', async (
       campaign: 'Launch week',
     }))
   })
+
+  it('soft-fails ordinary Edit when the job cannot be loaded', async () => {
+    const onUnhandled = vi.fn()
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      onUnhandled(event.reason)
+      event.preventDefault()
+    }
+    window.addEventListener('unhandledrejection', handleRejection)
+    vi.mocked(getGraphJob).mockRejectedValue(new Error('job gone'))
+
+    render(<GraphScreen {...props} />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+
+    expect(await screen.findByText('Error: job gone')).toBeInTheDocument()
+    expect(screen.getByRole('table', { name: 'Draft plans' })).toBeInTheDocument()
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 1))
+    expect(onUnhandled).not.toHaveBeenCalled()
+    window.removeEventListener('unhandledrejection', handleRejection)
+  })
+
 })

@@ -6568,12 +6568,6 @@ div.result-media {
 	border-radius: var(--radius-md);
 	background: color-mix(in srgb, var(--ui-surface) 78%, transparent);
 }
-.workflow-home-group-head.is-manual {
-	background: color-mix(in srgb, var(--ui-accent) 5%, var(--ui-surface));
-}
-.workflow-home-group-head.is-scheduled {
-	background: color-mix(in srgb, var(--ui-warning) 6%, var(--ui-surface));
-}
 .workflow-home-group-head > div {
 	display: flex;
 	align-items: baseline;
@@ -6631,7 +6625,7 @@ div.result-media {
 }
 .workflow-home-workflow-row {
 	display: grid;
-	grid-template-columns: minmax(0, 1.45fr) minmax(min-content, 0.55fr) minmax(min-content, 0.8fr) auto;
+	grid-template-columns: minmax(0, 1.35fr) minmax(min-content, 0.5fr) minmax(min-content, 0.65fr) minmax(min-content, 0.8fr) auto;
 	gap: var(--space-4);
 }
 .workflow-home-draft-row {
@@ -6684,10 +6678,14 @@ div.result-media {
 .workflow-home-category {
 	color: var(--ui-accent);
 }
-.workflow-home-trigger.is-scheduled {
-	border-color: color-mix(in srgb, var(--ui-warning) 52%, var(--ui-stroke-secondary));
-	background: var(--ui-warning-bg);
-	color: var(--ui-warning);
+.workflow-home-available {
+	border-color: color-mix(in srgb, var(--ui-success) 48%, var(--ui-stroke-secondary));
+	background: var(--ui-success-bg);
+	color: var(--ui-success-strong);
+}
+.workflow-home-paused {
+	background: var(--ui-surface-subtle);
+	color: var(--ui-text-tertiary);
 }
 .workflow-home-draft-chip {
 	border-color: color-mix(in srgb, var(--ui-accent) 44%, var(--ui-stroke-secondary));
@@ -13968,12 +13966,33 @@ button.moodboard-add-method:hover {
 .schedule-create-card label.wf-step-check { display: flex; align-items: center; gap: var(--space-2); }
 .schedule-create-card label.wf-step-check input[type="checkbox"] { width: auto; }
 .schedule-create-card .schedule-trigger-settings { display: contents; }
+.schedule-bindings {
+	display: grid;
+	grid-column: 1 / -1;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-3);
+	padding-top: var(--space-3);
+	border-top: 1px solid var(--ui-stroke-tertiary);
+}
+.schedule-bindings > strong,
+.schedule-bindings > p {
+	grid-column: 1 / -1;
+	margin: 0;
+}
+.schedule-form-actions {
+	display: flex;
+	grid-column: 1 / -1;
+	justify-content: flex-end;
+	gap: var(--space-2);
+}
 .schedule-brief { grid-column: span 2; }
 .schedule-list { display: grid; gap: var(--space-2); margin-top: var(--space-4); }
-.schedule-row { display: flex; align-items: center; gap: var(--space-4); border: 1px solid var(--ui-stroke-tertiary); border-radius: var(--radius-md); background: var(--ui-surface); padding: var(--space-3); }
+.schedule-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); border: 1px solid var(--ui-stroke-tertiary); border-radius: var(--radius-md); background: var(--ui-surface); padding: var(--space-3); }
 .schedule-row > div { min-width: 0; margin-right: auto; }
 .schedule-row strong, .schedule-row small { display: block; }
 .schedule-row small { margin-top: var(--space-1); color: var(--ui-text-tertiary); }
+.schedule-row .schedule-ready { color: var(--ui-success-strong); }
+.schedule-row .schedule-needs-source { color: var(--ui-warning); }
 .schedule-modal-card {
 	width: min(100%, var(--workflow-schedule-modal-width));
 	max-width: var(--workflow-schedule-modal-width);
@@ -14016,6 +14035,7 @@ button.moodboard-add-method:hover {
   .schedule-create-card { grid-template-columns: 1fr; }
   .schedule-manager.compact { padding: var(--space-4); }
   .schedule-manager.compact .schedule-create-card { grid-template-columns: 1fr; }
+  .schedule-bindings { grid-template-columns: 1fr; }
   .schedule-brief { grid-column: auto; }
 }
 @media (max-width: 360px) {

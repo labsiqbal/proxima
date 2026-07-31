@@ -46,6 +46,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [tour.md](tour.md) | Visual tour — screenshots of every surface | by hand |
 | [evidence/auth-onboarding-accessibility/README.md](evidence/auth-onboarding-accessibility/README.md) | Disposable real-browser auth/onboarding pass, redacted GET-only Tailscale entry check, Lighthouse report, and before/after screenshots | `npm --prefix apps/web run test:accessibility` |
 | [evidence/linux-daily-driver/README.md](evidence/linux-daily-driver/README.md) | Disposable real-browser platform labels, Master/Safe-Update state, and validated PNG evidence | `scripts/capture-linux-daily-driver-evidence.mjs` |
+| [evidence/scheduled-workflow-trust/README.md](evidence/scheduled-workflow-trust/README.md) | Disposable real-browser scheduled-workflow trust pass with stable before/after PNGs (missing binding refusal and Run now exact job) | `npm run test:e2e:schedules` (assertions); add `--screenshots docs/evidence/scheduled-workflow-trust` to regenerate captures |
 
 **Operations & contributing:** [installation.md](installation.md) ·
 [backup.md](backup.md) · [development-tools.md](development-tools.md) ·
