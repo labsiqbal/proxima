@@ -6,6 +6,8 @@ import http.server
 import json
 import logging
 import os
+import re
+import secrets
 import shutil
 import signal
 import socket
@@ -17,6 +19,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -25,6 +28,13 @@ API_PYTHON = ROOT / "apps" / "api" / ".venv" / "bin" / "python"
 WEB_DIR = ROOT / "apps" / "web"
 PROBE_ROOT = ROOT / "trusted-probes" / "safe-update"
 PASSWORD = "file-target-browser-password"
+MANIFEST_NONCE_QUERY = "__proxima_request_nonce"
+CAPABILITY_GENERATION_HEADER = "x-proxima-preview-generation"
+NONCE_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}\Z", re.ASCII)
+
+
+def _new_manifest_probe_nonce() -> str:
+    return secrets.token_urlsafe(24)
 
 
 def _instrumented_app():
@@ -268,7 +278,7 @@ def _pdf_fixture() -> bytes:
     return bytes(document)
 
 
-def _write_fixture_files(container: Path) -> None:
+def _write_fixture_files(container: Path, manifest_probe_nonce: str) -> None:
     ops = container / "ops"
     ops.mkdir(exist_ok=True)
     image = base64.b64decode(
@@ -432,9 +442,9 @@ if (mainOrigin) {
 """.strip(),
         encoding="utf-8",
     )
-    (ops / "site" / "metadata.html").write_text(
+    metadata_html = (
         """
-<link rel="manifest" href="app.webmanifest" crossorigin="use-credentials">
+<link rel="manifest" href="app.webmanifest?__PROXIMA_MANIFEST_NONCE_QUERY__=__PROXIMA_MANIFEST_NONCE__" crossorigin="use-credentials">
 <main>TRACK RESOURCE LOADING</main>
 <script>
 globalThis.__proximaTrackLoaded = false;
@@ -451,7 +461,18 @@ media.append(captions);
 document.body.append(media);
 captions.track.mode = "hidden";
 </script>
-""".strip(),
+""".strip()
+        .replace(
+            "__PROXIMA_MANIFEST_NONCE_QUERY__",
+            MANIFEST_NONCE_QUERY,
+        )
+        .replace(
+            "__PROXIMA_MANIFEST_NONCE__",
+            manifest_probe_nonce,
+        )
+    )
+    (ops / "site" / "metadata.html").write_text(
+        metadata_html,
         encoding="utf-8",
     )
     (ops / "site" / "theme.css").write_text(
@@ -617,8 +638,8 @@ def _seed_registry(database: Path, canonical: Path, legacy: Path) -> None:
     )
 
 
-def _browser_expression() -> str:
-    return r"""
+def _browser_expression(manifest_probe_nonce: str) -> str:
+    script = r"""
 (async () => {
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   const until = async (label, check, timeout = 15000) => {
@@ -924,7 +945,12 @@ def _browser_expression() -> str:
       const targetFrame = overlay.querySelector("iframe.av-frame");
       window.__targetPreviewEntry = targetFrame.src;
       window.__targetPreviewOrigin = previewOrigin;
-      window.__targetPreviewManifestUrl = `${previewOrigin}/site/app.webmanifest`;
+      const manifestUrl = new URL(`${previewOrigin}/site/app.webmanifest`);
+      manifestUrl.searchParams.set(
+        "__PROXIMA_MANIFEST_NONCE_QUERY__",
+        __PROXIMA_MANIFEST_NONCE__
+      );
+      window.__targetPreviewManifestUrl = manifestUrl.href;
       window.__targetPreviewMetadataUrl = `${previewOrigin}/site/metadata.html`;
       window.__targetPreviewTrackUrl = `${previewOrigin}/site/captions.vtt`;
       const cleanLocation = await until(
@@ -1037,6 +1063,15 @@ def _browser_expression() -> str:
   return {ok: true, checks};
 })()
 """
+    return (
+        script.replace(
+            "__PROXIMA_MANIFEST_NONCE_QUERY__",
+            MANIFEST_NONCE_QUERY,
+        ).replace(
+            "__PROXIMA_MANIFEST_NONCE__",
+            json.dumps(manifest_probe_nonce),
+        )
+    )
 
 
 def _http_preview_expression(*, relay: bool = False) -> str:
@@ -1225,6 +1260,7 @@ def _browser_metadata_recording_probe() -> dict[str, object]:
         "network_resource": {
             "url_expression": "window.__targetPreviewManifestUrl",
             "mime_type": "application/manifest+json",
+            "response_headers": ["X-Proxima-Preview-Generation"],
             "body_json": {
                 "name": "Canonical preview",
                 "short_name": "Canonical",
@@ -1248,25 +1284,19 @@ def _browser_metadata_recording_probe() -> dict[str, object]:
 def _observed_resource_metadata(
     path: Path,
     manifest_resource: dict[str, object],
+    expected_nonce: str,
 ) -> dict[str, object]:
-    records = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        prefix = "target-preview-admitted "
-        if not line.startswith(prefix):
-            continue
-        value = json.loads(line[len(prefix) :])
-        if isinstance(value, dict):
-            records.append(value)
+    records = _preview_admission_records(path)
     expected = {
-        "/site/app.webmanifest": ("same-origin", "cors", "manifest"),
-        "/site/captions.vtt": ("same-origin", "same-origin", "track"),
+        "site/app.webmanifest": ("same-origin", "cors", "manifest"),
+        "site/captions.vtt": ("same-origin", "same-origin", "track"),
     }
     observed: dict[str, dict[str, object]] = {}
     for resource_path, tuple_value in expected.items():
         matching = [
             record
             for record in records
-            if record.get("path") == resource_path
+            if record.get("final_path") == resource_path
         ]
         actual = {
             (
@@ -1278,42 +1308,140 @@ def _observed_resource_metadata(
         }
         if tuple_value not in actual:
             raise RuntimeError(
-                f"{resource_path} emitted unexpected Fetch Metadata: "
+                f"/{resource_path} emitted unexpected Fetch Metadata: "
                 f"{sorted(actual, key=str)}"
             )
         if any(mode == "no-cors" for _site, mode, _destination in actual):
             raise RuntimeError(
-                f"{resource_path} emitted an impossible no-cors request"
+                f"/{resource_path} emitted an impossible no-cors request"
             )
-        observed[resource_path] = {
+        observed[f"/{resource_path}"] = {
             "destination": tuple_value[2],
             "mode": tuple_value[1],
             "site": tuple_value[0],
         }
+    correlated = _correlate_manifest_admission(
+        records,
+        manifest_resource,
+        expected_nonce,
+    )
+    return {
+        "name": "browser-emitted preview resource metadata",
+        "manifest_request_id": manifest_resource["request_id"],
+        "manifest_nonce": expected_nonce,
+        "capability_generation": correlated["capability_generation"],
+        "observed": observed,
+        "ok": True,
+    }
+
+
+def _preview_admission_records(path: Path) -> list[dict[str, object]]:
+    records = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        prefix = "target-preview-admitted "
+        if not line.startswith(prefix):
+            continue
+        value = json.loads(line[len(prefix) :])
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
+def _correlate_manifest_admission(
+    records: list[dict[str, object]],
+    manifest_resource: dict[str, object],
+    expected_nonce: str,
+) -> dict[str, object]:
     manifest_metadata = manifest_resource.get("fetch_metadata")
     manifest_request_id = manifest_resource.get("request_id")
     manifest_url = manifest_resource.get("url")
+    method = manifest_resource.get("method")
+    response_headers = manifest_resource.get("response_headers")
+    capability_generation = (
+        response_headers.get(CAPABILITY_GENERATION_HEADER)
+        if isinstance(response_headers, dict)
+        else None
+    )
     if (
-        not isinstance(manifest_request_id, str)
+        NONCE_TOKEN.fullmatch(expected_nonce) is None
+        or not isinstance(manifest_request_id, str)
         or not manifest_request_id
         or not isinstance(manifest_url, str)
-        or not manifest_url.split("?", 1)[0].endswith(
-            "/site/app.webmanifest"
-        )
+        or method != "GET"
+        or manifest_resource.get("status") != 200
+        or not isinstance(capability_generation, str)
+        or re.fullmatch(r"[0-9a-f]{64}", capability_generation) is None
         or manifest_metadata
         != {"site": "same-origin", "mode": "cors", "dest": "manifest"}
-        or observed["/site/app.webmanifest"]
-        != {"site": "same-origin", "mode": "cors", "destination": "manifest"}
     ):
         raise RuntimeError(
             "manifest network request and admission metadata do not correlate"
         )
-    return {
-        "name": "browser-emitted preview resource metadata",
-        "manifest_request_id": manifest_request_id,
-        "observed": observed,
-        "ok": True,
+    parsed = urlsplit(manifest_url)
+    try:
+        query = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+        )
+    except ValueError as exc:
+        raise RuntimeError(
+            "manifest network request and admission metadata do not correlate"
+        ) from exc
+    if (
+        parsed.path != "/site/app.webmanifest"
+        or query != [(MANIFEST_NONCE_QUERY, expected_nonce)]
+    ):
+        raise RuntimeError(
+            "manifest network request and admission metadata do not correlate"
+        )
+    host = str(parsed.hostname or "")
+    identity = re.match(
+        r"file-(\d+)-(container|code|ops)-(\d+)(?:\.|$)",
+        host,
+    )
+    if identity is None or identity.group(2) != "ops":
+        raise RuntimeError(
+            "manifest network request and admission metadata do not correlate"
+        )
+    project_id = int(identity.group(1))
+    area_id = int(identity.group(3))
+    if project_id <= 0 or area_id <= 0:
+        raise RuntimeError(
+            "manifest network request and admission metadata do not correlate"
+        )
+    matching = [
+        record
+        for record in records
+        if record.get("nonce") == expected_nonce
+    ]
+    if len(matching) != 1:
+        raise RuntimeError(
+            "manifest admission nonce must match exactly one request"
+        )
+    expected_record = {
+        "area": area_id,
+        "capability_generation": capability_generation,
+        "destination": "manifest",
+        "final_path": parsed.path.lstrip("/"),
+        "kind": "ops",
+        "method": method,
+        "mode": "cors",
+        "nonce": expected_nonce,
+        "project": project_id,
+        "request_target": (
+            f"{parsed.path}?{urlencode([(MANIFEST_NONCE_QUERY, expected_nonce)])}"
+        ),
+        "site": "same-origin",
     }
+    if any(
+        matching[0].get(key) != value
+        for key, value in expected_record.items()
+    ):
+        raise RuntimeError(
+            "manifest network request and admission metadata do not correlate"
+        )
+    return matching[0]
 
 
 def _coop_success_probe(url: str) -> dict[str, object]:
@@ -1333,6 +1461,7 @@ def main() -> None:
     if not API_PYTHON.is_file():
         raise RuntimeError(f"API Python is unavailable: {API_PYTHON}")
     browser_executable, openssl = _fixture_toolchain()
+    manifest_probe_nonce = _new_manifest_probe_nonce()
     _build_web()
     sys.path.insert(0, str(PROBE_ROOT))
     from browser import run_scenario
@@ -1436,7 +1565,7 @@ def main() -> None:
                         token=token,
                         tls_context=tls_context,
                     )
-                _write_fixture_files(canonical)
+                _write_fixture_files(canonical, manifest_probe_nonce)
                 _seed_registry(database, canonical, legacy)
                 http_database = fixture / "http-preview.db"
                 with (
@@ -1466,7 +1595,9 @@ def main() -> None:
                                 "action": "script",
                                 "name": "canonical file identity browser flow",
                                 "timeout": 45,
-                                "expression": _browser_expression(),
+                                "expression": _browser_expression(
+                                    manifest_probe_nonce
+                                ),
                             },
                             _browser_metadata_recording_probe(),
                             _resource_metadata_denial_probe(
@@ -1564,6 +1695,7 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                     _observed_resource_metadata(
                         preview_metadata_log,
                         metadata_probe["network_resource"],
+                        manifest_probe_nonce,
                     )
                 )
                 print(

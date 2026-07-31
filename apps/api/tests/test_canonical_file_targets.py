@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from urllib.parse import (
     parse_qs,
@@ -993,7 +994,9 @@ def test_http_named_localhost_uses_a_scoped_bootstrap_cookie(
 
 def test_https_remote_preview_uses_a_distinct_tls_area_origin(
     tmp_path: Path,
+    caplog,
 ):
+    caplog.set_level(logging.DEBUG, logger="proxima_api.target_preview")
     api, headers, root = _api(
         tmp_path,
         {"apps_domain": "preview.test"},
@@ -1010,6 +1013,10 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
     (ops / "image.png").write_bytes(PNG_1X1)
     (ops / "data.json").write_text(
         '{"source":"canonical"}',
+        encoding="utf-8",
+    )
+    (ops / "app.webmanifest").write_text(
+        '{"name":"Canonical preview"}',
         encoding="utf-8",
     )
     area = api.app.state.db.execute(
@@ -1036,7 +1043,7 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
     )
     assert f"{parsed.scheme}://{parsed.netloc}" == preview_origin
     assert parsed.netloc != "proxima.tailnet.test"
-    assert parse_qs(parsed.query)["__proxima_cap"]
+    token = parse_qs(parsed.query)["__proxima_cap"][0]
 
     external_navigation = {
         "Sec-Fetch-Site": "cross-site",
@@ -1104,6 +1111,65 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
         "frame-ancestors https://proxima.tailnet.test "
         f"{preview_origin}"
     ) in policy
+    request_nonce = "A" * 32
+    manifest_path = (
+        "/app.webmanifest?__proxima_request_nonce=" + request_nonce
+    )
+    manifest = remote.get(
+        f"{preview_origin}{manifest_path}",
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "manifest",
+        },
+    )
+    capability_generation = target_preview._capability_generation(token)
+    assert manifest.status_code == 200
+    assert (
+        manifest.headers["x-proxima-preview-generation"]
+        == capability_generation
+    )
+    missing_nonce = "B" * 32
+    missing = remote.get(
+        f"{preview_origin}/missing.webmanifest"
+        f"?__proxima_request_nonce={missing_nonce}",
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "manifest",
+        },
+    )
+    assert missing.status_code == 404
+    admissions = [
+        json.loads(record.message.removeprefix("target-preview-admitted "))
+        for record in caplog.records
+        if record.message.startswith("target-preview-admitted ")
+    ]
+    correlated = [
+        record
+        for record in admissions
+        if record.get("nonce") == request_nonce
+    ]
+    assert correlated == [
+        {
+            "area": area["id"],
+            "capability_generation": capability_generation,
+            "destination": "manifest",
+            "final_path": "app.webmanifest",
+            "kind": "ops",
+            "method": "GET",
+            "mode": "cors",
+            "nonce": request_nonce,
+            "project": area["project_id"],
+            "request_target": manifest_path,
+            "site": "same-origin",
+        }
+    ]
+    assert not any(
+        record.get("nonce") == missing_nonce
+        for record in admissions
+    )
+    assert token not in caplog.text
 
     worker_url = urljoin(page_url, "worker.js")
     assert urlsplit(worker_url).netloc == parsed.netloc

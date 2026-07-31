@@ -319,7 +319,10 @@ Main-origin executable responses deny framing, so absolute document navigation c
 regain Proxima authority. Embedded requests from same-site, cross-site, or opaque
 preview origins are rejected before route dispatch. Capability query, retired gateway
 path, and cookie values are redacted before access logging for every supported
-Uvicorn entry point. Cloudflare tunnel ingress changes share one cross-process
+Uvicorn entry point. Successful file responses expose only a hash of their capability
+generation. The browser fixture binds that hash and a strong request nonce to one
+post-resolution record of the normalized Area-relative target without logging the
+capability. Cloudflare tunnel ingress changes share one cross-process
 desired-state mutation lock. Mutation preserves the complete ordered rule list,
 including path-only rules and the terminal catchall, inserts new host rules before
 the first hostname-agnostic matcher, and accepts success only when refreshed ingress

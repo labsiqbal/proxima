@@ -34,10 +34,12 @@ _NETWORK_RESOURCE_EVENTS = frozenset(
 class _NetworkResourceObservation:
     request_id: str
     url: str
+    method: str
     status: int
     mime_type: str
     content_type: str
     fetch_metadata: dict[str, str]
+    response_headers: dict[str, str]
 
 
 def _recv_exact(connection: socket.socket, size: int) -> bytes:
@@ -353,6 +355,7 @@ def _network_resource_observation(
     expected_url: str,
     expected_mime_type: str,
     expected_fetch_metadata: dict[str, str],
+    required_response_headers: tuple[str, ...],
 ) -> _NetworkResourceObservation:
     request_ids = _network_resource_request_ids(events, expected_url)
     if not request_ids:
@@ -376,6 +379,17 @@ def _network_resource_observation(
     ]
     if request_urls != [expected_url]:
         raise BrowserProbeError("browser resource final URL is invalid")
+    request_methods = [
+        event["request"].get("method")
+        for event in request_events
+        if isinstance(event.get("request"), dict)
+    ]
+    if (
+        len(request_methods) != 1
+        or not isinstance(request_methods[0], str)
+        or not request_methods[0]
+    ):
+        raise BrowserProbeError("browser resource request method is invalid")
     failures = [
         event["params"]
         for event in events
@@ -430,6 +444,12 @@ def _network_resource_observation(
     content_type = _network_header(response.get("headers"), "content-type")
     if content_type.split(";", 1)[0].strip().lower() != expected_mime_type.lower():
         raise BrowserProbeError("browser resource Content-Type is invalid")
+    response_headers = {
+        name.lower(): _network_header(response.get("headers"), name)
+        for name in required_response_headers
+    }
+    if any(not value for value in response_headers.values()):
+        raise BrowserProbeError("browser resource response header is missing")
     completed = any(
         event.get("method") == "Network.loadingFinished"
         and isinstance(event.get("params"), dict)
@@ -441,10 +461,12 @@ def _network_resource_observation(
     return _NetworkResourceObservation(
         request_id=request_id,
         url=expected_url,
+        method=request_methods[0],
         status=status,
         mime_type=mime_type,
         content_type=content_type,
         fetch_metadata=fetch_metadata,
+        response_headers=response_headers,
     )
 
 
@@ -457,10 +479,16 @@ def _network_resource_summary(
     expected_mime_type = expectation.get("mime_type")
     expected_json = expectation.get("body_json")
     expected_fetch_metadata = expectation.get("fetch_metadata")
+    required_response_headers = expectation.get("response_headers", [])
     if (
         not isinstance(expected_mime_type, str)
         or not isinstance(expected_json, dict)
         or not isinstance(expected_fetch_metadata, dict)
+        or not isinstance(required_response_headers, list)
+        or not all(
+            isinstance(name, str) and name
+            for name in required_response_headers
+        )
         or not all(
             isinstance(key, str) and isinstance(value, str)
             for key, value in expected_fetch_metadata.items()
@@ -473,6 +501,7 @@ def _network_resource_summary(
             expected_url=expected_url,
             expected_mime_type=expected_mime_type,
             expected_fetch_metadata=expected_fetch_metadata,
+            required_response_headers=tuple(required_response_headers),
         )
     except BrowserProbeError as exc:
         request_ids = _network_resource_request_ids(
@@ -524,8 +553,10 @@ def _network_resource_summary(
         "body_sha256": hashlib.sha256(body_bytes).hexdigest(),
         "content_type": observation.content_type,
         "fetch_metadata": observation.fetch_metadata,
+        "method": observation.method,
         "mime_type": observation.mime_type,
         "request_id": observation.request_id,
+        "response_headers": observation.response_headers,
         "status": observation.status,
         "url": observation.url,
     }
