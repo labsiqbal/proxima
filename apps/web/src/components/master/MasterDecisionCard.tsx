@@ -26,6 +26,15 @@ function actionError(caught: unknown) {
   return message.replace(/^[A-Z]+ \S+ failed \(\d+\): /, '')
 }
 
+/** Format API timestamps that may be SQLite (`YYYY-MM-DD HH:MM:SS`) or canonical ISO-Z. */
+export function formatDecisionTime(value: string): string {
+  const normalized = value.replace(' ', 'T')
+  const timestamp = new Date(
+    normalized.endsWith('Z') ? normalized : `${normalized}Z`,
+  )
+  return Number.isNaN(timestamp.getTime()) ? 'Unknown time' : timestamp.toLocaleString()
+}
+
 export function MasterDecisionCard({
   token,
   decision: incoming,
@@ -118,8 +127,7 @@ export function MasterDecisionCard({
       <p className="master-decision-context">{decision.context}</p>
       {decision.state === 'deferred' && decision.deferred_at && (
         <small className="master-decision-timestamp">
-          Deferred by owner{' '}
-          {new Date(`${decision.deferred_at.replace(' ', 'T')}Z`).toLocaleString()}
+          Deferred by owner {formatDecisionTime(decision.deferred_at)}
         </small>
       )}
 
@@ -187,8 +195,7 @@ export function MasterDecisionCard({
           <strong>{decision.response?.label || 'Response recorded'}</strong>
           {decision.resolved_at && (
             <small>
-              Recorded by owner{' '}
-              {new Date(`${decision.resolved_at.replace(' ', 'T')}Z`).toLocaleString()}
+              Recorded by owner {formatDecisionTime(decision.resolved_at)}
             </small>
           )}
         </div>
