@@ -166,6 +166,16 @@ function safeProjectionContent(
   if (type === 'master.satpam.recovery_failed' && taskId != null) {
     return `Satpam could not complete the approved recovery for Task #${taskId}.`
   }
+  const decisionId = positiveInteger(payload.decision_id)
+  if (type === 'master.decision.deferred' && decisionId != null && taskId != null) {
+    return `Owner deferred decision #${decisionId} for Task #${taskId}.`
+  }
+  if (type === 'master.decision.resolved' && decisionId != null && taskId != null) {
+    if (payload.closed_without_owner_response === true) {
+      return `Decision #${decisionId} for Task #${taskId} was closed because the Task left review.`
+    }
+    return `Owner resolved decision #${decisionId} for Task #${taskId}. The Task is continuing.`
+  }
   const attentionKind = payload.attention_kind
   if (attentionKind === 'permission_job' && taskId != null) {
     return `Task #${taskId} needs an owner permission decision.`

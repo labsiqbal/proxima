@@ -43,6 +43,8 @@ export function TaskWorkspace({
   designStudioEnabled = false,
   onOpenDesign,
   onOpenFile,
+  onOpenJob,
+  onOpenMaster,
   projects = [],
   containers = [],
   areasByContainer = {},
@@ -59,6 +61,8 @@ export function TaskWorkspace({
   designStudioEnabled?: boolean
   onOpenDesign?: (id: string, projectSlug?: string | null) => void
   onOpenFile?: (slug: string, path: string) => void
+  onOpenJob?: (id: number, engine?: string) => void
+  onOpenMaster?: (originMessageId: number | null) => void
   projects?: Project[]
   containers?: Container[]
   areasByContainer?: Record<number, ContainerAreas>
@@ -247,6 +251,8 @@ export function TaskWorkspace({
               void load()
               onChanged?.()
             }}
+            onOpenJob={onOpenJob}
+            onOpenMaster={onOpenMaster}
           />
         </div>
       : isReview && (isMidGate
@@ -277,7 +283,10 @@ export function TaskWorkspace({
       jobStatus={job.status}
       worktree={job.worktree}
       rejectedReason={job.rejected_reason}
-      canDecide={isReview && !isMidGate}
+      canDecide={isReview && !isMidGate && !job.master_decision}
+      decideBlockedNote={job.master_decision
+        ? 'Resolve the Master decision above instead of approving or rejecting here.'
+        : undefined}
       onApprove={() => approveJob(token, jobId)}
       onChanged={() => { void load(); onChanged?.() }}
     />}

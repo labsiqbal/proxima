@@ -11,6 +11,7 @@ from fastapi import Depends, HTTPException, status
 
 from .. import (
     artifact_registry,
+    master_decisions,
     container_registry,
     features,
     repo_remote,
@@ -1137,6 +1138,14 @@ def register(app, deps):
     ):
         require_graph()
         job = graph_job_or_404(job_id, user)
+        pending_decision = master_decisions.pending_decision_for_job(db(), job_id)
+        if pending_decision:
+            raise HTTPException(
+                status_code=409,
+                detail=master_decisions.pending_decision_conflict(
+                    int(pending_decision["id"])
+                ),
+            )
         ensure_correctable(job)
         incomplete = db().execute(
             "SELECT 1 FROM node_states WHERE job_id = ? AND status != 'done' LIMIT 1",

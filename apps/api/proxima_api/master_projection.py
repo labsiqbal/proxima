@@ -92,6 +92,7 @@ _DECISION_PAYLOAD_FIELDS = {
     "attention_id",
     "attention_kind",
     "attention_required",
+    "closed_without_owner_response",
     "container_id",
     "decision_id",
     "decision_state",
@@ -189,6 +190,7 @@ def _validate_event_payload(
             or not _positive_id(payload.get("decision_id"))
             or payload.get("decision_state") != expected_state
             or payload.get("task_id") is None
+            or not isinstance(payload.get("closed_without_owner_response"), bool)
         ):
             raise ValueError("Master decision projection payload is invalid")
     else:
@@ -220,6 +222,11 @@ def _safe_projection_content(
             f"for Task #{task_id}."
         )
     if projection_type == "master.decision.resolved":
+        if payload.get("closed_without_owner_response"):
+            return (
+                f"Decision #{payload['decision_id']} for Task #{task_id} "
+                "was closed because the Task left review."
+            )
         return (
             f"Owner resolved decision #{payload['decision_id']} "
             f"for Task #{task_id}. The Task is continuing."
@@ -2410,6 +2417,17 @@ class MasterProjectionService:
             return None
         projection_type = f"master.decision.{row['state']}"
         task_id = _as_int(row["requesting_job_id"])
+        response = {}
+        if row["response_json"]:
+            try:
+                decoded = json.loads(row["response_json"])
+            except (TypeError, json.JSONDecodeError):
+                decoded = {}
+            if isinstance(decoded, dict):
+                response = decoded
+        closed_without_owner_response = (
+            response.get("value") == "__task_left_review__"
+        )
         payload = {
             "attention_id": _as_int(row["attention_item_id"]),
             "attention_kind": row["attention_kind"],
@@ -2420,6 +2438,7 @@ class MasterProjectionService:
             "area_id": row["target_area_id"],
             "attention_required": False,
             "toast_key": f"decision:{decision_id}:{row['state']}",
+            "closed_without_owner_response": closed_without_owner_response,
         }
         return self._insert(
             owner_user_id=_as_int(row["owner_user_id"]),

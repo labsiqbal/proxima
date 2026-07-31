@@ -177,6 +177,26 @@ describe('AttentionInbox', () => {
     })
   })
 
+  it('opens the Master conversation at the durable origin message', async () => {
+    vi.mocked(getAttention).mockResolvedValue({
+      items: [decisionItem],
+      count: 1,
+    })
+    const user = userEvent.setup()
+    const openTarget = vi.fn()
+    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
+    await user.click(
+      await screen.findByRole('button', { name: '1 attention item' }),
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Open Master conversation' }),
+    )
+    expect(openTarget).toHaveBeenCalledWith({
+      view: 'master',
+      origin_message_id: 21,
+    })
+  })
+
   it('defers a Master decision through its specialized state path', async () => {
     vi.mocked(getAttention).mockResolvedValue({
       items: [decisionItem],

@@ -41,12 +41,16 @@ export function MasterScreen({
   onOpenJob,
   activeProject = null,
   active = true,
+  focusMessageId = null,
+  onFocusMessageConsumed,
 }: {
   token: string
   runners: Runner[]
   onOpenJob: (id: number, engine?: string) => void
   activeProject?: Project | null
   active?: boolean
+  focusMessageId?: number | null
+  onFocusMessageConsumed?: () => void
 }) {
   const state = useMasterState()
   const { desk, loading, connection, actions } = state
@@ -57,6 +61,36 @@ export function MasterScreen({
     setHomeActive(active)
     return () => setHomeActive(false)
   }, [active, setHomeActive])
+
+  React.useEffect(() => {
+    if (!active || focusMessageId == null || !desk) return
+    actions.setHistory({ kind: 'roving' })
+    let attempts = 0
+    let timer: number | null = null
+    const tryFocus = () => {
+      const target = document.querySelector<HTMLElement>(
+        `[data-message-id="${focusMessageId}"]`,
+      )
+      if (target) {
+        if (typeof target.scrollIntoView === 'function') {
+          target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        }
+        target.focus?.()
+        onFocusMessageConsumed?.()
+        return
+      }
+      if (attempts++ < 30) {
+        timer = window.setTimeout(tryFocus, 50)
+        return
+      }
+      onFocusMessageConsumed?.()
+    }
+    const frame = window.requestAnimationFrame(tryFocus)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      if (timer != null) window.clearTimeout(timer)
+    }
+  }, [active, actions, desk, focusMessageId, onFocusMessageConsumed])
 
   if (!active) return null
 

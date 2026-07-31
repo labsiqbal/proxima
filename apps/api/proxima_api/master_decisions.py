@@ -17,6 +17,10 @@ class MasterDecisionError(RuntimeError):
         self.status_code = status_code
 
 
+# System response value when a Task leaves review without an owner answer.
+TASK_LEFT_REVIEW_RESPONSE_VALUE = "__task_left_review__"
+
+
 def _as_int(value: Any, name: str) -> int:
     if isinstance(value, bool):
         raise MasterDecisionError(f"invalid_{name}", f"{name} must be an integer")
@@ -217,6 +221,121 @@ def get_decision(
     return row
 
 
+def pending_decision_for_job(
+    conn: sqlite3.Connection, job_id: int
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT id FROM master_decisions WHERE requesting_job_id = ? "
+        "AND state IN ('pending', 'deferred') ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+
+
+def pending_decision_conflict(decision_id: int) -> dict[str, str]:
+    return {
+        "code": "master_decision_pending",
+        "message": (
+            f"Resolve Master decision #{decision_id} "
+            "instead of approving this Task"
+        ),
+    }
+
+
+def task_can_continue_after_decision(job: Mapping[str, Any] | sqlite3.Row) -> bool:
+    """Linear Tasks with a current step can accept exactly-once continuation."""
+    data = dict(job)
+    if str(data.get("engine") or "linear") == "graph":
+        return False
+    try:
+        steps = json.loads(data.get("steps_state") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return False
+    try:
+        current_step = int(data.get("current_step_idx") or 0)
+    except (TypeError, ValueError):
+        return False
+    return (
+        isinstance(steps, list)
+        and 0 <= current_step < len(steps)
+        and isinstance(steps[current_step], dict)
+    )
+
+
+def settle_open_decisions_for_job(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    actor_user_id: int | None,
+    reason: str,
+) -> list[int]:
+    """Close unresolved decisions when their Task leaves review without an answer.
+
+    Runs inside the caller's write transaction. Returns settled decision ids so
+    the caller can project them after commit.
+    """
+    rows = conn.execute(
+        "SELECT * FROM master_decisions WHERE requesting_job_id = ? "
+        "AND state IN ('pending', 'deferred') ORDER BY id",
+        (job_id,),
+    ).fetchall()
+    if not rows:
+        return []
+    reason_label = (str(reason or "").strip() or "Task left review")[:200]
+    response = {
+        "value": TASK_LEFT_REVIEW_RESPONSE_VALUE,
+        "label": f"Closed because the Task left review ({reason_label})",
+    }
+    response_json = json.dumps(
+        response, ensure_ascii=False, separators=(",", ":")
+    )
+    settled: list[int] = []
+    for row in rows:
+        updated = conn.execute(
+            "UPDATE master_decisions SET state = 'resolved', "
+            "response_json = ?, resolved_by_user_id = ?, "
+            "resolved_at = CURRENT_TIMESTAMP, version = version + 1, "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND state IN ('pending', 'deferred')",
+            (response_json, actor_user_id, row["id"]),
+        )
+        if updated.rowcount != 1:
+            continue
+        conn.execute(
+            "UPDATE attention_items SET status = 'resolved', "
+            "resolved_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND status IN ('open', 'deferred')",
+            (row["attention_item_id"],),
+        )
+        conn.execute(
+            "INSERT INTO audit_log("
+            "actor_user_id, action, target_type, target_id, metadata"
+            ") VALUES (?, 'master.decision.settle', 'master_decision', ?, ?)",
+            (
+                actor_user_id,
+                str(row["id"]),
+                json.dumps(
+                    {
+                        "task_id": job_id,
+                        "reason": reason_label,
+                        "previous_state": row["state"],
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            ),
+        )
+        settled.append(int(row["id"]))
+    return settled
+
+
+def project_settled_decisions(app: Any, decision_ids: list[int]) -> None:
+    projection = getattr(app.state, "master_projection", None)
+    if projection is None:
+        return
+    for decision_id in decision_ids:
+        projection.safe_project_decision(decision_id)
+
+
 def create_decision(
     conn: sqlite3.Connection,
     app: Any,
@@ -290,7 +409,8 @@ def create_decision(
                     409,
                 )
             job = conn.execute(
-                "SELECT j.id, j.status, j.engine, j.session_id "
+                "SELECT j.id, j.status, j.engine, j.session_id, "
+                "j.steps_state, j.current_step_idx "
                 "FROM jobs j WHERE j.id = ? AND j.created_by = ? "
                 "AND j.origin_master_session_id = ?",
                 (job_id, owner_user_id, master_session_id),
@@ -305,6 +425,13 @@ def create_decision(
                 raise MasterDecisionError(
                     "decision_task_not_waiting",
                     "Master can request a decision only for a Task waiting in review",
+                    409,
+                )
+            if not task_can_continue_after_decision(job):
+                raise MasterDecisionError(
+                    "decision_task_invalid",
+                    "Master decisions require a Task that can continue after "
+                    "the owner responds",
                     409,
                 )
             if conn.execute(
@@ -578,18 +705,14 @@ def resolve_decision(
                         "The requesting Task is already running",
                         409,
                     )
-                steps = json.loads(job["steps_state"] or "[]")
-                current_step = int(job["current_step_idx"] or 0)
-                if (
-                    not isinstance(steps, list)
-                    or not 0 <= current_step < len(steps)
-                    or not isinstance(steps[current_step], dict)
-                ):
+                if not task_can_continue_after_decision(job):
                     raise MasterDecisionError(
                         "decision_task_invalid",
                         "The requesting Task cannot accept a decision continuation",
                         409,
                     )
+                steps = json.loads(job["steps_state"] or "[]")
+                current_step = int(job["current_step_idx"] or 0)
                 response_message = (
                     f"Owner decision for: {row['prompt']}\n"
                     f"Response: {response['label']}"

@@ -168,6 +168,8 @@ describe("TaskWorkspace", () => {
 	);
 
 	it("shows the full Master decision instead of generic approval", async () => {
+		const onOpenMaster = vi.fn();
+		const onOpenJob = vi.fn();
 		vi.mocked(getJob).mockResolvedValue({
 			...job,
 			master_decision: {
@@ -201,7 +203,15 @@ describe("TaskWorkspace", () => {
 			},
 		} as never);
 
-		render(<TaskWorkspace token="token" jobId={42} onBack={vi.fn()} />);
+		render(
+			<TaskWorkspace
+				token="token"
+				jobId={42}
+				onBack={vi.fn()}
+				onOpenJob={onOpenJob}
+				onOpenMaster={onOpenMaster}
+			/>,
+		);
 
 		expect(
 			await screen.findByText("Which rollout window should the release use?"),
@@ -213,6 +223,84 @@ describe("TaskWorkspace", () => {
 		expect(
 			screen.getByRole("button", { name: "Send decision" }),
 		).toBeDisabled();
+		await userEvent.click(
+			screen.getByRole("button", { name: "Open Master conversation" }),
+		);
+		expect(onOpenMaster).toHaveBeenCalledWith(19);
+		await userEvent.click(screen.getByRole("button", { name: "Open Task #42" }));
+		expect(onOpenJob).toHaveBeenCalledWith(42, "linear");
+	});
+
+	it("hides repo approve/reject while a Master decision is open", async () => {
+		vi.mocked(getJob).mockResolvedValue({
+			...job,
+			master_decision: {
+				id: 7,
+				attention_item_id: 11,
+				master_session_id: 3,
+				origin_message_id: 19,
+				requesting_job_id: 42,
+				title: "Choose rollout window",
+				prompt: "Which rollout window should the release use?",
+				context: "Both options include two hours of planned downtime.",
+				response_shape: {
+					type: "choice",
+					choices: [
+						{ id: "saturday", label: "Saturday 02:00 UTC" },
+						{ id: "sunday", label: "Sunday 02:00 UTC" },
+					],
+				},
+				state: "pending",
+				response: null,
+				version: 1,
+				created_at: "2026-01-01",
+				updated_at: "2026-01-01",
+				legacy_without_task: false,
+				task: {
+					id: 42,
+					title: "Audit release",
+					status: "review",
+					engine: "linear",
+				},
+			},
+			worktree: {
+				area_id: 1,
+				branch: "proxima/job-42",
+				base_branch: "main",
+				base_commit: "aaaaaaa",
+				status: "active",
+				merge_commit: null,
+				error: null,
+				worktree_path: "/ws/worktrees/job-42",
+			},
+		} as never);
+		vi.mocked(getJobDiff).mockResolvedValue({
+			job_id: 42,
+			branch: "proxima/job-42",
+			base_branch: "main",
+			worktree_status: "active",
+			base_commit: "aaaaaaa",
+			head_commit: "bbbbbbb",
+			files: [{ path: "app.py", old_path: null, status: "A" }],
+			patch: "diff --git a/app.py b/app.py\n",
+			patch_truncated: false,
+			summary: "1 file changed",
+		} as never);
+
+		render(<TaskWorkspace token="token" jobId={42} onBack={vi.fn()} />);
+
+		expect(
+			await screen.findByText("Which rollout window should the release use?"),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: /Approve & merge changes/ }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: /Reject/ }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.getByText(/Resolve the Master decision above/),
+		).toBeInTheDocument();
 	});
 
 	it("shows the durable prerequisite reason for a blocked queued task", async () => {

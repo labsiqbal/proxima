@@ -2905,6 +2905,197 @@ def test_master_decision_defer_resolve_and_stale_response_are_exactly_once(
     ).json()["response"]["label"] == "Sunday 02:00 UTC"
 
 
+
+def _create_review_decision(
+    app,
+    client: TestClient,
+    project: dict,
+    *,
+    key: str,
+    engine: str = "linear",
+    steps_state: list[dict] | None = None,
+):
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key=key,
+        tasks=[
+            {
+                "title": "Prepare production rollout",
+                "brief": "Prepare the release and wait for a rollout window",
+            }
+        ],
+    )
+    job_id = jobs[0]["id"]
+    if engine == "graph":
+        graph = normalize_graph(
+            {
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "name": "Prepare",
+                        "type": "agent",
+                        "instruction": "Prepare the release",
+                    }
+                ],
+                "edges": [],
+            }
+        )
+        app.state.db.execute(
+            "UPDATE jobs SET status = 'review', engine = 'graph', graph = ?, "
+            "steps_state = '[]', current_step_idx = 0 WHERE id = ?",
+            (json.dumps(graph), job_id),
+        )
+    else:
+        steps = steps_state or [
+            {
+                "title": "Prepare release",
+                "status": "done",
+                "output_summary": "The rollout window needs a decision.",
+            }
+        ]
+        app.state.db.execute(
+            "UPDATE jobs SET status = 'review', current_step_idx = 0, "
+            "steps_state = ? WHERE id = ?",
+            (json.dumps(steps), job_id),
+        )
+    origin = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content, author) "
+        "VALUES (?, 'user', 'Prepare the rollout', 'owner')",
+        (desk["session"]["id"],),
+    )
+    master_focus.stamp_message(
+        app.state.db,
+        message_id=origin.lastrowid,
+        focus_epoch_id=None,
+    )
+    broker = MasterToolBroker(
+        app.state.db,
+        app,
+        {"id": 1, "username": "owner"},
+        desk["session"]["id"],
+        origin_message_id=origin.lastrowid,
+    )
+    created = broker.execute(
+        "create_attention",
+        {
+            "title": "Choose rollout window",
+            "prompt": "Which rollout window should the release use?",
+            "context": "Both windows include two hours of planned downtime.",
+            "response": {
+                "type": "choice",
+                "choices": [
+                    {"id": "saturday", "label": "Saturday 02:00 UTC"},
+                    {"id": "sunday", "label": "Sunday 02:00 UTC"},
+                ],
+            },
+            "task_id": job_id,
+            "idempotency_key": f"{key}-decision",
+        },
+    )
+    return desk, job_id, created, origin.lastrowid
+
+
+
+
+def test_reject_settles_unresolved_master_decision(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, job_id, created, _origin = _create_review_decision(
+        app, client, project, key="reject-settles-decision"
+    )
+    assert created["ok"] is True
+    decision_id = created["result"]["decision_id"]
+
+    rejected = client.post(
+        f"/api/jobs/{job_id}/reject",
+        json={"reason": "Rollout is cancelled"},
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "failed"
+
+    decision = client.get(f"/api/master/decisions/{decision_id}").json()
+    assert decision["state"] == "resolved"
+    assert decision["response"]["value"] == (
+        master_decisions.TASK_LEFT_REVIEW_RESPONSE_VALUE
+    )
+    assert "left review" in decision["response"]["label"].lower()
+    assert app.state.db.execute(
+        "SELECT status FROM attention_items WHERE id = ?",
+        (decision["attention_item_id"],),
+    ).fetchone()["status"] == "resolved"
+    assert not any(
+        item["kind"] == "master_decision"
+        for item in client.get("/api/attention").json()["items"]
+    )
+    assert client.get("/api/master/desk").json()["decisions"] == []
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM audit_log "
+        "WHERE action = 'master.decision.settle' AND target_id = ?",
+        (str(decision_id),),
+    ).fetchone()[0] == 1
+    # Settled decisions cannot continue the failed Task.
+    repeated = client.post(
+        f"/api/master/decisions/{decision_id}/resolve",
+        json={"expected_version": decision["version"], "response": "sunday"},
+    )
+    assert repeated.status_code == 409
+    assert repeated.json()["detail"]["code"] == "decision_not_pending"
+
+
+def test_graph_task_rejects_master_decision_creation_and_guards_approve(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path)
+    desk, job_id, created, origin_id = _create_review_decision(
+        app, client, project, key="graph-decision-denied", engine="graph"
+    )
+    assert created["ok"] is False
+    assert created["error"]["code"] == "decision_task_invalid"
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_decisions WHERE requesting_job_id = ?",
+        (job_id,),
+    ).fetchone()[0] == 0
+
+    # Defense in depth: even a forged open decision blocks graph approval.
+    attention = app.state.db.execute(
+        "INSERT INTO attention_items("
+        "kind, title, target_json, inline_ok, actions_json, status, source_key"
+        ") VALUES ('master_decision', 'Forged', '{}', 0, '[]', 'open', "
+        "'forged-graph-decision')"
+    )
+    app.state.db.execute(
+        "INSERT INTO master_decisions("
+        "attention_item_id, owner_user_id, master_session_id, "
+        "origin_message_id, requesting_job_id, title, prompt, context, "
+        "response_shape_json, request_fingerprint, state"
+        ") VALUES (?, 1, ?, ?, ?, 'Forged', 'Choose?', 'Context', ?, 'fp', "
+        "'pending')",
+        (
+            attention.lastrowid,
+            desk["session"]["id"],
+            origin_id,
+            job_id,
+            json.dumps(
+                {
+                    "type": "choice",
+                    "choices": [
+                        {"id": "a", "label": "A"},
+                        {"id": "b", "label": "B"},
+                    ],
+                }
+            ),
+        ),
+    )
+    approved = client.post(f"/api/graph/jobs/{job_id}/approve")
+    assert approved.status_code == 409
+    detail = approved.json()["detail"]
+    assert detail["code"] == "master_decision_pending"
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "review"
+
+
 def test_master_decision_free_text_shape_is_bounded_and_owner_readable():
     assert master_decisions.normalize_response_shape(
         {

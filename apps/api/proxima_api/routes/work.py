@@ -561,21 +561,13 @@ def register(app, deps):
     @app.post("/api/jobs/{job_id}/approve")
     def approve_job(job_id: int, payload: JobApproveRequest | None = None, user: dict[str, Any] = Depends(current_user)):
         job = _job_or_404(job_id, user)
-        pending_decision = db().execute(
-            "SELECT id FROM master_decisions WHERE requesting_job_id = ? "
-            "AND state IN ('pending', 'deferred') ORDER BY id DESC LIMIT 1",
-            (job_id,),
-        ).fetchone()
+        pending_decision = master_decisions.pending_decision_for_job(db(), job_id)
         if pending_decision:
             raise HTTPException(
                 status_code=409,
-                detail={
-                    "code": "master_decision_pending",
-                    "message": (
-                        f"Resolve Master decision #{pending_decision['id']} "
-                        "instead of approving this Task"
-                    ),
-                },
+                detail=master_decisions.pending_decision_conflict(
+                    int(pending_decision["id"])
+                ),
             )
         if job["status"] != "review":
             return _job_payload(job)  # nothing to approve; idempotent
@@ -718,9 +710,12 @@ def register(app, deps):
         if job["status"] != "review":
             raise HTTPException(status_code=409, detail="only a job waiting for review can be rejected")
         # Claim first (this is the review verdict mutex - a concurrent approve
-        # and reject cannot both win), tear down after.
+        # and reject cannot both win), settle linked Master decisions in the
+        # same transition so Attention cannot stay open on a dead Task, then
+        # tear down after commit.
         conn = db()
         notify_sessions: set[int] = set()
+        settled_decision_ids: list[int] = []
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -743,6 +738,12 @@ def register(app, deps):
                     mutation="review_rejected",
                 )
                 notify_sessions.add(task_event["session_id"])
+                settled_decision_ids = master_decisions.settle_open_decisions_for_job(
+                    conn,
+                    job_id=job_id,
+                    actor_user_id=user.get("id"),
+                    reason=payload.reason,
+                )
                 conn.execute("COMMIT")
             except Exception:
                 _rollback(conn)
@@ -750,6 +751,7 @@ def register(app, deps):
         for session_id in notify_sessions:
             app.state.hub.notify(session_id)
         _process_task_projection(task_event)
+        master_decisions.project_settled_decisions(app, settled_decision_ids)
         # Flag-independent, like delete: a flag flip must not orphan a
         # worktree. Cleanup trouble is logged, not raised - the verdict stands
         # either way and discard_job_worktree is idempotent on retry.
@@ -853,7 +855,24 @@ def register(app, deps):
             worktrees.discard_job_worktree(db(), job_id)
         except worktrees.WorktreeError:
             logging.getLogger("proxima.worktrees").exception("job %s worktree cleanup failed (job deleted anyway)", job_id)
-        db().execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        conn = db()
+        settled_decision_ids: list[int] = []
+        with app.state.db_lock:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                settled_decision_ids = master_decisions.settle_open_decisions_for_job(
+                    conn,
+                    job_id=job_id,
+                    actor_user_id=user.get("id"),
+                    reason="Task deleted",
+                )
+                conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+                conn.execute("COMMIT")
+            except Exception:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        master_decisions.project_settled_decisions(app, settled_decision_ids)
         return {"ok": True, "id": job_id}
 
     # --- Schedules (recurring workflow triggers / cron) ---
