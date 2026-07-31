@@ -302,6 +302,29 @@ def _target_params(target: dict) -> dict[str, str]:
     return {"target": json.dumps(target, separators=(",", ":"))}
 
 
+def _enable_active_preview(
+    api: TestClient,
+    headers: dict[str, str],
+    target: dict,
+    *,
+    preview_session: str = "S" * 32,
+) -> tuple[str, str]:
+    response = api.post(
+        f"/api/projects/{target['project']}/preview-mode",
+        headers=headers,
+        params=_target_params(target),
+        json={
+            "active": True,
+            "preview_session": preview_session,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["active"] is True
+    generation = response.json()["generation"]
+    assert isinstance(generation, str)
+    return preview_session, generation
+
+
 def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     tmp_path: Path,
 ):
@@ -558,6 +581,7 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         in capability_gate.headers["set-cookie"]
     )
     isolated_url = _clean_capability_url(capability_url)
+    passive_isolated_url = isolated_url
     assert "content=\"0;url=/site/index.html?cache=7\"" in (
         capability_gate.text
     )
@@ -589,16 +613,71 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert page.status_code == 200, page.text
     assert "Ops page" in page.text
     preview_policy = page.headers["content-security-policy"]
-    assert "sandbox allow-scripts allow-same-origin" in preview_policy
-    assert "default-src 'self' data: blob:" in preview_policy
-    assert "script-src 'self' 'unsafe-inline' blob:" in preview_policy
+    assert "sandbox allow-same-origin" in preview_policy
+    assert "allow-scripts" not in preview_policy
+    assert "default-src 'self' data:" in preview_policy
+    assert "script-src 'none'" in preview_policy
     assert "font-src 'self' data:" in preview_policy
-    assert "connect-src 'self'" in preview_policy
-    assert "worker-src 'self' blob:" in preview_policy
+    assert "connect-src 'none'" in preview_policy
+    assert "worker-src 'none'" in preview_policy
     assert "frame-ancestors http://testserver" in preview_policy
-    assert f"http://{capability_host}" in preview_policy
+    assert f"http://{capability_host}" not in preview_policy
     assert page.headers["cross-origin-opener-policy"] == "same-origin"
     assert page.headers["referrer-policy"] == "no-referrer"
+
+    passive_module = api.get(
+        urljoin(isolated_url, "module.js"),
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "script",
+        },
+    )
+    assert passive_module.status_code == 403
+    assert passive_module.text == (
+        "passive previews do not allow active content"
+    )
+
+    active_target = {
+        "project": "identity",
+        "area": {"kind": "ops", "id": ops_area_id},
+        "path": "site/index.html",
+    }
+    preview_session, active_generation = _enable_active_preview(
+        api,
+        headers,
+        active_target,
+    )
+    active_entry = api.get(
+        f"/api/target-preview/identity/ops/{ops_area_id}/site/index.html",
+        headers=headers,
+        params={
+            "__proxima_mode": "active",
+            "__proxima_preview_session": preview_session,
+            "__proxima_preview_generation": active_generation,
+        },
+        follow_redirects=False,
+    )
+    assert active_entry.status_code == 307, active_entry.text
+    capability_url = active_entry.headers["location"]
+    active_gate = api.get(
+        capability_url,
+        headers=frame_metadata,
+        follow_redirects=False,
+    )
+    assert active_gate.status_code == 200, active_gate.text
+    isolated_url = _clean_capability_url(capability_url)
+    page = api.get(isolated_url, headers=same_origin_frame_metadata)
+    assert page.status_code == 200, page.text
+    preview_policy = page.headers["content-security-policy"]
+    assert "sandbox allow-scripts allow-same-origin" in preview_policy
+    assert "script-src 'self' 'unsafe-inline' blob:" in preview_policy
+    assert "connect-src *" in preview_policy
+    assert "worker-src 'self' blob:" in preview_policy
+    assert (
+        f"frame-ancestors http://testserver http://{capability_host}"
+        in preview_policy
+    )
 
     clean_top_level = api.get(
         isolated_url,
@@ -748,7 +827,7 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         ("text/javascript", "application/javascript")
     )
     assert worker.status_code == 200
-    assert "connect-src 'self'" in worker.headers["content-security-policy"]
+    assert "connect-src *" in worker.headers["content-security-policy"]
     assert "worker-src 'none'" in worker.headers["content-security-policy"]
     assert font.status_code == 200
     assert fetched.json() == {"source": "canonical"}
@@ -776,6 +855,33 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         assert active.headers["content-type"].startswith(media_type)
         assert active.headers["content-disposition"].startswith("attachment;")
         assert "sandbox" in active.headers["content-security-policy"]
+
+    disabled = api.post(
+        "/api/projects/identity/preview-mode",
+        headers=headers,
+        params=_target_params(active_target),
+        json={
+            "active": False,
+            "preview_session": preview_session,
+            "generation": active_generation,
+        },
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json() == {"active": False, "generation": None}
+    stale_page = api.get(isolated_url, headers=same_origin_frame_metadata)
+    assert stale_page.status_code == 403
+    assert stale_page.text == "active preview capability is revoked"
+    stale_entry = api.get(
+        f"/api/target-preview/identity/ops/{ops_area_id}/site/index.html",
+        headers=headers,
+        params={
+            "__proxima_mode": "active",
+            "__proxima_preview_session": preview_session,
+            "__proxima_preview_generation": active_generation,
+        },
+        follow_redirects=False,
+    )
+    assert stale_entry.status_code == 503
 
     legacy_collision = root / "area" / "ops" / str(ops_area_id) / "site"
     legacy_collision.mkdir(parents=True)
@@ -845,24 +951,30 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert main_document.headers["x-frame-options"] == "DENY"
 
     escaped_navigation = urljoin(
-        isolated_url,
+        passive_isolated_url,
         "../../../../../../api/preview/identity/escape.png",
     )
     assert urlsplit(escaped_navigation).hostname == capability_host
-    assert api.get(
+    passive_cookie = (
+        f"proxima_file_preview_{project_id}_ops_{ops_area_id}="
+        f"{capability_query['__proxima_cap'][0]}"
+    )
+    assert without_capability.get(
         escaped_navigation,
         headers={
             "Sec-Fetch-Site": "same-origin",
             "Sec-Fetch-Mode": "no-cors",
             "Sec-Fetch-Dest": "image",
+            "Cookie": passive_cookie,
         },
     ).status_code == 404
-    assert api.get(
-        urljoin(isolated_url, "/api/health"),
+    assert without_capability.get(
+        urljoin(passive_isolated_url, "/api/health"),
         headers={
             "Sec-Fetch-Site": "same-origin",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Dest": "empty",
+            "Cookie": passive_cookie,
         },
     ).status_code == 404
 
@@ -883,6 +995,117 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert explicit.status_code == 200, explicit.text
     assert explicit.json()["content"] == "# Ops only"
     assert explicit.json()["target"] == ops_only
+
+
+def test_active_preview_requires_bearer_consent_and_exact_session_generation(
+    tmp_path: Path,
+):
+    api, headers, root = _api(tmp_path)
+    (root / "ops" / "index.html").write_text(
+        "<script>globalThis.executed = true</script>",
+        encoding="utf-8",
+    )
+    area = api.app.state.db.execute(
+        "SELECT pa.id FROM project_areas pa "
+        "JOIN projects p ON p.id = pa.project_id "
+        "WHERE p.slug = 'identity' AND pa.kind = 'ops'"
+    ).fetchone()
+    target = {
+        "project": "identity",
+        "area": {"kind": "ops", "id": area["id"]},
+        "path": "index.html",
+    }
+    preview_session = "S" * 32
+
+    cookie_only = api.post(
+        "/api/projects/identity/preview-mode",
+        params=_target_params(target),
+        json={"active": True, "preview_session": preview_session},
+    )
+    assert cookie_only.status_code == 401
+    assert cookie_only.json()["detail"] == (
+        "active preview changes require owner authorization"
+    )
+    forged_bearer = api.post(
+        "/api/projects/identity/preview-mode",
+        headers={"Authorization": "Bearer forged"},
+        params=_target_params(target),
+        json={"active": True, "preview_session": preview_session},
+    )
+    assert forged_bearer.status_code == 401
+    assert forged_bearer.json()["detail"] == (
+        "preview owner session is invalid or expired"
+    )
+
+    area_origin = TestClient(
+        api.app,
+        base_url=f"http://file-1-ops-{area['id']}.testserver",
+    )
+    self_enable = area_origin.post(
+        "/api/projects/identity/preview-mode",
+        params=_target_params(target),
+        json={"active": True, "preview_session": preview_session},
+    )
+    assert self_enable.status_code == 403
+    assert self_enable.text == "preview request metadata is invalid"
+
+    enabled = api.post(
+        "/api/projects/identity/preview-mode",
+        headers=headers,
+        params=_target_params(target),
+        json={"active": True, "preview_session": preview_session},
+    )
+    assert enabled.status_code == 200, enabled.text
+    generation = enabled.json()["generation"]
+    assert enabled.json()["active"] is True
+    assert isinstance(generation, str)
+
+    repeated = api.post(
+        "/api/projects/identity/preview-mode",
+        headers=headers,
+        params=_target_params(target),
+        json={"active": True, "preview_session": preview_session},
+    )
+    assert repeated.json() == {
+        "active": True,
+        "generation": generation,
+    }
+
+    wrong_generation = api.post(
+        "/api/projects/identity/preview-mode",
+        headers=headers,
+        params=_target_params(target),
+        json={
+            "active": False,
+            "preview_session": preview_session,
+            "generation": "W" * 32,
+        },
+    )
+    assert wrong_generation.status_code == 409
+
+    other_session = api.get(
+        f"/api/target-preview/identity/ops/{area['id']}/index.html",
+        headers=headers,
+        params={
+            "__proxima_mode": "active",
+            "__proxima_preview_session": "O" * 32,
+            "__proxima_preview_generation": generation,
+        },
+        follow_redirects=False,
+    )
+    assert other_session.status_code == 503
+
+    still_active = api.get(
+        f"/api/target-preview/identity/ops/{area['id']}/index.html",
+        headers=headers,
+        params={
+            "__proxima_mode": "active",
+            "__proxima_preview_session": preview_session,
+            "__proxima_preview_generation": generation,
+        },
+        follow_redirects=False,
+    )
+    assert still_active.status_code == 307
 
 
 def test_https_remote_preview_requires_a_distinct_tls_origin(
@@ -1028,9 +1251,24 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
         api.app,
         base_url="https://proxima.tailnet.test",
     )
+    active_target = {
+        "project": "identity",
+        "area": {"kind": "ops", "id": area["id"]},
+        "path": "index.html",
+    }
+    preview_session, active_generation = _enable_active_preview(
+        remote,
+        headers,
+        active_target,
+    )
     entry = remote.get(
         f"/api/target-preview/identity/ops/{area['id']}/index.html",
         headers=headers,
+        params={
+            "__proxima_mode": "active",
+            "__proxima_preview_session": preview_session,
+            "__proxima_preview_generation": active_generation,
+        },
         follow_redirects=False,
     )
 
@@ -1185,7 +1423,7 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
     assert "script-src 'self'" in worker.headers[
         "content-security-policy"
     ]
-    assert "connect-src 'self'" in worker.headers[
+    assert "connect-src *" in worker.headers[
         "content-security-policy"
     ]
     image_url = urljoin(page_url, "image.png")

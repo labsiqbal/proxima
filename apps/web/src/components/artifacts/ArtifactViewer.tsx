@@ -1,7 +1,12 @@
 import React from 'react'
 import { createPortal } from 'react-dom'
-import { previewUrl, type Artifact } from '../../api/files'
+import {
+  previewUrl,
+  setTargetPreviewMode,
+  type Artifact,
+} from '../../api/files'
 import { projectFs } from '../../api/fsAdapter'
+import type { FileTarget } from '../../types'
 import { MessageContent } from '../chat/MessageContent'
 import { MermaidDiagram } from './MermaidDiagram'
 import { trapModalTab } from '../ui/modalFocus'
@@ -96,6 +101,18 @@ function reviewId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
 }
 
+function previewSessionId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : ''
+}
+
+type ActivePreviewState = {
+  areaKey: string
+  target: FileTarget
+  generation: string
+}
+
 export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, onEditSource, reviewSessionId = null, onSendFeedback }: {
   token: string
   slug: string
@@ -123,13 +140,28 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
   const [whiteboard, setWhiteboard] = React.useState<{ source: string; diagramIndex: number } | null>(null)
   const [handoffPending, setHandoffPending] = React.useState(false)
   const [handoffError, setHandoffError] = React.useState('')
+  const [activePreview, setActivePreview] = React.useState<ActivePreviewState | null>(null)
+  const [previewConsentOpen, setPreviewConsentOpen] = React.useState(false)
+  const [previewModePending, setPreviewModePending] = React.useState(false)
+  const [previewModeError, setPreviewModeError] = React.useState('')
   const loadSeq = React.useRef(0)
   const noteRef = React.useRef<HTMLTextAreaElement>(null)
   const dialogRef = React.useRef<HTMLDivElement>(null)
+  const consentRef = React.useRef<HTMLElement>(null)
+  const consentCancelRef = React.useRef<HTMLButtonElement>(null)
   const closeRef = React.useRef<HTMLButtonElement>(null)
   const triggerRef = React.useRef<HTMLElement | null>(null)
   const handoffCompletedRef = React.useRef(false)
+  const activePreviewRef = React.useRef<ActivePreviewState | null>(null)
+  const previewSessionRef = React.useRef(previewSessionId())
   const descriptionId = React.useId()
+  const consentTitleId = React.useId()
+  const currentAreaKey = item?.target
+    ? `${item.target.project}:${item.target.area.kind}:${item.target.area.id ?? 'root'}`
+    : ''
+  const activeForCurrentArea = activePreview?.areaKey === currentAreaKey
+    ? activePreview
+    : null
 
   React.useLayoutEffect(() => {
     triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -163,13 +195,14 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
         event.preventDefault()
         event.stopPropagation()
         if (whiteboard) setWhiteboard(null)
+        else if (previewConsentOpen) setPreviewConsentOpen(false)
         else onClose()
       } else if (!whiteboard && !editing && event.key === 'ArrowLeft') previous()
       else if (!whiteboard && !editing && event.key === 'ArrowRight') next()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, previous, next, whiteboard])
+  }, [onClose, previous, next, previewConsentOpen, whiteboard])
 
   React.useEffect(() => {
     setZoom(false)
@@ -193,6 +226,42 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     if (pendingPoint) noteRef.current?.focus()
   }, [pendingPoint])
 
+  React.useEffect(() => {
+    if (previewConsentOpen) consentCancelRef.current?.focus()
+  }, [previewConsentOpen])
+
+  React.useEffect(() => {
+    const authority = activePreviewRef.current
+    if (!authority || authority.areaKey === currentAreaKey) return
+    activePreviewRef.current = null
+    setActivePreview(null)
+    setPreviewConsentOpen(false)
+    setPreviewModeError('')
+    void setTargetPreviewMode(
+      token,
+      slug,
+      authority.target,
+      previewSessionRef.current,
+      false,
+      authority.generation,
+      true,
+    )
+  }, [currentAreaKey, slug, token])
+
+  React.useEffect(() => () => {
+    const authority = activePreviewRef.current
+    if (!authority) return
+    void setTargetPreviewMode(
+      token,
+      slug,
+      authority.target,
+      previewSessionRef.current,
+      false,
+      authority.generation,
+      true,
+    )
+  }, [slug, token])
+
   if (!item) return null
 
   const openDiagram = (source: string, diagramIndex: number) => {
@@ -204,7 +273,21 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     if (kind === 'image') return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={previewUrl(slug, path, item.target)} alt={name} onClick={() => { if (!annotating) setZoom(current => !current) }} title={zoom ? 'Fit to screen' : 'Actual size'} />
     if (kind === 'video') return <video className="av-video" src={previewUrl(slug, path, item.target)} controls autoPlay playsInline />
     if (kind === 'pdf') return <iframe className="av-frame" title={name} src={previewUrl(slug, path, item.target)} />
-    if (kind === 'html') return <iframe className="av-frame" title={name} src={previewUrl(slug, path, item.target)} />
+    if (kind === 'html') {
+      const authority = activeForCurrentArea
+        ? {
+            previewSession: previewSessionRef.current,
+            generation: activeForCurrentArea.generation,
+          }
+        : undefined
+      return <iframe
+        className="av-frame"
+        key={authority?.generation || 'passive'}
+        title={name}
+        src={previewUrl(slug, path, item.target, authority)}
+        sandbox={authority ? 'allow-scripts allow-same-origin' : ''}
+      />
+    }
     if (kind === 'binary') return <div className="av-msg muted">Can't preview this file type. <a href={previewUrl(slug, path, item.target)} download={name}>Download</a> to open it.</div>
     if (error) return <div className="av-msg muted">{error}</div>
     if (text == null) return <div className="av-msg muted">Loading...</div>
@@ -274,6 +357,60 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
       : { ...current, whiteboardPaths: [...current.whiteboardPaths, whiteboardPath] })
   }
 
+  const enableActivePreview = async () => {
+    if (!item.target || !previewSessionRef.current || previewModePending) return
+    setPreviewModePending(true)
+    setPreviewModeError('')
+    try {
+      const result = await setTargetPreviewMode(
+        token,
+        slug,
+        item.target,
+        previewSessionRef.current,
+        true,
+      )
+      if (!result.active || !result.generation) {
+        throw new Error('Active preview authority was not granted.')
+      }
+      const next = {
+        areaKey: currentAreaKey,
+        target: item.target,
+        generation: result.generation,
+      }
+      activePreviewRef.current = next
+      setActivePreview(next)
+      setPreviewConsentOpen(false)
+    } catch {
+      setPreviewModeError('Active preview could not be enabled. The preview remains passive.')
+    } finally {
+      setPreviewModePending(false)
+    }
+  }
+
+  const disableActivePreview = async () => {
+    const authority = activeForCurrentArea
+    if (!authority || previewModePending) return
+    setPreviewModePending(true)
+    setPreviewModeError('')
+    try {
+      await setTargetPreviewMode(
+        token,
+        slug,
+        authority.target,
+        previewSessionRef.current,
+        false,
+        authority.generation,
+      )
+      activePreviewRef.current = null
+      setActivePreview(null)
+      setPreviewConsentOpen(false)
+    } catch {
+      setPreviewModeError('Active preview could not be disabled. Close this review to revoke it automatically, then try again.')
+    } finally {
+      setPreviewModePending(false)
+    }
+  }
+
   const addToChat = async () => {
     if (!onSendFeedback || !hasArtifactReviewFeedback(review) || handoffPending) return
     setHandoffPending(true)
@@ -307,7 +444,8 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
       aria-describedby={descriptionId}
       tabIndex={-1}
       onKeyDown={event => {
-        if (dialogRef.current) trapModalTab(event, dialogRef.current)
+        const focusRoot = previewConsentOpen ? consentRef.current : dialogRef.current
+        if (focusRoot) trapModalTab(event, focusRoot)
       }}
       onClick={event => { if (event.target === event.currentTarget) onClose() }}
     >
@@ -326,8 +464,16 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
         </React.Suspense>
         : <>
           <header className="av-bar" onClick={event => event.stopPropagation()}>
-            <div className="av-title"><h2 title={path}>Artifact review: {item.title || name}</h2><span className="av-review-label">Review</span>{items.length > 1 && <span className="av-count">{index + 1} / {items.length}</span>}</div>
+            <div className="av-title">
+              <h2 title={path}>Artifact review: {item.title || name}</h2>
+              <span className="av-review-label">Review</span>
+              {kind === 'html' && <span className={`av-preview-mode ${activeForCurrentArea ? 'active' : 'passive'}`}>{activeForCurrentArea ? 'Active preview' : 'Passive preview'}</span>}
+              {items.length > 1 && <span className="av-count">{index + 1} / {items.length}</span>}
+            </div>
             <div className="av-actions">
+              {kind === 'html' && item.target && (activeForCurrentArea
+                ? <button type="button" className="ghost-button" disabled={previewModePending} onClick={() => void disableActivePreview()}>{previewModePending ? 'Disabling...' : 'Disable active preview'}</button>
+                : <button type="button" className="ghost-button" disabled={previewModePending || !previewSessionRef.current} onClick={() => { setPreviewModeError(''); setPreviewConsentOpen(true) }}>Enable active preview</button>)}
               <button type="button" className={`ghost-button ${annotating ? 'active' : ''}`} aria-pressed={annotating} onClick={() => { setAnnotating(current => !current); setPendingPoint(null) }}>{annotating ? 'Click artifact to pin' : 'Annotate'}</button>
               {EDITABLE.has(kind) && onEditSource && <button type="button" className="ghost-button" onClick={() => onEditSource(item)}>Edit source</button>}
               <a className="ghost-button" href={previewUrl(slug, path, item.target)} download={name}>Download</a>
@@ -336,6 +482,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
           </header>
           <div className="av-workspace">
             <main className="av-stage">
+              {previewModeError && <p className="av-preview-mode-error" role="alert">{previewModeError}</p>}
               <div className={`av-review-surface av-kind-${kind} ${annotating ? 'annotating' : ''}`}>
                 {stage()}
                 <div className={`av-annotation-layer ${annotating ? 'placing' : ''}`} onClick={placeAnnotation} aria-label={annotating ? 'Click to place an annotation' : undefined}>
@@ -379,6 +526,18 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
           </div>
           {items.length > 1 && <button type="button" className="av-nav prev" onClick={event => { event.stopPropagation(); previous() }} title="Previous (←)">‹</button>}
           {items.length > 1 && <button type="button" className="av-nav next" onClick={event => { event.stopPropagation(); next() }} title="Next (→)">›</button>}
+          {previewConsentOpen && <div className="av-preview-consent-scrim">
+            <section ref={consentRef} className="av-preview-consent" role="alertdialog" aria-modal="true" aria-labelledby={consentTitleId}>
+              <p className="eyebrow">Trust boundary</p>
+              <h3 id={consentTitleId}>Enable trusted active content?</h3>
+              <p>Active content can run scripts and module workers, use network access, navigate within the preview, and send any data from this Area to external services.</p>
+              <p><strong>Proxima cannot guarantee Area confidentiality while active mode is enabled.</strong> The preview remains isolated from Proxima and every other Area.</p>
+              <div className="av-preview-consent-actions">
+                <button ref={consentCancelRef} type="button" className="ghost-button" disabled={previewModePending} onClick={() => setPreviewConsentOpen(false)}>Keep passive</button>
+                <button type="button" className="primary-button" disabled={previewModePending} onClick={() => void enableActivePreview()}>{previewModePending ? 'Enabling...' : 'Enable trusted active mode'}</button>
+              </div>
+            </section>
+          </div>}
         </>}
     </div>,
     document.body,

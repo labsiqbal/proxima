@@ -278,6 +278,15 @@ host, or a plain HTTP relay. HTTPS remote entry fails with 503 when no distinct 
 Area origin is configured. `TargetPreviewMiddleware` routes Area hosts before the
 application and applies one capability and Fetch Metadata admission gate to every
 transport. Each admitted resource is resolved again through `file_targets.py`.
+HTML enters that origin with a passive, script-free capability by default. Artifact
+Review can create an active generation only after a bearer-authenticated owner
+confirmation that is scoped to one owner session, canonical Area, and mounted viewer.
+The server revalidates that generation and owner session on every active resource.
+Disabling, closing the viewer, changing Areas, or restarting the server revokes or
+forgets the generation and reloads passive content; a stale cookie or URL cannot
+restore it. Active responses allow dedicated module workers and outbound network
+requests after the trust warning, while Service Workers and Shared Workers remain
+unavailable.
 `cf_hostnames.py` serializes and verifies apps-domain ingress updates, while
 `logging_config.py` redacts preview capabilities before access logging. The complete
 admission, cookie, framing, worker, and response-policy contract lives in
@@ -295,7 +304,9 @@ remain unchanged, and model-supplied targets are otherwise removed. See
 [ADR-0029](../adr/0029-canonical-file-targets.md),
 [ADR-0030](../adr/0030-area-scoped-artifact-media.md), and
 [ADR-0034](../adr/0034-distinct-tls-area-preview-origins.md), with frame admission
-extended by [ADR-0035](../adr/0035-frame-bound-area-preview-admission.md).
+extended by [ADR-0035](../adr/0035-frame-bound-area-preview-admission.md) and the
+explicit trust transition recorded in
+[ADR-0036](../adr/0036-active-file-preview-is-explicit-trusted-mode.md).
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).

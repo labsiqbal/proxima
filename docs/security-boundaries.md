@@ -433,20 +433,42 @@ service-worker module requests switch to `same-origin`. Site, mode, and destinat
 must each be one canonical Structured Field token; optional user activation must be
 the canonical `?1` boolean on a navigation. Duplicate lines, comma-combined values,
 non-ASCII bytes, noncanonical casing, and surrounding whitespace fail closed before
-admission.
+admission. A syntactically valid tuple does not grant mode authority: passive mode
+still rejects active destinations, and every mode rejects Service Workers and Shared
+Workers.
 
-Legacy active files never execute on the Proxima origin. HTML is upgraded to the
-canonical response sandbox, active XML and SVG download, main-origin HTML denies
-framing, worker responses restrict connections, and Service Worker scripts are
-rejected. Fetch Metadata and opaque-origin checks reject embedded requests that try
-to leave the preview boundary for Proxima routes. Same-Area resources still cross
-the canonical resolver and realpath jail. Every document-viewable response,
-including PDF, receives an exact frame-ancestor allowlist: the authenticated Proxima
-origin, plus the same Area origin where nested Area frames are supported. Successful
-file responses expose a non-secret capability-generation hash. Browser evidence
-correlates that hash and a strong request nonce with exactly one admission record
-written after canonical resolution; capability values and unvalidated query fields
-are not recorded.
+HTML is passive and script-free by default, including legacy HTML upgraded into the
+canonical Area origin. Its sandbox permits static same-Area styles, images, fonts,
+and media while denying scripts, workers, fetch, forms, objects, and nested frames.
+Unknown prior state always means passive. Artifact Review visibly labels this mode.
+
+The owner may explicitly enable trusted active mode for one authenticated owner
+session, canonical Area, and mounted viewer. The mutation requires the bearer token,
+not an ambient cookie. Before confirmation the UI states that active content may run
+scripts and dedicated module workers, use network access, navigate within the
+preview, and send any data in that Area externally. Proxima therefore makes no
+confidentiality guarantee for the selected Area while active mode is enabled. The
+content remains origin-isolated from Proxima and every other Area.
+
+The server keeps an opaque active generation and checks it, the Area, viewer session,
+and live owner authentication on every active request. Active mode permits
+capability-bound same-Area nested frames; only then does `frame-ancestors` contain
+both the signed Proxima origin and the same Area origin. Passive mode names only the
+signed Proxima origin. Disabling removes the generation before reloading passive
+content. Closing the viewer or changing Areas also revokes it. Stale cookies, worker
+requests, frames, and URLs fail generation validation. Dedicated workers die with
+the reloaded document; Service Workers and Shared Workers are always rejected.
+
+Legacy active files never execute on the Proxima origin. Active XML and SVG download,
+main-origin HTML denies framing, and Fetch Metadata and opaque-origin checks reject
+embedded requests that try to leave the preview boundary for Proxima routes.
+Same-Area resources still cross the canonical resolver and realpath jail. Every
+document-viewable response, including PDF, receives the mode-appropriate exact
+frame-ancestor allowlist. Successful file responses expose a non-secret
+capability-generation hash. Browser evidence correlates that hash and a strong
+request nonce with exactly one admission record written after canonical resolution;
+capability values and unvalidated query fields are not recorded. See
+[ADR-0036](adr/0036-active-file-preview-is-explicit-trusted-mode.md).
 Design Studio obtains targeted canvas and export pixels through authenticated raw
 bytes and temporary blob URLs rather than through preview-origin CORS.
 

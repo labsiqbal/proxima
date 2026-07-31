@@ -23,6 +23,7 @@ from .. import higgsfield
 from .. import image_providers
 from .. import media_settings
 from .. import cf_hostnames
+from ..auth import hash_token, iso_now
 from ..artifacts import scan_project_artifacts, update_produced_artifacts
 from ..preview_proxy import (
     PreviewConnectionRejected,
@@ -35,6 +36,7 @@ from ..schemas import (
     FileWriteRequest,
     FsPathRequest,
     FsRenameRequest,
+    PreviewModeRequest,
 )
 from ..target_preview import (
     is_active_preview_media_type,
@@ -55,6 +57,38 @@ def register(app, deps):
     _project_root = deps["_project_root"]
     _ops_root = deps["_ops_root"]
     _virtual_root = deps["_virtual_root"]
+
+    def _owner_session(request: Request, *, bearer_only: bool = False) -> str:
+        authorization = request.headers.get("authorization", "")
+        token = (
+            authorization.removeprefix("Bearer ").strip()
+            if authorization.startswith("Bearer ")
+            else ""
+        )
+        if not token and not bearer_only:
+            token = request.cookies.get("proxima_session", "")
+        if not token:
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "active preview changes require owner authorization"
+                    if bearer_only
+                    else "preview owner session is unavailable"
+                ),
+            )
+        token_hash = hash_token(token)
+        session = db().execute(
+            "SELECT 1 FROM auth_sessions "
+            "WHERE token_hash = ? AND revoked_at IS NULL "
+            "AND (expires_at IS NULL OR expires_at > ?)",
+            (token_hash, iso_now()),
+        ).fetchone()
+        if session is None:
+            raise HTTPException(
+                status_code=401,
+                detail="preview owner session is invalid or expired",
+            )
+        return token_hash
 
     def _resolved_file(
         slug: str,
@@ -1214,6 +1248,7 @@ def register(app, deps):
                 request,
                 int(project["id"]),
                 resolved.locator,
+                owner_session=_owner_session(request),
             )
         except (OSError, RuntimeError, httpx.HTTPError) as exc:
             raise HTTPException(
@@ -1224,6 +1259,64 @@ def register(app, deps):
         response.headers["Cache-Control"] = "private, no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
+
+    @app.post("/api/projects/{slug}/preview-mode")
+    def project_preview_mode(
+        slug: str,
+        request: Request,
+        payload: PreviewModeRequest,
+        target: str = Query(min_length=1),
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        owner_session = _owner_session(request, bearer_only=True)
+        project = visible_project(slug, user)
+        resolved = _resolved_file(
+            slug,
+            user,
+            target=target,
+            project=project,
+        )
+        if not resolved.path.is_file():
+            raise HTTPException(status_code=404, detail="not a file")
+        if preview_media_type(resolved.path) not in {"text/html"}:
+            raise HTTPException(
+                status_code=400,
+                detail="active mode is available only for HTML previews",
+            )
+        area = app.state.target_previews.area_for_locator(
+            int(project["id"]),
+            resolved.locator,
+        )
+        generation = app.state.target_previews.set_active_mode(
+            owner_session=owner_session,
+            area=area,
+            preview_session=payload.preview_session,
+            active=payload.active,
+            expected_generation=payload.generation,
+        )
+        if not payload.active and generation is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="active preview generation changed; reload before disabling",
+            )
+        _audit(
+            user,
+            (
+                "file.preview.active.enabled"
+                if payload.active
+                else "file.preview.active.disabled"
+            ),
+            "project",
+            slug,
+            {
+                "area_kind": area.kind,
+                "area_id": area.area_id,
+            },
+        )
+        return {
+            "active": payload.active and generation is not None,
+            "generation": generation if payload.active else None,
+        }
 
     @app.get("/api/preview/{slug}/{file_path:path}")
     async def project_preview(
@@ -1255,6 +1348,11 @@ def register(app, deps):
                     request,
                     int(project["id"]),
                     resolved.locator,
+                    owner_session=(
+                        _owner_session(request)
+                        if request.query_params.get("__proxima_mode") == "active"
+                        else None
+                    ),
                 )
             except (OSError, RuntimeError, httpx.HTTPError) as exc:
                 raise HTTPException(

@@ -11,6 +11,7 @@ import {
   fetchRawFile,
   previewUrl,
   relativeFileUrl,
+  setTargetPreviewMode,
 } from './files'
 import type { FileTarget } from '../types'
 
@@ -34,6 +35,45 @@ describe('canonical file URLs', () => {
     expect(previewUrl('identity', 'display/brief.md', target)).toBe(
       '/api/target-preview/identity/ops/42/reports/brief.md',
     )
+  })
+
+  it('adds scoped active authority only when explicitly supplied', () => {
+    const active = previewUrl('identity', 'display/brief.md', target, {
+      previewSession: 's'.repeat(32),
+      generation: 'g'.repeat(43),
+    })
+    const [path, rawQuery] = active.split('?')
+    expect(path).toBe('/api/target-preview/identity/ops/42/reports/brief.md')
+    expect(Object.fromEntries(new URLSearchParams(rawQuery))).toEqual({
+      __proxima_mode: 'active',
+      __proxima_preview_session: 's'.repeat(32),
+      __proxima_preview_generation: 'g'.repeat(43),
+    })
+  })
+
+  it('changes active mode through a bearer-authenticated target mutation', async () => {
+    await setTargetPreviewMode(
+      'owner-token',
+      'identity',
+      target,
+      's'.repeat(32),
+      false,
+      'g'.repeat(43),
+    )
+
+    const [url, token, init] = apiMock.mock.calls[0]
+    expect(token).toBe('owner-token')
+    expect(init).toEqual({
+      method: 'POST',
+      keepalive: false,
+      body: JSON.stringify({
+        active: false,
+        preview_session: 's'.repeat(32),
+        generation: 'g'.repeat(43),
+      }),
+    })
+    const query = new URLSearchParams(String(url).split('?')[1])
+    expect(JSON.parse(query.get('target') || '{}')).toEqual(target)
   })
 
   it('resolves Markdown siblings relative to the originating Area', () => {

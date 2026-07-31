@@ -920,12 +920,75 @@ def _browser_expression(manifest_probe_nonce: str) -> str:
           : null;
       });
     } else if (kind === "html") {
-      await until(`${name} isolated HTML preview`, () => {
+      const passiveFrame = await until(`${name} passive HTML preview`, () => {
         const frame = overlay.querySelector("iframe.av-frame");
         return frame?.src.includes("/api/target-preview/")
           && frame.src.includes("/ops/")
-          && !frame.hasAttribute("sandbox");
+          && frame.getAttribute("sandbox") === ""
+          ? frame
+          : null;
       });
+      if (!(overlay.textContent || "").includes("Passive preview")) {
+        throw new Error("HTML preview did not visibly default to passive mode");
+      }
+      await wait(500);
+      if (
+        previewMessages["target-preview-origin"]
+        || previewMessages["target-preview-module"]
+        || previewMessages["target-preview-worker"]
+      ) {
+        throw new Error("passive HTML executed scripts or workers before consent");
+      }
+      checks.push("passive-preview-default-script-free");
+
+      const enable = exactButton("Enable active preview");
+      if (!enable) throw new Error("missing explicit active preview action");
+      enable.click();
+      const consent = await until(
+        `${name} active preview consent`,
+        () => document.querySelector(".av-preview-consent")
+      );
+      const disclosure = consent.textContent || "";
+      for (const required of [
+        "run scripts and module workers",
+        "send any data from this Area to external services",
+        "cannot guarantee Area confidentiality",
+        "isolated from Proxima and every other Area",
+      ]) {
+        if (!disclosure.includes(required)) {
+          throw new Error(`active preview disclosure omitted: ${required}`);
+        }
+      }
+      for (const theme of ["light", "dark", "ocean", "violet", "sunset", "forest"]) {
+        document.documentElement.setAttribute("data-theme", theme);
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        const bounds = consent.getBoundingClientRect();
+        const style = getComputedStyle(consent);
+        if (
+          bounds.width < 300
+          || bounds.height < 150
+          || style.display === "none"
+          || style.visibility === "hidden"
+          || style.backgroundColor === "rgba(0, 0, 0, 0)"
+          || !getComputedStyle(consent.querySelector(".primary-button")).color
+        ) {
+          throw new Error(`active preview consent is not usable in ${theme} theme`);
+        }
+      }
+      checks.push("active-preview-consent-all-themes");
+      const activate = exactButton("Enable trusted active mode");
+      if (!activate) throw new Error("missing trusted active confirmation");
+      activate.click();
+      const targetFrame = await until(`${name} active HTML preview`, () => {
+        const frame = overlay.querySelector("iframe.av-frame");
+        return frame?.src.includes("__proxima_mode=active")
+          && frame.getAttribute("sandbox") === "allow-scripts allow-same-origin"
+          ? frame
+          : null;
+      });
+      if (!(overlay.textContent || "").includes("Active preview")) {
+        throw new Error("active preview trust state is not visibly indicated");
+      }
       if (
         location.protocol !== "https:"
         || location.hostname !== "proxima.tailnet.test"
@@ -942,7 +1005,6 @@ def _browser_expression(manifest_probe_nonce: str) -> str:
       ) {
         throw new Error(`targeted HTML used an invalid TLS origin: ${previewOrigin}`);
       }
-      const targetFrame = overlay.querySelector("iframe.av-frame");
       window.__targetPreviewEntry = targetFrame.src;
       window.__targetPreviewOrigin = previewOrigin;
       const manifestUrl = new URL(`${previewOrigin}/site/app.webmanifest`);
@@ -1040,6 +1102,8 @@ def _browser_expression(manifest_probe_nonce: str) -> str:
       if (previewMessages["target-preview-external-frame"] === "loaded") {
         throw new Error("an opaque external ancestor framed the Area preview");
       }
+      window.__targetPreviewActiveEntry = targetFrame.src;
+      window.__targetPreviewPassiveEntry = passiveFrame.src;
     } else {
       await until(`${name} PDF preview`, () => {
         const frame = overlay.querySelector("iframe.av-frame");
@@ -1056,9 +1120,8 @@ def _browser_expression(manifest_probe_nonce: str) -> str:
 
   await openRecord("brief.md", "markdown");
   await openRecord("visual.png", "image");
-  await openRecord("index.html", "html");
-  await openRecord("handout.pdf", "pdf", false);
-  checks.push("archive-to-viewer-markdown-image-html-pdf");
+  await openRecord("index.html", "html", false);
+  checks.push("archive-to-viewer-markdown-image-html");
 
   return {ok: true, checks};
 })()
@@ -1100,12 +1163,35 @@ def _http_preview_expression(*, relay: bool = False) -> str:
   const encodePath = path =>
     path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
   const target = record.target;
-  const entry = (
+  const passiveEntry = (
     `/api/target-preview/${encodeURIComponent(target.project)}`
     + `/${encodeURIComponent(target.area.kind)}`
     + `/${target.area.id ?? "root"}`
     + `/${encodePath(target.path)}`
   );
+  const resume = await fetch("/auth/resume", {method: "POST"});
+  if (!resume.ok) throw new Error(`HTTP preview owner resume failed: ${resume.status}`);
+  const ownerToken = (await resume.json()).token;
+  const previewSession = crypto.randomUUID();
+  const mode = await fetch(
+    `/api/projects/${encodeURIComponent(target.project)}/preview-mode?target=${encodeURIComponent(JSON.stringify(target))}`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${ownerToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({active: true, preview_session: previewSession}),
+    },
+  );
+  if (!mode.ok) throw new Error(`HTTP active preview consent failed: ${mode.status}`);
+  const generation = (await mode.json()).generation;
+  const entryQuery = new URLSearchParams({
+    __proxima_mode: "active",
+    __proxima_preview_session: previewSession,
+    __proxima_preview_generation: generation,
+  });
+  const entry = `${passiveEntry}?${entryQuery}`;
   const messages = {};
   window.addEventListener("message", event => {
     if (typeof event.data?.probe === "string") {
@@ -1168,6 +1254,12 @@ def _http_preview_expression(*, relay: bool = False) -> str:
       `same-site Area script request was not rejected: ${sameSiteScript}`
     );
   }
+  window.__targetPreviewMode = {
+    generation,
+    ownerToken,
+    previewSession,
+    target,
+  };
   return {
     ok: true,
     checks: relay ? [
@@ -1183,6 +1275,117 @@ def _http_preview_expression(*, relay: bool = False) -> str:
 })()
 """
     return script.replace("__RELAY__", "true" if relay else "false")
+
+
+def _revoke_http_preview_expression() -> str:
+    return r"""
+(async () => {
+  const mode = window.__targetPreviewMode;
+  if (!mode) throw new Error("HTTP active preview authority is unavailable");
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(mode.target.project)}/preview-mode?target=${encodeURIComponent(JSON.stringify(mode.target))}`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${mode.ownerToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        active: false,
+        preview_session: mode.previewSession,
+        generation: mode.generation,
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`HTTP active preview revoke failed: ${response.status}`);
+  }
+  const stale = await fetch(window.__targetPreviewEntry, {redirect: "manual"});
+  if (stale.status !== 503) {
+    throw new Error(`HTTP stale authority survived revocation: ${stale.status}`);
+  }
+  return {ok: true};
+})()
+"""
+
+
+def _revoke_active_preview_and_open_pdf_expression() -> str:
+    return r"""
+(async () => {
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const until = async (label, check, timeout = 15000) => {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const value = await check();
+      if (value) return value;
+      await wait(75);
+    }
+    throw new Error(`timed out waiting for ${label}`);
+  };
+  const exactButton = label => [...document.querySelectorAll("button")]
+    .find(node => (node.textContent || "").trim() === label);
+  const overlay = await until(
+    "active ArtifactViewer before revocation",
+    () => document.querySelector(".av-overlay")
+  );
+  const disable = exactButton("Disable active preview");
+  if (!disable) throw new Error("missing reversible active preview action");
+  disable.click();
+  await until("passive reload after disable", () => {
+    const frame = overlay.querySelector("iframe.av-frame");
+    return frame?.src === window.__targetPreviewPassiveEntry
+      && frame.getAttribute("sandbox") === ""
+      && (overlay.textContent || "").includes("Passive preview");
+  });
+  const stale = await fetch(window.__targetPreviewActiveEntry, {
+    redirect: "manual",
+  });
+  if (stale.status !== 503) {
+    throw new Error(
+      `stale active preview authority survived revocation: ${stale.status}`
+    );
+  }
+  overlay.querySelector('[aria-label="Close artifact review"]')?.click();
+  await until(
+    "HTML viewer close after revocation",
+    () => !document.querySelector(".av-overlay")
+  );
+
+  const row = await until("handout.pdf Archive row", () =>
+    [...document.querySelectorAll(".archive-row")]
+      .find(node => (
+        node.querySelector("strong")?.textContent || ""
+      ).trim() === "handout.pdf")
+  );
+  if (row.getAttribute("aria-expanded") !== "true") row.click();
+  const expanded = await until("handout.pdf expanded row", () =>
+    row.nextElementSibling?.classList.contains("archive-exp-row")
+      ? row.nextElementSibling
+      : null
+  );
+  const open = [...expanded.querySelectorAll("button")]
+    .find(node => (node.textContent || "").trim() === "Open");
+  if (!open) throw new Error("missing Open action for handout.pdf");
+  open.click();
+  const pdfOverlay = await until(
+    "handout.pdf ArtifactViewer",
+    () => document.querySelector(".av-overlay")
+  );
+  await until("handout.pdf canonical preview", () => {
+    const frame = pdfOverlay.querySelector("iframe.av-frame");
+    return frame?.src.includes("/api/target-preview/")
+      && frame.src.includes("/ops/")
+      && !frame.src.includes("target=");
+  });
+  return {
+    ok: true,
+    checks: [
+      "active-preview-revocation-and-stale-generation",
+      "archive-to-viewer-pdf",
+    ],
+  };
+})()
+"""
 
 
 def _top_level_preview_probe(name: str) -> dict[str, object]:
@@ -1555,13 +1758,25 @@ def main() -> None:
                         tls_context=tls_context,
                     )["token"]
                 )
+                root_id = str(
+                    _request(
+                        f"{api_url}/api/fs/dirs",
+                        token=token,
+                        tls_context=tls_context,
+                    )["root_id"]
+                )
                 for path, name, slug in (
                     (legacy, "Legacy browser", "legacy-browser"),
                     (canonical, "Canonical browser", "canonical-browser"),
                 ):
                     _request(
                         f"{api_url}/api/projects/link",
-                        body={"name": name, "path": str(path), "slug": slug},
+                        body={
+                            "name": name,
+                            "path": str(path),
+                            "root_id": root_id,
+                            "slug": slug,
+                        },
                         token=token,
                         tls_context=tls_context,
                     )
@@ -1632,6 +1847,14 @@ def main() -> None:
                                 "HTTPS clean top-level Area rejection"
                             ),
                             _coop_success_probe(coop_control_url),
+                            {
+                                "action": "script",
+                                "name": "revoke active preview and open PDF",
+                                "timeout": 30,
+                                "expression": (
+                                    _revoke_active_preview_and_open_pdf_expression()
+                                ),
+                            },
                             *(
                                 [
                                     {
@@ -1773,6 +1996,14 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                                 _clean_top_level_preview_probe(
                                     "HTTP named-local clean top-level rejection"
                                 ),
+                                {
+                                    "action": "script",
+                                    "name": "HTTP named-local active revocation",
+                                    "timeout": 15,
+                                    "expression": (
+                                        _revoke_http_preview_expression()
+                                    ),
+                                },
                             ],
                         }
                         http_transcript = run_scenario(
@@ -1816,6 +2047,14 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                                 _clean_top_level_preview_probe(
                                     "HTTP relay clean top-level rejection"
                                 ),
+                                {
+                                    "action": "script",
+                                    "name": "HTTP relay active revocation",
+                                    "timeout": 15,
+                                    "expression": (
+                                        _revoke_http_preview_expression()
+                                    ),
+                                },
                             ],
                         }
                         relay_transcript = run_scenario(

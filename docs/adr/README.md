@@ -93,3 +93,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0033](0033-capability-scoped-file-preview-gateways.md) | File previews use capability-scoped execution boundaries | Superseded by ADR-0034 |
 | [0034](0034-distinct-tls-area-preview-origins.md) | Active file previews require distinct TLS Area origins | Accepted |
 | [0035](0035-frame-bound-area-preview-admission.md) | Area preview admission is frame-bound | Accepted |
+| [0036](0036-active-file-preview-is-explicit-trusted-mode.md) | Active file preview is an explicit trusted mode | Accepted |

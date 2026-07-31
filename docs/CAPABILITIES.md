@@ -1349,13 +1349,22 @@ targets, but agent replies cannot create or replace that trusted metadata. Artif
 lists and chat messages omit links that cannot be assigned a validated target.
 Workspace discovery alone does not create Archive records.
 
-Active file previews run on an Area-only origin selected from a named local host, an
-apps-domain host, or a plain HTTP relay. An HTTPS remote install without a distinct
-TLS Area origin returns 503 for active canonical previews; passive media remains
+HTML previews run passively and script-free by default on an Area-only origin selected
+from a named local host, an apps-domain host, or a plain HTTP relay. Artifact Review
+labels that state and requires an explicit owner confirmation before enabling trusted
+active content for one owner session, Area, and viewer. The warning states that
+scripts, dedicated module workers, network access, and navigation can send selected
+Area data externally, so Proxima provides no Area-confidentiality guarantee in active
+mode. Active content remains origin-isolated from Proxima and every other Area.
+Disabling, closing, changing Areas, or restarting revokes the active generation and
+reloads passive content; stale cookies and URLs cannot restore it. Service Workers and
+Shared Workers remain unavailable. An HTTPS remote install without a distinct TLS
+Area origin returns 503 for active canonical previews; passive media remains
 available through the authenticated route. The security contract and deployment
 matrix are owned by [Security boundaries](security-boundaries.md#canonical-file-preview);
-the locator and request flow are detailed in
-[Architecture](reference/architecture.md) and [ADR-0029](adr/0029-canonical-file-targets.md).
+the locator and request flow are detailed in [Architecture](reference/architecture.md),
+[ADR-0029](adr/0029-canonical-file-targets.md), and
+[ADR-0036](adr/0036-active-file-preview-is-explicit-trusted-mode.md).
 These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge, chat attachments, and `@`
@@ -1365,7 +1374,7 @@ name (`New file name`, `New folder name`, or `Rename <entry>`) and a create
 placeholder (`file-name` / `folder-name`) so the empty field is not a dead unlabeled
 box — Enter commits, Escape or empty blur cancels.
 **Endpoints:** `/api/projects/{slug}/tree`, `/file`, `/upload`, `/fs/*`, `/raw`,
-`/reference-files`, `/artifacts`, `/api/preview/{slug}/{path}`,
+`/reference-files`, `/artifacts`, `/preview-mode`, `/api/preview/{slug}/{path}`,
 `/api/target-preview/{slug}/{kind}/{id}/{path}`.
 
 ## 12. Run & Preview app

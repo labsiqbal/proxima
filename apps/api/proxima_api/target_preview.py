@@ -15,6 +15,7 @@ import mimetypes
 import re
 import secrets
 import socket
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,9 @@ _LOG = logging.getLogger(__name__)
 FILE_PREVIEW_COOKIE = "proxima_file_preview"
 FILE_PREVIEW_TTL_SECONDS = 60 * 60
 _CAPABILITY_QUERY = "__proxima_cap"
+_PREVIEW_MODE_QUERY = "__proxima_mode"
+_PREVIEW_SESSION_QUERY = "__proxima_preview_session"
+_PREVIEW_GENERATION_QUERY = "__proxima_preview_generation"
 _REQUEST_NONCE_QUERY = "__proxima_request_nonce"
 _REQUEST_NONCE_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}\Z", re.ASCII)
 _CAPABILITY_GENERATION_HEADER = "X-Proxima-Preview-Generation"
@@ -55,6 +59,18 @@ _SCRIPT_MEDIA_TYPES = frozenset(
         "application/javascript",
         "text/ecmascript",
         "text/javascript",
+    }
+)
+_PASSIVE_BLOCKED_DESTINATIONS = frozenset(
+    {
+        "audioworklet",
+        "embed",
+        "object",
+        "paintworklet",
+        "script",
+        "serviceworker",
+        "sharedworker",
+        "worker",
     }
 )
 _STRUCTURED_TOKEN = re.compile(
@@ -183,6 +199,8 @@ def mint_file_preview_token(
     *,
     ttl_seconds: int = FILE_PREVIEW_TTL_SECONDS,
     frame_origin: str = "",
+    active_generation: str | None = None,
+    preview_session: str | None = None,
 ) -> str:
     encoded = _encode_payload(
         {
@@ -192,6 +210,9 @@ def mint_file_preview_token(
             "area": area.area_id,
             "nonce": secrets.token_urlsafe(12),
             "frame_origin": frame_origin,
+            "mode": "active" if active_generation else "passive",
+            "active_generation": active_generation,
+            "preview_session": preview_session,
         }
     )
     signature = base64.urlsafe_b64encode(
@@ -259,6 +280,21 @@ def valid_file_preview_token(
 ) -> bool:
     payload = _file_preview_token_payload(secret, token, now=now)
     return payload is not None and _area_from_payload(payload) == area
+
+
+def _active_token_generation(payload: dict[str, Any]) -> str | None:
+    if payload.get("mode") != "active":
+        return None
+    generation = payload.get("active_generation")
+    preview_session = payload.get("preview_session")
+    if (
+        not isinstance(generation, str)
+        or _REQUEST_NONCE_TOKEN.fullmatch(generation) is None
+        or not isinstance(preview_session, str)
+        or _REQUEST_NONCE_TOKEN.fullmatch(preview_session) is None
+    ):
+        return None
+    return generation
 
 
 def _normalized_origin(scheme: str, host: str) -> str:
@@ -559,6 +595,99 @@ class TargetPreviewManager:
         self._relays: dict[tuple[PreviewArea, str], dict[str, Any]] = {}
         self._provisioned: set[PreviewArea] = set()
         self._provision_locks: dict[PreviewArea, asyncio.Lock] = {}
+        self._active_modes: dict[
+            tuple[str, PreviewArea, str],
+            str,
+        ] = {}
+        self._active_generations: dict[
+            str,
+            tuple[str, PreviewArea, str],
+        ] = {}
+        self._active_lock = threading.RLock()
+
+    @staticmethod
+    def area_for_locator(
+        project_id: int,
+        locator: file_targets.FileLocator,
+    ) -> PreviewArea:
+        return PreviewArea.from_locator(project_id, locator)
+
+    def active_mode(
+        self,
+        *,
+        owner_session: str,
+        area: PreviewArea,
+        preview_session: str,
+    ) -> str | None:
+        with self._active_lock:
+            return self._active_modes.get(
+                (owner_session, area, preview_session)
+            )
+
+    def set_active_mode(
+        self,
+        *,
+        owner_session: str,
+        area: PreviewArea,
+        preview_session: str,
+        active: bool,
+        expected_generation: str | None = None,
+    ) -> str | None:
+        with self._active_lock:
+            key = (owner_session, area, preview_session)
+            current = self._active_modes.get(key)
+            if not active:
+                if (
+                    expected_generation is not None
+                    and current != expected_generation
+                ):
+                    return current
+                if current is not None:
+                    self._active_modes.pop(key, None)
+                    self._active_generations.pop(current, None)
+                return None
+            if current is not None:
+                return current
+            generation = secrets.token_urlsafe(32)
+            self._active_modes[key] = generation
+            self._active_generations[generation] = key
+            return generation
+
+    def _active_payload_is_current(
+        self,
+        area: PreviewArea,
+        payload: dict[str, Any],
+    ) -> bool:
+        generation = _active_token_generation(payload)
+        if generation is None:
+            return payload.get("mode") in {None, "passive"}
+        with self._active_lock:
+            key = self._active_generations.get(generation)
+            current = (
+                key is not None
+                and key[1] == area
+                and key[2] == payload.get("preview_session")
+                and self._active_modes.get(key) == generation
+            )
+        if not current or key is None:
+            return False
+        conn = connect(self.database_path, read_only=True)
+        try:
+            authenticated = conn.execute(
+                "SELECT 1 FROM auth_sessions "
+                "WHERE token_hash = ? AND revoked_at IS NULL "
+                "AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)",
+                (key[0],),
+            ).fetchone()
+        finally:
+            conn.close()
+        if authenticated is not None:
+            return True
+        with self._active_lock:
+            if self._active_modes.get(key) == generation:
+                self._active_modes.pop(key, None)
+                self._active_generations.pop(generation, None)
+        return False
 
     @staticmethod
     def _is_loopback_address(host: str) -> bool:
@@ -620,6 +749,8 @@ class TargetPreviewManager:
         request: Request,
         project_id: int,
         locator: file_targets.FileLocator,
+        *,
+        owner_session: str | None = None,
     ) -> str:
         if self.maintenance is not None and self.maintenance.fenced():
             raise RuntimeError("dedicated file previews are unavailable")
@@ -631,8 +762,35 @@ class TargetPreviewManager:
         query = [
             (key, value)
             for key, value in request.query_params.multi_items()
-            if key != _CAPABILITY_QUERY
+            if key not in {
+                _CAPABILITY_QUERY,
+                _PREVIEW_MODE_QUERY,
+                _PREVIEW_SESSION_QUERY,
+                _PREVIEW_GENERATION_QUERY,
+            }
         ]
+        active_generation: str | None = None
+        preview_session: str | None = None
+        if request.query_params.get(_PREVIEW_MODE_QUERY) == "active":
+            preview_session = request.query_params.get(_PREVIEW_SESSION_QUERY)
+            requested_generation = request.query_params.get(
+                _PREVIEW_GENERATION_QUERY
+            )
+            if (
+                owner_session is None
+                or preview_session is None
+                or _REQUEST_NONCE_TOKEN.fullmatch(preview_session) is None
+                or requested_generation is None
+                or _REQUEST_NONCE_TOKEN.fullmatch(requested_generation) is None
+                or self.active_mode(
+                    owner_session=owner_session,
+                    area=area,
+                    preview_session=preview_session,
+                )
+                != requested_generation
+            ):
+                raise RuntimeError("active file preview authority is unavailable")
+            active_generation = requested_generation
 
         if self.apps_domain:
             if self.provision_hostname is not None and area not in self._provisioned:
@@ -682,6 +840,8 @@ class TargetPreviewManager:
             self.secret,
             area,
             frame_origin=frame_origin,
+            active_generation=active_generation,
+            preview_session=preview_session,
         )
         query.append((_CAPABILITY_QUERY, token))
         return f"{origin}/{encoded}?{urlencode(query)}"
@@ -808,9 +968,37 @@ class TargetPreviewManager:
         if payload is None or _area_from_payload(payload) != area:
             await self._reject(scope, send, 403, "preview capability is invalid")
             return
+        if not self._active_payload_is_current(area, payload):
+            await self._reject(
+                scope,
+                send,
+                403,
+                "active preview capability is revoked",
+            )
+            return
+        active = _active_token_generation(payload) is not None
         capability_generation = _capability_generation(token)
         if _is_service_worker_request(scope, metadata):
             await self._reject(scope, send, 403, "service workers are unavailable")
+            return
+        if (
+            not active
+            and metadata.destination in _PASSIVE_BLOCKED_DESTINATIONS
+        ):
+            await self._reject(
+                scope,
+                send,
+                403,
+                "passive previews do not allow active content",
+            )
+            return
+        if active and metadata.destination == "sharedworker":
+            await self._reject(
+                scope,
+                send,
+                403,
+                "shared workers are unavailable",
+            )
             return
         if query_token:
             location = scope.get("path") or "/"
@@ -866,6 +1054,7 @@ class TargetPreviewManager:
             frame_origin=str(payload.get("frame_origin") or ""),
             capability_generation=capability_generation,
             metadata=metadata,
+            active=active,
         )
 
     async def _serve_file(
@@ -879,6 +1068,7 @@ class TargetPreviewManager:
         frame_origin: str,
         capability_generation: str,
         metadata: _PreviewFetchMetadata,
+        active: bool,
     ) -> None:
         try:
             normalized = file_targets.normalize_relative_path(
@@ -928,10 +1118,13 @@ class TargetPreviewManager:
             preview_source = _frame_source(_scope_origin(scope))
         except ValueError:
             preview_source = "'none'"
+        ancestor_sources = [frame_source]
+        if active:
+            ancestor_sources.append(preview_source)
         frame_ancestors = " ".join(
             dict.fromkeys(
                 source
-                for source in (frame_source, preview_source)
+                for source in ancestor_sources
                 if source != "'none'"
             )
         ) or "'none'"
@@ -942,18 +1135,34 @@ class TargetPreviewManager:
             _CAPABILITY_GENERATION_HEADER: capability_generation,
             "X-Content-Type-Options": "nosniff",
         }
-        if media_type in _HTML_MEDIA_TYPES:
+        if media_type in _HTML_MEDIA_TYPES and active:
             policy = (
                 "sandbox allow-scripts allow-same-origin",
                 "default-src 'self' data: blob:",
                 "script-src 'self' 'unsafe-inline' blob:",
                 "style-src 'self' 'unsafe-inline'",
-                "img-src 'self' data: blob:",
-                "media-src 'self' blob:",
+                "img-src * data: blob:",
+                "media-src * data: blob:",
                 "font-src 'self' data:",
-                "connect-src 'self'",
+                "connect-src *",
                 "worker-src 'self' blob:",
                 "frame-src 'self'",
+                "object-src 'none'",
+                "base-uri 'none'",
+                "form-action 'none'",
+            )
+        elif media_type in _HTML_MEDIA_TYPES:
+            policy = (
+                "sandbox allow-same-origin",
+                "default-src 'self' data:",
+                "script-src 'none'",
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data:",
+                "media-src 'self'",
+                "font-src 'self' data:",
+                "connect-src 'none'",
+                "worker-src 'none'",
+                "frame-src 'none'",
                 "object-src 'none'",
                 "base-uri 'none'",
                 "form-action 'none'",
@@ -964,11 +1173,19 @@ class TargetPreviewManager:
                 "default-src 'none'",
                 "object-src 'none'",
             )
-        elif media_type in _SCRIPT_MEDIA_TYPES:
+        elif media_type in _SCRIPT_MEDIA_TYPES and active:
             policy = (
                 "default-src 'none'",
                 "script-src 'self'",
-                "connect-src 'self'",
+                "connect-src *",
+                "worker-src 'none'",
+                "object-src 'none'",
+            )
+        elif media_type in _SCRIPT_MEDIA_TYPES:
+            policy = (
+                "default-src 'none'",
+                "script-src 'none'",
+                "connect-src 'none'",
                 "worker-src 'none'",
                 "object-src 'none'",
             )
@@ -1019,6 +1236,9 @@ class TargetPreviewManager:
         await response(scope, receive, send)
 
     async def shutdown(self) -> None:
+        with self._active_lock:
+            self._active_modes.clear()
+            self._active_generations.clear()
         for relay_key in list(self._relays):
             relay = self._relays.pop(relay_key)
             relay["server"].should_exit = True

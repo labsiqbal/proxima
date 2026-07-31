@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-192 endpoints across 18 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+193 endpoints across 18 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -14,7 +14,7 @@
 - [`routes/chat.py`](#routes-chat-py) - 25 endpoints
 - [`routes/containers.py`](#routes-containers-py) - 3 endpoints
 - [`routes/design.py`](#routes-design-py) - 8 endpoints
-- [`routes/files.py`](#routes-files-py) - 33 endpoints
+- [`routes/files.py`](#routes-files-py) - 34 endpoints
 - [`routes/graph.py`](#routes-graph-py) - 14 endpoints
 - [`routes/graphs.py`](#routes-graphs-py) - 2 endpoints
 - [`routes/master.py`](#routes-master-py) - 20 endpoints
@@ -131,6 +131,7 @@
 | DELETE | `/api/projects/{slug}/fs` | `project_delete` |  |
 | POST | `/api/projects/{slug}/fs/mkdir` | `project_mkdir` |  |
 | POST | `/api/projects/{slug}/fs/rename` | `project_rename` |  |
+| POST | `/api/projects/{slug}/preview-mode` | `project_preview_mode` |  |
 | GET | `/api/projects/{slug}/raw` | `project_raw` |  |
 | GET | `/api/projects/{slug}/reference-files` | `project_reference_files` | Safe, path-only project file index for @-reference autocomplete. |
 | GET | `/api/projects/{slug}/tree` | `project_tree` |  |
@@ -329,4 +330,4 @@
 
 
 ---
-_Generated 2026-07-31 11:06 UTC._
+_Generated 2026-07-31 11:07 UTC._

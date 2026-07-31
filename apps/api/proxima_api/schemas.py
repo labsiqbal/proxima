@@ -53,6 +53,21 @@ class AppStatusResponse(BaseModel):
     broad_bind: bool | None = None
 
 
+class PreviewModeRequest(BaseModel):
+    active: bool
+    preview_session: str = Field(
+        min_length=32,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    generation: str | None = Field(
+        default=None,
+        min_length=32,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+
+
 class PermissionResponse(BaseModel):
     request_id: str
     option_id: str

@@ -7,9 +7,11 @@ import { ArtifactViewer } from './ArtifactViewer'
 import { previewUrl } from '../../api/files'
 
 const fsRead = vi.fn()
+const setTargetPreviewMode = vi.fn()
 
 vi.mock('../../api/files', () => ({
-  previewUrl: vi.fn((_slug: string, path: string) => `/preview/${path}`),
+  previewUrl: vi.fn((_slug: string, path: string, _target?: unknown, active?: { generation: string }) => `/preview/${path}${active ? `?generation=${active.generation}` : ''}`),
+  setTargetPreviewMode: (...args: unknown[]) => setTargetPreviewMode(...args),
 }))
 vi.mock('../../api/fsAdapter', () => ({
   projectFs: vi.fn(() => ({ read: (...args: unknown[]) => fsRead(...args) })),
@@ -37,6 +39,7 @@ vi.mock('./ExcalidrawWhiteboard', () => ({
 
 beforeEach(() => {
   fsRead.mockReset()
+  setTargetPreviewMode.mockReset()
   window.localStorage.clear()
 })
 
@@ -227,7 +230,7 @@ describe('ArtifactViewer v2 review flow', () => {
     expect(JSON.parse(markdown.getAttribute('data-file-target') || '{}')).toEqual(target)
   })
 
-  it('delegates targeted HTML sandbox policy to the preview response', () => {
+  it('renders targeted HTML passive and script-free by default', () => {
     const target = {
       project: 'master',
       area: { kind: 'ops', id: 42 },
@@ -242,15 +245,17 @@ describe('ArtifactViewer v2 review flow', () => {
       onClose={() => undefined}
     />)
 
-    expect(screen.getByTitle('index.html')).not.toHaveAttribute('sandbox')
+    expect(screen.getByTitle('index.html')).toHaveAttribute('sandbox', '')
+    expect(screen.getByText('Passive preview')).toBeInTheDocument()
     expect(previewUrl).toHaveBeenCalledWith(
       'master',
       'site/index.html',
       target,
+      undefined,
     )
   })
 
-  it('delegates legacy HTML isolation to the canonical preview redirect', () => {
+  it('keeps legacy HTML passive without offering unscoped active mode', () => {
     render(<ArtifactViewer
       token="token"
       slug="master"
@@ -263,7 +268,65 @@ describe('ArtifactViewer v2 review flow', () => {
     const frame = screen
       .getAllByTitle('legacy.html')
       .find(node => node.tagName === 'IFRAME')
-    expect(frame).not.toHaveAttribute('sandbox')
+    expect(frame).toHaveAttribute('sandbox', '')
+    expect(screen.queryByRole('button', { name: 'Enable active preview' })).not.toBeInTheDocument()
+  })
+
+  it('requires explicit trust consent and revokes active mode back to passive', async () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'site/index.html',
+    }
+    setTargetPreviewMode
+      .mockResolvedValueOnce({ active: true, generation: 'g'.repeat(43) })
+      .mockResolvedValueOnce({ active: false, generation: null })
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'page', title: 'Site', path: 'site/index.html', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Enable active preview' }))
+    const consent = screen.getByRole('alertdialog', { name: 'Enable trusted active content?' })
+    expect(consent).toHaveTextContent('run scripts and module workers')
+    expect(consent).toHaveTextContent('send any data from this Area to external services')
+    expect(consent).toHaveTextContent('cannot guarantee Area confidentiality')
+    expect(setTargetPreviewMode).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Enable trusted active mode' }))
+    await waitFor(() => expect(screen.getByText('Active preview')).toBeInTheDocument())
+    expect(screen.getByTitle('index.html')).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin')
+    expect(setTargetPreviewMode).toHaveBeenNthCalledWith(
+      1,
+      'token',
+      'master',
+      target,
+      expect.stringMatching(/^[A-Za-z0-9_-]{32,128}$/),
+      true,
+    )
+    expect(previewUrl).toHaveBeenLastCalledWith(
+      'master',
+      'site/index.html',
+      target,
+      expect.objectContaining({ generation: 'g'.repeat(43) }),
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Disable active preview' }))
+    await waitFor(() => expect(screen.getByText('Passive preview')).toBeInTheDocument())
+    expect(screen.getByTitle('index.html')).toHaveAttribute('sandbox', '')
+    expect(setTargetPreviewMode).toHaveBeenNthCalledWith(
+      2,
+      'token',
+      'master',
+      target,
+      expect.stringMatching(/^[A-Za-z0-9_-]{32,128}$/),
+      false,
+      'g'.repeat(43),
+    )
   })
 
   it('shows an actionable fallback instead of loading forever for a directory or unknown binary', () => {

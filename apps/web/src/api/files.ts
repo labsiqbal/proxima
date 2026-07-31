@@ -29,10 +29,55 @@ async function responseError(res: Response, fallback: string): Promise<Error> {
 // Raw-file URL usable directly as <img>/<video> src. Path-only previews use the
 // owner session. Canonical previews enter through the API and redirect to an
 // Area-bound capability origin.
-export const previewUrl = (slug: string, path: string, target?: FileTarget) =>
-  target
+export type ActivePreviewAuthority = {
+  previewSession: string
+  generation: string
+}
+
+export const previewUrl = (
+  slug: string,
+  path: string,
+  target?: FileTarget,
+  active?: ActivePreviewAuthority,
+) => {
+  const base = target
     ? `/api/target-preview/${q(slug)}/${q(target.area.kind)}/${target.area.id ?? 'root'}/${encodedPath(target.path)}`
     : `/api/preview/${q(slug)}/${encodedPath(path)}`
+  if (!target || !active) return base
+  const query = new URLSearchParams({
+    __proxima_mode: 'active',
+    __proxima_preview_session: active.previewSession,
+    __proxima_preview_generation: active.generation,
+  })
+  return `${base}?${query.toString()}`
+}
+
+export type PreviewModeResponse = {
+  active: boolean
+  generation: string | null
+}
+
+export const setTargetPreviewMode = (
+  token: string,
+  slug: string,
+  target: FileTarget,
+  previewSession: string,
+  active: boolean,
+  generation?: string | null,
+  keepalive = false,
+) => api<PreviewModeResponse>(
+  `/api/projects/${q(slug)}/preview-mode?target=${targetParam(target)}`,
+  token,
+  {
+    method: 'POST',
+    keepalive,
+    body: JSON.stringify({
+      active,
+      preview_session: previewSession,
+      ...(generation ? { generation } : {}),
+    }),
+  },
+)
 
 export function relativeFileUrl(
   slug: string,
