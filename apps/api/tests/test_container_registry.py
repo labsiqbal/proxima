@@ -17,6 +17,7 @@ from proxima_api.container_registry import (
     validated_area_roots,
 )
 from proxima_api.db import connect, init_db
+from proxima_api.directory_handles import directory_identity_for_path
 from proxima_api.main import create_app
 
 
@@ -27,8 +28,16 @@ def _legacy_container(conn, root: Path, slug: str = "legacy") -> int:
         (f"owner-{slug}", f"owner-{slug}"),
     ).lastrowid
     container_id = conn.execute(
-        "INSERT INTO projects(slug, name, path, owner_user_id) VALUES (?, ?, ?, ?)",
-        (slug, slug.title(), str(root), user_id),
+        "INSERT INTO projects("
+        "slug, name, path, path_identity, owner_user_id"
+        ") VALUES (?, ?, ?, ?, ?)",
+        (
+            slug,
+            slug.title(),
+            str(root),
+            directory_identity_for_path(root),
+            user_id,
+        ),
     ).lastrowid
     conn.execute(
         "INSERT INTO project_areas(project_id, kind, rel_path, source) "
@@ -331,7 +340,7 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
     container_registry.refresh_registry_projection(
         api.app.state.db,
         api.app.state.db.execute(
-            "SELECT id, path FROM projects WHERE slug = 'fresh'"
+            "SELECT id, path, path_identity FROM projects WHERE slug = 'fresh'"
         ).fetchone(),
     )
     refreshed = api.app.state.db.execute(

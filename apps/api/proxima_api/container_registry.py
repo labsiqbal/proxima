@@ -17,8 +17,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .auth import iso_now
+from .directory_handles import directory_backend
 
 logger = logging.getLogger("proxima.container_registry")
+_directory_backend = directory_backend()
 
 OPS_RELPATH = "ops"
 CONTAINER_DOC = "container.md"
@@ -73,11 +75,33 @@ def container_root(container: sqlite3.Row | Mapping[str, Any]) -> Path:
     if not raw:
         raise ContainerBoundaryError("Container path is unavailable")
     root = Path(raw)
-    if root.is_symlink():
-        raise ContainerBoundaryError("Container root cannot be a symlink")
-    resolved = root.resolve()
+    try:
+        if root.is_symlink():
+            raise ContainerBoundaryError("Container root cannot be a symlink")
+        resolved = root.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ContainerBoundaryError("Container root is not reachable") from exc
     if not resolved.is_dir():
         raise ContainerBoundaryError("Container root is missing")
+    expected_identity = str(data.get("path_identity") or "").strip()
+    if not expected_identity:
+        raise ContainerBoundaryError("Container root identity is unavailable")
+    try:
+        verification_root = (
+            root.absolute()
+            if _directory_backend.platform == "windows"
+            else resolved
+        )
+        handle = _directory_backend.open_absolute(verification_root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ContainerBoundaryError(
+            "Container root identity cannot be verified"
+        ) from exc
+    try:
+        if handle.identity != expected_identity:
+            raise ContainerBoundaryError("Container root identity changed")
+    finally:
+        _directory_backend.close(handle)
     return resolved
 
 
@@ -668,7 +692,7 @@ def refresh_registry_projections(conn: sqlite3.Connection) -> dict[str, int]:
     result = {"refreshed": 0, "unchanged": 0, "unavailable": 0}
     rows = conn.execute(
         """
-        SELECT p.id, p.slug, p.name, p.path, cr.source_hash
+        SELECT p.id, p.slug, p.name, p.path, p.path_identity, cr.source_hash
         FROM projects p
         LEFT JOIN container_registry cr ON cr.container_id = p.id
         WHERE p.archived_at IS NULL
@@ -1070,7 +1094,8 @@ def migrate_legacy_ops_containers(conn: sqlite3.Connection) -> dict[str, int]:
     """Run the resumable physical Ops migration for every current Container."""
     summary = {"complete": 0, "attention": 0}
     rows = conn.execute(
-        "SELECT id, slug, name, path FROM projects WHERE archived_at IS NULL ORDER BY id"
+        "SELECT id, slug, name, path, path_identity "
+        "FROM projects WHERE archived_at IS NULL ORDER BY id"
     ).fetchall()
     for row in rows:
         try:

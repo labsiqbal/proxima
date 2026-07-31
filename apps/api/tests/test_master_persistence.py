@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api.db import connect, init_db
+from proxima_api.directory_handles import directory_identity_for_path
 from proxima_api.main import create_app
 from proxima_api.master_persistence import (
     MasterPersistenceError,
@@ -95,9 +96,14 @@ def _alpha_v30_database(path: Path, workspace: Path) -> dict[str, int]:
     container_root.mkdir(parents=True)
     container_id = int(
         conn.execute(
-            "INSERT INTO projects(slug, name, path, owner_user_id) "
-            "VALUES ('fixture', 'Fixture', ?, ?)",
-            (str(container_root), owner_id),
+            "INSERT INTO projects("
+            "slug, name, path, path_identity, owner_user_id"
+            ") VALUES ('fixture', 'Fixture', ?, ?, ?)",
+            (
+                str(container_root),
+                directory_identity_for_path(container_root),
+                owner_id,
+            ),
         ).lastrowid
     )
     area_id = int(
@@ -255,7 +261,7 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     token = client.post("/auth/auto").json()["token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
 
-    assert current_version(app.state.db) == 43
+    assert current_version(app.state.db) == 44
     profile = app.state.db.execute(
         "SELECT id, slug, name, system_kind FROM profiles WHERE system_kind = 'master'"
     ).fetchone()

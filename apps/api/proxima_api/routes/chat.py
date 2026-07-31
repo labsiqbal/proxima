@@ -672,7 +672,8 @@ def register(app, deps):
                 ).fetchall()
             ]
             prow = db().execute(
-                "SELECT id, path FROM projects WHERE id = ?", (session["project_id"],)
+                "SELECT id, path, path_identity FROM projects WHERE id = ?",
+                (session["project_id"],),
             ).fetchone()
             if prow and prow["path"]:
                 scripts_catalog = scripts_library.scan_catalog(
@@ -1132,7 +1133,7 @@ def register(app, deps):
             stale_params(stale_seconds),
         ).fetchall()]
         projects = [dict(r) for r in d.execute(
-            "SELECT p.id, p.slug, p.name, p.path, p.visibility, "
+            "SELECT p.id, p.slug, p.name, p.path, p.path_identity, p.visibility, "
             "(SELECT COUNT(*) FROM sessions s WHERE s.project_id = p.id) AS chats, "
             "(SELECT MAX(updated_at) FROM sessions s WHERE s.project_id = p.id) AS last_activity "
             "FROM projects p ORDER BY last_activity DESC").fetchall()]

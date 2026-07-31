@@ -928,7 +928,8 @@ def register(app, deps):
         if not job["project_id"]:
             raise HTTPException(status_code=409, detail="script steps need a project container")
         project = db().execute(
-            "SELECT id, path FROM projects WHERE id = ?", (job["project_id"],)
+            "SELECT id, path, path_identity FROM projects WHERE id = ?",
+            (job["project_id"],),
         ).fetchone()
         if not project or not project["path"]:
             raise HTTPException(status_code=409, detail="this plan's project path is unavailable")

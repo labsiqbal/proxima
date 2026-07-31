@@ -21,6 +21,7 @@ from proxima_api.knowledge_graph_lifecycle import (
     KnowledgeGraphLifecycle,
 )
 from proxima_api.main import create_app
+from project_test_utils import with_browse_root
 
 
 def _api(tmp_path: Path, **config) -> tuple[TestClient, dict[str, str]]:
@@ -221,7 +222,11 @@ def test_knowledge_scope_excludes_nested_container_roots(tmp_path: Path):
     linked = api.post(
         "/api/projects/link",
         headers=headers,
-        json={"path": str(nested), "slug": "nested", "name": "Nested"},
+        json=with_browse_root(
+            api,
+            {"path": str(nested), "slug": "nested", "name": "Nested"},
+            headers,
+        ),
     )
     assert linked.status_code == 201, linked.text
 

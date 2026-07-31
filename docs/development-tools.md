@@ -37,7 +37,12 @@ cd apps/api && .venv/bin/ruff check proxima_api tests
 cd apps/api && .venv/bin/python -m pytest -q tests
 npm --prefix apps/web test -- --run
 npm --prefix apps/web run build
+npm --prefix apps/web run test:accessibility
 ```
+
+`test:accessibility` owns the disposable auth/onboarding browser pass. Details and
+evidence live in [ui-shell.md](ui-shell.md#validation) and
+[evidence/auth-onboarding-accessibility/README.md](evidence/auth-onboarding-accessibility/README.md).
 
 Current local environment note:
 

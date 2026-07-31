@@ -13,8 +13,9 @@ rather than treating the product as finished SaaS polish.
 Sessions, chat history, projects, and other owner data live in the **data
 directory** (SQLite and workspace files), not in the git checkout. The current
 safe-update activation paths change neither code nor live data: both HTTP apply
-and `proxima update` refuse activation. Normal startup still applies migration 43,
-which adds the app-owned `self_update_runs` projection table. Details:
+and `proxima update` refuse activation. Normal startup still applies migrations:
+43 adds the app-owned `self_update_runs` projection table, while 44 pins existing
+Project roots to their platform filesystem identities. Details:
 [Updating](#updating).
 
 ## Requirements
@@ -273,7 +274,7 @@ The inert activation path keeps the two locations separate:
 | Location | Contents | Safe-update foundation effect |
 | --- | --- | --- |
 | **Git checkout** (install source) | App code | No activation write |
-| **Data dir** (default `~/.local/share/proxima`, or `PROXIMA_DATA_DIR` / env from install) | `proxima.db` (sessions, messages, projects registry), workspace, hermes-profiles, backups | Migration 43 adds the app-owned projection table; no application-data migration, swap, or activation |
+| **Data dir** (default `~/.local/share/proxima`, or `PROXIMA_DATA_DIR` / env from install) | `proxima.db` (sessions, messages, projects registry), workspace, hermes-profiles, backups | Migration 43 adds the app-owned projection table; migration 44 pins Project-root identities; no application-data swap or activation |
 
 Chat history lives in **SQLite under the data dir** (`PROXIMA_DB_PATH`, default
 `$DATA_DIR/proxima.db`), not in the git tree. Any future qualified updater must

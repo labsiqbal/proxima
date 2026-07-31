@@ -147,7 +147,8 @@ class ScriptRunner:
             self._fail(run, "script steps need a project container to run in")
             return
         project = db.execute(
-            "SELECT id, path FROM projects WHERE id = ?", (attempt["job_project_id"],)
+            "SELECT id, path, path_identity FROM projects WHERE id = ?",
+            (attempt["job_project_id"],),
         ).fetchone()
         if not project or not project["path"]:
             self._fail(run, "script step's project path is unavailable")

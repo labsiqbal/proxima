@@ -9,7 +9,7 @@ import type { Project } from '../types'
 export function WorkspaceOnboarding({ token, onDone }: { token: string; onDone: (linked: Project | null) => void }) {
   const [busy, setBusy] = React.useState(false)
   return (
-    <div className="center-screen">
+    <main className="center-screen">
       <div className="onboard-card">
         <ProximaMark className="proxima-mark-boot" label="Proxima" />
         <h1 className="auth-title">Pick your working folder</h1>
@@ -23,6 +23,6 @@ export function WorkspaceOnboarding({ token, onDone }: { token: string; onDone: 
           Skip for now
         </button>
       </div>
-    </div>
+    </main>
   )
 }

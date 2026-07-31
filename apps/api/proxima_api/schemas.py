@@ -275,6 +275,7 @@ class ProjectCreateRequest(ContainerCreateRequest):
 
 class ContainerLinkRequest(BaseModel):
     path: str = Field(min_length=1)
+    root_id: str = Field(min_length=1, max_length=64)
     name: str | None = Field(default=None, max_length=120)
     slug: str | None = None
     # When true, create `path` as a new empty directory under an existing parent

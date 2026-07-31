@@ -1151,7 +1151,8 @@ class RunWorker:
         if not job["project_id"]:
             return []
         prow = db.execute(
-            "SELECT id, path FROM projects WHERE id = ?", (job["project_id"],)
+            "SELECT id, path, path_identity FROM projects WHERE id = ?",
+            (job["project_id"],),
         ).fetchone()
         if not prow:
             return []
@@ -1232,7 +1233,8 @@ class RunWorker:
             row = None
             if project_id:
                 row = db.execute(
-                    "SELECT id, name, slug, path FROM projects WHERE id = ?",
+                    "SELECT id, name, slug, path, path_identity "
+                    "FROM projects WHERE id = ?",
                     (project_id,),
                 ).fetchone()
                 if row and row["path"]:

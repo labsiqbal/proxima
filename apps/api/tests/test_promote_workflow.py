@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from proxima_api import workflows as wf
 from proxima_api.main import create_app
+from project_test_utils import with_browse_root
 
 
 def test_parse_blueprint_tolerates_fences_and_normalizes():
@@ -129,7 +130,10 @@ def test_graph_promote_prompt_lists_the_projects_code_areas(tmp_path):
     repo.mkdir()
     (repo / ".git").mkdir()
     c, app = _client(tmp_path, link_roots=[str(tmp_path)])
-    linked = c.post("/api/projects/link", json={"path": str(repo), "slug": "myrepo"})
+    linked = c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(repo), "slug": "myrepo"}),
+    )
     assert linked.status_code == 201, linked.text
     job = c.post(
         "/api/jobs", json={"project_slug": "myrepo", "input": {"brief": "fix the bug"}}

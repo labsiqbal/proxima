@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .db import backfill_project_path_identities
 from .runner_specs import FALLBACK_RUNNER
 
 # (version, human description, apply function[, opts]).
@@ -583,7 +584,7 @@ def _add_artifact_registry(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
     if not {"id", "path"}.issubset(cols):
         return  # minimal test fixture, nothing to seed
-    for prow in conn.execute("SELECT id, path FROM projects").fetchall():
+    for prow in conn.execute("SELECT * FROM projects").fetchall():
         if not prow["path"]:
             continue
         try:
@@ -2425,6 +2426,7 @@ MIGRATIONS: list[Migration] = [
         {"no_auto_tx": True},
     ),
     (43, "add external safe-update owner projection", _add_self_update_runs),
+    (44, "pin Project filesystem identities", backfill_project_path_identities),
 ]
 
 

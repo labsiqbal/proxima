@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from proxima_api import repo_remote
 from proxima_api.main import create_app
 from proxima_api.repo_remote import detect_remote, github_web_url
+from project_test_utils import with_browse_root
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -71,7 +72,10 @@ def _client(app) -> TestClient:
 def _repo_job(c: TestClient, slug: str, folder: Path) -> tuple[dict, int]:
     """Link `folder` as a project; return (job targeting its first code area,
     that area's id)."""
-    p = c.post("/api/projects/link", json={"path": str(folder), "slug": slug})
+    p = c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(folder), "slug": slug}),
+    )
     assert p.status_code == 201, p.text
     area_id = p.json()["code_areas"][0]["id"]
     job = c.post("/api/jobs", json={"project_slug": slug, "input": {"brief": "change it"}, "target_area_id": area_id})
@@ -158,7 +162,10 @@ def test_areas_payload_offers_remote_only_where_one_exists(tmp_path: Path):
     _bare_remote(connected, tmp_path / "bare.git")
     _scratch_repo(container / "local-only")
     c = _client(_app(tmp_path))
-    assert c.post("/api/projects/link", json={"path": str(container), "slug": "c"}).status_code == 201
+    assert c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(container), "slug": "c"}),
+    ).status_code == 201
 
     areas = {a["rel_path"]: a for a in c.get("/api/projects/c/areas").json()["code_areas"]}
     assert areas["connected"]["remote"]["name"] == "origin"
@@ -175,7 +182,10 @@ def test_areas_payload_offers_remote_only_where_one_exists(tmp_path: Path):
 def test_toggle_on_requires_a_remote_off_always_works(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "repo")
     c = _client(_app(tmp_path))
-    assert c.post("/api/projects/link", json={"path": str(repo), "slug": "r"}).status_code == 201
+    assert c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(repo), "slug": "r"}),
+    ).status_code == 201
     area_id = c.get("/api/projects/r/areas").json()["code_areas"][0]["id"]
 
     refused = c.patch(f"/api/projects/r/areas/{area_id}", json={"push_on_merge": True})
@@ -196,7 +206,10 @@ def test_toggle_on_requires_a_remote_off_always_works(tmp_path: Path):
 def test_toggle_is_a_code_area_setting_only(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "repo")
     c = _client(_app(tmp_path))
-    p = c.post("/api/projects/link", json={"path": str(repo), "slug": "r"}).json()
+    p = c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(repo), "slug": "r"}),
+    ).json()
     ops_id = p["ops_area"]["id"]
     assert c.patch(f"/api/projects/r/areas/{ops_id}", json={"push_on_merge": True}).status_code == 404
     assert c.patch("/api/projects/r/areas/99999", json={"push_on_merge": True}).status_code == 404
@@ -340,7 +353,10 @@ def test_enabling_the_toggle_pins_the_remote_url(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "repo")
     bare = _bare_remote(repo, tmp_path / "bare.git")
     c = _client(_app(tmp_path))
-    assert c.post("/api/projects/link", json={"path": str(repo), "slug": "r"}).status_code == 201
+    assert c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(repo), "slug": "r"}),
+    ).status_code == 201
     area_id = c.get("/api/projects/r/areas").json()["code_areas"][0]["id"]
 
     enabled = c.patch(f"/api/projects/r/areas/{area_id}", json={"push_on_merge": True})
@@ -459,7 +475,10 @@ def test_graph_plan_approve_pushes_after_merge(tmp_path: Path):
     bare = _bare_remote(repo, tmp_path / "bare.git")
     app = _app(tmp_path, feature_workflow_graph=True)
     c = _client(app)
-    p = c.post("/api/projects/link", json={"path": str(repo), "slug": "r"})
+    p = c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(repo), "slug": "r"}),
+    )
     assert p.status_code == 201, p.text
     area_id = p.json()["code_areas"][0]["id"]
     assert c.patch(f"/api/projects/r/areas/{area_id}", json={"push_on_merge": True}).status_code == 200

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .container_registry import create_physical_ops_root, refresh_registry_projection
+from .directory_handles import directory_identity_for_path
 from .project_areas import ensure_ops_area, sync_code_areas
 
 logger = logging.getLogger("proxima.provisioning")
@@ -71,11 +72,14 @@ def provision_private_project(conn: sqlite3.Connection, cfg: dict[str, Any], use
         refresh_registry_projection(conn, existing["id"])
         return existing
     path = str(scaffold_project_dir(cfg, slug, str(user["username"])))
+    path_identity = directory_identity_for_path(Path(path))
     cur = conn.execute(
-        "INSERT INTO projects(slug, name, path, owner_user_id, visibility) VALUES (?, ?, ?, ?, 'private')",
+        "INSERT INTO projects("
+        "slug, name, path, path_identity, owner_user_id, visibility"
+        ") VALUES (?, ?, ?, ?, ?, 'private')",
         # Display name is the username alone — slug is already unique. Older rows may
         # still read "{user} (personal)" from historical provisioning; rename fixes those.
-        (slug, user["username"], path, user["id"]),
+        (slug, user["username"], path, path_identity, user["id"]),
     )
     project_id = cur.lastrowid
     # Container areas (T1): ops area + code-area auto-detect at creation.

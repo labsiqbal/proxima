@@ -15,10 +15,24 @@ from typing import Any
 from fastapi import Depends, HTTPException
 
 from .. import container_registry, fsapi, repo_remote
+from ..directory_handles import directory_identity_for_path
+from ..project_browse import (
+    AllowedRoots,
+    CreatedDirectory,
+    DirectoryBrowseUnavailable,
+    DirectoryComponentInvalid,
+    DirectoryPublishConflict,
+    PathOutsideRoots,
+    PathResolutionUnavailable,
+    browse_directory,
+    create_directory_component,
+    directory_identity,
+    split_directory_target,
+)
 from ..project_areas import areas_payload, ensure_ops_area, sync_code_areas
-from ..settings import validate_slug
 from ..provisioning import scaffold_project_dir
 from ..schemas import ProjectAreaAddRequest, ProjectAreaUpdateRequest, ProjectCreateRequest, ProjectLinkRequest, ProjectUpdateRequest
+from ..settings import validate_slug
 
 
 def register(app, deps):
@@ -97,50 +111,44 @@ def register(app, deps):
             )
         }
 
-    def _link_roots() -> list[Path]:
-        return [Path(p).expanduser().resolve() for p in (cfg.get("link_roots") or [os.path.expanduser("~")])]
-
-    def _within_link_roots(p: Path) -> bool:
-        rp = p.resolve()
-        return any(rp == r or r in rp.parents for r in _link_roots())
+    def _link_roots() -> list[str | Path]:
+        return list(cfg.get("link_roots") or [os.path.expanduser("~")])
 
     @app.get("/api/fs/dirs")
-    def fs_dirs(path: str = "", user: dict[str, Any] = Depends(current_user)):
+    def fs_dirs(
+        path: str = "",
+        root_id: str = "",
+        user: dict[str, Any] = Depends(current_user),
+    ):
         """Browse directories under the configured link roots, to pick an existing
         folder to register as a project."""
-        roots = _link_roots()
-        base = Path(path).expanduser().resolve() if path else roots[0]
-        if not (base in roots or _within_link_roots(base)) or not base.is_dir():
-            base = roots[0]
-        dirs = []
+        if path and not root_id:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "configured folder root identity is required",
+                    "field": "path",
+                },
+            )
         try:
-            for child in sorted(base.iterdir(), key=lambda c: c.name.lower()):
-                try:
-                    if child.is_dir() and not child.name.startswith("."):
-                        dirs.append({"name": child.name, "path": str(child)})
-                except OSError:
-                    pass
-        except OSError:
-            pass
-        parent = str(base.parent) if (base not in roots and _within_link_roots(base.parent)) else None
-        return {"path": str(base), "parent": parent, "dirs": dirs, "roots": [str(r) for r in roots]}
+            return browse_directory(path, _link_roots(), root_id or None)
+        except DirectoryBrowseUnavailable as exc:
+            raise HTTPException(
+                status_code=403,
+                detail={"message": str(exc), "field": "path"},
+            ) from exc
 
     def _validate_new_folder_name(name: str) -> str:
         """Single path component only - no separators, traversal, or empty names."""
         cleaned = name.strip()
         if not cleaned or cleaned in (".", ".."):
-            raise HTTPException(status_code=400, detail="invalid folder name")
+            raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "folder"})
         if cleaned != name or any(sep in cleaned for sep in ("/", "\\", "\0")):
-            raise HTTPException(status_code=400, detail="invalid folder name")
-        if len(cleaned) > 255:
-            raise HTTPException(status_code=400, detail="folder name is too long")
+            raise HTTPException(status_code=400, detail={"message": "invalid folder name", "field": "folder"})
         return cleaned
 
-    def _rmdir_if_empty(path: Path) -> None:
-        try:
-            path.rmdir()
-        except OSError:
-            pass
+    def _link_error(status_code: int, message: str, field: str) -> HTTPException:
+        return HTTPException(status_code=status_code, detail={"message": message, "field": field})
 
     @app.post("/api/projects/link", status_code=201)
     def link_project(payload: ProjectLinkRequest, user: dict[str, Any] = Depends(current_user)):
@@ -148,45 +156,65 @@ def register(app, deps):
         project's path points at the real folder, so chat/terminal/files operate
         on it. Pass mkdir=true to create a brand-new empty directory first
         (parent must already exist inside the link roots)."""
-        # created_dir tracks a directory we made in this request. On any failure
-        # after mkdir (known 4xx or unexpected DB/area errors), finally removes it
-        # so a retry is not blocked by an orphan empty folder.
-        created_dir: Path | None = None
+        created_dir: CreatedDirectory | None = None
+        pid: int | None = None
+        made_dir = False
         try:
+            error_field = "parent" if payload.mkdir else "path"
+            try:
+                allowed_roots = AllowedRoots.from_configured(_link_roots())
+            except PathResolutionUnavailable as exc:
+                raise _link_error(403, str(exc), error_field) from exc
             if payload.mkdir:
-                raw = Path(payload.path).expanduser()
-                folder_name = _validate_new_folder_name(raw.name)
                 try:
-                    parent = raw.parent.resolve()
-                except OSError as exc:
-                    raise HTTPException(status_code=400, detail="parent directory is not reachable") from exc
-                if not _within_link_roots(parent):
-                    raise HTTPException(status_code=403, detail="path is outside the allowed roots")
-                if not parent.is_dir():
-                    raise HTTPException(status_code=400, detail="parent directory does not exist")
-                target = parent / folder_name
-                # Refuse anything that would resolve outside the chosen parent (symlink games).
-                if target.exists():
-                    raise HTTPException(status_code=409, detail="a folder with that name already exists")
+                    raw_parent, raw_name = split_directory_target(payload.path)
+                except PathResolutionUnavailable as exc:
+                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
+                folder_name = _validate_new_folder_name(raw_name)
                 try:
-                    target.mkdir(mode=0o755)  # single level only; never parents=True
+                    parent = allowed_roots.resolve(raw_parent, payload.root_id)
+                except PathOutsideRoots as exc:
+                    raise _link_error(403, str(exc), "parent") from exc
+                except PathResolutionUnavailable as exc:
+                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
+                try:
+                    created_dir = create_directory_component(parent, folder_name)
+                except DirectoryComponentInvalid as exc:
+                    raise _link_error(400, str(exc), "folder") from exc
                 except PermissionError as exc:
-                    raise HTTPException(status_code=403, detail="permission denied - cannot create folder here") from exc
+                    raise _link_error(403, "permission denied - cannot create folder here", "parent") from exc
                 except FileExistsError as exc:
-                    raise HTTPException(status_code=409, detail="a folder with that name already exists") from exc
+                    raise _link_error(409, "a folder with that name already exists", "folder") from exc
+                except FileNotFoundError as exc:
+                    raise _link_error(400, "parent directory does not exist", "parent") from exc
+                except NotADirectoryError as exc:
+                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
+                except (PathOutsideRoots, PathResolutionUnavailable) as exc:
+                    raise _link_error(400, "parent directory is not reachable", "parent") from exc
                 except OSError as exc:
-                    raise HTTPException(status_code=400, detail=f"could not create folder: {exc.strerror or exc}") from exc
-                created_dir = target
-                target = target.resolve()
-                if not _within_link_roots(target):
-                    # Extremely defensive: if resolve() jumped (unexpected), finally removes the empty dir.
-                    raise HTTPException(status_code=403, detail="path is outside the allowed roots")
+                    raise _link_error(400, f"could not create folder: {exc.strerror or exc}", "parent") from exc
+                try:
+                    target = created_dir.require_staged()
+                except (PathOutsideRoots, PathResolutionUnavailable) as exc:
+                    raise _link_error(400, "created folder is not reachable", "parent") from exc
+                path_identity = created_dir.identity
             else:
-                target = Path(payload.path).expanduser().resolve()
-                if not _within_link_roots(target):
-                    raise HTTPException(status_code=403, detail="path is outside the allowed roots")
-                if not target.is_dir():
-                    raise HTTPException(status_code=400, detail="not a directory")
+                try:
+                    resolved_target = allowed_roots.resolve(
+                        payload.path,
+                        payload.root_id,
+                    )
+                except PathOutsideRoots as exc:
+                    raise _link_error(403, str(exc), "path") from exc
+                except PathResolutionUnavailable as exc:
+                    raise _link_error(400, "selected folder is not reachable", "path") from exc
+                try:
+                    path_identity = directory_identity(resolved_target)
+                except PermissionError as exc:
+                    raise _link_error(403, "permission denied - selected folder is not accessible", "path") from exc
+                except (OSError, PathResolutionUnavailable) as exc:
+                    raise _link_error(400, "selected folder is not reachable", "path") from exc
+                target = resolved_target.path
             name = (payload.name or target.name).strip()
             # strip("-") AFTER the 63-char truncation too: [:63] can re-cut a collapsed
             # run mid-hyphen and leave a trailing '-', which validate_slug would reject.
@@ -194,21 +222,53 @@ def register(app, deps):
             try:
                 slug = validate_slug(base_slug)
             except ValueError as exc:
-                raise HTTPException(status_code=422, detail=f"invalid project slug: {exc}") from exc
+                raise _link_error(422, f"invalid project slug: {exc}", "slug" if payload.slug else "name") from exc
             if db().execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone():
-                raise HTTPException(status_code=409, detail=f"slug '{slug}' already exists - pick another")
+                message = (
+                    f"slug '{slug}' already exists - pick another"
+                    if payload.slug
+                    else "A project with that display name already exists - choose another display name"
+                )
+                raise _link_error(409, message, "slug" if payload.slug else "name")
             cur = db().execute(
-                "INSERT INTO projects(slug, name, path, owner_user_id, visibility) VALUES (?, ?, ?, ?, 'private')",
-                (slug, name, str(target), user["id"]),
+                "INSERT INTO projects("
+                "slug, name, path, path_identity, owner_user_id, visibility"
+                ") VALUES (?, ?, ?, ?, ?, 'private')",
+                (slug, name, str(target), path_identity, user["id"]),
             )
             pid = cur.lastrowid
-            # INSERT succeeded: the project row owns the path. Clear created_dir so a
-            # later area/audit failure cannot delete a folder the project still points at.
             made_dir = created_dir is not None
-            created_dir = None
+            if created_dir is not None:
+                try:
+                    created_dir.commit()
+                except DirectoryPublishConflict as exc:
+                    raise _link_error(409, str(exc), "folder") from exc
+                except DirectoryComponentInvalid as exc:
+                    raise _link_error(400, str(exc), "folder") from exc
+                except (OSError, PathOutsideRoots, PathResolutionUnavailable) as exc:
+                    raise _link_error(
+                        400,
+                        "created folder is not reachable",
+                        "parent",
+                    ) from exc
+            registered = {
+                "id": pid,
+                "path": str(target),
+                "path_identity": path_identity,
+            }
+            try:
+                container_registry.container_root(registered)
+            except container_registry.ContainerBoundaryError as exc:
+                raise _link_error(
+                    400,
+                    "selected folder identity changed",
+                    "parent" if made_dir else "path",
+                ) from exc
             # Container areas (T1): register the ops area + auto-detect code areas.
             ensure_ops_area(db(), pid, rel_path=".")
+            container_registry.container_root(registered)
             container_registry.migrate_container_ops(db(), pid)
+            container_registry.container_root(registered)
             summary = sync_code_areas(db(), pid, target)
             audit_action = "project.link.mkdir" if made_dir else "project.link"
             db().execute(
@@ -226,10 +286,26 @@ def register(app, deps):
                 container_slug=slug,
             )
             row = dict(db().execute("SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p JOIN users u ON u.id = p.owner_user_id WHERE p.id = ?", (pid,)).fetchone())
+            container_registry.container_root(row)
+            if created_dir is not None:
+                created_dir.finish()
+                created_dir = None
             return project_payload(row)
+        except container_registry.ContainerBoundaryError as exc:
+            if pid is not None:
+                db().execute("DELETE FROM projects WHERE id = ?", (pid,))
+            raise _link_error(
+                400,
+                "selected folder identity changed",
+                "parent" if made_dir else "path",
+            ) from exc
+        except BaseException:
+            if pid is not None:
+                db().execute("DELETE FROM projects WHERE id = ?", (pid,))
+            raise
         finally:
             if created_dir is not None:
-                _rmdir_if_empty(created_dir)
+                created_dir.rollback()
 
     @app.post("/api/projects", status_code=201)
     def create_project(payload: ProjectCreateRequest, user: dict[str, Any] = Depends(current_user)):
@@ -238,9 +314,12 @@ def register(app, deps):
         path = str(Path(cfg["workspace_root"]) / "projects" / payload.slug)
         run_projectctl("create-project", payload.slug, "--owner", user["os_user"])
         scaffold_project_dir(cfg, payload.slug, payload.name)
+        path_identity = directory_identity_for_path(Path(path))
         cur = db().execute(
-            "INSERT INTO projects(slug, name, path, owner_user_id, visibility) VALUES (?, ?, ?, ?, 'private')",
-            (payload.slug, payload.name, path, user["id"]),
+            "INSERT INTO projects("
+            "slug, name, path, path_identity, owner_user_id, visibility"
+            ") VALUES (?, ?, ?, ?, ?, 'private')",
+            (payload.slug, payload.name, path, path_identity, user["id"]),
         )
         project_id = cur.lastrowid
         ensure_ops_area(db(), project_id)

@@ -150,7 +150,7 @@ def record_run_outputs(
     if not project_id or not output_links:
         return
     prow = conn.execute(
-        "SELECT id, path FROM projects WHERE id = ?", (project_id,)
+        "SELECT id, path, path_identity FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
     root = ops_root(conn, prow) if prow and prow["path"] else None
     rrow = conn.execute("SELECT kind FROM runs WHERE id = ?", (run_id,)).fetchone()

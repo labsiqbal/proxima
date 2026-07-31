@@ -1073,9 +1073,47 @@ distinguishes what the API actually does: a linked/created-on-disk folder is unl
 and its real files stay; a Proxima-scaffolded project is deleted from disk. On
 **first run**, right after setting a password, an onboarding step
 (`screens/WorkspaceOnboarding.tsx`, reusing `FolderLinker`) offers link, create-new-folder,
-or skip (starter project under the data dir).
-**Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional), `GET /api/fs/dirs`,
-`PATCH/DELETE /api/projects/{slug}`.
+or skip (starter project under the data dir). The two folder choices are mutually
+exclusive pressed buttons with ordinary Tab traversal and Enter/Space activation.
+Validation exposes one assertive alert, marks the corrective target invalid, and returns
+focus there before the alert is published. The alert is the only semantic announcement
+owner, so the focused target does not duplicate the message as its description. Every
+invalid submission mounts a fresh single alert, including an unchanged repeat while the
+target remains focused.
+If the initial folder listing is unavailable, the chooser renders and focuses a marked
+retry control before publishing the same single alert; keyboard retry keeps that control
+as the correction target until a readable folder is selected.
+Display names are checked against the API's 120-character limit before submission. The
+project-link error contract distinguishes the selected `path`/`parent`, child `folder`,
+and display `name`/`slug` targets. Parent and link-path failures focus a selected-folder
+refresh control, child-name failures focus the folder field, and name/slug failures
+focus the display-name field. Browsing selects the nearest actually readable ancestor
+inside the configured root, skips self-referential or mutual symlink cycles, and never
+uses an unresolved path for containment. Every configured root keeps its raw identity
+plus optional lexical and resolved identities, so one unexpandable root does not disable
+valid siblings and a retained selection stays bound to its original owning root. Later
+resolution failure cannot fall back to a containing root. Each browse response carries
+an opaque configured-root ID, and every later navigation plus link/create request
+must send that ID back. Canonical paths from symlink-root aliases therefore retain their
+original owner; any later request without an ID fails closed. If no allowed ancestor
+is readable, the chooser retains its selection and explicit invalid state instead of
+reporting an empty success.
+New folder names are validated against the target filesystem's encoded component-byte
+limit. The API opens the verified allowed root and each parent component separately,
+using no-follow directory descriptors on POSIX and native no-reparse directory handles
+on Windows. Creation starts under an unguessable staging name relative to the retained
+parent, pins the created directory's platform identity, and atomically publishes it
+without replacing an existing entry. The expected identity is stored with the Project
+and rechecked through the configured root before success. Rollback removes only that
+pinned directory, even if it was renamed, and never removes a replacement. Component
+and encoding failures stay owned by the folder field, while parent traversal, identity,
+and location failures remain owned by the selected-folder control. Later Container
+filesystem resolution also compares the stored identity and rejects path replacement.
+Startup backfills readable legacy Project rows with their current platform identity;
+an unreachable legacy path receives a fail-closed unavailable marker instead of silently
+opting out of later identity checks.
+**Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional, `root_id` required),
+`GET /api/fs/dirs` (`root_id` required once a path is selected), `PATCH/DELETE /api/projects/{slug}`.
 
 ### Container Areas and physical Ops storage
 
@@ -1527,4 +1565,4 @@ owner with one password/session gate; legacy invite/member tables have been drop
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped, in any context; the rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells and unsaved edits survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 
-Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it.
+Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it. Each invalid attempt focuses the corrective field and mounts one fresh assertive alert, even when the same values are submitted again. The gate keeps one main landmark, password-manager-compatible hidden owner metadata, and token-based text and focus contrast across every canonical theme.

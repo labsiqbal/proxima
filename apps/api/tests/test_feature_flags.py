@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from proxima_api import app_settings, features, wiki_memory, workflows
+from proxima_api.directory_handles import directory_identity_for_path
 from proxima_api.main import _config_from_env, create_app
 from proxima_api.settings import normalize_config
 
@@ -182,9 +183,14 @@ def test_disabled_master_runtime_leaves_master_and_owned_task_runs_queued(
     container_root.mkdir()
     container_id = int(
         app.state.worker_db.execute(
-            "INSERT INTO projects(slug, name, path, owner_user_id) "
-            "VALUES ('feature-off', 'Feature off', ?, ?)",
-            (str(container_root), owner["id"]),
+            "INSERT INTO projects("
+            "slug, name, path, path_identity, owner_user_id"
+            ") VALUES ('feature-off', 'Feature off', ?, ?, ?)",
+            (
+                str(container_root),
+                directory_identity_for_path(container_root),
+                owner["id"],
+            ),
         ).lastrowid
     )
     target_area_id = int(

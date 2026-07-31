@@ -1713,7 +1713,7 @@ class GraphContextService:
     ) -> tuple[Path, ...]:
         exclusions: set[Path] = set()
         rows = self._db_factory().execute(
-            "SELECT id, path FROM projects "
+            "SELECT id, path, path_identity FROM projects "
             "WHERE owner_user_id = ? AND id != ? AND archived_at IS NULL",
             (owner_user_id, container_id),
         ).fetchall()

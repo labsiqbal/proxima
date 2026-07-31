@@ -6,6 +6,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .directory_handles import (
+    directory_identity_for_path,
+    unavailable_directory_identity,
+)
 from .profile_seed import seed_hermes_home
 from .runner_specs import FALLBACK_RUNNER
 
@@ -49,6 +53,7 @@ CREATE TABLE IF NOT EXISTS projects (
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   path TEXT NOT NULL,
+  path_identity TEXT,
   owner_user_id INTEGER NOT NULL REFERENCES users(id),
   visibility TEXT NOT NULL DEFAULT 'private',
   archived_at TEXT,
@@ -1147,6 +1152,31 @@ def _ensure_node_states(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_node_states_job ON node_states(job_id, status)")
 
 
+def backfill_project_path_identities(conn: sqlite3.Connection) -> None:
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'projects'"
+    ).fetchone()
+    if table is None:
+        return
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
+    }
+    if not {"id", "path", "path_identity"}.issubset(columns):
+        return
+    for row in conn.execute(
+        "SELECT id, path FROM projects "
+        "WHERE path_identity IS NULL OR trim(path_identity) = ''"
+    ).fetchall():
+        try:
+            identity = directory_identity_for_path(Path(row["path"]))
+        except (OSError, RuntimeError, TypeError, ValueError):
+            identity = unavailable_directory_identity(row["path"])
+        conn.execute(
+            "UPDATE projects SET path_identity = ? WHERE id = ?",
+            (identity, row["id"]),
+        )
+
+
 def migrate_existing(conn: sqlite3.Connection) -> None:
     _ensure_message_reviews(conn)
     _ensure_prompt_collaborations(conn)
@@ -1154,6 +1184,8 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
     _add_column(conn, "users", "password_hash", "password_hash TEXT")
     _add_column(conn, "users", "password_set_at", "password_set_at TEXT")
     _add_column(conn, "projects", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'")
+    _add_column(conn, "projects", "path_identity", "path_identity TEXT")
+    backfill_project_path_identities(conn)
     _add_column(conn, "sessions", "profile_id", "profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL")
     _add_column(conn, "sessions", "visibility", "visibility TEXT NOT NULL DEFAULT 'private'")
     _add_column(conn, "sessions", "mode", "mode TEXT NOT NULL DEFAULT 'chat'")

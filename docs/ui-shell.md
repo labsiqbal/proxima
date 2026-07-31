@@ -239,6 +239,40 @@ prompt dialog, and the hover/focus **×** removes it. Add opens a modal holding 
 create a new project, or point Proxima at a folder on disk - link one you already work
 in, or create a new empty one under a parent you pick.
 
+The link/create choice is an ordinary labeled button group. Each button exposes
+`aria-pressed`, and both remain in normal Tab order with Enter and Space activation.
+Folder and display-name validation publishes one assertive alert only after focus has
+moved to the marked corrective target. The alert is the only semantic announcement owner;
+the focused target remains invalid without repeating the message as its description.
+Every attempt mounts a fresh alert, including an unchanged assistive or keyboard
+resubmission while focus stays on the target. Display names are checked against the API's
+120-character limit before a link or create request. Structured project-link errors
+retain selected `path`/`parent`, child `folder`, and display `name`/`slug` ownership
+through the API client. Child-name failures focus the folder-name field, name/slug
+failures focus the display-name field, and parent or link-path failures focus a
+selected-folder refresh control. Refresh chooses the nearest actually readable ancestor
+within the owning allowed root. Resolution and containment fail closed around self or
+mutual symlink cycles. If initial browsing fails, a marked retry control is already
+mounted and receives focus before the single alert appears. Failed configured roots
+retain raw ownership even when expansion fails, valid sibling roots remain available,
+and later resolution failure cannot move a selection into a containing root. Browse
+responses carry an opaque configured-root ID through each later navigation and
+link/create request, preserving symlink-alias ownership after the API returns a canonical
+path. Every later request without that ID fails closed.
+New-folder validation uses the target filesystem's encoded component-byte limit. The API
+then traverses from the verified root one POSIX no-follow descriptor or Windows
+no-reparse native handle at a time. It creates under an unguessable staging name, pins
+the directory's platform identity, atomically publishes without replacement, persists
+that identity with the Project, and verifies the final path through the configured root.
+Rollback removes only the pinned directory, including after a rename, and leaves any
+replacement untouched. Component or encoding failures return to the folder-name field,
+while parent traversal, identity, or location failures return to the selected-folder
+control. If no ancestor is readable, the current selection stays explicitly invalid
+until the owner retries or chooses another folder.
+Later Container filesystem access compares the stored identity and rejects a replacement
+at the same path. Readable legacy Project rows receive their current platform identity
+at startup; unreachable legacy paths receive a fail-closed unavailable marker.
+
 Removal copy must distinguish the two cases, because the API does: a folder outside the
 workspace root is only *unlinked* and its real files survive, while a project Proxima
 created is deleted from disk. Chats and tasks go in both cases.
@@ -261,10 +295,69 @@ delegation step in the general core tour. A stale `?mode=delegate` URL falls bac
 
 The left navigation width persists locally in both modes. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses the same focus-managed drawer in both modes; Work's tool rail pins to the right edge, while Delegate keeps its global Master, Tasks, and Archive navigation. The Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics in Work. Escape dismisses transient Work overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
 
+The setup and returning-owner password gates each expose exactly one `main` landmark.
+Password fields have stable accessible names and password-manager autocomplete values,
+with a hidden, read-only `owner` username field that does not create an account model.
+Validation focuses the marked password field before publishing its single assertive
+alert. Every validation attempt mounts a fresh alert instance, including an unchanged
+repeat while focus stays on the corrective field. That alert is the sole semantic
+announcement owner; the invalid field does not duplicate it as an accessible
+description. Auth and onboarding text, errors,
+primary controls, placeholders, entered values, and focus indicators use central theme
+tokens that maintain WCAG AA contrast in every supported theme.
+
 ## Extension points
 
 Add destinations through the existing `View`, feature policy, App routing, Sidebar, and SearchModal boundaries together. Every new destination must declare whether it belongs to the flow navigation or the global account layer; new tools belong on the rail, not in the nav. Destination-specific inspectors remain owned by their destination rather than the application shell.
 
 ## Validation
 
-For shell changes, run `npm --prefix apps/web test`, `npm --prefix apps/web run build`, and `git diff --check`. Tests should cover navigation order and feature-off gating, tool-rail open/close with Terminal persistence, asynchronous task success/failure, declared schedule inputs, cron grammar, and keyboard resizing. Browser QA should check authenticated desktop and narrow layouts, focus order, themes, zoom, and reduced motion; if authentication prevents inspection, record that rather than using credentials.
+For shell changes, run `npm --prefix apps/web test`,
+`npm --prefix apps/web run build`, and `git diff --check`. Tests should cover
+navigation order and feature-off gating, tool-rail open/close with Terminal
+persistence, asynchronous task success/failure, declared schedule inputs, cron
+grammar, and keyboard resizing.
+
+`npm --prefix apps/web run test:accessibility` first runs focused project-link API
+regressions for corrective ownership, filesystem component-byte limits, encoding
+failures, readable-ancestor selection, symlink-cycle handling, explicit no-ancestor
+failure, and configured-root jailing. It then runs the password and folder flows in a
+disposable real-browser fixture, records accessibility trees, genuine Enter/Space
+activation, every supported theme, Lighthouse, and
+[screenshot evidence](evidence/auth-onboarding-accessibility/README.md) without
+touching live data. The allowlisted child environment redirects every writable Proxima
+path into the fixture and disables workers, credential refresh, update checks, preview
+relays, and external graph egress. Its theme matrix checks title, subtitle, entered
+value, placeholder, error, button, input focus, and button focus styles against the
+rendered backgrounds for every canonical theme.
+
+The harness discovers the current root Tailscale Serve entry that proxies to loopback
+port 8765. Any `PROXIMA_A11Y_REMOTE_BASE` or
+`PROXIMA_A11Y_REMOTE_ADDRESS` override must match that current device and Serve
+mapping. The remote browser pass uses a fresh profile for each origin and auto-attaches
+to the page plus every related service, shared, and nested worker before they run.
+Every session installs Fetch and a Network/WebSocket block before resume. A service
+worker without the CDP Network domain remains paused until its served bytes match the
+locally audited duplex-free artifact, with Fetch still intercepting every request. One
+explicit unauthenticated read-only `/sw.js` GET supplies that proof.
+One secured session owns each target's accounting; a secured duplicate is promoted on
+detach, while losing the last owner before audited closure closes the target and fails
+the pass. Stable target/network IDs deduplicate extra session observations.
+
+Service workers are restricted to same-origin `/sw.js`. Policy remains active through
+assertions, screenshots, and page/worker closure. A secure disposable production
+origin compares the complete resulting Cache Storage key set with `APP_SHELL` and
+accounts for the service-worker artifact-proof GET separately, even when the current
+private entry is development-served. For a Vite entry, `/@vite/client` is fulfilled
+with an inert no-socket compatibility shim that preserves rendering and stylesheet
+loading. Each pass requires exactly one page navigation GET, accounts for every worker
+shell GET by target and path, forwards only allowlisted same-origin static assets,
+fulfills config, setup status, failed session resume, and the optional inert Vite
+client inside the browser fixture, and blocks or rejects every other API, auth,
+cross-origin, non-static, and duplex request. Attempted WebSocket connections and
+blocked failures are counted without retaining their private URLs; any outbound
+handshake or frame fails the audit. It never logs in and retains only a redacted origin
+label, pass state, exact request counts, Vite fixture state, and redacted current-device
+Serve provenance. Browser QA should also check authenticated desktop and narrow
+layouts, zoom, and reduced motion; if remote authentication prevents inspection,
+record that rather than using credentials.

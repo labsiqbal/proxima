@@ -7,6 +7,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from proxima_api.main import create_app
+from project_test_utils import with_browse_root
 
 
 def _app(tmp_path, *, enabled: bool, **overrides):
@@ -634,7 +635,10 @@ def _scratch_repo(path) -> None:
 
 
 def _link_project(client: TestClient, path, slug: str) -> dict[str, Any]:
-    response = client.post("/api/projects/link", json={"path": str(path), "slug": slug})
+    response = client.post(
+        "/api/projects/link",
+        json=with_browse_root(client, {"path": str(path), "slug": slug}),
+    )
     assert response.status_code == 201, response.text
     return response.json()
 

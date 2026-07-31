@@ -42,7 +42,12 @@ def register(app, deps):
         """List targetable Areas after canonical Container-boundary validation."""
         container = _owned_container(slug, user)
         try:
-            roots = container_registry.validated_area_roots(db(), container)
+            # Re-load by id so boundary checks see path_identity from the
+            # projects row; the Fleet DTO intentionally omits that field.
+            roots = container_registry.validated_area_roots(
+                db(),
+                int(container["id"]),
+            )
         except container_registry.ContainerBoundaryError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         rows = db().execute(

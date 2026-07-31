@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 from proxima_api import features, runner_specs
 from proxima_api.main import create_app
 from proxima_api.runner_specs import RunnerSpec
+from project_test_utils import with_browse_root
 from proxima_api.worktrees import (
     MergeConflictError,
     WorktreeError,
@@ -287,7 +288,10 @@ def _client(app) -> TestClient:
 
 def _repo_job(c: TestClient, slug: str, folder: Path, brief: str = "change the code") -> dict:
     """Link `folder` as a project and create a job targeting its first code area."""
-    p = c.post("/api/projects/link", json={"path": str(folder), "slug": slug})
+    p = c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(folder), "slug": slug}),
+    )
     assert p.status_code == 201, p.text
     area_id = p.json()["code_areas"][0]["id"]
     job = c.post("/api/jobs", json={"project_slug": slug, "input": {"brief": brief}, "target_area_id": area_id})
@@ -354,7 +358,10 @@ def test_autonomous_repo_task_still_stops_for_diff_review(tmp_path: Path):
     client = _client(app)
     linked = client.post(
         "/api/projects/link",
-        json={"path": str(repo), "slug": "autonomous-repo"},
+        json=with_browse_root(
+            client,
+            {"path": str(repo), "slug": "autonomous-repo"},
+        ),
     )
     assert linked.status_code == 201, linked.text
     area_id = linked.json()["code_areas"][0]["id"]
@@ -515,8 +522,14 @@ def test_create_job_validates_target_area(tmp_path: Path):
     other = _scratch_repo(tmp_path / "other")
     app = _app(tmp_path, feature_repo_worktrees=True)
     c = _client(app)
-    assert c.post("/api/projects/link", json={"path": str(repo), "slug": "myrepo"}).status_code == 201
-    p2 = c.post("/api/projects/link", json={"path": str(other), "slug": "other"}).json()
+    assert c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(repo), "slug": "myrepo"}),
+    ).status_code == 201
+    p2 = c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(other), "slug": "other"}),
+    ).json()
 
     bogus = c.post("/api/jobs", json={"project_slug": "myrepo", "input": {"brief": "x"}, "target_area_id": 99999})
     assert bogus.status_code == 422
@@ -530,7 +543,10 @@ def test_ops_targeted_job_gets_no_worktree_even_with_flag_on(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "myrepo")
     app = _app(tmp_path, feature_repo_worktrees=True)
     c = _client(app)
-    p = c.post("/api/projects/link", json={"path": str(repo), "slug": "myrepo"}).json()
+    p = c.post(
+        "/api/projects/link",
+        json=with_browse_root(c, {"path": str(repo), "slug": "myrepo"}),
+    ).json()
     ops_id = p["ops_area"]["id"]
     job = c.post("/api/jobs", json={"project_slug": "myrepo", "input": {"brief": "write a report"}, "target_area_id": ops_id}).json()
     assert c.post(f"/api/jobs/{job['id']}/start").status_code == 200
@@ -817,7 +833,13 @@ def test_graph_repo_node_runs_in_worktree_and_ops_node_in_ops_area(tmp_path: Pat
         with TestClient(app) as c:
             tok = c.post("/auth/auto").json()["token"]
             c.headers.update({"Authorization": f"Bearer {tok}"})
-            p = c.post("/api/projects/link", json={"path": str(repo), "slug": "myrepo"})
+            p = c.post(
+                "/api/projects/link",
+                json=with_browse_root(
+                    c,
+                    {"path": str(repo), "slug": "myrepo"},
+                ),
+            )
             assert p.status_code == 201, p.text
             plan = c.post("/api/graph/jobs", json={
                 "title": "Fix + report",

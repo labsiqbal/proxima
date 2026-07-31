@@ -1381,4 +1381,71 @@ tree with a second implementation. Master is deliberately outside this generic
 polling path: its provider uses the existing session SSE stream plus recovery-only
 reconciliation.
 
-Authentication boot checks setup state, requires set-password or login, and resumes from the HttpOnly `proxima_session` cookie into an in-memory bearer token.
+Authentication boot checks setup state, requires set-password or login, and resumes from
+the HttpOnly `proxima_session` cookie into an in-memory bearer token. The password gate
+uses one main landmark and supplies hidden, read-only `owner` identity metadata for
+password-manager compatibility without adding accounts. Validation exposes one
+fresh assertive alert for each invalid attempt after focus moves to the marked and
+invalid corrective password field. That alert is the single semantic announcement owner;
+the focused field does not repeat the message as an accessible description. Repeating
+unchanged invalid values remounts the single alert while focus remains on the field. Gate
+title, subtitle, entered value,
+placeholder, error, button, and input/button focus styles use theme tokens that meet
+WCAG AA across every canonical preset.
+
+Project link/create failures use structured API details carrying the owning request
+field. The fetch client preserves FastAPI validation locations and explicit
+selected `path`/`parent`, child `folder`, and display `name`/`slug` ownership.
+`FolderLinker` maps parent and link-path failures to a focusable selected-folder refresh
+control, child-name failures to the folder input, and name/slug failures to the
+display-name input before focusing and publishing the single alert. Every repeated
+attempt remounts that sole announcement owner. Initial browse failure renders and focuses
+a marked retry control before its alert is published. Directory browsing tests
+readability, uses one fail-closed resolution and containment boundary, skips symlink
+cycles, climbs only to the nearest readable ancestor within the owning configured root,
+and returns a structured path error while retaining the current invalid selection when
+no allowed ancestor is readable. Configured roots retain raw identity even when lexical
+expansion or resolution fails, continue valid siblings, and bind recovery to the
+original owning root. Every browse response carries an opaque configured-root ID through
+later browse and link/create requests, so a canonical path returned for a symlink alias
+cannot switch to a containing root. Every later request with no ID fails
+closed. Create-on-disk opens the verified root and traverses each parent component with
+POSIX no-follow directory descriptors or Windows no-reparse native handles. It creates
+an unguessable staging entry relative to the retained parent, pins its platform identity,
+and publishes it atomically without clobbering a destination. The Project stores that
+expected identity, and success requires the published path to resolve back to the same
+identity through the configured root. Rollback follows the retained identity if another
+process renames it and never deletes a replacement, preserving component versus parent
+error ownership when the filesystem changes concurrently. `container_registry.py`
+compares the persisted identity on later Container filesystem resolution and rejects a
+replacement at the same path. Startup captures the current identity for readable legacy
+Project roots and writes a fail-closed unavailable marker for legacy paths that cannot be
+opened, so an old row cannot bypass the identity boundary.
+
+The retained browser audit runs the production bundle with allowlisted child
+environments, disposable runtime/profile roots, and background/live-service features
+disabled. Its real Tailscale entry check correlates the origin to the current device root
+Serve handler and uses a fresh browser profile for each origin. Browser-level CDP
+auto-attachment pauses the page plus every related service, shared, and nested worker
+until a bounded traffic policy is ready. Every duplicate session is secured before
+resume; one session owns target accounting, and a surviving secured session is promoted
+if the owner detaches. Losing the last owner before audited closure closes the target
+and fails the pass. Page and worker sessions install Fetch plus Network/WebSocket
+blocking. If a service-worker target does not expose the CDP Network domain, it remains
+paused until its served bytes match the locally audited duplex-free source; Fetch
+interception remains active for every request. The production service worker must be
+same-origin `/sw.js`. One explicit unauthenticated read-only GET proves those bytes,
+and artifact drift fails closed before execution is trusted.
+A secure disposable production fixture compares the complete resulting Cache Storage
+key set with `APP_SHELL` and accounts for the worker artifact-proof GET separately before
+the same boundary checks the current private entry. If that entry is
+development-served, the audit fulfills `/@vite/client` with an inert compatibility shim
+that preserves module and style loading without opening HMR duplex traffic. Interception
+remains active through DOM checks, screenshots, and page/worker shutdown. The audit
+forwards and accounts for only allowlisted static asset GETs across those targets.
+Config, setup status, failed session resume, and the optional inert Vite client are
+fulfilled inside the browser fixture; every other API, auth, cross-origin, non-static,
+and duplex request is blocked or fails the audit. All CDP policy installation and
+shutdown waits are bounded. The report persists only exact per-target and per-path
+request counts, the Vite fixture state, redacted WebSocket totals, a redacted pass label,
+and current-device Serve provenance, never the private origin or address.

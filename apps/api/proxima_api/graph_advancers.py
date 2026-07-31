@@ -62,7 +62,8 @@ def _parse_json_output(answer: str) -> Any:
 def _artifact_root(app: Any, job: Mapping[str, Any]) -> Path:
     if job.get("project_id"):
         row = app.state.worker_db.execute(
-            "SELECT id, path FROM projects WHERE id = ?", (job["project_id"],)
+            "SELECT id, path, path_identity FROM projects WHERE id = ?",
+            (job["project_id"],),
         ).fetchone()
         if not row or not row["path"]:
             raise NodeOutputError("graph job project path is unavailable")
