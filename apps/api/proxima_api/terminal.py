@@ -12,11 +12,10 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .container_activity import process_start_identity
+from .container_activity import GuardedWriterTree, process_start_identity
 from .process_containment import (
     pid_namespace_argv,
     process_tree_pids,
-    terminate_process_tree,
 )
 
 logger = logging.getLogger("proxima.terminal")
@@ -38,6 +37,7 @@ class CloseResult:
     child_reaped: bool
     pid: int | None = None
     start_identity: str | None = None
+    writer_tree: Any | None = None
 
     def __bool__(self) -> bool:
         return self.session_stopped
@@ -64,25 +64,6 @@ def _signal_process(pid: int, value: int) -> None:
         pass
 
 
-def _tree_exited(root_pid: int) -> bool | None:
-    """True when the tracked tree is gone, False if live, None if unprovable."""
-    tree = process_tree_pids(root_pid)
-    if tree is None:
-        return None
-    if not tree:
-        return True
-    for pid in tree:
-        try:
-            with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
-                stat = fh.read()
-            state = stat.rsplit(") ", 1)[1].split()[0]
-        except (OSError, IndexError, ValueError):
-            continue
-        if state != "Z":
-            return False
-    return True
-
-
 class TerminalSession:
     """A PTY-backed login shell. Spawns the shell in `cwd`; the master fd carries
     bidirectional I/O. Child inherits the server's environment (so PATH, etc. are
@@ -104,6 +85,7 @@ class TerminalSession:
         self.sid: int | None = None
         self.fd: int | None = None
         self.start_identity: str | None = None
+        self.writer_tree: GuardedWriterTree | None = None
 
     def _argv(self) -> list[str]:
         if not self.contained:
@@ -136,6 +118,11 @@ class TerminalSession:
         self.start_identity = process_start_identity(pid)
         if self.activity_lease is not None:
             self.activity_lease.mark_process_started()
+            self.writer_tree = GuardedWriterTree.bind(
+                self.activity_lease,
+                launcher_pid=pid,
+                launcher_start=self.start_identity,
+            )
         for _ in range(50):
             try:
                 if os.getsid(pid) == pid:
@@ -185,31 +172,35 @@ class TerminalSession:
         # Snapshot the writer tree before closing the PTY master. Closing first
         # can kill the shell and reparent background jobs to init, which would
         # hide them from a root-only process-tree walk.
+        tree = self.writer_tree or GuardedWriterTree.bind(
+            self.activity_lease,
+            launcher_pid=pid,
+            launcher_start=start_identity,
+        )
         known = process_tree_pids(pid)
         seed = set(known) if known is not None else {pid}
+        tree.seed_live_members()
+        for member in seed:
+            start = process_start_identity(member)
+            if start:
+                tree.known_identities[int(member)] = start
         # Close the PTY master so the shell sees EOF on its controlling tty.
         if fd is not None:
             try:
                 os.close(fd)
             except OSError:
                 pass
-        # Stop through the identity-bound writer tree (guardian sentinel / shell
-        # descendants), never launcher session membership alone. PTY-attached
-        # guardians stay in-session, but writers may still setsid() themselves.
-        tree_stopped = terminate_process_tree(
-            pid,
+        # Stop through the identity-bound writer tree handle, never launcher
+        # session membership alone.
+        tree_stopped = tree.terminate(
             grace_seconds=0.5,
             kill_seconds=0.5,
             initial_signal=signal.SIGHUP,
-            known_pids=seed,
         )
         if not tree_stopped:
-            # One more aggressive pass if the first sweep could not prove exit.
-            tree_stopped = terminate_process_tree(
-                pid,
+            tree_stopped = tree.terminate(
                 grace_seconds=0.2,
                 kill_seconds=0.5,
-                known_pids=seed,
             )
         reaped = _reap(pid, attempts=20, delay=0.005)
         if not reaped:
@@ -221,18 +212,13 @@ class TerminalSession:
                 reaped = True
             except OSError as exc:
                 reaped = exc.errno == errno.ECHILD
-        proven = tree_stopped
-        if proven is not True:
-            leftover = _tree_exited(pid)
-            if leftover is True:
-                proven = True
-            elif leftover is False:
-                proven = False
-            else:
-                proven = False
+        # Launcher reap never upgrades tree proof.
+        tree.seed_live_members()
+        proven = tree.exited() is True
         return CloseResult(
             session_stopped=bool(proven and reaped),
             child_reaped=bool(proven and reaped),
             pid=pid,
             start_identity=start_identity,
+            writer_tree=tree,
         )

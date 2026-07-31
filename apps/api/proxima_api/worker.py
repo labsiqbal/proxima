@@ -1234,8 +1234,22 @@ class RunWorker:
                             activity_lease=script_activity_lease,
                         )
                 finally:
-                    if script_activity_lease is not None:
-                        script_activity_lease.release()
+                    if (
+                        script_activity_lease is not None
+                        and not getattr(
+                            script_activity_lease,
+                            "_retained_for_writer_tree",
+                            False,
+                        )
+                    ):
+                        # Only release after script_runner proved tree exit.
+                        # Unproven stops transfer the lease to a tree monitor.
+                        if not getattr(
+                            script_activity_lease,
+                            "_released",
+                            False,
+                        ):
+                            script_activity_lease.release()
                 return
             hermes_home = run["hermes_home"] or ""
             spec = runner_spec(run["runner_id"])
@@ -2040,6 +2054,8 @@ class RunWorker:
             detail = format_rpc_error(str(exc)[-2000:])
             self._fail_run_exception(run, detail)
         finally:
+            recycle_verified = True
+            recycle_tree = None
             if guarded_runner_key is not None:
                 (
                     guarded_spec,
@@ -2057,12 +2073,40 @@ class RunWorker:
                         cache_scope=guarded_scope,
                     )
                 except Exception:
+                    recycle_verified = False
                     logging.getLogger("proxima.worker").exception(
                         "failed to recycle activity-guarded runner for %s",
                         guarded_cwd,
                     )
+                    try:
+                        recycle_tree = getattr(
+                            self.app.state.acp_manager,
+                            "_last_recycle_tree",
+                            None,
+                        )
+                        if recycle_tree is None:
+                            from .container_activity import GuardedWriterTree
+                            recycle_tree = GuardedWriterTree.bind(
+                                project_activity_lease,
+                            )
+                    except Exception:
+                        recycle_tree = None
             if project_activity_lease is not None:
-                project_activity_lease.release()
+                if (
+                    recycle_verified
+                    and not getattr(
+                        project_activity_lease,
+                        "_retained_for_writer_tree",
+                        False,
+                    )
+                ):
+                    project_activity_lease.release()
+                elif not recycle_verified:
+                    from .container_activity import retain_activity_lease
+                    retain_activity_lease(
+                        project_activity_lease,
+                        tree=recycle_tree,
+                    )
             if hb_task:
                 hb_task.cancel()
                 with suppress(asyncio.CancelledError):

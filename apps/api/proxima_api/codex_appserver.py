@@ -38,6 +38,7 @@ from typing import Any, Callable
 from .acp import AcpError, UpdateHandler, config_sig, format_rpc_error
 from .codex_master_proxy import CodexMasterModelProxy
 from .master_tool_broker import TOOL_SCHEMAS, master_dynamic_tools
+from .container_activity import GuardedWriterTree, process_start_identity
 from .process_containment import pid_namespace_argv, terminate_and_verify
 from .runners import subprocess_env
 
@@ -135,6 +136,7 @@ class CodexAppServerProcess:
         self.contained = contained
         self.activity_lease = activity_lease
         self.proc: asyncio.subprocess.Process | None = None
+        self.writer_tree: GuardedWriterTree | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._handlers: dict[str, UpdateHandler] = {}          # threadId -> update handler
@@ -296,6 +298,16 @@ class CodexAppServerProcess:
             )
             if self.activity_lease is not None:
                 self.activity_lease.mark_process_started()
+                proc_pid = int(self.proc.pid) if self.proc.pid is not None else None
+                self.writer_tree = GuardedWriterTree.bind(
+                    self.activity_lease,
+                    launcher_pid=proc_pid,
+                    launcher_start=(
+                        process_start_identity(proc_pid)
+                        if proc_pid is not None
+                        else None
+                    ),
+                )
             self._reader = asyncio.create_task(self._read_loop())
             self._stderr_reader = asyncio.create_task(self._read_stderr())
             # app-server handshake: initialize, then the required `initialized`
@@ -753,7 +765,11 @@ class CodexAppServerProcess:
                 task.cancel()
         failure: BaseException | None = None
         try:
-            await terminate_and_verify(self.proc, label="Codex runner")
+            await terminate_and_verify(
+                self.proc,
+                label="Codex runner",
+                tree=self.writer_tree,
+            )
         except BaseException as exc:
             failure = exc
         for task in (self._reader, self._stderr_reader):

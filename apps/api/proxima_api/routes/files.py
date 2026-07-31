@@ -77,6 +77,7 @@ class _LeaseGroup:
         process_exited: bool,
         pid: int | None = None,
         start_identity: str | None = None,
+        tree: Any | None = None,
         retain_ingress: Any | None = None,
     ) -> None:
         if self._released:
@@ -97,6 +98,7 @@ class _LeaseGroup:
                 activity,
                 pid=pid,
                 start_identity=start_identity,
+                tree=tree,
             )
         for lease in ingress:
             if retain_ingress is not None:

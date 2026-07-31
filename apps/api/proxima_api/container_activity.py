@@ -292,6 +292,326 @@ def process_start_identity(pid: int) -> str | None:
     return _process_start_identity(pid)
 
 
+@dataclass
+class GuardedWriterTree:
+    """Identity-bound handle for a guarded Project writer tree.
+
+    Launcher exit never implies tree exit. Prefer the guardian-record sentinel
+    (or Windows job) as the durable root; fall back to the launcher only while
+    that identity is still live. Known member identities seed fail-closed retain
+    when stop cannot fully prove exit.
+    """
+
+    launcher_pid: int | None = None
+    launcher_start: str | None = None
+    guardian_record: Path | None = None
+    known_identities: dict[int, str] = None  # type: ignore[assignment]
+    job_name: str | None = None
+
+    def __post_init__(self) -> None:
+        raw_identities = self.known_identities or {}
+        cleaned: dict[int, str] = {}
+        for raw_pid, raw_start in raw_identities.items():
+            try:
+                pid = int(raw_pid)
+            except (TypeError, ValueError):
+                continue
+            start = str(raw_start or "")
+            if pid > 1 and start:
+                cleaned[pid] = start
+        self.known_identities = cleaned
+        if self.launcher_pid is not None:
+            try:
+                self.launcher_pid = int(self.launcher_pid)
+            except (TypeError, ValueError):
+                self.launcher_pid = None
+        if self.launcher_start is not None:
+            self.launcher_start = str(self.launcher_start) or None
+        if self.guardian_record is not None:
+            self.guardian_record = Path(self.guardian_record)
+
+    @classmethod
+    def bind(
+        cls,
+        lease: Any | None = None,
+        *,
+        launcher_pid: int | None = None,
+        launcher_start: str | None = None,
+        known_pids: set[int] | None = None,
+        guardian_record: Path | None = None,
+        job_name: str | None = None,
+    ) -> "GuardedWriterTree":
+        record = guardian_record
+        if record is None and lease is not None:
+            cursor = lease
+            seen: set[int] = set()
+            while cursor is not None and id(cursor) not in seen:
+                seen.add(id(cursor))
+                raw = getattr(cursor, "_guardian_record", None)
+                if raw is not None:
+                    record = Path(raw)
+                    break
+                cursor = getattr(cursor, "_activity", None) or getattr(
+                    cursor, "_inner", None
+                )
+        identities: dict[int, str] = {}
+        if known_pids:
+            for raw_pid in known_pids:
+                try:
+                    pid = int(raw_pid)
+                except (TypeError, ValueError):
+                    continue
+                start = _process_start_identity(pid)
+                if start:
+                    identities[pid] = start
+        if (
+            launcher_pid is not None
+            and launcher_start
+            and int(launcher_pid) > 1
+        ):
+            identities.setdefault(int(launcher_pid), str(launcher_start))
+        return cls(
+            launcher_pid=launcher_pid,
+            launcher_start=launcher_start,
+            guardian_record=record,
+            known_identities=identities,
+            job_name=job_name,
+        )
+
+    def _read_record(self) -> dict[str, Any] | None:
+        if self.guardian_record is None:
+            return None
+        try:
+            record_stat = self.guardian_record.lstat()
+            if stat.S_ISLNK(record_stat.st_mode) or not stat.S_ISREG(
+                record_stat.st_mode
+            ):
+                return None
+            return json.loads(
+                self.guardian_record.read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+            return None
+
+    def _sentinel_identity(self) -> tuple[int, str] | None:
+        payload = self._read_record()
+        if payload is None:
+            return None
+        try:
+            pid = int(payload["sentinel_pid"])
+            start = str(payload["sentinel_start"] or "")
+        except (KeyError, TypeError, ValueError):
+            return None
+        if pid <= 1 or not start:
+            return None
+        job = payload.get("job_name")
+        if job and not self.job_name:
+            self.job_name = str(job)
+        return pid, start
+
+    def seed_live_members(self) -> None:
+        """Capture currently visible tree members under launcher/sentinel."""
+        from .process_containment import process_tree_pids
+
+        roots: list[int] = []
+        if self.launcher_pid is not None and self.launcher_start:
+            if _process_has_identity(
+                self.launcher_pid,
+                self.launcher_start,
+            ) is True:
+                roots.append(self.launcher_pid)
+        sentinel = self._sentinel_identity()
+        if sentinel is not None:
+            pid, start = sentinel
+            if _process_has_identity(pid, start) is True:
+                roots.append(pid)
+                self.known_identities[pid] = start
+        for root in roots:
+            tree = process_tree_pids(root)
+            if not tree:
+                continue
+            for pid in tree:
+                start = _process_start_identity(pid)
+                if start:
+                    self.known_identities[int(pid)] = start
+
+    def monitor_roots(self) -> list[tuple[int, str]]:
+        """Identities whose liveness keeps the writer tree active."""
+        roots: list[tuple[int, str]] = []
+        seen: set[int] = set()
+        sentinel = self._sentinel_identity()
+        if sentinel is not None:
+            pid, start = sentinel
+            roots.append((pid, start))
+            seen.add(pid)
+            self.known_identities[pid] = start
+        if (
+            self.launcher_pid is not None
+            and self.launcher_start
+            and self.launcher_pid not in seen
+        ):
+            roots.append((self.launcher_pid, self.launcher_start))
+            seen.add(self.launcher_pid)
+        for pid, start in list(self.known_identities.items()):
+            if pid in seen:
+                continue
+            roots.append((pid, start))
+            seen.add(pid)
+        return roots
+
+    def has_binding(self) -> bool:
+        if self.launcher_pid is not None and self.launcher_start:
+            return True
+        if self.known_identities:
+            return True
+        if self.guardian_record is not None:
+            try:
+                return self.guardian_record.exists()
+            except OSError:
+                return True
+        return False
+
+    def exited(self) -> bool | None:
+        """True when every bound writer identity is gone.
+
+        False when any bound identity is still live. None when the tree cannot
+        be proven either way (caller must fail closed).
+        """
+        from .process_containment import process_tree_pids
+
+        roots = self.monitor_roots()
+        if not roots:
+            if self.guardian_record is not None:
+                try:
+                    exists = self.guardian_record.exists()
+                except OSError:
+                    return None
+                if exists:
+                    # Record present but sentinel identity unusable - unprovable.
+                    return None
+                # Absent record with no bound identities is not proof of a prior
+                # clean tree exit (acquire always allocates a record path).
+                if self.launcher_start or self.known_identities:
+                    return True
+                return None
+            return None
+
+        saw_dead = False
+        for pid, start in roots:
+            alive = _process_has_identity(pid, start)
+            if alive is True:
+                tree = process_tree_pids(pid)
+                if tree is None:
+                    return False
+                return False
+            if alive is None:
+                if _process_exists(pid):
+                    return None
+                saw_dead = True
+                continue
+            saw_dead = True
+
+        # Guardian record still present without a live matching sentinel is a
+        # stale file left after crash; treat as clear only when no member still
+        # matches a known identity.
+        for pid, start in list(self.known_identities.items()):
+            alive = _process_has_identity(pid, start)
+            if alive is True:
+                return False
+            if alive is None and _process_exists(pid):
+                return None
+            if alive is False:
+                saw_dead = True
+        return True if saw_dead else None
+
+    def terminate(
+        self,
+        *,
+        grace_seconds: float = 4.0,
+        kill_seconds: float = 2.0,
+        initial_signal: int | None = None,
+    ) -> bool:
+        """Signal the identity-bound tree; True only when exit is proven."""
+        from .process_containment import terminate_process_tree
+
+        self.seed_live_members()
+        if self.exited() is True:
+            return True
+
+        if not self.job_name:
+            sentinel_payload = self._read_record()
+            if sentinel_payload is not None:
+                job = sentinel_payload.get("job_name")
+                if job:
+                    self.job_name = str(job)
+
+        if self.job_name and _platform_is_windows():
+            _terminate_windows_job(self.job_name)
+            deadline = time.monotonic() + max(
+                0.05,
+                float(grace_seconds) + float(kill_seconds),
+            )
+            while time.monotonic() < deadline:
+                if self.exited() is True:
+                    return True
+                time.sleep(0.05)
+            return self.exited() is True
+
+        preferred: list[int] = []
+        seen: set[int] = set()
+        sentinel = self._sentinel_identity()
+        if sentinel is not None:
+            pid, start = sentinel
+            if _process_has_identity(pid, start) is True:
+                preferred.append(pid)
+                seen.add(pid)
+        if (
+            self.launcher_pid is not None
+            and self.launcher_start
+            and self.launcher_pid not in seen
+            and _process_has_identity(
+                self.launcher_pid,
+                self.launcher_start,
+            )
+            is True
+        ):
+            preferred.append(self.launcher_pid)
+            seen.add(self.launcher_pid)
+        for pid, start in self.monitor_roots():
+            if pid in seen:
+                continue
+            if _process_has_identity(pid, start) is True:
+                preferred.append(pid)
+                seen.add(pid)
+
+        known = set(self.known_identities)
+        for root in preferred:
+            terminate_process_tree(
+                root,
+                grace_seconds=grace_seconds,
+                kill_seconds=kill_seconds,
+                initial_signal=initial_signal,
+                known_pids=known,
+            )
+        self.seed_live_members()
+        return self.exited() is True
+
+
+def guarded_writer_tree_from_lease(
+    lease: Any | None,
+    *,
+    launcher_pid: int | None = None,
+    launcher_start: str | None = None,
+    known_pids: set[int] | None = None,
+) -> GuardedWriterTree:
+    return GuardedWriterTree.bind(
+        lease,
+        launcher_pid=launcher_pid,
+        launcher_start=launcher_start,
+        known_pids=known_pids,
+    )
+
+
 def _process_start_identity(pid: int) -> str | None:
     if os.name == "nt":
         from ctypes import wintypes
@@ -429,6 +749,22 @@ def _process_has_identity(
     pid: int,
     expected: str,
 ) -> bool | None:
+    if not expected:
+        return False
+    if sys.platform.startswith("linux"):
+        try:
+            with open(f"/proc/{int(pid)}/stat", encoding="utf-8") as fh:
+                stat_text = fh.read()
+            state = stat_text.rsplit(") ", 1)[1].split()[0]
+            if state == "Z":
+                return False
+            fields = stat_text.split()
+            current = fields[21] if len(fields) > 21 else None
+        except (OSError, IndexError, ValueError, TypeError):
+            return None if _process_exists(pid) else False
+        if current is None:
+            return None if _process_exists(pid) else False
+        return current == expected
     current = _process_start_identity(pid)
     if current is None:
         return None if _process_exists(pid) else False
@@ -630,13 +966,16 @@ def retain_activity_lease(
     *,
     pid: int | None = None,
     start_identity: str | None = None,
+    tree: GuardedWriterTree | None = None,
+    known_pids: set[int] | None = None,
 ) -> None:
-    """Retain a writer-activity lease until the exact process identity exits.
+    """Retain a writer-activity lease until the guarded writer tree exits.
 
-    Ingress/maintenance leases are not handled here. When the process identity
-    cannot be bound, the lease stays retained fail-closed so exclusive
-    quiescence remains blocked instead of leaking without a holder or falsely
-    reporting an idle Container.
+    Ingress/maintenance leases are not handled here. Launcher death alone never
+    releases the lease when a guardian sentinel or other bound tree member is
+    still live. When no tree identity can be bound, the lease stays retained
+    fail-closed so exclusive quiescence remains blocked instead of leaking
+    without a holder or falsely reporting an idle Container.
     """
     if lease is None or getattr(lease, "_released", False):
         return
@@ -644,20 +983,48 @@ def retain_activity_lease(
     with _RETAINED_ACTIVITY_GUARD:
         if lease not in _RETAINED_ACTIVITY_LEASES:
             _RETAINED_ACTIVITY_LEASES.append(lease)
+    try:
+        lease._retained_for_writer_tree = True
+    except Exception:
+        pass
 
-    bound_pid = int(pid) if pid is not None else 0
-    expected = str(start_identity or "")
-    if bound_pid <= 1 or not expected:
+    handle = tree or GuardedWriterTree.bind(
+        lease,
+        launcher_pid=pid,
+        launcher_start=start_identity,
+        known_pids=known_pids,
+    )
+    if not handle.has_binding():
+        return
+
+    handle.seed_live_members()
+    if handle.exited() is True:
+        try:
+            lease.release()
+        finally:
+            with _RETAINED_ACTIVITY_GUARD:
+                try:
+                    _RETAINED_ACTIVITY_LEASES.remove(lease)
+                except ValueError:
+                    pass
         return
 
     def monitor() -> None:
+        release = False
         try:
             while True:
-                alive = _process_has_identity(bound_pid, expected)
-                if alive is False:
+                state = handle.exited()
+                if state is True:
+                    release = True
                     break
-                time.sleep(0.05)
+                if state is False:
+                    time.sleep(0.05)
+                    continue
+                # Proof unavailable - keep the explicit blocker indefinitely.
+                time.sleep(0.25)
         finally:
+            if not release:
+                return
             try:
                 lease.release()
             finally:
@@ -667,9 +1034,14 @@ def retain_activity_lease(
                     except ValueError:
                         pass
 
+    label_pid = handle.launcher_pid or 0
+    if not label_pid:
+        roots = handle.monitor_roots()
+        if roots:
+            label_pid = roots[0][0]
     threading.Thread(
         target=monitor,
-        name=f"container-activity-lease-{bound_pid}",
+        name=f"container-activity-lease-{label_pid or 'tree'}",
         daemon=True,
     ).start()
 

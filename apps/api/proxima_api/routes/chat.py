@@ -1543,6 +1543,7 @@ def register(app, deps):
                             "start_identity",
                             None,
                         ),
+                        tree=getattr(close_result, "writer_tree", None),
                     )
 
     @app.websocket("/api/ws/sessions/{session_id}")

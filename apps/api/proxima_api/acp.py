@@ -18,6 +18,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from .container_activity import GuardedWriterTree, process_start_identity
 from .process_containment import pid_namespace_argv, terminate_and_verify
 from .runners import subprocess_env
 
@@ -203,6 +204,7 @@ class AcpProcess:
         self.contained = contained
         self.activity_lease = activity_lease
         self.proc: asyncio.subprocess.Process | None = None
+        self.writer_tree: GuardedWriterTree | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._handlers: dict[str, UpdateHandler] = {}   # sessionId -> update handler
@@ -212,6 +214,7 @@ class AcpProcess:
         self._stderr_reader: asyncio.Task | None = None
         self._stderr_lines: deque[str] = deque(maxlen=60)
         self._lock = asyncio.Lock()
+        self._last_recycle_tree = None
         self._started = False
         self.config_sig: tuple = ()
 
@@ -259,6 +262,16 @@ class AcpProcess:
         )
         if self.activity_lease is not None:
             self.activity_lease.mark_process_started()
+            proc_pid = int(self.proc.pid) if self.proc.pid is not None else None
+            self.writer_tree = GuardedWriterTree.bind(
+                self.activity_lease,
+                launcher_pid=proc_pid,
+                launcher_start=(
+                    process_start_identity(proc_pid)
+                    if proc_pid is not None
+                    else None
+                ),
+            )
         self._reader = asyncio.create_task(self._read_loop())
         self._stderr_reader = asyncio.create_task(self._read_stderr())
         try:
@@ -490,7 +503,11 @@ class AcpProcess:
             self._stderr_reader.cancel()
         failure: BaseException | None = None
         try:
-            await terminate_and_verify(self.proc, label="ACP runner")
+            await terminate_and_verify(
+                self.proc,
+                label="ACP runner",
+                tree=self.writer_tree,
+            )
         except BaseException as exc:
             failure = exc
         for task in (self._reader, self._stderr_reader):
@@ -562,15 +579,27 @@ class AcpManager:
         proc: Any,
         lease: IngressLease | None,
     ) -> None:
+        tree = getattr(proc, "writer_tree", None)
+        self._last_recycle_tree = tree
         try:
             await proc.stop()
         except BaseException:
             self._finish_effect_lease(lease, verified=False)
             raise
         process = getattr(proc, "proc", None)
+        tree_clear = True
+        if tree is not None:
+            try:
+                tree.seed_live_members()
+                tree_clear = tree.exited() is True
+            except Exception:
+                tree_clear = False
         if process is not None and process.returncode is None:
             self._finish_effect_lease(lease, verified=False)
             raise RuntimeError("runner process exit was not verified")
+        if not tree_clear:
+            self._finish_effect_lease(lease, verified=False)
+            raise RuntimeError("runner process tree exit was not verified")
         self._finish_effect_lease(lease, verified=True)
 
     async def get(

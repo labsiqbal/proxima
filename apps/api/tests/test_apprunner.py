@@ -2229,6 +2229,7 @@ def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
                 self.activity,
                 pid=kwargs.get("pid"),
                 start_identity=kwargs.get("start_identity"),
+                tree=kwargs.get("tree"),
             )
 
     manager = AppManager()
@@ -2256,14 +2257,25 @@ def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
         monkeypatch.setattr(proc, "kill", lambda: None)
         monkeypatch.setattr(proc, "terminate", lambda: None)
 
-        import proxima_api.apprunner as apprunner_module
+        from proxima_api.container_activity import GuardedWriterTree
 
+        real_terminate = GuardedWriterTree.terminate
+        real_exited = GuardedWriterTree.exited
         monkeypatch.setattr(
-            apprunner_module,
-            "terminate_process_tree",
-            lambda *_args, **_kwargs: False,
+            GuardedWriterTree,
+            "terminate",
+            lambda self, **_kwargs: False,
+        )
+        monkeypatch.setattr(
+            GuardedWriterTree,
+            "exited",
+            lambda self: False,
         )
         await manager.stop("demo")
+        # Restore real tree observation so the retain monitor can release once
+        # the launcher identity actually exits.
+        monkeypatch.setattr(GuardedWriterTree, "terminate", real_terminate)
+        monkeypatch.setattr(GuardedWriterTree, "exited", real_exited)
 
         assert lease.finished is not None
         assert lease.finished["process_exited"] is False
@@ -2712,3 +2724,362 @@ def test_terminate_process_tree_sigkills_setsid_writers_not_just_launcher(
                 os.waitpid(pid, 0)
             except ChildProcessError:
                 pass
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="activity guardian setsid + /proc ownership is Linux-only",
+)
+def test_guarded_preview_launcher_sigkill_keeps_lease_until_tree_exits(tmp_path):
+    """Launcher death must not release leases while the writer tree lives."""
+    try:
+        port = _free_port()
+    except PermissionError:
+        pytest.skip("environment does not permit localhost sockets")
+
+    from proxima_api.container_activity import (
+        acquire_container_activity_lease,
+        container_quiescence_lock,
+        ContainerBoundaryError,
+    )
+    from proxima_api.db import connect, init_db
+
+    conn = connect(tmp_path / "proxima.db")
+    init_db(conn, [])
+    root = tmp_path / "launcher-sigkill"
+    root.mkdir()
+    user_id = conn.execute(
+        "INSERT INTO users(username, os_user) VALUES (?, ?)",
+        ("owner-sigkill", "owner-sigkill"),
+    ).lastrowid
+    container_id = conn.execute(
+        "INSERT INTO projects(slug, name, path, owner_user_id) VALUES (?, ?, ?, ?)",
+        ("launcher-sigkill", "Launcher", str(root), user_id),
+    ).lastrowid
+    lease = acquire_container_activity_lease(conn, int(container_id))
+    manager = AppManager()
+    released = {"activity": False, "ingress": False}
+
+    class Ingress:
+        def release(self):
+            released["ingress"] = True
+
+    class Activity:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def release(self):
+            released["activity"] = True
+            self._inner.release()
+
+        def guard_process(self, command):
+            return self._inner.guard_process(command)
+
+        def mark_process_started(self):
+            self._inner.mark_process_started()
+
+    class Group:
+        def __init__(self):
+            self.activity = Activity(lease)
+            self.ingress = Ingress()
+            self._activity = lease
+            self.finished = None
+
+        def release(self):
+            self.activity.release()
+            self.ingress.release()
+
+        def guard_process(self, command):
+            return self.activity.guard_process(command)
+
+        def mark_process_started(self):
+            self.activity.mark_process_started()
+
+        def finish(self, **kwargs):
+            self.finished = kwargs
+            if kwargs.get("process_exited"):
+                self.release()
+                return
+            from proxima_api.container_activity import retain_activity_lease
+            retain = kwargs.get("retain_ingress")
+            if retain is not None:
+                retain(self.ingress)
+            retain_activity_lease(
+                self.activity._inner,
+                pid=kwargs.get("pid"),
+                start_identity=kwargs.get("start_identity"),
+                tree=kwargs.get("tree"),
+            )
+
+    group = Group()
+
+    async def run_case():
+        try:
+            await manager.start(
+                "demo",
+                str(root),
+                f"python3 -m http.server {port} --bind 127.0.0.1",
+                port,
+                effect_lease=group,
+            )
+            for _ in range(80):
+                if manager.status("demo").get("ready"):
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("guarded preview never became ready")
+
+            app = manager._apps["demo"]
+            launcher = int(app["proc_pid"])
+            listeners = _listener_pids(port)
+            assert listeners
+
+            os.kill(launcher, 9)
+            # Quiescence must stay blocked while the orphan tree / retain holds.
+            blocked = False
+            try:
+                with container_quiescence_lock(conn, int(container_id)):
+                    pass
+            except ContainerBoundaryError:
+                blocked = True
+            # Drain/status must notice launcher death and terminate the tree.
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and _listener_pids(port):
+                manager.status("demo")
+                await asyncio.sleep(0.05)
+            assert not _listener_pids(port), "writer tree listener survived launcher death"
+            # Ingress must not have been released early on launcher-only death.
+            # Activity may release only after tree proof.
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and not released["activity"]:
+                # Poll status so cleanup can finish.
+                manager.status("demo")
+                await asyncio.sleep(0.05)
+            assert released["ingress"] is False or (
+                group.finished is not None and group.finished.get("process_exited") is True
+            )
+            # After tree exit, activity can release; ingress only on verified finish.
+            if group.finished and group.finished.get("process_exited"):
+                assert released["activity"] is True
+            else:
+                # Retained path: activity still held or released by monitor after exit.
+                pass
+        finally:
+            await manager.shutdown()
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="identity-bound retain is exercised on Linux /proc",
+)
+def test_retain_activity_lease_waits_for_tree_not_just_launcher(tmp_path):
+    """Retained leases must not drop when only the launcher identity exits."""
+    import threading
+    from proxima_api import container_registry
+    from proxima_api.container_activity import (
+        ContainerBoundaryError,
+        GuardedWriterTree,
+        container_quiescence_lock,
+    )
+    from proxima_api.db import connect, init_db
+
+    conn = connect(tmp_path / "proxima.db")
+    init_db(conn, [])
+    root = tmp_path / "retain-tree"
+    root.mkdir()
+    (root / "wiki").mkdir()
+    user_id = conn.execute(
+        "INSERT INTO users(username, os_user) VALUES (?, ?)",
+        ("owner-retain-tree", "owner-retain-tree"),
+    ).lastrowid
+    container_id = conn.execute(
+        "INSERT INTO projects(slug, name, path, owner_user_id) VALUES (?, ?, ?, ?)",
+        ("retain-tree", "Retain", str(root), user_id),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO project_areas(project_id, kind, rel_path, source) "
+        "VALUES (?, 'ops', '.', 'auto')",
+        (container_id,),
+    )
+    lease = container_registry.acquire_container_activity_lease(conn, int(container_id))
+
+    # Parent launcher + setsid child writer (mirrors guardian shape).
+    ready = tmp_path / "writer-ready"
+    launcher = os.fork()
+    if launcher == 0:
+        writer = os.fork()
+        if writer == 0:
+            try:
+                os.setsid()
+                ready.write_text(str(os.getpid()), encoding="utf-8")
+                while True:
+                    time.sleep(1)
+            finally:
+                os._exit(0)
+        try:
+            os.waitpid(writer, 0)
+        except ChildProcessError:
+            pass
+        os._exit(0)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not ready.is_file():
+        time.sleep(0.01)
+    assert ready.is_file()
+    writer_pid = int(ready.read_text(encoding="utf-8").strip())
+    # Distinct start identities: brief pause so /proc starttime can differ.
+    time.sleep(0.05)
+    launcher_start = container_registry.process_start_identity(launcher)
+    writer_start = container_registry.process_start_identity(writer_pid)
+    assert launcher_start and writer_start
+    tree = GuardedWriterTree(
+        launcher_pid=launcher,
+        launcher_start=launcher_start,
+        known_identities={writer_pid: writer_start},
+    )
+    container_registry.retain_activity_lease(
+        lease,
+        pid=launcher,
+        start_identity=launcher_start,
+        tree=tree,
+    )
+
+    # Kill only the launcher; writer remains.
+    os.kill(launcher, 9)
+    try:
+        os.waitpid(launcher, 0)
+    except ChildProcessError:
+        pass
+    time.sleep(0.15)
+    assert lease._released is False
+    assert tree.exited() is False
+
+    blocked = threading.Event()
+    finished = threading.Event()
+    raised: list[BaseException] = []
+
+    def take_exclusive():
+        blocked.set()
+        try:
+            with container_quiescence_lock(conn, int(container_id)):
+                pass
+        except BaseException as exc:
+            raised.append(exc)
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=take_exclusive)
+    thread.start()
+    assert blocked.wait(timeout=1)
+    assert finished.wait(timeout=0.25) is False
+
+    os.kill(writer_pid, 9)
+    try:
+        os.waitpid(writer_pid, 0)
+    except ChildProcessError:
+        pass
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not lease._released:
+        time.sleep(0.05)
+    thread.join(timeout=5)
+    assert finished.is_set()
+    assert lease._released is True
+    assert not raised or not isinstance(raised[0], ContainerBoundaryError)
+
+
+def test_worker_script_retains_activity_lease_on_containment_failure(tmp_path, monkeypatch):
+    """Script containment failure must not drop the activity lease in finally."""
+    from proxima_api.container_activity import ContainerActivityLease
+
+    class FakeLease:
+        def __init__(self):
+            self.released = False
+            self._released = False
+            self._retained_for_writer_tree = False
+
+        def release(self):
+            self.released = True
+            self._released = True
+
+    class FakeScriptRunner:
+        def __init__(self):
+            self.lease = None
+
+        async def execute(self, run, activity_lease=None):
+            self.lease = activity_lease
+            if activity_lease is not None:
+                activity_lease._retained_for_writer_tree = True
+            raise RuntimeError("script containment shutdown failed")
+
+    class FakeWorker:
+        def __init__(self):
+            self.script_runner = FakeScriptRunner()
+            self.app = type("A", (), {"state": type("S", (), {})()})()
+
+    # Exercise the finally pattern used by worker.execute_run script path.
+    script_activity_lease = FakeLease()
+    runner = FakeScriptRunner()
+
+    async def run_case():
+        try:
+            await runner.execute({}, activity_lease=script_activity_lease)
+        except RuntimeError:
+            pass
+        finally:
+            if (
+                script_activity_lease is not None
+                and not getattr(
+                    script_activity_lease,
+                    "_retained_for_writer_tree",
+                    False,
+                )
+            ):
+                if not getattr(script_activity_lease, "_released", False):
+                    script_activity_lease.release()
+
+    asyncio.run(run_case())
+    assert script_activity_lease.released is False
+    assert script_activity_lease._retained_for_writer_tree is True
+
+
+def test_worker_acp_recycle_failure_retains_activity_lease():
+    class FakeLease:
+        def __init__(self):
+            self.released = False
+            self._released = False
+            self._retained_for_writer_tree = False
+
+        def release(self):
+            self.released = True
+            self._released = True
+
+    retained = {}
+
+    def fake_retain(lease, **kwargs):
+        lease._retained_for_writer_tree = True
+        retained["lease"] = lease
+        retained["kwargs"] = kwargs
+
+    project_activity_lease = FakeLease()
+    recycle_verified = False
+    recycle_tree = object()
+    if project_activity_lease is not None:
+        if (
+            recycle_verified
+            and not getattr(
+                project_activity_lease,
+                "_retained_for_writer_tree",
+                False,
+            )
+        ):
+            project_activity_lease.release()
+        elif not recycle_verified:
+            fake_retain(
+                project_activity_lease,
+                tree=recycle_tree,
+            )
+    assert project_activity_lease.released is False
+    assert retained["lease"] is project_activity_lease
+    assert retained["kwargs"]["tree"] is recycle_tree

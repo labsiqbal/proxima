@@ -42,6 +42,7 @@ from typing import Any
 from . import app_settings, scripts_library
 from .container_registry import ops_root
 from .graph import normalize_graph
+from .container_activity import GuardedWriterTree, retain_activity_lease
 from .process_containment import pid_namespace_argv, terminate_and_verify
 from .runners import augmented_path
 from .workflows import substitute
@@ -248,6 +249,7 @@ class ScriptRunner:
         proc: asyncio.subprocess.Process | None = None
         effect_lease = None
         exit_verified = True
+        writer_tree: GuardedWriterTree | None = None
         try:
             command = [*argv, *args]
             if self.app.state.maintenance.process_containment_required:
@@ -274,6 +276,17 @@ class ScriptRunner:
                 )
                 if activity_lease is not None:
                     activity_lease.mark_process_started()
+                    from .container_activity import process_start_identity
+                    proc_pid = int(proc.pid) if proc.pid is not None else None
+                    writer_tree = GuardedWriterTree.bind(
+                        activity_lease,
+                        launcher_pid=proc_pid,
+                        launcher_start=(
+                            process_start_identity(proc_pid)
+                            if proc_pid is not None
+                            else None
+                        ),
+                    )
             except FileNotFoundError as exc:
                 self._fail(run, f"script interpreter not found: {exc}")
                 return
@@ -285,6 +298,7 @@ class ScriptRunner:
                 await terminate_and_verify(
                     proc,
                     label="script",
+                    tree=writer_tree,
                 )
                 # No auto-continuation for scripts: a deterministic step that
                 # overruns the quota is broken or mis-sized, not "still going".
@@ -309,20 +323,45 @@ class ScriptRunner:
             answer = stdout.decode("utf-8", errors="replace").strip()
             self._complete(run, answer, run_start_ts)
         finally:
-            if proc is not None and proc.returncode is None:
+            if proc is not None and (
+                proc.returncode is None
+                or (writer_tree is not None and writer_tree.exited() is not True)
+            ):
                 try:
                     await terminate_and_verify(
                         proc,
                         label="script",
+                        tree=writer_tree,
                     )
                 except BaseException:
                     exit_verified = False
+            elif writer_tree is not None and writer_tree.exited() is not True:
+                exit_verified = False
             if effect_lease is not None:
                 if exit_verified:
                     effect_lease.release()
                 else:
                     effect_lease.suspend_admission()
                     self.app.state.maintenance.retain(effect_lease)
+            if activity_lease is not None and not exit_verified:
+                # Transfer the shared activity flock to a tree monitor so the
+                # worker's outer finally cannot drop it while writers live.
+                if writer_tree is not None:
+                    writer_tree.seed_live_members()
+                retain_activity_lease(
+                    activity_lease,
+                    tree=writer_tree,
+                    pid=(
+                        writer_tree.launcher_pid
+                        if writer_tree is not None
+                        else (getattr(proc, "pid", None) if proc else None)
+                    ),
+                    start_identity=(
+                        writer_tree.launcher_start
+                        if writer_tree is not None
+                        else None
+                    ),
+                )
             shutil.rmtree(exec_dir, ignore_errors=True)
             heartbeat.cancel()
             try:

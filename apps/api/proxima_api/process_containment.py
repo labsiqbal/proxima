@@ -222,8 +222,60 @@ async def terminate_and_verify(
     *,
     label: str,
     timeout: float = 5.0,
+    tree: Any | None = None,
 ) -> None:
+    if process is None and tree is None:
+        return
+
+    if tree is not None:
+        grace = max(0.05, float(timeout) * 0.65)
+        kill_wait = max(0.05, float(timeout) - grace)
+        try:
+            tree.seed_live_members()
+        except Exception:
+            pass
+        tree_done = await asyncio.to_thread(
+            tree.terminate,
+            grace_seconds=grace,
+            kill_seconds=kill_wait,
+        )
+        if process is not None and process.returncode is None:
+            try:
+                await asyncio.wait_for(
+                    process.wait(),
+                    timeout=max(0.2, float(timeout) * 0.25),
+                )
+            except asyncio.TimeoutError as exc:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    raise RuntimeError(
+                        f"{label} process did not exit after kill"
+                    ) from exc
+                raise RuntimeError(
+                    f"{label} process did not exit after kill"
+                ) from exc
+        try:
+            tree.seed_live_members()
+        except Exception:
+            pass
+        if tree.exited() is not True:
+            raise RuntimeError(
+                f"{label} process tree did not exit after kill"
+            )
+        if not tree_done and tree.exited() is not True:
+            raise RuntimeError(
+                f"{label} process tree did not exit after kill"
+            )
+        return
+
     if process is None or process.returncode is not None:
+        # Without a tree handle, launcher returncode alone is the only signal
+        # available. Callers that wrap guardians must pass ``tree``.
         return
     pid = getattr(process, "pid", None)
     use_tree = (

@@ -57,17 +57,19 @@ def test_close_fails_closed_when_tree_cannot_be_verified(
     tmp_path,
     monkeypatch,
 ):
+    from proxima_api.container_activity import GuardedWriterTree
+
     terminal = TerminalSession(str(tmp_path))
     terminal.start()
     monkeypatch.setattr(
-        terminal_module,
-        "terminate_process_tree",
-        lambda *_args, **_kwargs: False,
+        GuardedWriterTree,
+        "terminate",
+        lambda self, **_kwargs: False,
     )
     monkeypatch.setattr(
-        terminal_module,
-        "_tree_exited",
-        lambda _pid: None,
+        GuardedWriterTree,
+        "exited",
+        lambda self: None,
     )
 
     result = terminal.close()
@@ -76,20 +78,22 @@ def test_close_fails_closed_when_tree_cannot_be_verified(
 
 
 def test_close_failure_retains_until_tree_proven(tmp_path, monkeypatch):
+    from proxima_api.container_activity import GuardedWriterTree
+
     terminal = TerminalSession(str(tmp_path))
     terminal.start()
     pid = terminal.pid
     assert pid is not None
     start_identity = terminal.start_identity
     monkeypatch.setattr(
-        terminal_module,
-        "terminate_process_tree",
-        lambda *_args, **_kwargs: False,
+        GuardedWriterTree,
+        "terminate",
+        lambda self, **_kwargs: False,
     )
     monkeypatch.setattr(
-        terminal_module,
-        "_tree_exited",
-        lambda _pid: False,
+        GuardedWriterTree,
+        "exited",
+        lambda self: False,
     )
 
     result = terminal.close()

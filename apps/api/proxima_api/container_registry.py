@@ -26,6 +26,7 @@ from .auth import iso_now
 from .directory_handles import directory_backend
 from .container_activity import (
     ContainerBoundaryError,
+    GuardedWriterTree,
     acquire_container_activity_lease,
     container_mutation_lock,
     container_quiescence_lock,
@@ -55,6 +56,7 @@ _directory_backend = directory_backend()
 
 __all__ = (
     "ContainerBoundaryError",
+    "GuardedWriterTree",
     "OpsMigrationCollision",
     "acquire_container_activity_lease",
     "container_mutation_lock",
