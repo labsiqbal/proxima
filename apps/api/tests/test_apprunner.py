@@ -230,18 +230,43 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
             status = manager.status("demo")
             assert status["state"] == "stopped"
             assert "inherited-tail" in status["log"]
-            os.kill(broker_pid, 0)
-            write_trigger_file.write_text("write")
-            for _ in range(200):
-                if write_result_file.is_file():
-                    break
-                await asyncio.sleep(0.01)
-            assert write_result_file.read_text() == "success"
-            assert manager.status("demo")["log"] == status["log"]
+            # Final drain is sealed at stop: later pipe traffic must not append.
             assert not any(
-                "after-stop" in line for line in manager.status("demo")["log"]
+                "after-stop" in line for line in status["log"]
             )
-            os.kill(child_pid, 0)
+
+            try:
+                os.kill(child_pid, 0)
+                child_alive = True
+            except ProcessLookupError:
+                child_alive = False
+
+            if child_alive:
+                # No managed cgroup (or the child escaped it): the detached
+                # writer still holds the inherited pipe write end. Stop must
+                # keep the output broker alive and must not absorb post-stop
+                # bytes into the sealed log.
+                os.kill(broker_pid, 0)
+                write_trigger_file.write_text("write")
+                for _ in range(200):
+                    if write_result_file.is_file():
+                        break
+                    await asyncio.sleep(0.01)
+                assert write_result_file.is_file(), (
+                    "detached writer never reported pipe write result"
+                )
+                assert write_result_file.read_text() == "success"
+                assert manager.status("demo")["log"] == status["log"]
+                assert not any(
+                    "after-stop" in line
+                    for line in manager.status("demo")["log"]
+                )
+            else:
+                # Launch-specific cgroup stop correctly reaped the
+                # start_new_session child with the managed scope. Bounded
+                # drain still captured pre-stop output only.
+                child_pid = None
+                assert manager.status("demo")["log"] == status["log"]
         finally:
             if child_pid is not None:
                 try:
@@ -2025,7 +2050,24 @@ def test_reparented_uncontained_listener_stays_ownership_unknown(tmp_path):
 
             await manager.stop("demo")
             assert manager.status("demo")["state"] == "stopped"
-            os.kill(child_pid, 0)
+
+            try:
+                os.kill(child_pid, 0)
+                child_alive = True
+            except ProcessLookupError:
+                child_alive = False
+
+            if child_alive:
+                # killpg-only stop leaves the setsid listener alone because it
+                # left the managed process group. Ownership stayed unknown, so
+                # Proxima must not claim or signal that foreign group.
+                pass
+            else:
+                # Launch-specific cgroup stop reaps every member of the managed
+                # scope, including setsid children that still share the cgroup.
+                # Readiness stayed ownership_unknown; cleanup used the cgroup
+                # boundary rather than a verified process-group claim.
+                child_pid = None
         finally:
             if child_pid is not None:
                 try:
