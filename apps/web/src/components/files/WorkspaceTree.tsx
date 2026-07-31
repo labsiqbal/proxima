@@ -157,8 +157,16 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
   const mountedRef = React.useRef(true)
   const actionSeq = React.useRef(0)
   const treeScrollRef = React.useRef<HTMLDivElement | null>(null)
+  const editingDirtyRef = React.useRef(false)
   const writableFs = writableAdapter(fs)
   const refresh = () => setRefreshKey(k => k + 1)
+  const clearEditing = React.useCallback(() => {
+    editingDirtyRef.current = false
+    setEditing(null)
+  }, [])
+  const onEditorDirtyChange = React.useCallback((dirty: boolean) => {
+    editingDirtyRef.current = dirty
+  }, [])
   React.useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -167,8 +175,19 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
     }
   }, [])
 
-  // Reset view when the source (fs) or external refresh signal changes.
-  React.useEffect(() => { actionSeq.current += 1; setBusy(false); setEditing(null); setExpanded(new Set()); setRefreshKey(k => k + 1) }, [fs])
+  // Reset the tree when the source (fs) changes. Keep an open dirty editor mounted
+  // so recovery inspection can swap adapters without discarding unsaved bytes;
+  // FileEditor flips that buffer read-only and restores write on the way back.
+  React.useEffect(() => {
+    actionSeq.current += 1
+    setBusy(false)
+    setCreating(null)
+    setRenaming(null)
+    setMenu(null)
+    setExpanded(new Set())
+    setRefreshKey(k => k + 1)
+    if (!editingDirtyRef.current) clearEditing()
+  }, [fs, clearEditing])
   React.useEffect(() => { if (refreshSignal) setRefreshKey(k => k + 1) }, [refreshSignal])
   React.useEffect(() => {
     const onChange = () => setRefreshKey(k => k + 1)
@@ -178,14 +197,14 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
 
   // "Reveal in Files" (and any external activePath): expand every ancestor so the
   // highlighted row is actually visible, not buried under a collapsed folder.
-  // Close any inline editor too - it is absolute-positioned over the tree and
-  // would hide the highlight Reveal is supposed to show. Archive already has
-  // Open for content.
+  // Close a clean inline editor - it is absolute-positioned over the tree and
+  // would hide the highlight Reveal is supposed to show. A dirty buffer stays
+  // mounted (read-only under inspection) so recovery cannot discard owner edits.
   // Re-run when `fs` changes too: the reset effect above clears `expanded`, and
   // a same-path reveal after a project switch would otherwise stay collapsed.
   React.useEffect(() => {
     if (!activePath) return
-    setEditing(null)
+    if (!editingDirtyRef.current) clearEditing()
     const parts = activePath.split('/').filter(Boolean)
     const limit = activePathKind === 'directory' ? parts.length : parts.length - 1
     if (limit <= 0) return
@@ -198,7 +217,7 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
       }
       return next
     })
-  }, [activePath, activePathKind, fs])
+  }, [activePath, activePathKind, fs, clearEditing])
 
   // After ancestors expand and their children load, scroll the highlighted row
   // into view inside the tree scroller (not the whole page).
@@ -297,10 +316,10 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
   async function remove(path: string, target?: FileTarget) {
     if (busy || !writableFs) return
     if (!(await confirmDialog({ title: `Delete "${base(path)}"?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true }))) return
-    if (
+if (
       await guard(writableFs.remove(target || path))
       && (editing?.path === path || editing?.path.startsWith(path + '/'))
-    ) setEditing(null)
+    ) clearEditing()
   }
 
   const t: Ctl = {
@@ -340,7 +359,7 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
     </div></div>
     {treeError && <p className="tree-error">{treeError}</p>}
     <div className="tree-scroll" ref={treeScrollRef} onContextMenu={writableFs ? e => { if (e.target === e.currentTarget) t.openMenu(e, null, true) } : undefined}><Level dir="" depth={0} t={t} /></div>
-    {!onOpenFile && editing && <React.Suspense fallback={<div className="file-editor"><div className="file-editor-head"><strong>{base(editing.path)}</strong></div><p className="muted" style={{ padding: '10px' }}>Loading editor…</p></div>}><FileEditor fs={fs} write={writableFs?.write} path={editing.path} target={editing.target} onClose={() => setEditing(null)} /></React.Suspense>}
+{!onOpenFile && editing && <React.Suspense fallback={<div className="file-editor"><div className="file-editor-head"><strong>{base(editing.path)}</strong></div><p className="muted" style={{ padding: '10px' }}>Loading editor…</p></div>}><FileEditor fs={fs} write={writableFs?.write} path={editing.path} target={editing.target} onClose={clearEditing} onDirtyChange={onEditorDirtyChange} /></React.Suspense>}
     {writableFs && menu && <div className="ctx-menu" style={{ top: menu.y, left: menu.x }} onClick={e => e.stopPropagation()}>
       <button onClick={() => { startCreate(menuDir, 'file', menuDirTarget); setMenu(null) }} disabled={busy}>New File</button>
       <button onClick={() => { startCreate(menuDir, 'dir', menuDirTarget); setMenu(null) }} disabled={busy}>New Folder</button>

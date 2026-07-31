@@ -32,12 +32,14 @@ export function FileEditor({
   path,
   target,
   onClose,
+  onDirtyChange,
 }: {
   fs: ReadOnlyFsAdapter
   write?: (ref: FileRef, content: string) => Promise<unknown>
   path: string
   target?: FileTarget
   onClose: () => void
+  onDirtyChange?: (dirty: boolean) => void
 }) {
   const [content, setContent] = React.useState('')
   const [dirty, setDirty] = React.useState(false)
@@ -59,6 +61,10 @@ const ref = target || path
       requestSeq.current += 1
     }
   }, [])
+
+  React.useEffect(() => {
+    onDirtyChange?.(dirty)
+  }, [dirty, onDirtyChange])
 
   React.useEffect(() => {
     const pathChanged = pathRef.current !== path

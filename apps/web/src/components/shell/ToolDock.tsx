@@ -165,7 +165,7 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
           </React.Suspense>)}
         {pane('files',
           fs && project
-            ? <WorkspaceTree fs={fs} title={project.name} className="tool-files" activePath={revealPath} activePathKind={revealPathKind} />
+            ? <WorkspaceTree key={slug} fs={fs} title={project.name} className="tool-files" activePath={revealPath} activePathKind={revealPathKind} />
             : <PaneFallback label="Pick a project to browse its files." />)}
         {open === 'preview' && <div className="tool-pane" style={{ display: 'flex' }}>
           {slug

@@ -8,8 +8,22 @@ import type { FileRef } from '../../api/files'
 import type { FileEntry } from '../../types'
 
 vi.mock('@uiw/react-codemirror', () => ({
-  default: ({ editable }: { editable?: boolean }) => (
-    <div data-testid="codemirror-stub" data-editable={String(editable)} />
+  default: ({
+    value,
+    editable,
+    onChange,
+  }: {
+    value?: string
+    editable?: boolean
+    onChange?: (value: string) => void
+  }) => (
+    <textarea
+      data-testid="codemirror-stub"
+      data-editable={String(editable !== false)}
+      value={value ?? ''}
+      readOnly={editable === false}
+      onChange={e => onChange?.(e.target.value)}
+    />
   ),
 }))
 
@@ -162,6 +176,135 @@ describe('WorkspaceTree reveal / activePath', () => {
     await user.click(screen.getByRole('button', { name: /note\.md/ }))
     expect(await screen.findByText('Read-only inspection')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+  })
+
+  it('preserves a dirty editor buffer across recovery reveal, side switch, and restore', async () => {
+    const user = userEvent.setup()
+    const projectRead = vi.fn(async () => ({ content: 'project bytes' }))
+    const legacyRead = vi.fn(async () => ({ content: 'legacy inspection bytes' }))
+    const physicalRead = vi.fn(async () => ({ content: 'physical inspection bytes' }))
+    const write = vi.fn(async () => ({}))
+    const projectFs = mockFs({
+      '': entries(['README.md', 'file'], ['notes', 'dir']),
+      notes: entries(['todo.md', 'file']),
+    })
+    projectFs.read = projectRead
+    projectFs.write = write
+
+    const legacyFs: ReadOnlyFsAdapter = {
+      list: vi.fn(async (path: string) => ({
+        entries: path === '' ? entries(['wiki', 'dir'], ['notes', 'dir']) : entries(['todo.md', 'file']),
+      })),
+      read: legacyRead,
+    }
+    const physicalFs: ReadOnlyFsAdapter = {
+      list: vi.fn(async (path: string) => ({
+        entries: path === ''
+          ? entries(['ops', 'dir'])
+          : path === 'ops'
+            ? entries(['notes', 'dir'])
+            : entries(['todo.md', 'file']),
+      })),
+      read: physicalRead,
+    }
+
+    const view = render(<WorkspaceTree fs={projectFs} title="Demo" />)
+    await user.click(await screen.findByRole('button', { name: /notes/ }))
+    await user.click(await screen.findByRole('button', { name: /todo\.md/ }))
+    await screen.findByDisplayValue('project bytes')
+    const editor = screen.getByTestId('codemirror-stub')
+    await user.clear(editor)
+    await user.type(editor, 'unsaved owner edits')
+    expect(screen.getByText(/Unsaved/)).toBeVisible()
+
+    // Ops recovery reveal swaps to container inspection and highlights a path.
+    view.rerender(
+      <WorkspaceTree
+        fs={legacyFs}
+        title="Demo"
+        activePath="notes/todo.md"
+        activePathKind="file"
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Read-only inspection')).toBeVisible()
+    })
+    expect(screen.getByDisplayValue('unsaved owner edits')).toBeVisible()
+    expect(screen.getByTitle('notes/todo.md')).toHaveTextContent('•')
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+    expect(legacyRead).not.toHaveBeenCalled()
+    expect(projectRead).toHaveBeenCalledTimes(1)
+
+    // Switching recovery side keeps the same dirty buffer mounted.
+    view.rerender(
+      <WorkspaceTree
+        fs={physicalFs}
+        title="Demo"
+        activePath="ops/notes"
+        activePathKind="directory"
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Read-only inspection')).toBeVisible()
+    })
+    expect(screen.getByDisplayValue('unsaved owner edits')).toBeVisible()
+    expect(physicalRead).not.toHaveBeenCalled()
+
+    // Closing inspection restores ordinary Files write access without reload.
+    view.rerender(<WorkspaceTree fs={projectFs} title="Demo" />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/Unsaved/)).toBeVisible()
+    })
+    expect(screen.getByDisplayValue('unsaved owner edits')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeVisible()
+    expect(screen.getByTestId('codemirror-stub')).toHaveAttribute('data-editable', 'true')
+    expect(projectRead).toHaveBeenCalledTimes(1)
+    expect(legacyRead).not.toHaveBeenCalled()
+    expect(physicalRead).not.toHaveBeenCalled()
+  })
+
+  it('discards a clean editor on reveal but keeps the tree highlight path', async () => {
+    const user = userEvent.setup()
+    const fs = mockFs(nestedTree)
+    const view = render(<WorkspaceTree fs={fs} title="Demo" />)
+
+    await user.click(await screen.findByRole('button', { name: /README\.md/ }))
+    await screen.findByDisplayValue('hello from file')
+    expect(screen.getByTitle('README.md')).toBeInTheDocument()
+
+    view.rerender(
+      <WorkspaceTree fs={fs} title="Demo" activePath="artifacts/farewell-note.md" />,
+    )
+
+    const row = await screen.findByRole('button', { name: /farewell-note\.md/ })
+    expect(row).toHaveClass('active')
+    expect(screen.queryByTitle('README.md')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('codemirror-stub')).not.toBeInTheDocument()
+  })
+
+  it('starts clean after a project-scoped remount', async () => {
+    const user = userEvent.setup()
+    const first = mockFs({ '': entries(['a.md', 'file']) })
+    first.read = vi.fn(async () => ({ content: 'first project' }))
+    const second = mockFs({ '': entries(['b.md', 'file']) })
+    second.read = vi.fn(async () => ({ content: 'second project' }))
+
+    const view = render(<WorkspaceTree key="first" fs={first} title="First" />)
+    await user.click(await screen.findByRole('button', { name: /a\.md/ }))
+    await screen.findByDisplayValue('first project')
+    await user.type(screen.getByTestId('codemirror-stub'), ' dirty')
+    expect(screen.getByText(/Unsaved/)).toBeVisible()
+
+    view.rerender(<WorkspaceTree key="second" fs={second} title="Second" />)
+
+    expect(screen.queryByTestId('codemirror-stub')).not.toBeInTheDocument()
+    expect(screen.queryByDisplayValue(/dirty/)).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: /b\.md/ }))
+    await screen.findByDisplayValue('second project')
+    expect(second.read).toHaveBeenCalledWith('b.md')
   })
 })
 
