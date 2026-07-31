@@ -195,7 +195,7 @@ export function MasterWorkPanel({
   if (!desk) return null
   const decisions = desk.decisions || []
   const otherAttention = desk.attention.filter(
-    item => item.kind !== 'master_decision',
+    item => !(item.kind === 'master_decision' && item.decision),
   )
   const visibleJobs = desk.jobs.filter(job =>
     WORK_STATES.some(state => state.status === job.desk_status),

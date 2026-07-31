@@ -588,6 +588,16 @@ def register(app, deps):
             with app.state.db_lock:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
+                    pending_decision = master_decisions.pending_decision_for_job(
+                        conn, job_id
+                    )
+                    if pending_decision:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=master_decisions.pending_decision_conflict(
+                                int(pending_decision["id"])
+                            ),
+                        )
                     # Mid-workflow gate cleared. Claim review->running and enqueue the
                     # next run atomically so a failed insert cannot strand the job.
                     claimed = conn.execute(
@@ -658,6 +668,16 @@ def register(app, deps):
             with app.state.db_lock:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
+                    pending_decision = master_decisions.pending_decision_for_job(
+                        conn, job_id
+                    )
+                    if pending_decision:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=master_decisions.pending_decision_conflict(
+                                int(pending_decision["id"])
+                            ),
+                        )
                     claimed = conn.execute(
                         "UPDATE jobs SET status='done', "
                         "finished_at=CURRENT_TIMESTAMP, "

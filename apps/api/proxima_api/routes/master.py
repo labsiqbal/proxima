@@ -741,11 +741,10 @@ def register(app, deps):
                     "WHERE attention_item_id = ? AND owner_user_id = ?",
                     (attention_id, user["id"]),
                 ).fetchone()
-                if decision is None:
-                    continue
-                data["decision"] = master_decisions.decision_payload(
-                    db(), decision
-                )
+                if decision is not None:
+                    data["decision"] = master_decisions.decision_payload(
+                        db(), decision
+                    )
             data["id"] = f"attention:{attention_id}"
             items.append(data)
         for row in db().execute(

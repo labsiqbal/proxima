@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .auth import iso_now
+from .task_state_events import append_task_update
 
 
 class MasterDecisionError(RuntimeError):
@@ -701,7 +702,12 @@ def resolve_decision(
     owner_user_id = _as_int(user.get("id"), "owner")
     decision_id = _as_int(decision_id, "decision_id")
     expected_version = _as_int(expected_version, "expected_version")
+    task_event: dict[str, int] | None = None
+    continuation_run_id: int | None = None
     task_session_id: int | None = None
+    continuation_project_id: int | None = None
+    continuation_runner_id: str | None = None
+    continuation_job_id: int | None = None
     with app.state.db_lock:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -790,6 +796,9 @@ def resolve_decision(
                     ),
                 )
                 continuation_run_id = int(run_cursor.lastrowid)
+                continuation_project_id = job["project_id"]
+                continuation_runner_id = str(job["runner_id"])
+                continuation_job_id = int(job_id)
                 steps[current_step].update(
                     {
                         "status": "running",
@@ -840,23 +849,10 @@ def resolve_decision(
                         event_payload,
                     ),
                 )
-                conn.execute(
-                    "INSERT INTO events("
-                    "run_id, session_id, project_id, seq, type, payload"
-                    ") VALUES (?, ?, ?, 2, 'run.queued', ?)",
-                    (
-                        continuation_run_id,
-                        task_session_id,
-                        job["project_id"],
-                        json.dumps(
-                            {
-                                "runner": job["runner_id"],
-                                "job": job_id,
-                                "decision_id": decision_id,
-                            },
-                            separators=(",", ":"),
-                        ),
-                    ),
+                task_event = append_task_update(
+                    conn,
+                    job_id=int(job_id),
+                    mutation="review_approved",
                 )
 
             updated = conn.execute(
@@ -915,8 +911,30 @@ def resolve_decision(
                 conn.execute("ROLLBACK")
             raise
 
-    if task_session_id is not None:
+    if task_event is not None:
+        app.state.hub.notify(task_event["session_id"])
+        outbox_id = task_event.get("projection_outbox_id")
+        projection = getattr(app.state, "master_projection", None)
+        if outbox_id is not None and projection is not None:
+            projection.safe_process_task_outbox(outbox_id)
+    elif task_session_id is not None:
         app.state.hub.notify(task_session_id)
+    if (
+        continuation_run_id is not None
+        and task_session_id is not None
+        and continuation_job_id is not None
+    ):
+        app.state.worker.add_event(
+            continuation_run_id,
+            task_session_id,
+            continuation_project_id,
+            "run.queued",
+            {
+                "runner": continuation_runner_id,
+                "job": continuation_job_id,
+                "decision_id": decision_id,
+            },
+        )
     projection = getattr(app.state, "master_projection", None)
     if projection is not None:
         projection.safe_project_decision(decision_id)

@@ -197,6 +197,38 @@ describe('AttentionInbox', () => {
     })
   })
 
+  it('keeps bare supervisor start-failure rows on the generic attention path', async () => {
+    const bareItem = {
+      id: 'attention:99',
+      kind: 'master_decision',
+      title: 'Master could not start queued work',
+      target: { view: 'master', job_id: 7 },
+      inline_ok: false,
+      actions: [],
+      status: 'open',
+      created_at: '2026-01-01 00:00:00',
+    }
+    vi.mocked(getAttention).mockResolvedValue({
+      items: [bareItem],
+      count: 1,
+    })
+    const user = userEvent.setup()
+    const openTarget = vi.fn()
+    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
+    await user.click(
+      await screen.findByRole('button', { name: '1 attention item' }),
+    )
+
+    expect(
+      screen.getByText('Master could not start queued work'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Send decision')).not.toBeInTheDocument()
+    await user.click(
+      screen.getByRole('button', { name: /Master could not start queued work/ }),
+    )
+    expect(openTarget).toHaveBeenCalledWith({ view: 'master', job_id: 7 })
+  })
+
   it('defers a Master decision through its specialized state path', async () => {
     vi.mocked(getAttention).mockResolvedValue({
       items: [decisionItem],

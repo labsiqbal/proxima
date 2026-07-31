@@ -2854,6 +2854,29 @@ def test_master_decision_defer_resolve_and_stale_response_are_exactly_once(
         "run.queued",
     ]
     assert json.loads(task_events[0]["payload"])["actor_user_id"] == 1
+    assert json.loads(task_events[1]["payload"]) == {
+        "runner": json.loads(task_events[1]["payload"])["runner"],
+        "job": job_id,
+        "decision_id": decision_id,
+    }
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM events WHERE type = 'job.update' "
+        "AND session_id = ? "
+        "AND json_extract(payload, '$.job_id') = ? "
+        "AND json_extract(payload, '$.mutation') = 'review_approved' "
+        "AND json_extract(payload, '$.status') = 'running'",
+        (job["session_id"], job_id),
+    ).fetchone()[0] == 1
+    outbox = app.state.db.execute(
+        "SELECT state, mutation, task_status FROM task_projection_outbox "
+        "WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    assert dict(outbox) == {
+        "state": "projected",
+        "mutation": "review_approved",
+        "task_status": "running",
+    }
     assert app.state.db.execute(
         "SELECT COUNT(*) FROM audit_log "
         "WHERE action = 'master.decision.resolve' "
@@ -3546,3 +3569,272 @@ def test_retried_repo_recovery_failure_projects_one_attention_and_event(
             if event["type"] == "master.satpam.recovery_failed"
         ]
     ) == 1
+
+
+
+def test_bare_supervisor_start_failure_attention_stays_listed(tmp_path: Path):
+    app, client, project = _app_and_client(tmp_path)
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="bare-start-failure",
+        tasks=[{"title": "Start me", "brief": "Fail to start"}],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "INSERT INTO attention_items("
+        "kind, title, target_json, inline_ok, actions_json, status, source_key"
+        ") VALUES ("
+        "'master_decision', 'Master could not start queued work', ?, 0, '[]', "
+        "'open', ?"
+        ")",
+        (
+            json.dumps(
+                {
+                    "view": "master",
+                    "job_id": job_id,
+                    "error": "runner missing",
+                    "origin_master_session_id": desk["session"]["id"],
+                }
+            ),
+            f"master-start:{job_id}",
+        ),
+    )
+    attention_id = app.state.db.execute(
+        "SELECT id FROM attention_items WHERE source_key = ?",
+        (f"master-start:{job_id}",),
+    ).fetchone()["id"]
+
+    items = client.get("/api/attention").json()["items"]
+    bare = next(item for item in items if item["id"] == f"attention:{attention_id}")
+    assert bare["kind"] == "master_decision"
+    assert bare["title"] == "Master could not start queued work"
+    assert "decision" not in bare or bare.get("decision") is None
+    assert bare["target"]["job_id"] == job_id
+
+    desk_payload = client.get("/api/master/desk").json()
+    desk_bare = next(
+        item
+        for item in desk_payload["attention"]
+        if item["id"] == f"attention:{attention_id}"
+    )
+    assert desk_bare["title"] == "Master could not start queued work"
+    assert "decision" not in desk_bare or desk_bare.get("decision") is None
+
+
+def test_approve_and_create_decision_race_cannot_orphan_pending(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "approve-decision-race.db"
+    app, client, project = _app_and_client(
+        tmp_path, database_path=database_path
+    )
+    desk, jobs = _delegate(
+        app,
+        client,
+        project,
+        key="approve-decision-race",
+        tasks=[
+            {
+                "title": "Race window",
+                "brief": "Stay in review for the race",
+            }
+        ],
+    )
+    job_id = jobs[0]["id"]
+    app.state.db.execute(
+        "UPDATE jobs SET status = 'review', current_step_idx = 0, "
+        "steps_state = ? WHERE id = ?",
+        (
+            json.dumps(
+                [
+                    {
+                        "title": "Prepare release",
+                        "status": "done",
+                        "output_summary": "Ready for a decision race.",
+                    }
+                ]
+            ),
+            job_id,
+        ),
+    )
+    origin = app.state.db.execute(
+        "INSERT INTO messages(session_id, role, content, author) "
+        "VALUES (?, 'user', 'Prepare the rollout', 'owner')",
+        (desk["session"]["id"],),
+    )
+    master_focus.stamp_message(
+        app.state.db,
+        message_id=origin.lastrowid,
+        focus_epoch_id=None,
+    )
+    second_app = create_app(dict(app.state.config))
+    second_client = TestClient(second_app)
+    token = second_client.post("/auth/auto").json()["token"]
+    second_client.headers.update({"Authorization": f"Bearer {token}"})
+
+    barrier = threading.Barrier(3)
+    results: dict[str, object] = {}
+
+    def approve() -> None:
+        barrier.wait()
+        results["approve"] = client.post(f"/api/jobs/{job_id}/approve")
+
+    def create() -> None:
+        barrier.wait()
+        broker = MasterToolBroker(
+            second_app.state.db,
+            second_app,
+            {"id": 1, "username": "owner"},
+            desk["session"]["id"],
+            origin_message_id=origin.lastrowid,
+        )
+        results["create"] = broker.execute(
+            "create_attention",
+            {
+                "title": "Choose rollout window",
+                "prompt": "Which rollout window should the release use?",
+                "context": "Both windows include two hours of planned downtime.",
+                "response": {
+                    "type": "choice",
+                    "choices": [
+                        {"id": "saturday", "label": "Saturday 02:00 UTC"},
+                        {"id": "sunday", "label": "Sunday 02:00 UTC"},
+                    ],
+                },
+                "task_id": job_id,
+                "idempotency_key": "approve-decision-race",
+            },
+        )
+
+    threads = [
+        threading.Thread(target=approve),
+        threading.Thread(target=create),
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    job_status = app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"]
+    pending_count = app.state.db.execute(
+        "SELECT COUNT(*) FROM master_decisions "
+        "WHERE requesting_job_id = ? AND state IN ('pending', 'deferred')",
+        (job_id,),
+    ).fetchone()[0]
+    if job_status != "review":
+        assert pending_count == 0
+    if pending_count > 0:
+        assert job_status == "review"
+        approve_response = results["approve"]
+        assert approve_response.status_code == 409
+        assert approve_response.json()["detail"]["code"] == (
+            "master_decision_pending"
+        )
+    create_result = results["create"]
+    assert isinstance(create_result, dict)
+    if create_result.get("ok"):
+        assert pending_count == 1
+        assert job_status == "review"
+    else:
+        assert job_status == "done"
+        assert pending_count == 0
+
+
+def test_graph_approve_claim_checks_pending_decision_atomically(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path)
+    desk, job_id, created, origin_id = _create_review_decision(
+        app, client, project, key="graph-atomic-pending", engine="graph"
+    )
+    assert created["ok"] is False
+    attention = app.state.db.execute(
+        "INSERT INTO attention_items("
+        "kind, title, target_json, inline_ok, actions_json, status, source_key"
+        ") VALUES ('master_decision', 'Forged', '{}', 0, '[]', 'open', "
+        "'forged-graph-atomic')"
+    )
+    app.state.db.execute(
+        "INSERT INTO master_decisions("
+        "attention_item_id, owner_user_id, master_session_id, "
+        "origin_message_id, requesting_job_id, title, prompt, context, "
+        "response_shape_json, request_fingerprint, state"
+        ") VALUES (?, 1, ?, ?, ?, 'Forged', 'Choose?', 'Context', ?, 'fp', "
+        "'pending')",
+        (
+            attention.lastrowid,
+            desk["session"]["id"],
+            origin_id,
+            job_id,
+            json.dumps(
+                {
+                    "type": "choice",
+                    "choices": [
+                        {"id": "a", "label": "A"},
+                        {"id": "b", "label": "B"},
+                    ],
+                }
+            ),
+        ),
+    )
+    # Force the outer pre-check to miss so only the in-transaction check can win.
+    original = master_decisions.pending_decision_for_job
+    calls = {"n": 0}
+
+    def flaky(conn, job_id_arg):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return original(conn, job_id_arg)
+
+    master_decisions.pending_decision_for_job = flaky
+    try:
+        approved = client.post(f"/api/graph/jobs/{job_id}/approve")
+    finally:
+        master_decisions.pending_decision_for_job = original
+    assert approved.status_code == 409
+    assert approved.json()["detail"]["code"] == "master_decision_pending"
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "review"
+    assert app.state.db.execute(
+        "SELECT COUNT(*) FROM master_decisions "
+        "WHERE requesting_job_id = ? AND state = 'pending'",
+        (job_id,),
+    ).fetchone()[0] == 1
+
+
+def test_linear_approve_claim_checks_pending_decision_atomically(
+    tmp_path: Path,
+):
+    app, client, project = _app_and_client(tmp_path)
+    _desk, job_id, created, _origin = _create_review_decision(
+        app, client, project, key="linear-atomic-pending"
+    )
+    assert created["ok"] is True
+    original = master_decisions.pending_decision_for_job
+    calls = {"n": 0}
+
+    def flaky(conn, job_id_arg):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return original(conn, job_id_arg)
+
+    master_decisions.pending_decision_for_job = flaky
+    try:
+        approved = client.post(f"/api/jobs/{job_id}/approve")
+    finally:
+        master_decisions.pending_decision_for_job = original
+    assert approved.status_code == 409
+    assert approved.json()["detail"]["code"] == "master_decision_pending"
+    assert app.state.db.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()["status"] == "review"
+    assert calls["n"] >= 2

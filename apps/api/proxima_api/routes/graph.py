@@ -1188,6 +1188,16 @@ def register(app, deps):
         with app.state.db_lock:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                pending_decision = master_decisions.pending_decision_for_job(
+                    conn, job_id
+                )
+                if pending_decision:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=master_decisions.pending_decision_conflict(
+                            int(pending_decision["id"])
+                        ),
+                    )
                 approved = state.guarded_transition(
                     conn,
                     "jobs",
