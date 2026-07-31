@@ -980,16 +980,34 @@ def test_legacy_recovery_gap_corrects_after_current_task_projection(
             successor["id"],
         ),
     ).lastrowid
+    app.state.db.execute(
+        "INSERT INTO task_recovery_ordering_gaps("
+        "job_id, predecessor_outbox_id, successor_outbox_id, kind, "
+        "predecessor_task_event_id, successor_task_event_id, "
+        "successor_publication_event_id"
+        ") VALUES (?, ?, ?, 'unpublished_predecessor', ?, ?, ?)",
+        (
+            job_id,
+            gap_id,
+            successor["id"],
+            predecessor_event_id,
+            successor["task_event_id"],
+            successor["event_id"],
+        ),
+    )
     correction_id = app.state.db.execute(
         "INSERT INTO task_recovery_corrections("
         "job_id, successor_outbox_id, gap_count, first_task_event_id, "
-        "last_task_event_id, master_session_id"
-        ") VALUES (?, ?, 1, ?, ?, ?)",
+        "last_task_event_id, first_successor_task_event_id, "
+        "last_successor_task_event_id, master_session_id"
+        ") VALUES (?, ?, 1, ?, ?, ?, ?, ?)",
         (
             job_id,
             successor["id"],
             predecessor_event_id,
             predecessor_event_id,
+            successor["task_event_id"],
+            successor["task_event_id"],
             desk["session"]["id"],
         ),
     ).lastrowid
@@ -1010,6 +1028,25 @@ def test_legacy_recovery_gap_corrects_after_current_task_projection(
         job_id=job_id,
         mutation="owner_completed",
     )
+    app.state.db.execute(
+        "CREATE TRIGGER reject_recovery_correction_event "
+        "BEFORE INSERT ON events "
+        "WHEN NEW.type = 'master.task.recovery_history_corrected' "
+        "BEGIN SELECT RAISE(ABORT, 'injected correction failure'); END"
+    )
+    app.state.master_projection.reconcile()
+    assert dict(
+        app.state.db.execute(
+            "SELECT state, failure_code, attempt_count "
+            "FROM task_recovery_corrections WHERE id = ?",
+            (correction_id,),
+        ).fetchone()
+    ) == {
+        "state": "pending",
+        "failure_code": "projection_failed",
+        "attempt_count": 1,
+    }
+    app.state.db.execute("DROP TRIGGER reject_recovery_correction_event")
     app.state.master_projection.reconcile()
     app.state.master_projection.reconcile()
 
@@ -1026,7 +1063,7 @@ def test_legacy_recovery_gap_corrects_after_current_task_projection(
     ) == {
         "state": "projected",
         "failure_code": None,
-        "attempt_count": 1,
+        "attempt_count": 2,
     }
     events = _projection_events(client, desk["session"]["id"])
     assert [event["type"] for event in events] == [
@@ -1046,6 +1083,8 @@ def test_legacy_recovery_gap_corrects_after_current_task_projection(
         "first_task_event_id": predecessor_event_id,
         "last_task_event_id": predecessor_event_id,
         "successor_task_event_id": successor["task_event_id"],
+        "first_successor_task_event_id": successor["task_event_id"],
+        "last_successor_task_event_id": successor["task_event_id"],
         "focus_epoch_id": correction_event["payload"]["focus_epoch_id"],
         "focus_container_id": correction_event["payload"][
             "focus_container_id"
@@ -1053,6 +1092,10 @@ def test_legacy_recovery_gap_corrects_after_current_task_projection(
         "subject_container_id": container_id,
     }
     assert len(json.dumps(correction_event["payload"]).encode("utf-8")) < 2048
+    assert sum(
+        event["type"] == "master.task.recovery_history_corrected"
+        for event in events
+    ) == 1
     assert client.get(f"/api/jobs/{job_id}").json()["status"] == "done"
     assert client.get(
         f"/api/jobs/{job_id}"

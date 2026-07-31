@@ -574,6 +574,12 @@ def publish_master_recovery_correction(
     gap_count = _as_int(row["gap_count"])
     first_task_event_id = _as_int(row["first_task_event_id"])
     last_task_event_id = _as_int(row["last_task_event_id"])
+    first_successor_task_event_id = _as_int(
+        row["first_successor_task_event_id"]
+    )
+    last_successor_task_event_id = _as_int(
+        row["last_successor_task_event_id"]
+    )
     successor_task_event_id = _as_int(row["successor_task_event_id"])
     noun = "audit" if gap_count == 1 else "audits"
     pronoun = "It was" if gap_count == 1 else "They were"
@@ -583,10 +589,12 @@ def publish_master_recovery_correction(
         else "legacy ordering gaps"
     )
     content = (
-        f"Retained {gap_count} earlier checkpoint recovery {noun} for "
-        f"Task #{job_id} as {gap_label} before Task event "
-        f"#{successor_task_event_id}. {pronoun} not replayed because the "
-        "later recovery had already been published."
+        f"Retained {gap_count} checkpoint recovery {noun} for Task "
+        f"#{job_id} as {gap_label} across Task events "
+        f"#{first_task_event_id}-#{last_task_event_id} and successor "
+        f"events #{first_successor_task_event_id}-"
+        f"#{last_successor_task_event_id}. {pronoun} contained without "
+        "replaying older history after a later publication."
     )
     message = conn.execute(
         "INSERT INTO messages(session_id, role, content, author) "
@@ -613,6 +621,8 @@ def publish_master_recovery_correction(
         "first_task_event_id": first_task_event_id,
         "last_task_event_id": last_task_event_id,
         "successor_task_event_id": successor_task_event_id,
+        "first_successor_task_event_id": first_successor_task_event_id,
+        "last_successor_task_event_id": last_successor_task_event_id,
         "focus_epoch_id": focus_epoch_id,
         "focus_container_id": focus_container_id,
         "subject_container_id": subject_container_id,

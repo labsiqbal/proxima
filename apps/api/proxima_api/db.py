@@ -784,6 +784,45 @@ WHEN OLD.state = 'legacy_ordering_gap'
 BEGIN
   SELECT RAISE(ABORT, 'legacy recovery ordering gap is immutable');
 END;
+CREATE TABLE IF NOT EXISTS task_recovery_ordering_gaps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  predecessor_outbox_id INTEGER NOT NULL
+    REFERENCES task_recovery_outbox(id) ON DELETE CASCADE,
+  successor_outbox_id INTEGER NOT NULL
+    REFERENCES task_recovery_outbox(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (
+    kind IN ('unpublished_predecessor', 'projected_reversal')
+  ),
+  predecessor_task_event_id INTEGER NOT NULL CHECK (
+    predecessor_task_event_id > 0
+  ),
+  successor_task_event_id INTEGER NOT NULL CHECK (
+    successor_task_event_id > predecessor_task_event_id
+  ),
+  predecessor_publication_event_id INTEGER
+    REFERENCES events(id) ON DELETE RESTRICT,
+  successor_publication_event_id INTEGER NOT NULL
+    REFERENCES events(id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(predecessor_outbox_id, successor_outbox_id, kind),
+  CHECK (
+    (kind = 'unpublished_predecessor'
+      AND predecessor_publication_event_id IS NULL)
+    OR
+    (kind = 'projected_reversal'
+      AND predecessor_publication_event_id IS NOT NULL
+      AND predecessor_publication_event_id
+        > successor_publication_event_id)
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_task_recovery_ordering_gaps_job
+  ON task_recovery_ordering_gaps(job_id, id);
+CREATE TRIGGER IF NOT EXISTS task_recovery_ordering_gaps_immutable
+BEFORE UPDATE ON task_recovery_ordering_gaps
+BEGIN
+  SELECT RAISE(ABORT, 'legacy recovery ordering gap record is immutable');
+END;
 CREATE TABLE IF NOT EXISTS task_recovery_corrections (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -793,6 +832,12 @@ CREATE TABLE IF NOT EXISTS task_recovery_corrections (
   first_task_event_id INTEGER NOT NULL CHECK (first_task_event_id > 0),
   last_task_event_id INTEGER NOT NULL CHECK (
     last_task_event_id >= first_task_event_id
+  ),
+  first_successor_task_event_id INTEGER NOT NULL DEFAULT 1 CHECK (
+    first_successor_task_event_id > 0
+  ),
+  last_successor_task_event_id INTEGER NOT NULL DEFAULT 1 CHECK (
+    last_successor_task_event_id >= first_successor_task_event_id
   ),
   state TEXT NOT NULL DEFAULT 'pending' CHECK (
     state IN ('pending', 'projected', 'failed_attribution')
@@ -811,7 +856,7 @@ CREATE TABLE IF NOT EXISTS task_recovery_corrections (
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(successor_outbox_id),
+  UNIQUE(job_id),
   CHECK (
     (state = 'pending' AND message_id IS NULL AND event_id IS NULL
       AND (failure_code IS NULL OR failure_code = 'projection_failed'))

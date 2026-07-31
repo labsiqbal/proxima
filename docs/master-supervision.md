@@ -86,11 +86,15 @@ safely retries missing current-state projections because an existing revision ke
 produces no second message or event. Recovery causally supersedes only older
 unpublished status rows before emitting its authoritative current transition,
 preventing delayed Failed or Done delivery from overwriting restored Queued state.
-Recovery audit rows are never superseded: every restore remains durable and
-publishes exactly once in Task-event order. Unavailable legacy Focus is recorded as
-failed attribution and can be replayed only after attribution becomes provable; the
-Task restore remains committed and no unattributed history is published. Each
-reconciliation candidate has its own
+Recovery audit rows are never superseded. New and still-orderable restores remain
+durable and publish exactly once in Task-event order. Legacy upgrades retain
+unpublished predecessors and already-projected publication reversals as immutable
+causal gap rows without replaying or rewriting original recovery history. At most
+one bounded `master.task.recovery_history_corrected` marker per Task summarizes all
+known gap counts and event ranges after the current Task projection settles.
+Unavailable legacy Focus is recorded as failed attribution and can be replayed only
+after attribution becomes provable; the Task restore remains committed and no
+unattributed history is published. Each reconciliation candidate has its own
 failure boundary, so one invalid legacy source does not starve later Task, Satpam, or
 Attention repair. A reused key with different ownership or source binding fails
 closed. Raw token, reasoning, and tool delta events are never projected, and
@@ -127,6 +131,7 @@ Task events:
 - `master.task.cancelled`
 - `master.task.blocked`
 - `master.task.recovered`
+- `master.task.recovery_history_corrected`
 
 Supervision events:
 

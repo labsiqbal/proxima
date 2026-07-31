@@ -436,6 +436,7 @@ def assert_task_projection_outbox(
     require_ordered: bool | None = None,
     require_state_generation: bool | None = None,
     require_legacy_ordering: bool | None = None,
+    require_aggregated_recovery_corrections: bool | None = None,
 ) -> None:
     table = conn.execute(
         "SELECT sql FROM sqlite_master "
@@ -462,6 +463,11 @@ def assert_task_projection_outbox(
         require_legacy_ordering
         if require_legacy_ordering is not None
         else _as_int(version_row["version"]) >= 47
+    )
+    aggregated_recovery_corrections = (
+        require_aggregated_recovery_corrections
+        if require_aggregated_recovery_corrections is not None
+        else _as_int(version_row["version"]) >= 48
     )
     if not ordered:
         if (
@@ -612,14 +618,29 @@ def assert_task_projection_outbox(
             str(correction["sql"] or "").lower().split()
         )
         correction_tokens = (
-            "unique(successor_outbox_id)",
             "state = 'projected' and message_id is not null",
             "gap_count > 0",
         )
+        correction_unique_token = (
+            "unique(job_id)"
+            if aggregated_recovery_corrections
+            else "unique(successor_outbox_id)"
+        )
         if any(
             token not in correction_schema for token in correction_tokens
+        ) or (
+            correction_unique_token not in correction_schema
+            and not (
+                not aggregated_recovery_corrections
+                and "unique(job_id)" in correction_schema
+            )
         ):
             raise RuntimeError("Task recovery corrections are incomplete")
+        if aggregated_recovery_corrections and (
+            "first_successor_task_event_id" not in correction_schema
+            or "last_successor_task_event_id" not in correction_schema
+        ):
+            raise RuntimeError("Task recovery correction ranges are incomplete")
         expected_correction_foreign_keys = {
             "job_id": ("jobs", "CASCADE"),
             "successor_outbox_id": (
@@ -677,40 +698,213 @@ def assert_task_projection_outbox(
             ") LIMIT 1"
         ).fetchone():
             raise RuntimeError("Task recovery ordering gap link is invalid")
-        if conn.execute(
-            "SELECT 1 FROM task_recovery_corrections AS correction "
-            "JOIN task_recovery_outbox AS successor "
-            "ON successor.id = correction.successor_outbox_id "
-            "LEFT JOIN ("
-            "SELECT ordering_successor_id, job_id, COUNT(*) AS gap_count, "
-            "MIN(task_event_id) AS first_task_event_id, "
-            "MAX(task_event_id) AS last_task_event_id "
-            "FROM task_recovery_outbox "
-            "WHERE state = 'legacy_ordering_gap' "
-            "GROUP BY ordering_successor_id, job_id"
-            ") AS gaps "
-            "ON gaps.ordering_successor_id = correction.successor_outbox_id "
-            "AND gaps.job_id = correction.job_id "
-            "WHERE successor.state != 'projected' "
-            "OR successor.job_id != correction.job_id "
-            "OR gaps.gap_count IS NULL "
-            "OR gaps.gap_count != correction.gap_count "
-            "OR gaps.first_task_event_id != correction.first_task_event_id "
-            "OR gaps.last_task_event_id != correction.last_task_event_id "
-            "LIMIT 1"
-        ).fetchone():
-            raise RuntimeError("Task recovery correction audit is invalid")
-        if conn.execute(
-            "SELECT 1 FROM task_recovery_outbox AS gap "
-            "WHERE gap.state = 'legacy_ordering_gap' "
-            "AND NOT EXISTS ("
-            "SELECT 1 FROM task_recovery_corrections AS correction "
-            "WHERE correction.job_id = gap.job_id "
-            "AND correction.successor_outbox_id "
-            "= gap.ordering_successor_id"
-            ") LIMIT 1"
-        ).fetchone():
-            raise RuntimeError("Task recovery correction intent is missing")
+        if aggregated_recovery_corrections:
+            gap_table = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'task_recovery_ordering_gaps'"
+            ).fetchone()
+            if gap_table is None:
+                raise RuntimeError("Task recovery gap ledger is missing")
+            gap_schema = " ".join(
+                str(gap_table["sql"] or "").lower().split()
+            )
+            gap_tokens = (
+                "'unpublished_predecessor', 'projected_reversal'",
+                "unique(predecessor_outbox_id, successor_outbox_id, kind)",
+                "predecessor_publication_event_id",
+                "successor_publication_event_id",
+            )
+            if any(token not in gap_schema for token in gap_tokens):
+                raise RuntimeError("Task recovery gap ledger is incomplete")
+            expected_gap_foreign_keys = {
+                "job_id": ("jobs", "CASCADE"),
+                "predecessor_outbox_id": (
+                    "task_recovery_outbox",
+                    "CASCADE",
+                ),
+                "successor_outbox_id": (
+                    "task_recovery_outbox",
+                    "CASCADE",
+                ),
+                "predecessor_publication_event_id": (
+                    "events",
+                    "RESTRICT",
+                ),
+                "successor_publication_event_id": (
+                    "events",
+                    "RESTRICT",
+                ),
+            }
+            gap_foreign_keys = {
+                str(row[3]): (str(row[2]), str(row[6]).upper())
+                for row in conn.execute(
+                    "PRAGMA foreign_key_list(task_recovery_ordering_gaps)"
+                ).fetchall()
+            }
+            if gap_foreign_keys != expected_gap_foreign_keys:
+                raise RuntimeError("Task recovery gap links are incomplete")
+            gap_indexes = {
+                str(row[1]): bool(row[2])
+                for row in conn.execute(
+                    "PRAGMA index_list(task_recovery_ordering_gaps)"
+                ).fetchall()
+            }
+            if (
+                gap_indexes.get("idx_task_recovery_ordering_gaps_job")
+                is not False
+            ):
+                raise RuntimeError("Task recovery gap indexes are incomplete")
+            gap_trigger = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'trigger' "
+                "AND name = 'task_recovery_ordering_gaps_immutable'"
+            ).fetchone()
+            if gap_trigger is None:
+                raise RuntimeError("Task recovery gap records are mutable")
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_ordering_gaps AS gap "
+                "JOIN task_recovery_outbox AS predecessor "
+                "ON predecessor.id = gap.predecessor_outbox_id "
+                "JOIN task_recovery_outbox AS successor "
+                "ON successor.id = gap.successor_outbox_id "
+                "WHERE predecessor.job_id != gap.job_id "
+                "OR successor.job_id != gap.job_id "
+                "OR predecessor.task_event_id "
+                "!= gap.predecessor_task_event_id "
+                "OR successor.task_event_id "
+                "!= gap.successor_task_event_id "
+                "OR successor.state != 'projected' "
+                "OR successor.event_id "
+                "!= gap.successor_publication_event_id "
+                "OR (gap.kind = 'unpublished_predecessor' AND ("
+                "predecessor.state != 'legacy_ordering_gap' "
+                "OR predecessor.event_id IS NOT NULL "
+                "OR gap.predecessor_publication_event_id IS NOT NULL"
+                ")) OR (gap.kind = 'projected_reversal' AND ("
+                "predecessor.state != 'projected' "
+                "OR predecessor.event_id "
+                "!= gap.predecessor_publication_event_id "
+                "OR predecessor.event_id <= successor.event_id"
+                ")) LIMIT 1"
+            ).fetchone():
+                raise RuntimeError("Task recovery gap audit is invalid")
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_outbox AS gap "
+                "WHERE gap.state = 'legacy_ordering_gap' "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM task_recovery_ordering_gaps AS audit "
+                "WHERE audit.predecessor_outbox_id = gap.id "
+                "AND audit.successor_outbox_id = gap.ordering_successor_id "
+                "AND audit.kind = 'unpublished_predecessor'"
+                ") LIMIT 1"
+            ).fetchone():
+                raise RuntimeError("Task recovery gap audit is missing")
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_outbox AS predecessor "
+                "WHERE predecessor.state = 'projected' "
+                "AND EXISTS ("
+                "SELECT 1 FROM task_recovery_outbox AS successor "
+                "WHERE successor.job_id = predecessor.job_id "
+                "AND successor.state = 'projected' "
+                "AND successor.task_event_id > predecessor.task_event_id "
+                "AND successor.event_id < predecessor.event_id"
+                ") AND NOT EXISTS ("
+                "SELECT 1 FROM task_recovery_ordering_gaps AS audit "
+                "WHERE audit.predecessor_outbox_id = predecessor.id "
+                "AND audit.kind = 'projected_reversal' "
+                "AND audit.successor_outbox_id = ("
+                "SELECT successor.id "
+                "FROM task_recovery_outbox AS successor "
+                "WHERE successor.job_id = predecessor.job_id "
+                "AND successor.state = 'projected' "
+                "AND successor.task_event_id > predecessor.task_event_id "
+                "AND successor.event_id < predecessor.event_id "
+                "ORDER BY successor.task_event_id, successor.id LIMIT 1"
+                ")) LIMIT 1"
+            ).fetchone():
+                raise RuntimeError("Task recovery reversal audit is missing")
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_corrections AS correction "
+                "JOIN task_recovery_outbox AS successor "
+                "ON successor.id = correction.successor_outbox_id "
+                "LEFT JOIN ("
+                "SELECT job_id, COUNT(*) AS gap_count, "
+                "MIN(predecessor_task_event_id) AS first_task_event_id, "
+                "MAX(predecessor_task_event_id) AS last_task_event_id, "
+                "MIN(successor_task_event_id) "
+                "AS first_successor_task_event_id, "
+                "MAX(successor_task_event_id) "
+                "AS last_successor_task_event_id "
+                "FROM task_recovery_ordering_gaps GROUP BY job_id"
+                ") AS gaps ON gaps.job_id = correction.job_id "
+                "WHERE successor.state != 'projected' "
+                "OR successor.job_id != correction.job_id "
+                "OR NOT EXISTS ("
+                "SELECT 1 FROM task_recovery_ordering_gaps AS anchor "
+                "WHERE anchor.job_id = correction.job_id "
+                "AND anchor.successor_outbox_id "
+                "= correction.successor_outbox_id"
+                ") OR gaps.gap_count IS NULL "
+                "OR gaps.gap_count != correction.gap_count "
+                "OR gaps.first_task_event_id "
+                "!= correction.first_task_event_id "
+                "OR gaps.last_task_event_id "
+                "!= correction.last_task_event_id "
+                "OR gaps.first_successor_task_event_id "
+                "!= correction.first_successor_task_event_id "
+                "OR gaps.last_successor_task_event_id "
+                "!= correction.last_successor_task_event_id "
+                "LIMIT 1"
+            ).fetchone():
+                raise RuntimeError("Task recovery correction audit is invalid")
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_ordering_gaps AS gap "
+                "WHERE NOT EXISTS ("
+                "SELECT 1 FROM task_recovery_corrections AS correction "
+                "WHERE correction.job_id = gap.job_id"
+                ") LIMIT 1"
+            ).fetchone():
+                raise RuntimeError(
+                    "Task recovery correction intent is missing"
+                )
+        else:
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_corrections AS correction "
+                "JOIN task_recovery_outbox AS successor "
+                "ON successor.id = correction.successor_outbox_id "
+                "LEFT JOIN ("
+                "SELECT ordering_successor_id, job_id, "
+                "COUNT(*) AS gap_count, "
+                "MIN(task_event_id) AS first_task_event_id, "
+                "MAX(task_event_id) AS last_task_event_id "
+                "FROM task_recovery_outbox "
+                "WHERE state = 'legacy_ordering_gap' "
+                "GROUP BY ordering_successor_id, job_id"
+                ") AS gaps ON gaps.ordering_successor_id "
+                "= correction.successor_outbox_id "
+                "AND gaps.job_id = correction.job_id "
+                "WHERE successor.state != 'projected' "
+                "OR successor.job_id != correction.job_id "
+                "OR gaps.gap_count IS NULL "
+                "OR gaps.gap_count != correction.gap_count "
+                "OR gaps.first_task_event_id "
+                "!= correction.first_task_event_id "
+                "OR gaps.last_task_event_id "
+                "!= correction.last_task_event_id LIMIT 1"
+            ).fetchone():
+                raise RuntimeError("Task recovery correction audit is invalid")
+            if conn.execute(
+                "SELECT 1 FROM task_recovery_outbox AS gap "
+                "WHERE gap.state = 'legacy_ordering_gap' "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM task_recovery_corrections AS correction "
+                "WHERE correction.job_id = gap.job_id "
+                "AND correction.successor_outbox_id "
+                "= gap.ordering_successor_id"
+                ") LIMIT 1"
+            ).fetchone():
+                raise RuntimeError(
+                    "Task recovery correction intent is missing"
+                )
     job_columns = {
         str(row[1]) for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
     }

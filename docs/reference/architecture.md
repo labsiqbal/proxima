@@ -650,14 +650,16 @@ delivery happens only after commit and remains replayable if it fails. Per-Task
 delivery follows durable Task-event order. Checkpoint restore records a bounded
 `task_recovery_outbox` intent and marks only obsolete unpublished status intents as
 causally superseded before emitting the authoritative Queued recovery event.
-Recovery audit intents remain append-only and publish exactly once in Task-event
-order. Missing legacy Focus leaves each restore as a failed-attribution repair row
-without rolling back Task restoration or publishing unattributed history. Projection
-schema upgrades classify an unpublished predecessor with an already-published
-successor as an immutable `legacy_ordering_gap` linked to that successor. A separate
-idempotent correction intent emits one bounded history marker only after ordered
-outboxes and the canonical current Task projection are settled; still-orderable
-predecessors remain on the normal recovery path.
+Recovery audit intents remain append-only. New and still-orderable audits publish
+exactly once in Task-event order. Missing legacy Focus leaves each restore as a
+failed-attribution repair row without rolling back Task restoration or publishing
+unattributed history. Projection schema upgrades retain unpublished predecessors and
+already-projected publication reversals in an immutable per-Task ordering-gap ledger
+without replaying or rewriting original recovery rows. One per-Task correction
+intent summarizes bounded gap counts and predecessor/successor Task-event ranges,
+and emits at most one history marker only after ordered outboxes and the canonical
+current Task projection are settled. Still-orderable predecessors remain on the
+normal recovery path.
 Projection message, event, and ledger rows then commit together. Startup validates
 their strict owner, source/type, foreign-key, index, complete-link, and bounded payload
 contract.

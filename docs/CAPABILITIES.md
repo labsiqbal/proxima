@@ -623,11 +623,13 @@ lifecycle event while Running to Review to Running remains distinct. Status and
 recovery intents process in Task-event order. Checkpoint recovery causally supersedes
 only obsolete unpublished status intents before its authoritative recovery event, so
 delayed Failed or Done delivery cannot overwrite Queued. Every recovery audit intent
-remains append-only and publishes exactly once in that order. An upgrade from the
-older superseding recovery model retains a predecessor whose successor already
-published as an immutable ordering-gap audit instead of replaying it out of order.
-One bounded correction marker is delivered after the current Task projection, while
-predecessors without a published successor return to normal ordered delivery. SSE
+remains append-only. New and still-orderable recovery audits publish exactly once in
+that order. An upgrade from the older superseding recovery model records both
+unpublished predecessors and already-projected publication reversals in an immutable
+per-Task ordering-gap ledger without replaying or rewriting original recovery rows.
+At most one bounded correction marker per Task summarizes gap counts and Task-event
+ranges after the current Task projection, while predecessors without a published
+successor return to normal ordered delivery. SSE
 reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).
