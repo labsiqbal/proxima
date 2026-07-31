@@ -127,11 +127,10 @@ the right tool rail. That lane remains reserved while the popup is open, preserv
 the Chat draft and composer geometry.
 Auth, onboarding, the full Master home, update application, drawers, search,
 account menus, ToolDock panels, and an open Running or Attention popover suppress it.
-The same status-popover boundary suppresses live Master toasts until the popover
-closes, so saturated mobile sheets remain unobscured. Durable conversation messages stay
-the completion/failure/review/Attention/Satpam truth; named durable transitions may
-also show one coalesced, keyboard-dismissible toast that never steals focus. Raw
-token, reasoning, and tool deltas never produce toasts.
+Running and Attention use the shared status-disclosure contract below. Durable
+conversation messages stay the completion/failure/review/Attention/Satpam truth;
+named durable transitions may also show one coalesced, keyboard-dismissible toast
+that never steals focus. Raw token, reasoning, and tool deltas never produce toasts.
 
 **Unattended** is a quick pressed toggle on the desk. Off means Master never starts work
 without an owner turn. On means the server may start already-queued Master jobs until the
@@ -252,15 +251,16 @@ shape. Non-decision rows are real buttons that deep-link to the owning
 Master/Task/plan/Settings surface. Only server-marked `inline_ok` binary actions render
 beside the link; diff review and Master budget items navigate instead. Non-approval
 Master decisions render their full resolve/defer form inline in the inbox (same card as
-Master Decisions and the Task workspace). The popover has loading, empty,
-populated, and persistent retryable-error states, closes on Escape/outside click, and
-becomes a viewport-bounded sheet on narrow screens.
+Master Decisions and the Task workspace). The badge is hidden while empty. A visible
+inbox supports refresh progress, populated results, and persistent retryable refresh
+errors, closes on Escape/outside click, and becomes a viewport-bounded sheet on narrow
+screens.
 
 Next to Attention, a **Running** text pill polls `GET /api/runs/active` plus running jobs
 and shows only while work is in flight (`1 task running` / `N tasks running`; mobile may
 shorten to `N running`). When the count is zero the control is hidden entirely (quiet
 header). The popover lists de-duplicated tasks and chat sessions with deep-links (task
-workspace / chat / Tasks index), matching Attention's open/refresh/empty/error affordances.
+workspace / chat / Tasks index), matching Attention's open, refresh, and retry affordances.
 Attention stays a separate `!` control and remains hidden when empty. On mobile,
 Menu, Back, Work / Delegate, Running, Attention, Search, and New chat live in normal
 header layout slots rather than fixed overlays. Compact Work widths use a second
@@ -374,11 +374,11 @@ Add destinations through the existing `View`, feature policy, App routing, Sideb
 
 ## Validation
 
-For shell changes, run `npm --prefix apps/web test`,
-`npm --prefix apps/web run build`, and `git diff --check`. Tests should cover
-navigation order and feature-off gating, tool-rail open/close with Terminal
-persistence, asynchronous task success/failure, declared schedule inputs, cron
-grammar, and keyboard resizing.
+Shell browser coverage and its disposable-data command are owned by the
+[Development tools guide](development-tools.md#shared-shell-browser-regression).
+Focused web checks should still cover navigation order and feature-off gating,
+tool-rail open/close with Terminal persistence, asynchronous task success/failure,
+declared schedule inputs, cron grammar, and keyboard resizing.
 
 `npm --prefix apps/web run test:accessibility` first runs focused project-link API
 regressions for corrective ownership, filesystem component-byte limits, encoding
@@ -421,5 +421,5 @@ blocked failures are counted without retaining their private URLs; any outbound
 handshake or frame fails the audit. It never logs in and retains only a redacted origin
 label, pass state, exact request counts, Vite fixture state, and redacted current-device
 Serve provenance. Browser QA should also check authenticated desktop and narrow
-layouts, zoom, and reduced motion; if remote authentication prevents inspection,
+layouts, themes, zoom, and reduced motion; if remote authentication prevents inspection,
 record that rather than using credentials.

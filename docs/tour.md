@@ -33,7 +33,7 @@ what an owner sees and how the surfaces connect.
 | Master empty | pass - production-bundle browser smoke, feature enabled | - |
 | Master runner eligibility | pass - replayable candidate browser assertion enables only server-qualified choices | - |
 | Master populated / checkpoint restore | skip - no worker jobs in this pass | - |
-| Attention inbox (empty) | pass | `attention-inbox.png` |
+| Attention badge (empty) | pass - hidden for a quiet header | - |
 | Tasks list / board / New task | pass (empty project honest) | `tasks-*.png`, `task-launcher.png` |
 | Recipes home / editor / schedules | pass | `workflows-home.png`, `workflow-blank-canvas.png`, `schedules.png` |
 | Projects | pass | `projects.png` |
@@ -131,10 +131,8 @@ Unattended budgets remain under Settings → Master when the feature is enabled.
 
 ## 5. Attention and Tasks
 
-The shell Attention badge opens a global inbox. With no blocked work it states
-that nothing needs you.
-
-![The global Attention inbox (empty)](screenshots/attention-inbox.png)
+The shell Attention badge appears only when work needs the owner and opens the global
+inbox. With no blocked work, the badge remains hidden for a quiet header.
 
 Tasks is the durable execution and review index. An empty project is shown
 honestly.

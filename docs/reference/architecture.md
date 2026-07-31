@@ -812,19 +812,18 @@ change.
 
 The shell popup is available only on ordinary authenticated surfaces. Auth,
 onboarding, the full Master home, update application, drawers, search, account
-menus, tool panels, and open Running or Attention disclosures suppress it.
-`AppShell` owns one exclusive Running-or-Attention disclosure and applies its open
-state to both the popup and toast availability boundaries, preventing status sheets
-from stacking or sharing pixels with either Master overlay. It persists a left/right corner preference and
-uses tokenized collision offsets for sidebar, ToolDock, mobile chrome, toast region,
-and system safe areas. Its transparent mobile positioning wrapper passes pointer
-input through to the work surface; only the trigger, open scrim, and dialog accept
-input. `AppShell` also publishes a stable Master-enabled bottom lane
+menus, tool panels, and open Running or Attention disclosures suppress it. The shared
+shell flow below owns that disclosure and overlay coordination. The popup persists a
+left/right corner preference and uses tokenized collision offsets for sidebar,
+ToolDock, mobile chrome, toast region, and system safe areas. Its transparent mobile
+positioning wrapper passes pointer input through to the work surface; only the
+trigger, open scrim, and dialog accept input. `AppShell` also publishes a stable
+Master-enabled bottom lane
 to Work Chat, keeping the entire composer above the trigger in either persisted
 corner without changing draft or composer geometry when the popup opens. The desktop
-presentation is a modal dialog with a focus trap,
-Escape close, and trigger focus restoration; narrow viewports use a sheet. The
-toast region maps only named projection events that carry a durable message id.
+presentation is a modal dialog with a focus trap, Escape close, and trigger focus
+restoration; narrow viewports use a sheet. The toast region maps only named projection
+events that carry a durable message id.
 Stable source keys coalesce Task progress, terminal source keys prevent duplicate
 completion toasts, and raw delta events are ignored. Toasts use polite or assertive
 live regions without stealing focus and preserve the existing optional background

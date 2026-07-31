@@ -194,6 +194,8 @@ Treat tests run during concurrent edits as advisory, not a release result. Never
 multiple sessions share a production database or run automated Git cleanup/reset on
 another session's changes.
 
+## Shared-shell browser regression
+
 The shared-shell browser regression builds a disposable authenticated runtime, sweeps
 every mobile CSS width from 320 through 767, checks the desktop reference sizes, and
 captures visual evidence without touching live data. The evidence viewports also
@@ -208,6 +210,9 @@ that exactly one saturated status dialog remains visible and reachable:
 ```bash
 python3 scripts/verify_shell_safe_areas_browser.py
 ```
+
+CI runs the same check in the `shell-browser` job and attempts to upload the screenshot
+directory as the `shell-safe-area-screenshots` artifact even when the check fails.
 
 ## Adding new features
 

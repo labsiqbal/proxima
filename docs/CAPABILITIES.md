@@ -319,16 +319,8 @@ bottom corner, avoids the tool dock, drawers, mobile chrome, safe areas, and toa
 region, and becomes a full-height sheet on narrow screens. Its modal dialog traps
 keyboard focus, closes with Escape, and returns focus to the trigger. Opening the
 full Master home closes only the presentation layer.
-Running and Attention disclosures participate in the same shell overlay boundary:
-while either is open, the Master launcher and live toast region are withheld, then
-restored when the disclosure closes. AppShell owns one exclusive status disclosure,
-so pointer or keyboard activation switches between Running and Attention without
-stacking their sheets.
-When Master is enabled, Work Chat reserves a stable bottom shell lane below the
-whole composer. The floating trigger therefore has zero intersection with Send,
-attachments, prompt modes, the composer surface, and the tool rail at compact,
-mobile, laptop, and desktop widths. Opening the popup leaves that reservation and
-the Chat composer geometry unchanged.
+The authoritative status-disclosure, composer-lane, and collision behavior is in
+the [UI shell contract](ui-shell.md#global-attention-running-work-and-account-surfaces).
 
 The shared composer defaults to **Let Master route**. The owner may choose an
 explicit Container and, in an advanced row, an optional Area override from the
@@ -618,10 +610,11 @@ generation before any merge or push so a concurrent decision cannot land mid-mer
 decision creation refuses while that generation is live, merge failure releases it,
 and restart finalizes a merged generation without merging twice. Supervisor start
 failures stay bare generic Attention and never become resolvable decision ledger rows.
-Errors persist inside the inbox until retried or dismissed.
+A refresh error persists inside an
+already-visible inbox until retry succeeds.
 
 **Running work:** a sibling shell control next to Attention polls `GET /api/runs/active`
-and running jobs, badges a count when work is in flight, and deep-links each row to
+and running jobs, shows a count when work is in flight, and deep-links each row to
 the task workspace or chat (with a Tasks index shortcut).
 
 **Unattended:** the desk toggle is opt-in. `MasterSupervisor` starts only already-queued
@@ -1825,7 +1818,7 @@ owner with one password/session gate; legacy invite/member tables have been drop
 ## Single-workspace shell ("Deck", T3)
 
 + **One workspace, no Ops/Code switch.** The header has a URL-durable **Work / Delegate** mode control. Work keeps the flow-ordered destinations Chat, Tasks, Workflows, Archive, gated Design, and project-scoped recent chats; its sidebar owns the active-project switcher and the top bar does not. Delegate keeps that same persistent, collapsible sidebar and header language, but replaces Work navigation with global Master, Tasks, and Archive. It has no project selector, project filter menu, ordinary Chat, Workflows, Design, tools, search, popup, or account surfaces; its Tasks and Archive views query across projects and their task and record deep links remain in Delegate. Opening a graph plan explicitly returns to Work, and Task workspace Design actions remain unavailable in Delegate. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. **Chrome Back** is always visible in Work (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach; Work Chat reload durability is under Chat above. Work/Chat is the default. Agents and Settings live in the Work profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative; a disabled Master flag removes Delegate and makes a stale Delegate URL fall back to Work.
-+ **Shared shell safe areas and labels.** Mobile Menu, Back, mode, Running, Attention, Search, and New chat controls occupy independent header slots. Narrow Work widths use a second action row and reserve the Attention slot while empty, preserving pointer placement. The shared mobile-header height matches its rendered rows and paints above the tool rail, while narrow Running and Attention popovers stop before the rail so their full bounds and controls remain visible to pointer and keyboard users. AppShell owns one exclusive Running-or-Attention disclosure, and an open status popover withholds the Master launcher and live toast region, including for saturated scrolling sheets. The transparent mobile Master wrapper passes pointer input through outside its trigger, open scrim, and dialog. The minimum hit-target and focus-ring tokens apply to every visible control. Work, Work project, and Recent chats use shared label tokens that clear the 4.5:1 text contrast floor.
++ **Shared shell safe areas and labels.** The shell keeps its visible controls reachable and non-overlapping and its shared labels above the WCAG AA text-contrast floor. The authoritative behavior is in [UI shell and information architecture](ui-shell.md#global-attention-running-work-and-account-surfaces); the disposable browser regression is in [Development tools](development-tools.md#shared-shell-browser-regression).
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. Its header carries the session and agent; Work-sidebar project context remains outside the conversation. Its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults off; dynamically conforming Codex 0.145.0 or newer is supported, and every other or unavailable adapter fails closed.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
