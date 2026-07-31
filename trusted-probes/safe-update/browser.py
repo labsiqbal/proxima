@@ -76,6 +76,7 @@ class _WebSocket:
         ):
             raise BrowserProbeError("browser debugging handshake failed")
         self.sequence = 0
+        self.network_failures: list[dict[str, object]] = []
 
     def close(self) -> None:
         self.connection.close()
@@ -163,6 +164,25 @@ class _WebSocket:
             except json.JSONDecodeError as exc:
                 raise BrowserProbeError("browser debugging response is invalid") from exc
             if not isinstance(value, dict) or value.get("id") != sequence:
+                if (
+                    isinstance(value, dict)
+                    and value.get("method") == "Network.loadingFailed"
+                    and isinstance(value.get("params"), dict)
+                ):
+                    params = value["params"]
+                    self.network_failures.append(
+                        {
+                            key: params[key]
+                            for key in (
+                                "blockedReason",
+                                "canceled",
+                                "errorText",
+                                "type",
+                            )
+                            if key in params
+                        }
+                    )
+                    self.network_failures = self.network_failures[-10:]
                 continue
             if "error" in value or not isinstance(value.get("result"), dict):
                 raise BrowserProbeError(f"browser command failed: {method}")
@@ -194,7 +214,14 @@ def _evaluation(connection: _WebSocket, expression: str) -> object:
             else None
         )
         suffix = f": {description}" if description else ""
-        raise BrowserProbeError(f"browser scenario JavaScript failed{suffix}")
+        failures = (
+            f"; network failures: {json.dumps(connection.network_failures)}"
+            if connection.network_failures
+            else ""
+        )
+        raise BrowserProbeError(
+            f"browser scenario JavaScript failed{suffix}{failures}"
+        )
     return result.get("value")
 
 
@@ -311,6 +338,8 @@ def run_scenario(
     auth_token: str,
     drop_prefix: list[str],
     path: str = "/",
+    host_resolver_rules: str = "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+    ignore_certificate_errors: bool = False,
 ) -> bytes:
     profile.mkdir(mode=0o777)
     profile.chmod(0o777)
@@ -332,7 +361,8 @@ def run_scenario(
         "--disable-sync",
         "--metrics-recording-only",
         "--no-first-run",
-        "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+        f"--host-resolver-rules={host_resolver_rules}",
+        *(["--ignore-certificate-errors"] if ignore_certificate_errors else []),
         f"--user-data-dir={profile}",
         "--remote-debugging-address=127.0.0.1",
         f"--remote-debugging-port={debug_port}",

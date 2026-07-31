@@ -14,12 +14,10 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
-import json
 import logging
 import os
 import stat
 import tempfile
-from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
@@ -77,6 +75,24 @@ def _existing_service(ingress: list[dict[str, Any]]) -> str:
         if rule.get("hostname") and rule.get("service"):
             return rule["service"]
     return _FALLBACK_SERVICE
+
+
+def _with_ingress_hostname(
+    ingress: list[dict[str, Any]],
+    host: str,
+) -> list[dict[str, Any]]:
+    updated = copy.deepcopy(ingress)
+    if (
+        not updated
+        or updated[-1].get("hostname")
+        or updated[-1].get("path")
+    ):
+        updated.append({"service": "http_status:404"})
+    updated.insert(
+        len(updated) - 1,
+        {"hostname": host, "service": _existing_service(updated)},
+    )
+    return updated
 
 
 async def _put_tunnel_config(cfg, client, config: dict[str, Any]) -> None:
@@ -158,35 +174,51 @@ def _release_ingress_file_lock(descriptor: int) -> None:
         os.close(descriptor)
 
 
+async def _finish_lock_acquisition(
+    acquisition: asyncio.Task[int],
+) -> int:
+    while True:
+        try:
+            return await asyncio.shield(acquisition)
+        except asyncio.CancelledError:
+            continue
+
+
+async def _acquire_ingress_file_lock_cancellable(
+    cfg: dict[str, Any],
+) -> int:
+    acquisition = asyncio.create_task(
+        asyncio.to_thread(_acquire_ingress_file_lock, cfg)
+    )
+    try:
+        return await asyncio.shield(acquisition)
+    except asyncio.CancelledError:
+        try:
+            descriptor = await _finish_lock_acquisition(acquisition)
+        except BaseException:
+            pass
+        else:
+            _release_ingress_file_lock(descriptor)
+        raise
+
+
 @asynccontextmanager
 async def _tunnel_mutation_lock(
     cfg: dict[str, Any],
 ) -> AsyncIterator[None]:
     async with _ingress_lock(cfg):
-        descriptor = await asyncio.to_thread(
-            _acquire_ingress_file_lock,
-            cfg,
-        )
+        descriptor = await _acquire_ingress_file_lock_cancellable(cfg)
         try:
             yield
         finally:
-            await asyncio.to_thread(
-                _release_ingress_file_lock,
-                descriptor,
-            )
+            _release_ingress_file_lock(descriptor)
 
 
-def _ingress_fingerprint(rule: dict[str, Any]) -> str:
-    return json.dumps(rule, separators=(",", ":"), sort_keys=True)
-
-
-def _preserves_ingress(
+def _matches_ingress(
     actual: list[dict[str, Any]],
     expected: list[dict[str, Any]],
 ) -> bool:
-    actual_rules = Counter(_ingress_fingerprint(rule) for rule in actual)
-    expected_rules = Counter(_ingress_fingerprint(rule) for rule in expected)
-    return not expected_rules - actual_rules
+    return actual == expected
 
 
 async def _mutate_tunnel_ingress(
@@ -208,7 +240,7 @@ async def _mutate_tunnel_ingress(
             refreshed_ingress = refreshed.get("ingress") or []
             if (
                 complete(refreshed_ingress)
-                and _preserves_ingress(refreshed_ingress, updated)
+                and _matches_ingress(refreshed_ingress, updated)
             ):
                 return
             await asyncio.sleep(0)
@@ -220,11 +252,7 @@ async def _ensure_hostname(cfg: dict[str, Any], host: str) -> None:
         return
     async with httpx.AsyncClient(timeout=20, headers=_headers(cfg)) as client:
         def add_host(ingress: list[dict[str, Any]]) -> list[dict[str, Any]]:
-            service = _existing_service(ingress)
-            catchall = ingress[-1:] if ingress and not ingress[-1].get("hostname") else [{"service": "http_status:404"}]
-            body = [r for r in ingress if r.get("hostname")]
-            body.append({"hostname": host, "service": service})
-            return body + catchall
+            return _with_ingress_hostname(ingress, host)
 
         await _mutate_tunnel_ingress(
             cfg,
