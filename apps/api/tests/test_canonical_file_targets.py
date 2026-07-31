@@ -1759,7 +1759,8 @@ def test_artifact_enrichment_skips_only_unsafe_entries(tmp_path: Path):
     assert "reports/escape.md" not in artifacts
 
     project = api.app.state.db.execute(
-        "SELECT id, slug, path FROM projects WHERE slug = 'identity'"
+        "SELECT id, slug, path, path_identity "
+        "FROM projects WHERE slug = 'identity'"
     ).fetchone()
     context = file_targets.target_context(api.app.state.db, project)
     assert file_targets.add_artifact_targets(

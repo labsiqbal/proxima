@@ -82,6 +82,12 @@ def test_me_rejects_stale_token_so_frontend_can_refresh(tmp_path):
 def test_messages_return_output_links(tmp_path):
     client, headers = authed(tmp_path)
     slug = client.get("/api/projects", headers=headers).json()["projects"][0]["slug"]
+    ops_area_id = client.app.state.db.execute(
+        "SELECT pa.id FROM project_areas pa "
+        "JOIN projects p ON p.id = pa.project_id "
+        "WHERE p.slug = ? AND pa.kind = 'ops'",
+        (slug,),
+    ).fetchone()["id"]
     sid = client.post("/api/sessions", headers=headers, json={"title": "outputs", "project_slug": slug}).json()["id"]
     client.app.state.db.execute(
         "INSERT INTO messages(session_id, role, content, author, output_links) VALUES (?, 'assistant', ?, 'Agent', ?)",
@@ -90,13 +96,20 @@ def test_messages_return_output_links(tmp_path):
 
     messages = client.get(f"/api/sessions/{sid}/messages", headers=headers).json()["messages"]
 
-    assert messages[0]["output_links"] == [{
-        "type": "design",
-        "title": "Launch Post",
-        "path": "artifacts/design/launch",
-        "id": "launch",
-        "project_slug": slug,
-    }]
+    assert messages[0]["output_links"] == [
+        {
+            "type": "design",
+            "title": "Launch Post",
+            "path": "artifacts/design/launch",
+            "id": "launch",
+            "project_slug": slug,
+            "target": {
+                "project": slug,
+                "area": {"kind": "ops", "id": ops_area_id},
+                "path": "artifacts/design/launch",
+            },
+        }
+    ]
 
 
 def test_messages_batch_activity_and_duration_for_multiple_runs(tmp_path):

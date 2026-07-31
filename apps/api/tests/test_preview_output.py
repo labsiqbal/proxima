@@ -74,6 +74,24 @@ def test_windows_adapter_fails_before_launch_without_breakaway_support(
         OutputBroker._open_windows_direct()
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="launch cgroups require Linux",
+)
+def test_direct_supervisor_does_not_create_packaged_app_cgroup(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    monkeypatch.setattr(
+        preview_output_broker,
+        "_cgroup_identity",
+        lambda _pid: pytest.fail("direct mode must not inspect cgroup delegation"),
+    )
+    supervisor = PreviewSupervisor.__new__(PreviewSupervisor)
+
+    assert supervisor._prepare_app_cgroup() is None
+
+
 @pytest.mark.skipif(os.name != "posix", reason="descriptor broker requires POSIX")
 def test_broker_owns_output_from_launch_and_snapshots_atomically() -> None:
     async def run_case() -> None:

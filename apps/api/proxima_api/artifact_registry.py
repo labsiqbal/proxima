@@ -223,7 +223,7 @@ def refresh_file_presence(
         project_id = int(row["project_id"])
         if project_id not in projects:
             projects[project_id] = conn.execute(
-                "SELECT id, slug, path FROM projects WHERE id = ?",
+                "SELECT id, slug, path, path_identity FROM projects WHERE id = ?",
                 (project_id,),
             ).fetchone()
         project = projects[project_id]

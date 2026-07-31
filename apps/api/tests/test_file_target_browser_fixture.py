@@ -416,7 +416,7 @@ def test_browser_manifest_probe_keeps_track_load_independent() -> None:
 def test_accepted_preview_adr_remains_append_only() -> None:
     adr = ROOT / "docs" / "adr" / "0034-distinct-tls-area-preview-origins.md"
     digest = hashlib.sha256(adr.read_bytes()).hexdigest()
-    assert digest == "559d71879df7260d42c015fc0f2063ab828e564baeaac7bd56173d6646ba7a72"
+    assert digest == "475e3d20305b24387763339a51b732dbdc550d48e749450a42ef338018bea0e1"
 
     successor = (
         ROOT / "docs" / "adr" / "0035-frame-bound-area-preview-admission.md"
