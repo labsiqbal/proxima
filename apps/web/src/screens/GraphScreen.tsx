@@ -586,10 +586,15 @@ export function GraphScreen({
     void refreshList()
   }, [backNonce, refreshList])
 
+  const jobIdRef = React.useRef<number | null>(null)
+  jobIdRef.current = job?.id ?? null
+
   const openJob = React.useCallback((jobId: number) => {
     setOpeningJobId(jobId)
     // Drop a mismatched keep-alive job so loading never displays or reports it.
-    if (job?.id !== jobId) {
+    // Read via ref so this callback stays stable when job loads — otherwise the
+    // pendingJobId effect re-fires, re-GETs, and can clear the editor mid-edit.
+    if (jobIdRef.current !== jobId) {
       setJob(null)
       setPlan(null)
       setSelectedId(null)
@@ -597,7 +602,7 @@ export function GraphScreen({
     setStage('editor')
     onStageChange?.('editor', jobId)
     void loadJob(jobId)
-  }, [loadJob, onStageChange, job?.id])
+  }, [loadJob, onStageChange])
 
   React.useEffect(() => { void refreshList() }, [refreshList])
 
