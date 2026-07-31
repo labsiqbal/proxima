@@ -9,6 +9,7 @@ import socket
 import struct
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 from urllib.request import urlopen
@@ -16,6 +17,27 @@ from urllib.request import urlopen
 
 class BrowserProbeError(RuntimeError):
     pass
+
+
+_NETWORK_RESOURCE_EVENTS = frozenset(
+    {
+        "Network.loadingFailed",
+        "Network.loadingFinished",
+        "Network.requestWillBeSent",
+        "Network.requestWillBeSentExtraInfo",
+        "Network.responseReceived",
+    }
+)
+
+
+@dataclass(frozen=True)
+class _NetworkResourceObservation:
+    request_id: str
+    url: str
+    status: int
+    mime_type: str
+    content_type: str
+    fetch_metadata: dict[str, str]
 
 
 def _recv_exact(connection: socket.socket, size: int) -> bytes:
@@ -77,6 +99,7 @@ class _WebSocket:
             raise BrowserProbeError("browser debugging handshake failed")
         self.sequence = 0
         self.network_failures: list[dict[str, object]] = []
+        self.network_events: list[dict[str, object]] = []
 
     def close(self) -> None:
         self.connection.close()
@@ -164,25 +187,38 @@ class _WebSocket:
             except json.JSONDecodeError as exc:
                 raise BrowserProbeError("browser debugging response is invalid") from exc
             if not isinstance(value, dict) or value.get("id") != sequence:
-                if (
-                    isinstance(value, dict)
-                    and value.get("method") == "Network.loadingFailed"
-                    and isinstance(value.get("params"), dict)
-                ):
-                    params = value["params"]
-                    self.network_failures.append(
-                        {
-                            key: params[key]
-                            for key in (
-                                "blockedReason",
-                                "canceled",
-                                "errorText",
-                                "type",
-                            )
-                            if key in params
-                        }
-                    )
-                    self.network_failures = self.network_failures[-10:]
+                if isinstance(value, dict):
+                    event_method = value.get("method")
+                    event_params = value.get("params")
+                    if (
+                        event_method in _NETWORK_RESOURCE_EVENTS
+                        and isinstance(event_params, dict)
+                    ):
+                        self.network_events.append(
+                            {
+                                "method": event_method,
+                                "params": event_params,
+                            }
+                        )
+                        self.network_events = self.network_events[-1000:]
+                    if (
+                        event_method == "Network.loadingFailed"
+                        and isinstance(event_params, dict)
+                    ):
+                        params = event_params
+                        self.network_failures.append(
+                            {
+                                key: params[key]
+                                for key in (
+                                    "blockedReason",
+                                    "canceled",
+                                    "errorText",
+                                    "type",
+                                )
+                                if key in params
+                            }
+                        )
+                        self.network_failures = self.network_failures[-10:]
                 continue
             if "error" in value or not isinstance(value.get("result"), dict):
                 raise BrowserProbeError(f"browser command failed: {method}")
@@ -257,6 +293,244 @@ def _browser_url(connection: _WebSocket, expression: str) -> str:
     return value
 
 
+def _network_header(headers: object, name: str) -> str:
+    if not isinstance(headers, dict):
+        return ""
+    return next(
+        (
+            str(value)
+            for key, value in headers.items()
+            if str(key).lower() == name.lower()
+        ),
+        "",
+    )
+
+
+def _network_resource_request_ids(
+    events: list[dict[str, object]],
+    expected_url: str,
+) -> set[str]:
+    return {
+        str(params["requestId"])
+        for event in events
+        if event.get("method") == "Network.requestWillBeSent"
+        and isinstance((params := event.get("params")), dict)
+        and isinstance(params.get("request"), dict)
+        and params["request"].get("url") == expected_url
+        and isinstance(params.get("requestId"), str)
+    }
+
+
+def _network_resource_terminal(
+    events: list[dict[str, object]],
+    expected_url: str,
+) -> bool:
+    request_ids = _network_resource_request_ids(events, expected_url)
+    if len(request_ids) != 1:
+        return False
+    request_id = next(iter(request_ids))
+    methods = {
+        str(event.get("method"))
+        for event in events
+        if isinstance(event.get("params"), dict)
+        and event["params"].get("requestId") == request_id
+    }
+    return (
+        "Network.requestWillBeSentExtraInfo" in methods
+        and (
+            "Network.loadingFailed" in methods
+            or (
+                "Network.responseReceived" in methods
+                and "Network.loadingFinished" in methods
+            )
+        )
+    )
+
+
+def _network_resource_observation(
+    events: list[dict[str, object]],
+    *,
+    expected_url: str,
+    expected_mime_type: str,
+    expected_fetch_metadata: dict[str, str],
+) -> _NetworkResourceObservation:
+    request_ids = _network_resource_request_ids(events, expected_url)
+    if not request_ids:
+        raise BrowserProbeError("browser resource request is missing")
+    if len(request_ids) != 1:
+        raise BrowserProbeError("browser resource request is ambiguous")
+    request_id = next(iter(request_ids))
+    request_events = [
+        event["params"]
+        for event in events
+        if event.get("method") == "Network.requestWillBeSent"
+        and isinstance(event.get("params"), dict)
+        and event["params"].get("requestId") == request_id
+    ]
+    if any(event.get("redirectResponse") for event in request_events):
+        raise BrowserProbeError("browser resource request redirected")
+    request_urls = [
+        event["request"].get("url")
+        for event in request_events
+        if isinstance(event.get("request"), dict)
+    ]
+    if request_urls != [expected_url]:
+        raise BrowserProbeError("browser resource final URL is invalid")
+    failures = [
+        event["params"]
+        for event in events
+        if event.get("method") == "Network.loadingFailed"
+        and isinstance(event.get("params"), dict)
+        and event["params"].get("requestId") == request_id
+    ]
+    if any(failure.get("blockedReason") for failure in failures):
+        raise BrowserProbeError("browser resource request was blocked")
+    if failures:
+        raise BrowserProbeError("browser resource request failed")
+    extra_infos = [
+        event["params"]
+        for event in events
+        if event.get("method") == "Network.requestWillBeSentExtraInfo"
+        and isinstance(event.get("params"), dict)
+        and event["params"].get("requestId") == request_id
+    ]
+    if len(extra_infos) != 1:
+        raise BrowserProbeError("browser resource request metadata is missing")
+    headers = extra_infos[0].get("headers")
+    fetch_metadata = {
+        name: _network_header(headers, f"sec-fetch-{name}")
+        for name in ("site", "mode", "dest")
+    }
+    if fetch_metadata != expected_fetch_metadata:
+        raise BrowserProbeError(
+            "browser resource request metadata is invalid: "
+            + json.dumps(fetch_metadata, sort_keys=True)
+        )
+    responses = [
+        event["params"].get("response")
+        for event in events
+        if event.get("method") == "Network.responseReceived"
+        and isinstance(event.get("params"), dict)
+        and event["params"].get("requestId") == request_id
+        and isinstance(event["params"].get("response"), dict)
+    ]
+    if len(responses) != 1:
+        raise BrowserProbeError("browser resource response is missing")
+    response = responses[0]
+    if response.get("url") != expected_url:
+        raise BrowserProbeError("browser resource final URL is invalid")
+    status = int(response.get("status") or 0)
+    if status != 200:
+        raise BrowserProbeError(
+            f"browser resource response status is invalid: {status}"
+        )
+    mime_type = str(response.get("mimeType") or "").lower()
+    if mime_type != expected_mime_type.lower():
+        raise BrowserProbeError("browser resource MIME type is invalid")
+    content_type = _network_header(response.get("headers"), "content-type")
+    if content_type.split(";", 1)[0].strip().lower() != expected_mime_type.lower():
+        raise BrowserProbeError("browser resource Content-Type is invalid")
+    completed = any(
+        event.get("method") == "Network.loadingFinished"
+        and isinstance(event.get("params"), dict)
+        and event["params"].get("requestId") == request_id
+        for event in events
+    )
+    if not completed:
+        raise BrowserProbeError("browser resource response did not complete")
+    return _NetworkResourceObservation(
+        request_id=request_id,
+        url=expected_url,
+        status=status,
+        mime_type=mime_type,
+        content_type=content_type,
+        fetch_metadata=fetch_metadata,
+    )
+
+
+def _network_resource_summary(
+    connection: _WebSocket,
+    *,
+    expected_url: str,
+    expectation: dict[str, object],
+) -> dict[str, object]:
+    expected_mime_type = expectation.get("mime_type")
+    expected_json = expectation.get("body_json")
+    expected_fetch_metadata = expectation.get("fetch_metadata")
+    if (
+        not isinstance(expected_mime_type, str)
+        or not isinstance(expected_json, dict)
+        or not isinstance(expected_fetch_metadata, dict)
+        or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in expected_fetch_metadata.items()
+        )
+    ):
+        raise BrowserProbeError("browser resource expectation is invalid")
+    try:
+        observation = _network_resource_observation(
+            connection.network_events,
+            expected_url=expected_url,
+            expected_mime_type=expected_mime_type,
+            expected_fetch_metadata=expected_fetch_metadata,
+        )
+    except BrowserProbeError as exc:
+        request_ids = _network_resource_request_ids(
+            connection.network_events,
+            expected_url,
+        )
+        if (
+            "response status is invalid" not in str(exc)
+            or len(request_ids) != 1
+        ):
+            raise
+        failure_body = connection.call(
+            "Network.getResponseBody",
+            {"requestId": next(iter(request_ids))},
+        ).get("body")
+        detail = (
+            failure_body[:256]
+            if isinstance(failure_body, str)
+            else "unavailable"
+        )
+        raise BrowserProbeError(f"{exc}; body: {detail}") from exc
+    response = connection.call(
+        "Network.getResponseBody",
+        {"requestId": observation.request_id},
+    )
+    body = response.get("body")
+    if not isinstance(body, str):
+        raise BrowserProbeError("browser resource response body is missing")
+    if response.get("base64Encoded") is True:
+        try:
+            body_bytes = base64.b64decode(body, validate=True)
+        except ValueError as exc:
+            raise BrowserProbeError(
+                "browser resource response body is invalid"
+            ) from exc
+    else:
+        body_bytes = body.encode()
+    if len(body_bytes) > 1024 * 1024:
+        raise BrowserProbeError("browser resource response body is oversized")
+    try:
+        body_json = json.loads(body_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BrowserProbeError(
+            "browser resource response content is invalid"
+        ) from exc
+    if body_json != expected_json:
+        raise BrowserProbeError("browser resource response content is invalid")
+    return {
+        "body_sha256": hashlib.sha256(body_bytes).hexdigest(),
+        "content_type": observation.content_type,
+        "fetch_metadata": observation.fetch_metadata,
+        "mime_type": observation.mime_type,
+        "request_id": observation.request_id,
+        "status": observation.status,
+        "url": observation.url,
+    }
+
+
 def _popup_response_step(
     connection: _WebSocket,
     step: dict,
@@ -274,6 +548,15 @@ def _popup_response_step(
         else f"{candidate.scheme}://{candidate.netloc}"
     )
     expected_path = step.get("expected_final_path", candidate.path)
+    network_resource = step.get("network_resource")
+    expected_network_url: str | None = None
+    if network_resource is not None:
+        if not isinstance(network_resource, dict):
+            raise BrowserProbeError("browser resource expectation is invalid")
+        url_expression = network_resource.get("url_expression")
+        if not isinstance(url_expression, str):
+            raise BrowserProbeError("browser resource URL is invalid")
+        expected_network_url = _browser_url(connection, url_expression)
     before = {
         item.get("id")
         for item in _debug_pages(debug_port)
@@ -287,6 +570,7 @@ def _popup_response_step(
             for key, value in request_headers.items()
         ):
             raise BrowserProbeError("browser popup request headers are invalid")
+    if request_headers is not None or network_resource is not None:
         created = connection.call(
             "Target.createTarget",
             {"url": "about:blank"},
@@ -343,6 +627,8 @@ def _popup_response_step(
                 {"headers": request_headers},
             )
             popup.call("Page.navigate", {"url": url})
+        elif network_resource is not None:
+            popup.call("Page.navigate", {"url": url})
         marker = json.dumps(
             step.get("execution_marker", "__proximaPreviewExecuted")
         )
@@ -368,6 +654,7 @@ def _popup_response_step(
   }};
 }})()
 """
+        network_summary: dict[str, object] | None = None
         while time.monotonic() < deadline:
             try:
                 value = _evaluation(popup, expression)
@@ -376,10 +663,32 @@ def _popup_response_step(
                 continue
             if isinstance(value, dict) and value.get("ok") is True:
                 result = value
-                break
+                if network_resource is None:
+                    break
+                if (
+                    expected_network_url is not None
+                    and _network_resource_terminal(
+                        popup.network_events,
+                        expected_network_url,
+                    )
+                ):
+                    network_summary = _network_resource_summary(
+                        popup,
+                        expected_url=expected_network_url,
+                        expectation=network_resource,
+                    )
+                    break
             time.sleep(0.025)
         if result is None:
             raise BrowserProbeError("browser popup response did not finish")
+        if network_resource is not None and network_summary is None:
+            if expected_network_url is None:
+                raise BrowserProbeError("browser resource URL is invalid")
+            network_summary = _network_resource_summary(
+                popup,
+                expected_url=expected_network_url,
+                expectation=network_resource,
+            )
     finally:
         popup.close()
         target_id = target.get("id")
@@ -414,6 +723,8 @@ def _popup_response_step(
         "capability_query": has_capability,
         "executed": result.get("executed"),
     }
+    if network_summary is not None:
+        summary["network_resource"] = network_summary
     expected = (
         result.get("status") == step["expected_status"]
         and final_origin == expected_origin

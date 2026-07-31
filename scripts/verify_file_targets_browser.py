@@ -434,35 +434,18 @@ if (mainOrigin) {
     )
     (ops / "site" / "metadata.html").write_text(
         """
-<link rel="manifest" href="app.webmanifest">
-<main>METADATA RESOURCES LOADING</main>
+<link rel="manifest" href="app.webmanifest" crossorigin="use-credentials">
+<main>TRACK RESOURCE LOADING</main>
 <script>
-globalThis.__proximaMetadataResourcesLoaded = false;
-let manifestLoaded = false;
-let trackLoaded = false;
-const finish = () => {
-  if (!manifestLoaded || !trackLoaded) return;
-  globalThis.__proximaMetadataResourcesLoaded = true;
-  document.querySelector("main").textContent = "METADATA RESOURCES LOADED";
-};
-const manifestUrl = new URL("app.webmanifest", location.href).href;
-const observeManifest = () => {
-  if (performance.getEntriesByName(manifestUrl).length) {
-    manifestLoaded = true;
-    finish();
-  } else {
-    setTimeout(observeManifest, 50);
-  }
-};
-observeManifest();
+globalThis.__proximaTrackLoaded = false;
 const media = document.createElement("video");
 const captions = document.createElement("track");
 captions.kind = "captions";
 captions.src = "captions.vtt";
 captions.default = true;
 captions.addEventListener("load", () => {
-  trackLoaded = true;
-  finish();
+  globalThis.__proximaTrackLoaded = true;
+  document.querySelector("main").textContent = "TRACK RESOURCE LOADED";
 });
 media.append(captions);
 document.body.append(media);
@@ -1238,17 +1221,34 @@ def _browser_metadata_recording_probe() -> dict[str, object]:
             "window.__targetPreviewMetadataUrl"
             " + '?__proxima_fixture_frame=1'"
         ),
-        "execution_marker": "__proximaMetadataResourcesLoaded",
+        "execution_marker": "__proximaTrackLoaded",
+        "network_resource": {
+            "url_expression": "window.__targetPreviewManifestUrl",
+            "mime_type": "application/manifest+json",
+            "body_json": {
+                "name": "Canonical preview",
+                "short_name": "Canonical",
+                "start_url": "./index.html",
+            },
+            "fetch_metadata": {
+                "site": "same-origin",
+                "mode": "cors",
+                "dest": "manifest",
+            },
+        },
         "expected_status": 200,
         "expected_final_origin_expression": "window.__targetPreviewOrigin",
         "expected_final_path": "/site/metadata.html",
         "expected_capability_query": False,
         "expected_executed": True,
-        "expected_body": "METADATA RESOURCES LOADED",
+        "expected_body": "TRACK RESOURCE LOADED",
     }
 
 
-def _observed_resource_metadata(path: Path) -> dict[str, object]:
+def _observed_resource_metadata(
+    path: Path,
+    manifest_resource: dict[str, object],
+) -> dict[str, object]:
     records = []
     for line in path.read_text(encoding="utf-8").splitlines():
         prefix = "target-preview-admitted "
@@ -1290,8 +1290,27 @@ def _observed_resource_metadata(path: Path) -> dict[str, object]:
             "mode": tuple_value[1],
             "site": tuple_value[0],
         }
+    manifest_metadata = manifest_resource.get("fetch_metadata")
+    manifest_request_id = manifest_resource.get("request_id")
+    manifest_url = manifest_resource.get("url")
+    if (
+        not isinstance(manifest_request_id, str)
+        or not manifest_request_id
+        or not isinstance(manifest_url, str)
+        or not manifest_url.split("?", 1)[0].endswith(
+            "/site/app.webmanifest"
+        )
+        or manifest_metadata
+        != {"site": "same-origin", "mode": "cors", "dest": "manifest"}
+        or observed["/site/app.webmanifest"]
+        != {"site": "same-origin", "mode": "cors", "destination": "manifest"}
+    ):
+        raise RuntimeError(
+            "manifest network request and admission metadata do not correlate"
+        )
     return {
         "name": "browser-emitted preview resource metadata",
+        "manifest_request_id": manifest_request_id,
         "observed": observed,
         "ok": True,
     }
@@ -1522,8 +1541,30 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                         ignore_certificate_errors=True,
                     )
                 transcript_value = json.loads(transcript)
+                metadata_probe = next(
+                    (
+                        item
+                        for item in transcript_value
+                        if item.get("name")
+                        == "HTTPS browser-emitted manifest and track metadata"
+                    ),
+                    None,
+                )
+                if (
+                    not isinstance(metadata_probe, dict)
+                    or not isinstance(
+                        metadata_probe.get("network_resource"),
+                        dict,
+                    )
+                ):
+                    raise RuntimeError(
+                        "manifest network observation is unavailable"
+                    )
                 transcript_value.append(
-                    _observed_resource_metadata(preview_metadata_log)
+                    _observed_resource_metadata(
+                        preview_metadata_log,
+                        metadata_probe["network_resource"],
+                    )
                 )
                 print(
                     json.dumps(
