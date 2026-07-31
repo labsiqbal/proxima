@@ -473,4 +473,25 @@ it('refreshes keep-alive home Runs after checkpoint restore job.update', async (
       campaign: 'Launch week',
     }))
   })
+
+  it('soft-fails ordinary Edit when the job cannot be loaded', async () => {
+    const onUnhandled = vi.fn()
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      onUnhandled(event.reason)
+      event.preventDefault()
+    }
+    window.addEventListener('unhandledrejection', handleRejection)
+    vi.mocked(getGraphJob).mockRejectedValue(new Error('job gone'))
+
+    render(<GraphScreen {...props} />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Drafts 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+
+    expect(await screen.findByText('Error: job gone')).toBeInTheDocument()
+    expect(screen.getByRole('table', { name: 'Draft plans' })).toBeInTheDocument()
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 1))
+    expect(onUnhandled).not.toHaveBeenCalled()
+    window.removeEventListener('unhandledrejection', handleRejection)
+  })
+
 })

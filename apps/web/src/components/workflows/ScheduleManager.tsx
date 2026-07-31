@@ -212,7 +212,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
     if (!selected) { setError('Choose a workflow first.'); return }
     if (!isValidCron(settings.cron)) { setError('Enter a valid five-field cron using numbers, *, steps, ranges, or comma-separated parts.'); return }
     if (settings.enabled && missingBindings.length) {
-      setError(`Cannot enable this schedule. Add a source node or save a durable binding for: ${missingBindings.map(input => input.label).join(', ')}.`)
+      setError(`Cannot enable this schedule. Save a durable binding for: ${missingBindings.map(input => input.label).join(', ')}, then turn it On.`)
       return
     }
     const body = {
@@ -244,7 +244,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
   const toggle = (schedule: Schedule) => {
     if (!schedule.enabled && !schedule.ready) {
       edit(schedule)
-      setError('This schedule is missing a required source. Add a source node or durable binding before turning it on.')
+      setError('This schedule is missing a required binding. Save a durable binding for each required input before turning it On.')
       return
     }
     void act(() => updateSchedule(token, schedule.id, { enabled: !schedule.enabled }))
@@ -275,7 +275,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
   }
   return <section className={`schedule-manager ${compact ? 'compact' : ''}`} aria-labelledby="schedule-manager-title">
     <header className="schedule-manager-head">
-      <div><p className="eyebrow">Automation</p><h1 id="schedule-manager-title">{compact ? `Schedules for ${selected?.name || 'workflow'}` : 'Schedules'}</h1><p className="muted">Configure unattended runs with a cadence, timezone, and durable input sources.</p></div>
+      <div><p className="eyebrow">Automation</p><h1 id="schedule-manager-title">{compact ? `Schedules for ${selected?.name || 'workflow'}` : 'Schedules'}</h1><p className="muted">Configure unattended runs with a cadence, timezone, and durable input bindings.</p></div>
       {onClose && <button className="ghost-button" onClick={onClose} disabled={busy}>Close</button>}
     </header>
     {error && <div className="error-bar" role="alert">{error}</div>}
@@ -290,7 +290,7 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
       <ScheduleSettingsEditor value={settings} disabled={busy} onChange={setSettings} />
       {declaredInputs.length > 0 && <div className="schedule-bindings">
         <strong>Automation bindings</strong>
-        <p className="muted">Manual runs ask for these each time. Schedules must save values here or get the data from a source node.</p>
+        <p className="muted">Manual runs ask for these each time. Save durable bindings here before turning a schedule On.</p>
         {declaredInputs.map(input => <label key={input.id}>
           {input.label} automation binding{input.required && <span className="muted"> (required to turn on)</span>}
           <input
@@ -322,12 +322,12 @@ export function ScheduleManager({ token, workflows, workflowId, compact = false,
             <strong>{workflow?.name || `Workflow ${schedule.workflow_id}`}</strong>
             <small>{cadence} · {schedule.timezone || 'UTC'} · {schedule.overlap_policy === 'allow' ? 'overlap allowed' : 'skip overlap'}</small>
             <small className={ready ? 'schedule-ready' : 'schedule-needs-source'}>
-              {ready ? 'Inputs ready' : `Needs source: ${unresolved.join(', ')}`}
+              {ready ? 'Inputs ready' : `Needs binding: ${unresolved.join(', ')}`}
             </small>
           </div>
           <label className="schedule-toggle"><input aria-label={`Schedule ${schedule.enabled ? 'on' : 'off'}`} type="checkbox" checked={schedule.enabled} disabled={busy} onChange={() => toggle(schedule)} /> {schedule.enabled ? 'On' : 'Off'}</label>
           <button className="ghost-button" disabled={busy} onClick={() => edit(schedule)}>Configure</button>
-          <button className="ghost-button" disabled={busy || !ready} onClick={() => void runNow(schedule)} title="Run this schedule now with its saved automation sources">{openingId === schedule.id ? 'Opening run...' : 'Run now'}</button>
+          <button className="ghost-button" disabled={busy || !ready} onClick={() => void runNow(schedule)} title="Run this schedule now with its saved durable bindings">{openingId === schedule.id ? 'Opening run...' : 'Run now'}</button>
           <button className="ghost-button danger" disabled={busy} onClick={() => void remove(schedule)}>Delete</button>
         </article>
       })}

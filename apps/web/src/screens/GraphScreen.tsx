@@ -597,12 +597,13 @@ export function GraphScreen({
       setPlan(null)
       setSelectedId(null)
     }
-    setStage('editor')
-    onStageChange?.('editor', jobId)
     const selected = await loadJob(jobId)
     if (!selected || selected.id !== jobId) {
-      throw new Error(`Could not select spawned graph job ${jobId}.`)
+      setOpeningJobId(current => (current === jobId ? null : current))
+      return null
     }
+    setStage('editor')
+    onStageChange?.('editor', jobId)
     return selected
   }, [loadJob, onStageChange])
 
@@ -1508,6 +1509,9 @@ export function GraphScreen({
                 throw new Error('Schedule returned a job outside the workflow owner project.')
               }
               const selected = await openJob(spawned.id)
+              if (!selected || selected.id !== spawned.id) {
+                throw new Error(`Could not select spawned graph job ${spawned.id}.`)
+              }
               if (selected.project_slug !== schedulingTemplate.project_slug) {
                 throw new Error('Selected job does not belong to this workflow project.')
               }

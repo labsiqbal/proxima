@@ -89,8 +89,9 @@ def test_enabled_schedule_requires_durable_bindings_for_manual_required_inputs(t
     detail = response.json()["detail"]
     assert detail["code"] == "schedule_missing_sources"
     assert detail["unresolved_inputs"] == ["topic"]
-    assert "source node" in detail["message"]
+    assert "source node" not in detail["message"]
     assert "durable binding" in detail["message"]
+    assert "Schedules" in detail["message"]
 
 
 def test_disabled_schedule_can_be_configured_then_atomically_enabled(tmp_path):

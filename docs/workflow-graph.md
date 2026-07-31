@@ -605,7 +605,7 @@ prompt or reuses answers from a manual run. `schedule_policy.py` derives the req
 input contract from the graph trigger and is used by the API, scheduler, Run now, and
 migration. A schedule with unresolved required inputs can be saved Off for configuration,
 but cannot be turned On; the 422 `schedule_missing_sources` detail names the unresolved
-fields and tells the owner to configure a durable binding or a supported source. The
+fields and tells the owner to save a durable binding in Schedules before turning it On. The
 scheduler checks again immediately before spawning so legacy or drifted unsafe rows fail
 closed.
 
@@ -632,7 +632,7 @@ generations, so refreshing schedule summaries cannot cancel the handoff.
 
 Run the disposable Chromium regression with `npm run test:e2e:schedules`. It builds the
 web app, starts an isolated API with synthetic data and a fake runner, verifies missing
-source refusal and reload behavior, then proves Run now opened the exact owning-project
+binding refusal and reload behavior, then proves Run now opened the exact owning-project
 job with its durable binding. CI runs this scenario separately from unit tests.
 
 With `PROXIMA_FEATURE_WORKFLOW_GRAPH` off, a graph schedule is **skipped with a logged

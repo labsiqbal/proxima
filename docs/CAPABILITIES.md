@@ -1153,7 +1153,7 @@ timezone and its cron is evaluated in that local time. Failed step fails the job
 Schedules are unattended and never receive the manual Run dialog's per-run answers.
 Required workflow inputs must instead have durable bindings in the schedule. An
 unresolved schedule may be saved Off, but create/update refuses to turn it On with
-`schedule_missing_sources` until the owner configures every required source. The
+`schedule_missing_sources` until the owner saves a durable binding for every required input. The
 scheduler repeats this validation before every spawn, so a legacy or drifted unsafe row
 cannot run. Migration 45 adds timezone state, preserves existing cron behavior with the
 host's local timezone, aligns schedule ownership with the workflow project, and turns

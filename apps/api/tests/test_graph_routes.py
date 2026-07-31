@@ -466,9 +466,43 @@ def test_scheduled_trigger_refuses_enablement_without_unattended_input(tmp_path)
     )
 
     assert response.status_code == 422, response.text
-    assert response.json()["detail"]["code"] == "schedule_missing_sources"
-    assert response.json()["detail"]["unresolved_inputs"] == ["legacy"]
+    detail = response.json()["detail"]
+    assert detail["code"] == "schedule_missing_sources"
+    assert detail["unresolved_inputs"] == ["legacy"]
+    assert "source node" not in detail["message"]
+    assert "durable binding" in detail["message"]
+    assert "Schedules" in detail["message"]
     assert client.get("/api/schedules").json() == []
+
+
+def test_omitted_trigger_schedule_enabled_defaults_off_on_save_template(tmp_path):
+    app = _app(tmp_path, enabled=True)
+    client = _client(app)
+    graph = _chain_graph()
+    graph["nodes"].insert(
+        0,
+        {
+            "id": "trigger",
+            "type": "trigger",
+            "name": "Morning",
+            "trigger_kind": "scheduled",
+            "schedule": {"cron": "0 8 * * *", "overlap_policy": "skip"},
+        },
+    )
+    graph["nodes"][1]["depends_on"] = ["trigger"]
+    job = _create(client, graph)
+
+    response = client.post(
+        f"/api/graph/jobs/{job['id']}/save-template",
+        json={"name": "Morning off by default"},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["graph"]["nodes"][0]["schedule"]["enabled"] is False
+    schedules = client.get("/api/schedules").json()
+    assert len(schedules) == 1
+    assert schedules[0]["enabled"] is False
+    assert schedules[0]["cron"] == "0 8 * * *"
 
 
 def test_graph_routes_are_inert_while_feature_is_off(tmp_path):

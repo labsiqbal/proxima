@@ -164,8 +164,8 @@ def missing_sources_detail(
         "code": "schedule_missing_sources",
         "message": (
             f"Cannot enable this schedule because required manual input has no "
-            f"unattended source: {labels}. Add a source node to the workflow or "
-            "save a durable binding for each required input."
+            f"durable binding: {labels}. Save a durable binding for each required "
+            "input in Schedules, then turn the schedule On."
         ),
         "unresolved_inputs": state["unresolved_inputs"],
     }

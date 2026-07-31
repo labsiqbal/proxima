@@ -175,4 +175,108 @@ describe('GraphScreen how-it-runs badges', () => {
     expect(await screen.findByRole('button', { name: 'Rename workflow Nightly publish run' })).toBeInTheDocument()
     expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
   })
+
+  it('keeps Run now open and reports when the spawned job cannot be selected', async () => {
+    const spawned = {
+      id: 99,
+      project_id: 1,
+      project_slug: 'owner-personal',
+      workflow_id: 10,
+      session_id: 99,
+      title: 'Nightly publish run',
+      status: 'running',
+      input: {},
+      engine: 'graph',
+      graph: {
+        nodes: [{ id: 'only', type: 'agent', name: 'Only', instruction: 'Publish', output_kind: 'text' }],
+        edges: [],
+      },
+      node_states: [],
+    } as never
+    vi.mocked(runScheduleNow).mockResolvedValue(spawned)
+    vi.mocked(getGraphJob).mockRejectedValue(new Error('network down'))
+
+    render(
+      <GraphScreen
+        token="t"
+        projects={[project]}
+        activeProject={project}
+        onActiveProject={vi.fn()}
+        profiles={[]}
+        profileId={null}
+        features={{ designStudio: false, workflowGraph: true, masterOrchestrator: false }}
+        activeProfile={null}
+      />,
+    )
+    await waitFor(() => expect(screen.getByText('Nightly publish')).toBeInTheDocument())
+    const row = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not select spawned graph job 99/)
+    expect(screen.getByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Nightly publish run' })).not.toBeInTheDocument()
+  })
+
+  it('discards a stale pending open without unhandled rejection', async () => {
+    const jobA = {
+      id: 41,
+      project_slug: 'owner-personal',
+      title: 'First plan',
+      status: 'queued',
+      engine: 'graph',
+      graph: {
+        nodes: [{ id: 'only', type: 'agent', name: 'Only', instruction: 'A', output_kind: 'text' }],
+        edges: [],
+      },
+      node_states: [],
+    } as never
+    const jobB = {
+      id: 42,
+      project_slug: 'owner-personal',
+      title: 'Second plan',
+      status: 'queued',
+      engine: 'graph',
+      graph: {
+        nodes: [{ id: 'only', type: 'agent', name: 'Only', instruction: 'B', output_kind: 'text' }],
+        edges: [],
+      },
+      node_states: [],
+    } as never
+    let finishA: ((value: typeof jobA) => void) | undefined
+    const pendingA = new Promise<typeof jobA>(resolve => { finishA = resolve })
+    vi.mocked(getGraphJob)
+      .mockImplementationOnce(() => pendingA)
+      .mockResolvedValueOnce(jobB)
+
+    const onUnhandled = vi.fn()
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      onUnhandled(event.reason)
+      event.preventDefault()
+    }
+    window.addEventListener('unhandledrejection', handleRejection)
+    const onPendingConsumed = vi.fn()
+    const screenProps = {
+      token: 't',
+      projects: [project],
+      activeProject: project,
+      onActiveProject: vi.fn(),
+      profiles: [] as never[],
+      profileId: null as number | null,
+      features: { designStudio: false, workflowGraph: true, masterOrchestrator: false },
+      activeProfile: null,
+      onPendingConsumed,
+    }
+    const { rerender } = render(<GraphScreen {...screenProps} pendingJobId={41} />)
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 41))
+
+    rerender(<GraphScreen {...screenProps} pendingJobId={42} />)
+    await waitFor(() => expect(getGraphJob).toHaveBeenCalledWith('t', 42))
+    finishA?.(jobA)
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Second plan' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow First plan' })).not.toBeInTheDocument()
+    expect(onUnhandled).not.toHaveBeenCalled()
+    window.removeEventListener('unhandledrejection', handleRejection)
+  })
 })

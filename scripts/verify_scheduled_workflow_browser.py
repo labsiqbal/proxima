@@ -136,7 +136,7 @@ def _scenario_missing_source() -> dict:
             {
                 "action": "assert",
                 "selector": ".schedule-row .schedule-needs-source",
-                "text": "Needs source: Topic",
+                "text": "Needs binding: Topic",
             },
             {
                 "action": "assert",
@@ -410,7 +410,7 @@ def main(screenshot_dir: Path | None = None) -> None:
                     step["text"]
                     for step in missing_transcript
                     if step.get("text", "").startswith(WORKFLOW_NAME)
-                    and "Needs source:" in step.get("text", "")
+                    and "Needs binding:" in step.get("text", "")
                 )
                 if "0 9 * * *" in schedule_row:
                     raise RuntimeError("schedule row duplicated preset cron text")

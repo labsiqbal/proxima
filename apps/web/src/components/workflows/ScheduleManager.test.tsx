@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ScheduleManager, isValidCron } from './ScheduleManager'
-import { createSchedule, listSchedules, runScheduleNow } from '../../api/schedules'
+import { createSchedule, listSchedules, runScheduleNow, updateSchedule } from '../../api/schedules'
 
 vi.mock('../../api/schedules', () => ({
   listSchedules: vi.fn(),
@@ -31,7 +31,7 @@ describe('ScheduleManager', () => {
     await user.click(screen.getByRole('button', { name: 'Add schedule' }))
 
     expect(createSchedule).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert')).toHaveTextContent(/source node or save a durable binding/i)
+    expect(screen.getByRole('alert')).toHaveTextContent(/save a durable binding for: Topic/i)
     expect(screen.getByLabelText('Topic automation binding')).toBeInTheDocument()
   })
 
@@ -109,8 +109,41 @@ describe('ScheduleManager', () => {
     expect(row).not.toBeNull()
     expect(row).toHaveTextContent('Every day at 9am · UTC · skip overlap')
     expect(row).not.toHaveTextContent('Every day at 9am · 0 9 * * *')
-    expect(row).toHaveTextContent('Needs source: Topic')
+    expect(row).toHaveTextContent('Needs binding: Topic')
     expect(screen.getByRole('checkbox', { name: 'Schedule off' })).not.toBeChecked()
+  })
+
+  it('opens configure guidance when turning on a schedule that still needs bindings', async () => {
+    const user = userEvent.setup()
+    vi.mocked(listSchedules).mockResolvedValue([{
+      id: 3,
+      workflow_id: 7,
+      project_id: 1,
+      cron: '0 9 * * *',
+      timezone: 'UTC',
+      bindings: {},
+      input: {},
+      overlap_policy: 'skip',
+      enabled: false,
+      ready: false,
+      unresolved_inputs: ['topic'],
+      unresolved_labels: ['Topic'],
+      last_run_minute: null,
+      last_tick_at: null,
+      created_by: 1,
+      created_at: '',
+      updated_at: '',
+    }])
+
+    render(<ScheduleManager token="token" workflows={[declaredWorkflow]} workflowId={7} defaultTimezone="UTC" />)
+    await screen.findByText('Release')
+    await user.click(screen.getByRole('checkbox', { name: 'Schedule off' }))
+
+    expect(updateSchedule).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent(/missing a required binding/i)
+    expect(screen.getByRole('alert')).toHaveTextContent(/save a durable binding/i)
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/source node/i)
+    expect(screen.getByLabelText('Topic automation binding')).toBeInTheDocument()
   })
 
   it('waits for the exact spawned job to be selected before finishing Run now', async () => {
