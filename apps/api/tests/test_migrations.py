@@ -2500,6 +2500,7 @@ def test_v19_adds_job_target_binding_and_worktrees(tmp_path: Path):
     a repo job's worktree row dies with its job (ON DELETE CASCADE)."""
     conn = connect(tmp_path / "m.db")
     conn.executescript("""
+      CREATE TABLE users(id INTEGER PRIMARY KEY);
       CREATE TABLE messages(id INTEGER PRIMARY KEY);
       CREATE TABLE profiles(id INTEGER PRIMARY KEY);
       CREATE TABLE runs(id INTEGER PRIMARY KEY);
@@ -3334,12 +3335,12 @@ def test_master_decision_migration_skips_start_failure_and_keeps_owner(
             f"master-start:{job_id}",
         ),
     ).lastrowid
-    # Simulate a pre-v54 database: ledger tables are absent, Attention remains.
+    # Simulate a pre-v55 database: ledger tables are absent, Attention remains.
     conn.execute("DROP TABLE IF EXISTS master_decisions")
     conn.execute("DROP TABLE IF EXISTS job_final_approval_intents")
     conn.commit()
 
-    migration = next(item for item in MIGRATIONS if item[0] == 54)
+    migration = next(item for item in MIGRATIONS if item[0] == 55)
     migration[2](conn)
 
     owner_row = conn.execute(
