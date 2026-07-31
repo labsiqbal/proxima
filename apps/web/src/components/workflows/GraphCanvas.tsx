@@ -181,9 +181,19 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
     return { width: rect.width, height: rect.height }
   }, [])
 
-  const rememberManualView = React.useCallback((next: CanvasView) => {
+  const rememberManualZoom = React.useCallback((next: CanvasView) => {
     const size = viewport()
     if (size) intentRef.current = captureCanvasIntent(next, size)
+  }, [viewport])
+
+  const rememberManualPan = React.useCallback((next: CanvasView) => {
+    const size = viewport()
+    if (!size) return
+    const focus = captureCanvasIntent(next, size).focus
+    const previous = intentRef.current
+    intentRef.current = previous.mode === 'manual'
+      ? { mode: 'manual', k: previous.k, focus }
+      : { mode: 'manual', k: next.k, focus }
   }, [viewport])
 
   const applyRefit = React.useCallback(() => {
@@ -218,6 +228,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
     setView(current => {
       const zoomMin = Math.min(ZOOM_MIN, current.k)
       const k = Math.min(ZOOM_MAX, Math.max(zoomMin, nextK))
+      if (Math.abs(k - current.k) < 0.001) return current
       const rect = svgRef.current?.getBoundingClientRect()
       const at = focus ?? { x: (rect?.width ?? 0) / 2, y: (rect?.height ?? 0) / 2 }
       // Keep whatever sits under `at` pinned there while the scale changes.
@@ -226,10 +237,10 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
         x: at.x - (at.x - current.x) * (k / current.k),
         y: at.y - (at.y - current.y) * (k / current.k),
       }
-      rememberManualView(next)
+      rememberManualZoom(next)
       return next
     })
-  }, [rememberManualView])
+  }, [rememberManualZoom])
 
   // React attaches wheel listeners passively at the root, so a non-passive native
   // listener is the only way to zoom without the page scrolling underneath.
@@ -243,18 +254,19 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
       setView(current => {
         const zoomMin = Math.min(ZOOM_MIN, current.k)
         const k = Math.min(ZOOM_MAX, Math.max(zoomMin, current.k * Math.exp(-event.deltaY * 0.0015)))
+        if (Math.abs(k - current.k) < 0.001) return current
         const next = {
           k,
           x: focus.x - (focus.x - current.x) * (k / current.k),
           y: focus.y - (focus.y - current.y) * (k / current.k),
         }
-        rememberManualView(next)
+        rememberManualZoom(next)
         return next
       })
     }
     element.addEventListener('wheel', onWheel, { passive: false })
     return () => element.removeEventListener('wheel', onWheel)
-  }, [rememberManualView])
+  }, [rememberManualZoom])
 
   const fit = React.useCallback(() => {
     intentRef.current = { mode: 'fit' }
@@ -298,7 +310,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
             x: gesture.origin.x + (event.clientX - gesture.from.x),
             y: gesture.origin.y + (event.clientY - gesture.from.y),
           }
-          rememberManualView(next)
+          rememberManualPan(next)
           return next
         })
         return
@@ -349,7 +361,7 @@ export function GraphCanvas({ job, plan, profiles, selectedId, onSelect, onDesel
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
     }
-  }, [gesture, toGraphPoint, rememberManualView, scheduleRefit])
+  }, [gesture, toGraphPoint, rememberManualPan, scheduleRefit])
 
   function beginPan(event: React.PointerEvent<SVGSVGElement>) {
     if (event.button !== 0) return

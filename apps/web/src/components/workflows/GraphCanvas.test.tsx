@@ -296,6 +296,77 @@ describe('GraphCanvas refitting', () => {
     expect(zoomed.k).toBeLessThan(0.35)
   })
 
+  it('restores preferred zoom after pan while a panel constrains scale', () => {
+    render(<CanvasHarness plan={chain()} />)
+    const canvas = screen.getByLabelText('Canvas refit plan workflow graph')
+    let canvasRect = rect(1440, 720)
+    vi.spyOn(canvas, 'getBoundingClientRect').mockImplementation(() => canvasRect)
+
+    act(() => {
+      triggerResize()
+      flushFrames()
+    })
+    // Wide desktop fits above 1; zoom out once so preferred k stays below fitK when space returns.
+    expect(readTransform(canvas).k).toBeCloseTo(1.5)
+    fireEvent.click(screen.getByLabelText('Zoom out'))
+    const preferred = readTransform(canvas)
+    expect(preferred.k).toBeCloseTo(1.2)
+
+    // Panel open shrinks the canvas; display k is constrained, preferred k stays.
+    canvasRect = rect(480, 420)
+    act(() => {
+      triggerResize()
+      flushFrames()
+    })
+    const constrained = readTransform(canvas)
+    expect(constrained.k).toBeCloseTo(0.5)
+
+    // Pan while constrained must not clobber the preferred zoom of 1.2.
+    act(() => {
+      fireEvent.pointerDown(canvas, { button: 0, clientX: 200, clientY: 200 })
+    })
+    act(() => {
+      fireEvent.pointerMove(window, { clientX: 260, clientY: 230 })
+      fireEvent.pointerUp(window, { clientX: 260, clientY: 230 })
+    })
+    expect(readTransform(canvas).k).toBeCloseTo(0.5)
+
+    // Space returns: preferred scale should restore, not the constrained display k.
+    canvasRect = rect(1440, 720)
+    act(() => {
+      triggerResize()
+      flushFrames()
+    })
+    expect(readTransform(canvas).k).toBeCloseTo(1.2)
+  })
+
+  it('ignores no-op zoom-out from a deep fit so later space can re-fit upward', () => {
+    render(<CanvasHarness plan={chain(4)} />)
+    const canvas = screen.getByLabelText('Canvas refit plan workflow graph')
+    let canvasRect = rect(200, 160)
+    vi.spyOn(canvas, 'getBoundingClientRect').mockImplementation(() => canvasRect)
+
+    act(() => {
+      triggerResize()
+      flushFrames()
+    })
+    const deepFit = readTransform(canvas)
+    expect(deepFit.k).toBeLessThan(0.35)
+
+    // Zoom-out clamps to the deep-fit floor — must leave fit intent intact.
+    fireEvent.click(screen.getByLabelText('Zoom out'))
+    expect(readTransform(canvas).k).toBeCloseTo(deepFit.k)
+
+    canvasRect = rect(960, 480)
+    act(() => {
+      triggerResize()
+      flushFrames()
+    })
+    const restored = readTransform(canvas)
+    expect(restored.k).toBeGreaterThan(deepFit.k)
+    expect(restored.k).toBeCloseTo(0.7441860465116279)
+  })
+
   it('refits when graph growth changes the layout bounds', () => {
     const { rerender } = render(<CanvasHarness plan={chain()} />)
     const canvas = screen.getByLabelText('Canvas refit plan workflow graph')
