@@ -1009,7 +1009,10 @@ topological columns as a *fallback*: a node's hand-placed `x`/`y` wins, and the 
 reports a real bounding box because the canvas is infinite and positions may be
 negative. Node positions are part of the graph and are persisted by the same explicit
 autosave as every other queued plan edit. Pending debounce work is flushed on editor
-exit so switching views cannot restore a stale graph.
+exit so switching views cannot restore a stale graph. `GraphCanvas` measures its SVG
+viewport and refits when side panels, metadata, browser size, or graph geometry change
+the usable area, without remounting nodes; fit vs manual pan/zoom intent is specified
+in [workflow-graph.md](../workflow-graph.md).
 The intake editor stages incomplete row edits locally under the last accepted stable
 ID and reports dirty/valid state to `GraphScreen`. Polling cannot overwrite or bless a
 local graph while an autosave is queued or in flight. The header therefore shows Not

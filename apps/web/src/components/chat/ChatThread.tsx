@@ -851,6 +851,7 @@ export function ChatThread({
 	onQuickReply,
 	onOpenOutput,
 	onMessageUpdated,
+	emptyContent,
 	features = DEFAULT_FEATURES,
 }: {
 	messages: ChatMessage[];
@@ -863,6 +864,8 @@ export function ChatThread({
 	onQuickReply?: (text: string) => void;
 	onOpenOutput?: (link: OutputLink) => void;
 	onMessageUpdated?: (messageId: number, content: string) => void;
+	/** Surface-specific teaching copy for embedded empty threads. */
+	emptyContent?: React.ReactNode;
 	features?: AppFeatures;
 }) {
 	// Label = recorded author (username for people, profile/agent name for the
@@ -1138,7 +1141,7 @@ export function ChatThread({
 	return (
 		<div className="thread" ref={scrollRef} onScroll={onScroll}>
 			<div className="chat-log">
-				{empty && <ChatEmpty />}
+				{empty && (emptyContent ?? <ChatEmpty />)}
 				{messageEls}
 				{(tools.length > 0 ||
 					(live && streaming.includes("<question-form"))) && (

@@ -434,6 +434,14 @@ action. Opening anything lands in the editor: full-width canvas + workflow chat 
 inspector, a ← back to home, and no rail — the editor is about one workflow at a time.
 Chat and inspector keep their **draggable widths** (persisted per panel); plan statuses
 stay phrased as what the owner can do next ("Draft — editable", "Needs your review").
+Opening or resizing either panel, expanding workflow metadata, selecting a node,
+resizing the browser, or growing the graph refits the canvas from its measured SVG
+viewport. Resize bursts share one update per animation frame. Fit mode keeps the whole
+graph framed; after a deliberate pan or zoom the canvas preserves that preferred focal
+point and scale wherever space allows and temporarily constrains them only enough to
+keep every node visible. The transform update does not remount nodes, so selection and
+keyboard focus stay put, and it has no animation to override reduced-motion
+preferences.
 
 The inspector's instruction / expected output / rules fields and the workflow chat all
 support **@-mentions**: typing `@` offers the project's artifacts and inserts the picked
@@ -472,7 +480,9 @@ way to fill a blank canvas. (Sequential's "New workflow" retired with it; chat p
 must not be the only door into the editor.) Template metadata the chat proposes, such as
 name and description, rides along client-side and pre-fills the lightweight promotion
 dialog. The trigger's intake or cadence contract stays in the graph and autosaves with
-the plan.
+the plan. An empty Plan Chat explains this authoring relationship - graph steps,
+branches, inputs, review gates, and node tests - rather than borrowing main Chat's
+hands-on conversation and Archive guidance.
 
 A plan that has started is **frozen** — the job is the record of what ran, so its graph
 cannot be redrawn after the fact. Its **outputs are not**: editing a node's output and
