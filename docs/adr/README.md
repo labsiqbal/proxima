@@ -69,7 +69,11 @@ Supersedes / superseded-by / links to feature docs.
 | [0009](0009-one-durable-master-interface-state.md) | One durable Master interface state | Accepted |
 | [0010](0010-preview-authority-requires-verified-connections.md) | Preview authority requires verified managed connections | Superseded by ADR-0011 |
 | [0011](0011-preview-containment-membership-and-detached-output.md) | Preview containment membership and detached output | Superseded by ADR-0012 |
-| [0012](0012-exact-containment-proof-gates-preview-authority.md) | Exact containment proof gates preview authority | Accepted |
-| [0013](0013-detached-preview-output-uses-os-sink-helpers.md) | Detached preview output uses OS sink helpers | Accepted |
+| [0012](0012-exact-containment-proof-gates-preview-authority.md) | Exact containment proof gates preview authority | Superseded by ADR-0016 |
+| [0013](0013-detached-preview-output-uses-os-sink-helpers.md) | Detached preview output uses OS sink helpers | Superseded by ADR-0018 |
 | [0014](0014-automatic-preview-relay-binds-explicit-interfaces.md) | Automatic preview relay binds explicit interfaces | Accepted |
 | [0015](0015-preview-authentication-precedes-target-resolution.md) | Preview authentication precedes target resolution | Accepted |
+| [0016](0016-live-containment-lineage-gates-preview-authority.md) | Live containment lineage gates preview authority | Accepted |
+| [0017](0017-manager-owned-provisional-preview-cleanup.md) | Manager-owned provisional preview cleanup | Accepted |
+| [0018](0018-preview-status-log-framing-is-bounded.md) | Preview status log framing is bounded | Accepted |
+| [0019](0019-launch-time-broker-owns-preview-output.md) | Launch-time broker owns preview output | Accepted |

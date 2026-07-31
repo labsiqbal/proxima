@@ -44,6 +44,7 @@ class AppStatusResponse(BaseModel):
     command: str | None = None
     log: list[str] = Field(default_factory=list)
     message: str | None = None
+    reason: Literal["output_sink_unavailable"] | None = None
     prolonged_start: bool | None = None
     exited: bool | None = None
     exit_code: int | None = None

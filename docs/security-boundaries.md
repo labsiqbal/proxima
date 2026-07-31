@@ -421,14 +421,23 @@ Marker and namespace evidence without live lineage remains ownership-unknown. Pr
 registers the provisional process and begins output draining immediately after spawn
 while namespace proof completes asynchronously; readiness stays fail closed until it
 completes.
-Stopping waits a bounded interval for available stdout and retains the collected tail.
-Partial-line retention has a fixed byte bound. A minimal OS helper then owns the read
-end and discards later detached output in fixed chunks until EOF, independently of the
-API event loop, so Stop and graceful service shutdown never signal that child through
-pipe closure. This policy preserves the ownership boundary instead of treating a
-successful TCP handshake as ownership evidence. See
-[ADR-0012](adr/0012-exact-containment-proof-gates-preview-authority.md) and
-[ADR-0013](adr/0013-detached-preview-output-uses-os-sink-helpers.md).
+Provisional cleanup belongs to AppManager rather than the start request. Cancellation
+can return immediately, while the manager-owned task completes the in-flight spawn and
+reaps only the process Proxima created. Shutdown reconciles those tasks.
+
+A preview output broker owns the child pipe before the app is spawned. It keeps a
+bounded complete-line ring and separately bounded partial-line tail, drains all
+currently available bytes before returning an atomic final snapshot, and continues
+discarding detached output until EOF after the API disconnects. Packaged Linux
+services obtain brokers from a socket-activated sibling systemd unit outside the API
+service cgroup. The API service uses `KillMode=process`, so service stop does not
+signal an uncontained detached writer through cgroup cleanup. Windows uses a detached
+breakaway broker when supported. If durable output ownership cannot be established,
+the app is not spawned and status reports the recoverable
+`output_sink_unavailable` reason. This policy preserves the ownership boundary instead
+of treating a successful TCP handshake as ownership evidence. See
+[ADR-0016](adr/0016-live-containment-lineage-gates-preview-authority.md) through
+[ADR-0019](adr/0019-launch-time-broker-owns-preview-output.md).
 
 Preview without an apps domain opens one **relay listener per running app**.
 The relay's interface is `PROXIMA_PREVIEW_BIND`; the default is `auto`: the Tailscale

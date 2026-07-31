@@ -17,14 +17,18 @@ import signal
 import socket
 import subprocess
 import time
-from typing import Any, Protocol
+from typing import Any, Awaitable, Callable, Protocol
 
 from .process_containment import pid_namespace_argv
-from .preview_output import BoundedLineBuffer, DetachedOutputSinks
+from .preview_output import (
+    OutputBroker,
+    OutputBrokerUnavailable,
+    OutputSnapshot,
+)
 from .runners import subprocess_env
 
 PROLONGED_START_SECONDS = 15
-FINAL_DRAIN_SECONDS = 1
+OUTPUT_POLL_SECONDS = 0.05
 _LINEAGE_ENV = "PROXIMA_APP_LINEAGE"
 
 
@@ -329,7 +333,14 @@ class EffectLease(Protocol):
 
 
 class AppManager:
-    def __init__(self, *, contained: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        contained: bool = False,
+        output_broker_factory: (
+            Callable[[], Awaitable[OutputBroker]] | None
+        ) = None,
+    ) -> None:
         self.contained = contained
         self._apps: dict[str, dict[str, Any]] = {}
         # Last terminal/stopped payload per slug, kept until the next start so
@@ -337,7 +348,10 @@ class AppManager:
         # and after an explicit Stop.
         self._last_exit: dict[str, dict[str, Any]] = {}
         self._retained_effects: list[EffectLease] = []
-        self._output_sinks = DetachedOutputSinks()
+        self._output_broker_factory = (
+            output_broker_factory or OutputBroker.open
+        )
+        self._cleanup_tasks: set[asyncio.Task[Any]] = set()
 
     def _finish_effect(
         self,
@@ -352,6 +366,40 @@ class AppManager:
             lease.release()
         else:
             self._retained_effects.append(lease)
+
+    def _track_cleanup(
+        self,
+        awaitable: Awaitable[Any],
+    ) -> asyncio.Task[Any]:
+        task = asyncio.create_task(awaitable)
+        self._cleanup_tasks.add(task)
+
+        def settled(done: asyncio.Task[Any]) -> None:
+            self._cleanup_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(settled)
+        return task
+
+    @staticmethod
+    def _output_unavailable_status(
+        *,
+        command: str,
+        requested_port: int,
+        message: str,
+        log: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "state": "stopped",
+            "running": False,
+            "ready": False,
+            "requested_port": requested_port,
+            "command": command,
+            "log": list(log or [])[-40:],
+            "reason": "output_sink_unavailable",
+            "message": message,
+        }
 
     async def start(
         self,
@@ -393,8 +441,30 @@ class AppManager:
         # reaches it via 127.0.0.1 regardless. An allowlisted HOST or an explicit
         # --host flag in the command still wins.
         env.setdefault("HOST", "127.0.0.1")
-        # Run the command string through the platform shell, in its own process
-        # group so we can clean-kill the whole tree later.
+        broker_task = asyncio.create_task(self._output_broker_factory())
+        try:
+            broker = await asyncio.shield(broker_task)
+        except asyncio.CancelledError:
+            self._track_cleanup(
+                self._dispose_opening_broker(
+                    broker_task,
+                    effect_lease,
+                )
+            )
+            raise
+        except OutputBrokerUnavailable as exc:
+            self._last_exit[slug] = self._output_unavailable_status(
+                command=command,
+                requested_port=port,
+                message=str(exc),
+            )
+            if effect_lease is not None:
+                effect_lease.release()
+            raise
+        except BaseException:
+            if effect_lease is not None:
+                effect_lease.release()
+            raise
         containment_read_fd: int | None = None
         containment_write_fd: int | None = None
         spawn_task: asyncio.Task[asyncio.subprocess.Process] | None = None
@@ -422,60 +492,107 @@ class AppManager:
                     *shell_argv,
                     cwd=cwd,
                     env=env,
-                    stdout=asyncio.subprocess.PIPE,
+                    stdout=broker.child_output_fd,
                     stderr=asyncio.subprocess.STDOUT,
                     **extra,
                 )
             )
             proc = await asyncio.shield(spawn_task)
-        except asyncio.CancelledError as cancellation:
-            if spawn_task is None:
-                self._close_fd(containment_read_fd)
-                if effect_lease is not None:
-                    effect_lease.release()
-                raise
-            try:
-                proc = await spawn_task
-            except BaseException:
-                self._close_fd(containment_read_fd)
-                if effect_lease is not None:
-                    effect_lease.release()
-                raise cancellation
-            finally:
-                self._close_fd(containment_write_fd)
-                containment_write_fd = None
-            app = self._register_app(
-                slug=slug,
-                proc=proc,
-                port=port,
-                command=command,
-                lineage_token=lineage_token,
-                effect_lease=effect_lease,
-                containment_read_fd=containment_read_fd,
+        except asyncio.CancelledError:
+            self._track_cleanup(
+                self._complete_cancelled_spawn(
+                    slug=slug,
+                    spawn_task=spawn_task,
+                    broker=broker,
+                    port=port,
+                    command=command,
+                    lineage_token=lineage_token,
+                    effect_lease=effect_lease,
+                    containment_read_fd=containment_read_fd,
+                    containment_write_fd=containment_write_fd,
+                )
             )
-            cleanup = asyncio.create_task(
-                self._abandon_provisional_app(slug, app)
-            )
-            try:
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError:
-                await cleanup
-            raise cancellation
+            raise
         except BaseException:
             self._close_fd(containment_read_fd)
+            self._close_fd(containment_write_fd)
+            broker.close_child_output()
+            self._track_cleanup(broker.disconnect())
             if effect_lease is not None:
                 effect_lease.release()
             raise
-        finally:
-            self._close_fd(containment_write_fd)
+        broker.close_child_output()
+        self._close_fd(containment_write_fd)
         self._register_app(
             slug=slug,
             proc=proc,
+            broker=broker,
             port=port,
             command=command,
             lineage_token=lineage_token,
             effect_lease=effect_lease,
             containment_read_fd=containment_read_fd,
+        )
+
+    async def _dispose_opening_broker(
+        self,
+        broker_task: asyncio.Task[OutputBroker],
+        effect_lease: EffectLease | None,
+    ) -> None:
+        try:
+            try:
+                broker = await broker_task
+            except BaseException:
+                broker = None
+            if broker is not None:
+                await broker.disconnect()
+        except BaseException:
+            pass
+        finally:
+            if effect_lease is not None:
+                effect_lease.release()
+
+    async def _complete_cancelled_spawn(
+        self,
+        *,
+        slug: str,
+        spawn_task: asyncio.Task[asyncio.subprocess.Process] | None,
+        broker: OutputBroker,
+        port: int,
+        command: str,
+        lineage_token: str,
+        effect_lease: EffectLease | None,
+        containment_read_fd: int | None,
+        containment_write_fd: int | None,
+    ) -> None:
+        try:
+            if spawn_task is None:
+                raise RuntimeError("Preview process spawn did not start")
+            proc = await spawn_task
+        except BaseException:
+            self._close_fd(containment_read_fd)
+            self._close_fd(containment_write_fd)
+            broker.close_child_output()
+            await broker.disconnect()
+            if effect_lease is not None:
+                effect_lease.release()
+            return
+        broker.close_child_output()
+        self._close_fd(containment_write_fd)
+        app = self._register_app(
+            slug=slug,
+            proc=proc,
+            broker=broker,
+            port=port,
+            command=command,
+            lineage_token=lineage_token,
+            effect_lease=effect_lease,
+            containment_read_fd=containment_read_fd,
+        )
+        await self._stop_app(
+            slug,
+            app,
+            preserve_status=False,
         )
 
     @staticmethod
@@ -492,6 +609,7 @@ class AppManager:
         *,
         slug: str,
         proc: asyncio.subprocess.Process,
+        broker: OutputBroker,
         port: int,
         command: str,
         lineage_token: str,
@@ -513,9 +631,11 @@ class AppManager:
             "log": [],
             "effect_lease": effect_lease,
             "authority": authority,
+            "output_broker": broker,
+            "stop_lock": asyncio.Lock(),
+            "stopped": False,
         }
         self._apps[slug] = app
-        app["drain_task"] = asyncio.create_task(self._drain(slug, proc))
         if containment_read_fd is not None:
             app["authority_task"] = asyncio.create_task(
                 self._complete_containment_authority(
@@ -524,6 +644,12 @@ class AppManager:
                     containment_read_fd,
                 )
             )
+        app["output_task"] = asyncio.create_task(
+            self._watch_output(slug, app)
+        )
+        app["exit_task"] = asyncio.create_task(
+            self._watch_exit(slug, app)
+        )
         return app
 
     async def _complete_containment_authority(
@@ -544,14 +670,6 @@ class AppManager:
                 app["authority"],
                 containment_pid_namespace=namespace,
             )
-
-    async def _abandon_provisional_app(
-        self,
-        slug: str,
-        app: dict[str, Any],
-    ) -> None:
-        if self._apps.get(slug) is app:
-            await self.stop(slug, preserve_status=False)
 
     @staticmethod
     async def _settle_authority_task(app: dict[str, Any]) -> None:
@@ -598,47 +716,76 @@ class AppManager:
         return None
 
     @staticmethod
-    def _append_log(app: dict[str, Any], line: bytes) -> None:
-        text = line.decode("utf-8", "replace").rstrip()
-        app["log"].append(text)
-        del app["log"][:-200]
-        if not app.get("detected_port"):
+    def _apply_output_snapshot(
+        app: dict[str, Any],
+        snapshot: OutputSnapshot,
+    ) -> None:
+        app["log"] = list(snapshot.lines[-200:])
+        if app.get("detected_port"):
+            return
+        for text in reversed(app["log"]):
             match = _PORT_RE.search(text) or _PORT_RE2.search(text)
-            if match:
-                found = int(match.group(1))
-                if 1024 <= found <= 65535:
-                    app["detected_port"] = found
+            if not match:
+                continue
+            found = int(match.group(1))
+            if 1024 <= found <= 65535:
+                app["detected_port"] = found
+                return
 
-    async def _drain(self, slug: str, proc: asyncio.subprocess.Process) -> None:
-        assert proc.stdout
-        lines = BoundedLineBuffer()
+    @staticmethod
+    async def _snapshot_output(
+        app: dict[str, Any],
+    ) -> OutputSnapshot | None:
         try:
-            while True:
-                chunk = await proc.stdout.read(4096)
-                if not chunk:
-                    break
-                for line in lines.feed(chunk):
-                    app = self._apps.get(slug)
-                    if app and app.get("proc") is proc:
-                        self._append_log(app, line)
-            wait = getattr(proc, "wait", None)
-            if wait is not None:
-                await wait()
-        finally:
-            app = self._apps.get(slug)
-            if app and app.get("proc") is proc:
-                pending = lines.finish()
-                if pending:
-                    self._append_log(app, pending)
-                if proc.returncode is not None and not app.get("stop_requested"):
-                    await self._settle_authority_task(app)
-                    result = self._terminal_status_after_exit(app)
-                    self._apps.pop(slug, None)
-                    self._last_exit[slug] = result
-                self._finish_effect(
-                    app,
-                    terminated=proc.returncode is not None,
-                )
+            snapshot = await app["output_broker"].snapshot()
+        except OutputBrokerUnavailable as exc:
+            app["output_error"] = str(exc)
+            return None
+        AppManager._apply_output_snapshot(app, snapshot)
+        return snapshot
+
+    async def _watch_output(
+        self,
+        slug: str,
+        app: dict[str, Any],
+    ) -> None:
+        while self._apps.get(slug) is app and not app.get("stopped"):
+            if not app.get("output_error"):
+                await self._snapshot_output(app)
+            await asyncio.sleep(OUTPUT_POLL_SECONDS)
+
+    async def _watch_exit(
+        self,
+        slug: str,
+        app: dict[str, Any],
+    ) -> None:
+        await app["proc"].wait()
+        async with app["stop_lock"]:
+            if app.get("stopped") or app.get("stop_requested"):
+                return
+            output_task = app.get("output_task")
+            if (
+                isinstance(output_task, asyncio.Task)
+                and not output_task.done()
+            ):
+                output_task.cancel()
+                await asyncio.gather(output_task, return_exceptions=True)
+            await self._settle_authority_task(app)
+            if not app.get("output_error"):
+                await self._snapshot_output(app)
+            result = self._terminal_status_after_exit(app)
+            try:
+                await app["output_broker"].disconnect()
+            except OutputBrokerUnavailable as exc:
+                app["output_error"] = str(exc)
+            if app.get("output_error"):
+                result["reason"] = "output_sink_unavailable"
+                result["message"] = app["output_error"]
+            if self._apps.get(slug) is app:
+                self._apps.pop(slug, None)
+            self._last_exit[slug] = result
+            self._finish_effect(app, terminated=True)
+            app["stopped"] = True
 
     @staticmethod
     def _stopped_status(previous: dict[str, Any]) -> dict[str, Any]:
@@ -647,7 +794,13 @@ class AppManager:
             "running": False,
             "ready": False,
         }
-        for key in ("requested_port", "command", "exit_code"):
+        for key in (
+            "requested_port",
+            "command",
+            "exit_code",
+            "reason",
+            "message",
+        ):
             if key in previous:
                 result[key] = previous[key]
         result["log"] = list(previous.get("log") or [])[-40:]
@@ -678,61 +831,115 @@ class AppManager:
             if preserve_status and previous:
                 self._last_exit[slug] = self._stopped_status(previous)
             return
-        app["stop_requested"] = True
-        proc = app["proc"]
-        await self._settle_authority_task(app)
-        if proc.returncode is None:
-            try:
-                if IS_WINDOWS:
-                    # taskkill /T ends the child tree; fall back to terminate().
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                                   capture_output=True, check=False)
-                else:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-            except Exception:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
-            # Wait for the managed leader to exit before the next app starts.
-            if not await self._wait_for_returncode(proc, 4):
-                try:
-                    if not IS_WINDOWS:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-                await self._wait_for_returncode(proc, 2)
-        drain_task = app.get("drain_task")
-        if (
-            isinstance(drain_task, asyncio.Task)
-            and drain_task is not asyncio.current_task()
-            and not drain_task.done()
-        ):
-            try:
-                await asyncio.wait_for(
-                    asyncio.shield(drain_task),
-                    timeout=FINAL_DRAIN_SECONDS,
+        stop_task = app.get("stop_task")
+        if not isinstance(stop_task, asyncio.Task):
+            stop_task = self._track_cleanup(
+                self._stop_app(
+                    slug,
+                    app,
+                    preserve_status=preserve_status,
                 )
-            except asyncio.TimeoutError:
-                drain_task.cancel()
-                await asyncio.gather(drain_task, return_exceptions=True)
-                if proc.stdout is not None:
-                    self._output_sinks.handoff(proc.stdout)
-        if self._apps.get(slug) is app:
-            self._apps.pop(slug, None)
-        self._finish_effect(
-            app,
-            terminated=proc.returncode is not None,
-        )
-        if preserve_status:
-            stopped = {
-                "requested_port": app["port"],
-                "command": app["command"],
-                "log": app["log"],
-            }
+            )
+            app["stop_task"] = stop_task
+        await asyncio.shield(stop_task)
+
+    async def _stop_app(
+        self,
+        slug: str,
+        app: dict[str, Any],
+        *,
+        preserve_status: bool,
+    ) -> None:
+        async with app["stop_lock"]:
+            if app.get("stopped"):
+                if preserve_status and slug in self._last_exit:
+                    self._last_exit[slug] = self._stopped_status(
+                        self._last_exit[slug]
+                    )
+                return
+            app["stop_requested"] = True
+            lifecycle_tasks = [
+                task
+                for task in (
+                    app.get("exit_task"),
+                    app.get("output_task"),
+                )
+                if (
+                    isinstance(task, asyncio.Task)
+                    and task is not asyncio.current_task()
+                    and not task.done()
+                )
+            ]
+            for task in lifecycle_tasks:
+                task.cancel()
+            if lifecycle_tasks:
+                await asyncio.gather(
+                    *lifecycle_tasks,
+                    return_exceptions=True,
+                )
+            proc = app["proc"]
+            await self._settle_authority_task(app)
+            if proc.returncode is None:
+                try:
+                    if IS_WINDOWS:
+                        subprocess.run(
+                            [
+                                "taskkill",
+                                "/F",
+                                "/T",
+                                "/PID",
+                                str(proc.pid),
+                            ],
+                            capture_output=True,
+                            check=False,
+                        )
+                    else:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except Exception:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                if not await self._wait_for_returncode(proc, 4):
+                    try:
+                        if not IS_WINDOWS:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except Exception:
+                        pass
+                    await self._wait_for_returncode(proc, 2)
+                if proc.returncode is None:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    await self._wait_for_returncode(proc, 2)
             if proc.returncode is not None:
-                stopped["exit_code"] = int(proc.returncode)
-            self._last_exit[slug] = self._stopped_status(stopped)
+                await proc.wait()
+            await self._snapshot_output(app)
+            try:
+                await app["output_broker"].disconnect()
+            except OutputBrokerUnavailable as exc:
+                app["output_error"] = str(exc)
+            if self._apps.get(slug) is app:
+                self._apps.pop(slug, None)
+            self._finish_effect(
+                app,
+                terminated=proc.returncode is not None,
+            )
+            app["stopped"] = True
+            if preserve_status:
+                stopped = {
+                    "requested_port": app["port"],
+                    "command": app["command"],
+                    "log": app["log"],
+                }
+                if proc.returncode is not None:
+                    stopped["exit_code"] = int(proc.returncode)
+                result = self._stopped_status(stopped)
+                if app.get("output_error"):
+                    result["reason"] = "output_sink_unavailable"
+                    result["message"] = app["output_error"]
+                self._last_exit[slug] = result
 
     @staticmethod
     def _port_conflict_status(
@@ -856,6 +1063,22 @@ class AppManager:
                 "running": False,
                 "ready": False,
             }
+        if app.get("output_error"):
+            if app["proc"].returncode is not None:
+                result = self._exited_status(app)
+                result["reason"] = "output_sink_unavailable"
+                result["message"] = app["output_error"]
+                return result
+            return {
+                "state": "ownership_unknown",
+                "running": app["proc"].returncode is None,
+                "ready": False,
+                "requested_port": app["port"],
+                "command": app["command"],
+                "log": app["log"][-40:],
+                "reason": "output_sink_unavailable",
+                "message": app["output_error"],
+            }
         if app.get("terminal_state") == "port_conflict":
             result = self._port_conflict_status(
                 command=app["command"],
@@ -893,7 +1116,7 @@ class AppManager:
         if ownership in (PortOwnership.UNKNOWN, PortOwnership.DETACHED):
             return self._ownership_unknown_status(app, ownership)
         if app["proc"].returncode is not None:
-            return self._exited_status(app)
+            return self._starting_status(app, prolonged=False)
         if not port_open:
             return self._starting_status(
                 app,
@@ -961,5 +1184,21 @@ class AppManager:
         return ownership == PortOwnership.VERIFIED
 
     async def shutdown(self) -> None:
+        while self._cleanup_tasks:
+            await asyncio.gather(
+                *(
+                    asyncio.shield(task)
+                    for task in list(self._cleanup_tasks)
+                ),
+                return_exceptions=True,
+            )
         for slug in list(self._apps):
             await self.stop(slug, preserve_status=False)
+        while self._cleanup_tasks:
+            await asyncio.gather(
+                *(
+                    asyncio.shield(task)
+                    for task in list(self._cleanup_tasks)
+                ),
+                return_exceptions=True,
+            )

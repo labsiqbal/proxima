@@ -111,6 +111,7 @@ type AppStatusBase = {
   command?: string
   log?: string[]
   message?: string
+  reason?: 'output_sink_unavailable'
   /** Present when the managed process self-exited (sticky until next start). */
   exited?: boolean
   exit_code?: number

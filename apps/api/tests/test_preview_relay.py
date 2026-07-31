@@ -33,6 +33,7 @@ from apps.safe_updater.write_fence import (
 from proxima_api import apprunner
 from proxima_api.main import create_app
 from proxima_api.maintenance_status import MaintenanceBoundary
+from proxima_api.preview_output import OutputBrokerUnavailable
 from proxima_api.preview_proxy import PreviewProxyMiddleware, PreviewRelayManager
 
 
@@ -83,6 +84,12 @@ class _TestServer(uvicorn.Server):
 
     def install_signal_handlers(self) -> None:
         pass
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
 
 
 async def _start_upstream(asgi) -> tuple[uvicorn.Server, asyncio.Task, socket.socket, int]:
@@ -441,6 +448,47 @@ def test_app_start_refuses_an_existing_preview_port_without_stopping_it(tmp_path
     finally:
         foreign.terminate()
         foreign.wait(timeout=5)
+
+
+def test_app_start_reports_recoverable_output_broker_failure(tmp_path):
+    with TestClient(_app(tmp_path)) as client:
+        token = client.post("/auth/auto").json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+        assert client.post(
+            "/api/projects",
+            json={"slug": "demo", "name": "Demo"},
+            headers=auth,
+        ).status_code == 201
+
+        async def unavailable():
+            raise OutputBrokerUnavailable(
+                "Preview output broker could not start"
+            )
+
+        client.app.state.app_manager._output_broker_factory = unavailable
+        response = client.post(
+            "/api/projects/demo/app/start",
+            headers=auth,
+            json={
+                "command": "sleep 60",
+                "port": _free_port(),
+                "dir": "",
+            },
+        )
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == {
+            "state": "stopped",
+            "reason": "output_sink_unavailable",
+            "message": "Preview output broker could not start",
+        }
+        status = client.get(
+            "/api/projects/demo/app/status",
+            headers=auth,
+        ).json()
+        assert status["state"] == "stopped"
+        assert status["reason"] == "output_sink_unavailable"
+        assert not client.app.state.app_manager._apps
 
 
 def test_post_preflight_port_theft_never_reaches_the_foreign_listener(

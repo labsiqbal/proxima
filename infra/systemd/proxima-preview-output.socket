@@ -1,0 +1,12 @@
+[Unit]
+Description=Proxima preview output broker socket
+
+[Socket]
+ListenStream=/run/proxima-preview-output.sock
+SocketUser=proxima
+SocketGroup=proxima
+SocketMode=0600
+Accept=yes
+
+[Install]
+WantedBy=sockets.target

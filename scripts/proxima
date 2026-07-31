@@ -139,6 +139,10 @@ EOF
     mkdir -p "$PROXIMA_WORKSPACE_ROOT" "$PROXIMA_HERMES_PROFILES_ROOT" "$(dirname "$PROXIMA_DB_PATH")"
     exec "$API_DIR/.venv/bin/python" "$API_DIR/scripts/serve.py" "$@"
     ;;
+  output-broker)
+    load_config
+    exec "$API_DIR/.venv/bin/python" -m proxima_api.preview_output_broker "$@"
+    ;;
   print-env)
     load_config
     while IFS='=' read -r key value; do
@@ -162,6 +166,7 @@ Usage:
   proxima status        Show service status
   proxima logs          Tail live service logs
   proxima serve         Serve API + built PWA on PROXIMA_HOST:PROXIMA_PORT
+  proxima output-broker Run the supervised preview output broker
   proxima print-env     Print resolved PROXIMA_* env
 EOF
     ;;

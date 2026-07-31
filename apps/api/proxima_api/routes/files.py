@@ -527,6 +527,16 @@ def register(app, deps):
                     "message": str(exc),
                 },
             ) from exc
+        except apprunner.OutputBrokerUnavailable as exc:
+            effect_lease.release()
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "state": "stopped",
+                    "reason": "output_sink_unavailable",
+                    "message": str(exc),
+                },
+            ) from exc
         except BaseException:
             effect_lease.release()
             raise

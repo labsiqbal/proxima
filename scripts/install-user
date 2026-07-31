@@ -66,21 +66,60 @@ echo "==> Installing systemd user units -> $UNIT_DIR"
 run mkdir -p "$UNIT_DIR"
 
 if [[ "$DRY_RUN" == 1 ]]; then
-  echo "+ write $UNIT_DIR/proxima.service"
+  echo "+ write $UNIT_DIR/proxima-preview-output.socket"
 else
-  cat > "$UNIT_DIR/proxima.service" <<EOF
+  cat > "$UNIT_DIR/proxima-preview-output.socket" <<EOF
 [Unit]
-Description=Proxima self-hosted workspace
-After=network-online.target
-Wants=network-online.target
+Description=Proxima preview output broker socket
+
+[Socket]
+ListenStream=%t/proxima/preview-output.sock
+SocketMode=0600
+DirectoryMode=0700
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
+EOF
+fi
+
+if [[ "$DRY_RUN" == 1 ]]; then
+  echo "+ write $UNIT_DIR/proxima-preview-output@.service"
+else
+  cat > "$UNIT_DIR/proxima-preview-output@.service" <<EOF
+[Unit]
+Description=Proxima preview output broker
 
 [Service]
 Type=simple
 WorkingDirectory=$ROOT
 Environment=PATH=$SVC_PATH
+ExecStart=$ROOT/scripts/proxima output-broker --systemd-socket
+StandardInput=socket
+StandardOutput=null
+StandardError=journal
+EOF
+fi
+
+if [[ "$DRY_RUN" == 1 ]]; then
+  echo "+ write $UNIT_DIR/proxima.service"
+else
+  cat > "$UNIT_DIR/proxima.service" <<EOF
+[Unit]
+Description=Proxima self-hosted workspace
+After=network-online.target proxima-preview-output.socket
+Wants=network-online.target
+Requires=proxima-preview-output.socket
+
+[Service]
+Type=simple
+WorkingDirectory=$ROOT
+Environment=PATH=$SVC_PATH
+Environment=PROXIMA_OUTPUT_BROKER_SOCKET=%t/proxima/preview-output.sock
 ExecStart=$ROOT/scripts/proxima serve
 Restart=on-failure
 RestartSec=3
+KillMode=process
 
 [Install]
 WantedBy=default.target
@@ -119,6 +158,7 @@ fi
 
 echo "==> Enabling services"
 run systemctl --user daemon-reload
+run systemctl --user enable --now proxima-preview-output.socket
 run systemctl --user enable proxima.service
 # restart (not just enable --now) so re-running this to UPDATE actually loads
 # the new code — enable --now is a no-op on an already-running unit.

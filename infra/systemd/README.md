@@ -14,6 +14,9 @@ complete sequence below for a managed deployment.
 Both public hostnames must remain behind Cloudflare Access (or an equivalent
 owner-only gate). The services bind to loopback; the tunnel is the only public
 route. Production uses `proxima-backup.service` and `proxima-backup.timer`.
+Both profiles share the socket-activated `proxima-preview-output.socket`. Each
+accepted connection starts a sibling broker instance that owns one preview app's
+stdout outside the API service cgroup until every writer reaches EOF.
 
 ## 1. Install prerequisites and code
 
@@ -95,6 +98,12 @@ sudo install -o root -g root -m 0644 \
   infra/systemd/proxima.service.example \
   /etc/systemd/system/proxima.service
 sudo install -o root -g root -m 0644 \
+  infra/systemd/proxima-preview-output.socket \
+  /etc/systemd/system/proxima-preview-output.socket
+sudo install -o root -g root -m 0644 \
+  infra/systemd/proxima-preview-output@.service.example \
+  /etc/systemd/system/proxima-preview-output@.service
+sudo install -o root -g root -m 0644 \
   infra/systemd/proxima-backup.service.example \
   /etc/systemd/system/proxima-backup.service
 sudo install -o root -g root -m 0644 \
@@ -102,7 +111,10 @@ sudo install -o root -g root -m 0644 \
   /etc/systemd/system/proxima-backup.timer
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now proxima.service proxima-backup.timer
+sudo systemctl enable --now \
+  proxima-preview-output.socket \
+  proxima.service \
+  proxima-backup.timer
 sudo systemctl status proxima.service --no-pager
 curl --fail --silent http://127.0.0.1:8765/api/health
 ```
@@ -154,7 +166,9 @@ sudo install -o root -g root -m 0644 \
   infra/systemd/proxima-staging.service.example \
   /etc/systemd/system/proxima-staging.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now proxima-staging.service
+sudo systemctl enable --now \
+  proxima-preview-output.socket \
+  proxima-staging.service
 curl --fail --silent http://127.0.0.1:8767/api/health
 ```
 

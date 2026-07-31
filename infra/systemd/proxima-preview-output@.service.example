@@ -1,0 +1,12 @@
+[Unit]
+Description=Proxima preview output broker
+
+[Service]
+Type=simple
+User=proxima
+Group=proxima
+WorkingDirectory=/opt/proxima
+ExecStart=/usr/local/bin/proxima output-broker --systemd-socket
+StandardInput=socket
+StandardOutput=null
+StandardError=journal

@@ -15,24 +15,7 @@ import pytest
 
 from proxima_api import apprunner
 from proxima_api.apprunner import AppManager, PortInUseError
-from proxima_api.preview_output import MAX_PENDING_LINE_BYTES
-
-
-class _FakeStdout:
-    def __init__(self, lines: list[bytes]) -> None:
-        self._lines = lines
-
-    async def read(self, _size: int) -> bytes:
-        if self._lines:
-            return self._lines.pop(0)
-        return b""
-
-
-class _FakeProcess:
-    returncode = None
-
-    def __init__(self, lines: list[bytes]) -> None:
-        self.stdout = _FakeStdout(lines)
+from proxima_api.preview_output import OutputBrokerUnavailable
 
 
 def _free_port() -> int:
@@ -55,39 +38,6 @@ def test_app_runner_does_not_report_ready_without_open_port(tmp_path):
             await manager.shutdown()
 
     asyncio.run(run_case())
-
-
-def test_app_runner_ignores_stale_drain_from_replaced_process():
-    manager = AppManager()
-    old_proc = _FakeProcess([b"http://localhost:49999\n"])
-    new_proc = _FakeProcess([])
-    manager._apps["demo"] = {"proc": new_proc, "port": 5180, "command": "new", "started_at": time.time(), "log": []}
-
-    asyncio.run(manager._drain("demo", old_proc))  # type: ignore[arg-type]
-
-    assert manager._apps["demo"]["log"] == []
-    assert "detected_port" not in manager._apps["demo"]
-
-
-def test_app_runner_bounds_newline_free_output():
-    manager = AppManager()
-    chunks = [b"x" * 4096] * 100
-    proc = _FakeProcess(chunks)
-    manager._apps["demo"] = {
-        "proc": proc,
-        "port": 5180,
-        "command": "flood",
-        "started_at": time.time(),
-        "log": [],
-    }
-
-    asyncio.run(manager._drain("demo", proc))  # type: ignore[arg-type]
-
-    assert chunks == []
-    assert len(manager._apps["demo"]["log"]) == 1
-    assert len(manager._apps["demo"]["log"][0].encode()) == (
-        MAX_PENDING_LINE_BYTES
-    )
 
 
 def test_app_runner_keeps_exit_log_across_status_polls(tmp_path):
@@ -127,17 +77,23 @@ def test_app_runner_keeps_bounded_log_after_explicit_stop(tmp_path):
     port = _free_port()
 
     async def run_case():
-        await manager.start("demo", str(tmp_path), "sleep 60", port)
-        manager._apps["demo"]["log"].extend(
-            f"line-{number}" for number in range(60)
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "for i in $(seq 0 59); do echo line-$i; done; sleep 60",
+            port,
         )
+        for _ in range(100):
+            if len(manager._apps["demo"]["log"]) >= 60:
+                break
+            await asyncio.sleep(0.01)
 
         await manager.stop("demo")
 
         status = manager.status("demo")
         assert status["state"] == "stopped"
         assert status["running"] is False
-        assert status["command"] == "sleep 60"
+        assert status["command"].endswith("sleep 60")
         assert status["requested_port"] == port
         assert status["log"] == [
             f"line-{number}" for number in range(20, 60)
@@ -152,19 +108,7 @@ def test_app_runner_stop_waits_for_terminal_output(tmp_path):
     port = _free_port()
 
     async def run_case():
-        gate = asyncio.Event()
-        drained = asyncio.Event()
         armed = tmp_path / "terminal-trap-armed"
-        original_drain = manager._drain
-
-        async def delayed_drain(slug, proc):
-            await gate.wait()
-            try:
-                await original_drain(slug, proc)
-            finally:
-                drained.set()
-
-        manager._drain = delayed_drain
         await manager.start(
             "demo",
             str(tmp_path),
@@ -178,15 +122,7 @@ def test_app_runner_stop_waits_for_terminal_output(tmp_path):
                 break
             await asyncio.sleep(0.01)
         assert armed.is_file()
-
-        async def release_drain():
-            await asyncio.sleep(0.1)
-            gate.set()
-
-        release_task = asyncio.create_task(release_drain())
         await manager.stop("demo")
-        await release_task
-        await asyncio.wait_for(drained.wait(), timeout=2)
 
         status = manager.status("demo")
         assert status["state"] == "stopped"
@@ -268,15 +204,14 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
                 await asyncio.sleep(0.01)
             assert os.getpgid(child_pid) != managed_group
 
-            await asyncio.wait_for(
-                manager.stop("demo"),
-                timeout=apprunner.FINAL_DRAIN_SECONDS + 2,
-            )
+            broker_pid = manager._apps["demo"]["output_broker"].pid
+            assert broker_pid is not None
+            await asyncio.wait_for(manager.stop("demo"), timeout=7)
 
             status = manager.status("demo")
             assert status["state"] == "stopped"
             assert "inherited-tail" in status["log"]
-            assert manager._output_sinks.active_pids()
+            os.kill(broker_pid, 0)
             write_trigger_file.write_text("write")
             for _ in range(200):
                 if write_result_file.is_file():
@@ -295,11 +230,6 @@ def test_stop_bounds_final_drain_with_inherited_detached_pipe(tmp_path):
                     os.kill(child_pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-            for _ in range(200):
-                if not manager._output_sinks.active_pids():
-                    break
-                await asyncio.sleep(0.01)
-            assert not manager._output_sinks.active_pids()
 
     asyncio.run(run_case())
 
@@ -359,9 +289,9 @@ async def run():
         if child.exists():
             break
         await asyncio.sleep(0.01)
+    broker_pid = manager._apps["demo"]["output_broker"].pid
+    Path({str(helper_pid_file)!r}).write_text(str(broker_pid))
     await manager.stop("demo")
-    helpers = manager._output_sinks.active_pids()
-    Path({str(helper_pid_file)!r}).write_text(str(next(iter(helpers))))
     await manager.shutdown()
 
 asyncio.run(run())
@@ -484,15 +414,20 @@ def test_cancelled_start_reaps_provisional_process(
             )
         )
         await asyncio.wait_for(entered.wait(), timeout=2)
-        task.cancel()
-        release.set()
+        for _ in range(3):
+            task.cancel()
+            await asyncio.sleep(0)
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, timeout=4)
+            await task
+        assert manager._cleanup_tasks
+        release.set()
+        await asyncio.wait_for(manager.shutdown(), timeout=7)
 
         proc = spawned["proc"]
         assert proc.returncode is not None
         assert "demo" not in manager._apps
         assert lease.released is True
+        assert not manager._cleanup_tasks
 
     asyncio.run(run_case())
 
@@ -536,6 +471,78 @@ def test_cancelled_start_before_spawn_releases_effect_lease(
 
         assert lease.released is True
         assert not manager._apps
+
+    asyncio.run(run_case())
+
+
+def test_output_broker_launch_failure_is_recoverable_before_spawn(
+    monkeypatch,
+    tmp_path,
+):
+    async def unavailable():
+        raise OutputBrokerUnavailable(
+            "Windows breakaway preview output is unavailable"
+        )
+
+    async def unexpected_spawn(*_args, **_kwargs):
+        raise AssertionError("app process must not spawn without output broker")
+
+    monkeypatch.setattr(
+        apprunner.asyncio,
+        "create_subprocess_exec",
+        unexpected_spawn,
+    )
+    manager = AppManager(output_broker_factory=unavailable)
+
+    async def run_case():
+        with pytest.raises(OutputBrokerUnavailable):
+            await manager.start(
+                "demo",
+                str(tmp_path),
+                "sleep 60",
+                _free_port(),
+            )
+        status = manager.status("demo")
+        assert status["state"] == "stopped"
+        assert status["reason"] == "output_sink_unavailable"
+        assert "breakaway" in status["message"]
+        assert not manager._apps
+
+    asyncio.run(run_case())
+
+
+def test_stop_completes_when_output_broker_disconnects(tmp_path):
+    manager = AppManager()
+
+    async def run_case():
+        await manager.start(
+            "demo",
+            str(tmp_path),
+            "echo retained-before-broker-error; sleep 60",
+            _free_port(),
+        )
+        app = manager._apps["demo"]
+        for _ in range(100):
+            if "retained-before-broker-error" in app["log"]:
+                break
+            await asyncio.sleep(0.01)
+
+        async def failed_snapshot():
+            raise OutputBrokerUnavailable("output broker test failure")
+
+        async def failed_disconnect():
+            raise OutputBrokerUnavailable("output broker test failure")
+
+        app["output_broker"].snapshot = failed_snapshot
+        app["output_broker"].disconnect = failed_disconnect
+
+        await manager.stop("demo")
+
+        status = manager.status("demo")
+        assert status["state"] == "stopped"
+        assert status["reason"] == "output_sink_unavailable"
+        assert "retained-before-broker-error" in status["log"]
+        assert "demo" not in manager._apps
 
     asyncio.run(run_case())
 

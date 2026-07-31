@@ -1,6 +1,6 @@
 # ADR-0013: Detached preview output uses OS sink helpers
 
-- Status: Accepted
+- Status: Superseded by ADR-0018
 - Date: 2026-07-31
 
 ## Context

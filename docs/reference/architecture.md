@@ -82,7 +82,9 @@ queue starter), `graph_context.py` (scoped Graphify adapter),
 `graphify_area_mcp.py` (fixed-Area Task MCP proxy), `job_checkpoints.py`,
 `turn_restore.py`,
 `acp.py` (ACP manager), `scheduler.py`, `event_hub.py`, `terminal.py`,
-`apprunner.py` + `preview_proxy.py`, `image_providers.py` (image backend registry),
+`apprunner.py` + `preview_proxy.py` + `preview_output.py` (preview lifecycle,
+proxy, and launch-time output broker client) with `preview_output_broker.py` as
+the supervisor-owned broker process, `image_providers.py` (image backend registry),
 `auth_health.py` (cached background auth/readiness
 checks for the Home banner), `logging_config.py` (query-token redaction across
 Uvicorn HTTP and WebSocket handlers), `run_prompting.py` (prompt framing plus jailed,
@@ -1107,11 +1109,11 @@ candidate. Status is a discriminated state:
 Only `ready` carries a proxy target. An uncontained launch requires Linux procfs
 evidence that every listener socket belongs to its managed process group. A contained
 launch instead requires every socket owner to match the exact launch-specific PID
-namespace and lineage marker reported at start. Appview, relay, and preview subdomain
-paths repeat the applicable proof on a fresh server-side socket before sending HTTP or
-WebSocket bytes. Starting, conflict, ownership-unknown, and exited states return a
-non-proxy response. An existing relay remains available to return that safe response
-until Stop releases it.
+namespace and lineage marker reported at start and retain positive live process-group
+or ancestry evidence. Appview, relay, and preview subdomain paths repeat the applicable
+proof on a fresh server-side socket before sending HTTP or WebSocket bytes. Starting,
+conflict, ownership-unknown, and exited states return a non-proxy response. An existing
+relay remains available to return that safe response until Stop releases it.
 
 If an unrelated process owns the candidate before start, start returns a structured
 HTTP 409 conflict. If it claims the port after preflight but before the managed app
@@ -1145,12 +1147,16 @@ forever. The bounded 40-line status buffer and Logs toggle remain available whil
 starting, ready, conflicted, exited, or stopped. Reloading the preview does not close
 the log panel, and explicit Stop awaits stdout draining so the most recent buffer,
 including terminal shutdown output, remains available for the stopped/retry
-state. Final draining has a bounded grace period: output already available is retained.
-The pending partial line has a fixed byte bound, so newline-free streams cannot grow
-memory without limit. If an uncontained child keeps stdout open, the read end transfers
-to a minimal OS discard helper that survives API event-loop shutdown, accumulates no
-output, exits at EOF, and is reaped independently. Stop returns without closing that
-read end, so the child is neither blocked nor signaled.
+state. A launch-time output broker owns the child pipe before process creation and
+drains all currently available bytes before returning the final snapshot. Complete
+lines use a bounded ring and the pending partial line has its own fixed byte bound, so
+newline-free streams cannot grow memory without limit. If an uncontained child keeps
+stdout open, the broker continues fixed-size reads after the API disconnects and exits
+at EOF. Packaged Linux installs run each broker in a socket-activated sibling systemd
+unit outside the API cgroup, so an API stop or restart does not close that read end.
+Windows uses a detached breakaway broker when supported. Broker setup failure occurs
+before app spawn and produces a recoverable `output_sink_unavailable` stopped state;
+a later broker disconnect cannot strand Stop or discard the last cached log.
 Conflict feedback keeps the candidate port visible with Stop, retry, and
 change-port actions. When
 `apps_domain` is configured, `PreviewProxyMiddleware` instead serves a
@@ -1163,8 +1169,8 @@ authentication runs before target resolution or procfs ownership work. Proxy pat
 Cookie/Authorization before forwarding and ignore upstream `Set-Cookie`;
 same-origin/generated HTML previews omit `allow-same-origin`. These are lightweight
 self-hosted mitigations, not OS isolation of the project process.
-See ADR-0012 through ADR-0015 for the focused authority, output, binding, and
-authentication decisions.
+See ADR-0014 through ADR-0019 for the focused binding, authentication, authority,
+cleanup, framing, and output-lifetime decisions.
 
 ### 9. Update check and candidate gate plus disabled switch fixture
 

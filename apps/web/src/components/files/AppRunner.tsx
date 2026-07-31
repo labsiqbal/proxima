@@ -244,7 +244,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
       <p className="app-runner-cwd muted">Working dir: <code>{slug}/{dir || ''}</code> · command runs here</p>
       {status.state === 'stopped' && <section className="app-state-card" role="status">
         <h3>{status.command ? 'App stopped' : 'Command logs'}</h3>
-        <p>{status.command ? 'The managed app is stopped. Its most recent bounded log buffer is still available.' : 'No app is running. Command output will appear here after you run one.'}</p>
+        <p>{status.message || (status.command ? 'The managed app is stopped. Its most recent bounded log buffer is still available.' : 'No app is running. Command output will appear here after you run one.')}</p>
         {stateActions({ retry: Boolean(status.command), changePort: Boolean(status.command), stop: false })}
         {showLogs && <pre className="app-log">{logText}</pre>}
       </section>}
@@ -254,7 +254,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
         {stateActions({ retry: true, changePort: true })}
         {showLogs && <pre className="app-log">{logText}</pre>}
       </section>}
-      {error && status.state !== 'port_conflict' && <p className="error-text">{error}</p>}
+      {error && status.state !== 'port_conflict' && status.reason !== 'output_sink_unavailable' && <p className="error-text">{error}</p>}
       {exitInfo && <div className={`app-exit-note ${exitInfo.tone}`} role="status">
         <strong>{exitInfo.title}</strong>
         <p>{exitInfo.hint}</p>

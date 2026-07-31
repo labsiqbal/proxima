@@ -1,6 +1,6 @@
 # ADR-0012: Exact containment proof gates preview authority
 
-- Status: Accepted
+- Status: Superseded by ADR-0016
 - Date: 2026-07-31
 
 ## Context

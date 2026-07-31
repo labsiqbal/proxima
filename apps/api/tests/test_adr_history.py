@@ -55,22 +55,70 @@ def test_preview_authority_adr_history_is_append_only():
 
     successors = {
         "0012-exact-containment-proof-gates-preview-authority.md": (
-            "Exact containment proof gates preview authority"
+            "Exact containment proof gates preview authority",
+            "Superseded by ADR-0016",
         ),
         "0013-detached-preview-output-uses-os-sink-helpers.md": (
-            "Detached preview output uses OS sink helpers"
+            "Detached preview output uses OS sink helpers",
+            "Superseded by ADR-0018",
         ),
         "0014-automatic-preview-relay-binds-explicit-interfaces.md": (
-            "Automatic preview relay binds explicit interfaces"
+            "Automatic preview relay binds explicit interfaces",
+            "Accepted",
         ),
         "0015-preview-authentication-precedes-target-resolution.md": (
-            "Preview authentication precedes target resolution"
+            "Preview authentication precedes target resolution",
+            "Accepted",
+        ),
+        "0016-live-containment-lineage-gates-preview-authority.md": (
+            "Live containment lineage gates preview authority",
+            "Accepted",
+        ),
+        "0017-manager-owned-provisional-preview-cleanup.md": (
+            "Manager-owned provisional preview cleanup",
+            "Accepted",
+        ),
+        "0018-preview-status-log-framing-is-bounded.md": (
+            "Preview status log framing is bounded",
+            "Accepted",
+        ),
+        "0019-launch-time-broker-owns-preview-output.md": (
+            "Launch-time broker owns preview output",
+            "Accepted",
         ),
     }
-    for filename, title in successors.items():
+    for filename, (title, status) in successors.items():
         adr = (ROOT / "docs" / "adr" / filename).read_text(
             encoding="utf-8",
         )
-        assert "- Status: Accepted" in adr
+        assert f"- Status: {status}" in adr
         assert adr.count("\n## Decision\n") == 1
-        assert f"| {title} | Accepted |" in index
+        assert f"| {title} | {status} |" in index
+
+    adr_0012 = (
+        ROOT
+        / "docs"
+        / "adr"
+        / "0012-exact-containment-proof-gates-preview-authority.md"
+    ).read_text(encoding="utf-8")
+    accepted_0012 = adr_0012.replace(
+        "- Status: Superseded by ADR-0016",
+        "- Status: Accepted",
+    )
+    assert hashlib.sha256(accepted_0012.encode()).hexdigest() == (
+        "42d2c0bf1c60918292847edfe0d6a83696ee7ffefc0436ec050fbc5ce6b25b0d"
+    )
+
+    adr_0013 = (
+        ROOT
+        / "docs"
+        / "adr"
+        / "0013-detached-preview-output-uses-os-sink-helpers.md"
+    ).read_text(encoding="utf-8")
+    accepted_0013 = adr_0013.replace(
+        "- Status: Superseded by ADR-0018",
+        "- Status: Accepted",
+    )
+    assert hashlib.sha256(accepted_0013.encode()).hexdigest() == (
+        "2109b66d492b89b0fe822c4948a0589d2d9111eeb1e86ab87d8e6e740a1f46f0"
+    )
