@@ -1344,56 +1344,60 @@ class MasterProjectionService:
         try:
             with self.app.state.db_lock:
                 self.conn.execute("BEGIN IMMEDIATE")
-                row = self.conn.execute(
-                    "SELECT * FROM task_projection_outbox WHERE id = ?",
-                    (outbox_id,),
-                ).fetchone()
-                if row is None or row["state"] == "superseded":
-                    self.conn.execute("COMMIT")
-                    return None
-                if (
-                    row["state"] == "projected"
-                    and row["projection_id"] is not None
-                ):
-                    projection = self.conn.execute(
-                        "SELECT * FROM master_projections WHERE id = ?",
-                        (row["projection_id"],),
+                try:
+                    row = self.conn.execute(
+                        "SELECT * FROM task_projection_outbox WHERE id = ?",
+                        (outbox_id,),
                     ).fetchone()
-                    self.conn.execute("COMMIT")
-                    return dict(projection) if projection else None
-                if self._has_earlier_unresolved(
-                    self.conn,
-                    job_id=_as_int(row["job_id"]),
-                    task_event_id=_as_int(row["task_event_id"]),
-                ):
-                    self.conn.execute("COMMIT")
-                    return None
-                projection = self._project_task(
-                    _as_int(row["job_id"]),
-                    connection=self.conn,
-                    notify_sessions=notify_sessions,
-                    status_override=str(row["task_status"]),
-                    projection_epoch_override=_as_int(row["projection_epoch"]),
-                    projection_revision_override=_as_int(
-                        row["projection_revision"]
-                    ),
-                )
-                if projection is None:
-                    raise ProjectionAttributionError(
-                        "projection_scope_unavailable"
+                    if row is None or row["state"] == "superseded":
+                        self.conn.execute("COMMIT")
+                        return None
+                    if (
+                        row["state"] == "projected"
+                        and row["projection_id"] is not None
+                    ):
+                        projection = self.conn.execute(
+                            "SELECT * FROM master_projections WHERE id = ?",
+                            (row["projection_id"],),
+                        ).fetchone()
+                        self.conn.execute("COMMIT")
+                        return dict(projection) if projection else None
+                    if self._has_earlier_unresolved(
+                        self.conn,
+                        job_id=_as_int(row["job_id"]),
+                        task_event_id=_as_int(row["task_event_id"]),
+                    ):
+                        self.conn.execute("COMMIT")
+                        return None
+                    projection = self._project_task(
+                        _as_int(row["job_id"]),
+                        connection=self.conn,
+                        notify_sessions=notify_sessions,
+                        status_override=str(row["task_status"]),
+                        projection_epoch_override=_as_int(
+                            row["projection_epoch"]
+                        ),
+                        projection_revision_override=_as_int(
+                            row["projection_revision"]
+                        ),
                     )
-                self.conn.execute(
-                    "UPDATE task_projection_outbox SET state = 'projected', "
-                    "projection_id = ?, failure_code = NULL, "
-                    "attempt_count = attempt_count + 1, "
-                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (_as_int(projection["id"]), outbox_id),
-                )
-                self.conn.execute("COMMIT")
+                    if projection is None:
+                        raise ProjectionAttributionError(
+                            "projection_scope_unavailable"
+                        )
+                    self.conn.execute(
+                        "UPDATE task_projection_outbox SET state = 'projected', "
+                        "projection_id = ?, failure_code = NULL, "
+                        "attempt_count = attempt_count + 1, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (_as_int(projection["id"]), outbox_id),
+                    )
+                    self.conn.execute("COMMIT")
+                except Exception:
+                    if self.conn.in_transaction:
+                        self.conn.execute("ROLLBACK")
+                    raise
         except ProjectionAttributionError as exc:
-            with self.app.state.db_lock:
-                if self.conn.in_transaction:
-                    self.conn.execute("ROLLBACK")
             self._record_outbox_attempt(
                 outbox_id,
                 state="failed_attribution",
@@ -1402,9 +1406,6 @@ class MasterProjectionService:
             )
             return None
         except Exception:
-            with self.app.state.db_lock:
-                if self.conn.in_transaction:
-                    self.conn.execute("ROLLBACK")
             self._record_outbox_attempt(
                 outbox_id,
                 state="pending",
@@ -1447,54 +1448,56 @@ class MasterProjectionService:
         try:
             with self.app.state.db_lock:
                 self.conn.execute("BEGIN IMMEDIATE")
-                row = self.conn.execute(
-                    "SELECT * FROM task_recovery_outbox WHERE id = ?",
-                    (outbox_id,),
-                ).fetchone()
-                if row is None or row["state"] == "legacy_ordering_gap":
+                try:
+                    row = self.conn.execute(
+                        "SELECT * FROM task_recovery_outbox WHERE id = ?",
+                        (outbox_id,),
+                    ).fetchone()
+                    if row is None or row["state"] == "legacy_ordering_gap":
+                        self.conn.execute("COMMIT")
+                        return None
+                    if (
+                        row["state"] == "projected"
+                        and row["message_id"] is not None
+                        and row["event_id"] is not None
+                    ):
+                        result = {
+                            "session_id": row["master_session_id"],
+                            "message_id": row["message_id"],
+                            "event_id": row["event_id"],
+                        }
+                        self.conn.execute("COMMIT")
+                        return result
+                    if self._has_earlier_unresolved(
+                        self.conn,
+                        job_id=_as_int(row["job_id"]),
+                        task_event_id=_as_int(row["task_event_id"]),
+                    ):
+                        self.conn.execute("COMMIT")
+                        return None
+                    result = publish_master_recovery(
+                        self.conn,
+                        outbox=dict(row),
+                    )
+                    self.conn.execute(
+                        "UPDATE task_recovery_outbox SET state = 'projected', "
+                        "master_session_id = ?, message_id = ?, event_id = ?, "
+                        "failure_code = NULL, "
+                        "attempt_count = attempt_count + 1, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (
+                            result["session_id"],
+                            result["message_id"],
+                            result["event_id"],
+                            outbox_id,
+                        ),
+                    )
                     self.conn.execute("COMMIT")
-                    return None
-                if (
-                    row["state"] == "projected"
-                    and row["message_id"] is not None
-                    and row["event_id"] is not None
-                ):
-                    result = {
-                        "session_id": row["master_session_id"],
-                        "message_id": row["message_id"],
-                        "event_id": row["event_id"],
-                    }
-                    self.conn.execute("COMMIT")
-                    return result
-                if self._has_earlier_unresolved(
-                    self.conn,
-                    job_id=_as_int(row["job_id"]),
-                    task_event_id=_as_int(row["task_event_id"]),
-                ):
-                    self.conn.execute("COMMIT")
-                    return None
-                result = publish_master_recovery(
-                    self.conn,
-                    outbox=dict(row),
-                )
-                self.conn.execute(
-                    "UPDATE task_recovery_outbox SET state = 'projected', "
-                    "master_session_id = ?, message_id = ?, event_id = ?, "
-                    "failure_code = NULL, "
-                    "attempt_count = attempt_count + 1, "
-                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (
-                        result["session_id"],
-                        result["message_id"],
-                        result["event_id"],
-                        outbox_id,
-                    ),
-                )
-                self.conn.execute("COMMIT")
+                except Exception:
+                    if self.conn.in_transaction:
+                        self.conn.execute("ROLLBACK")
+                    raise
         except RecoveryAttributionError as exc:
-            with self.app.state.db_lock:
-                if self.conn.in_transaction:
-                    self.conn.execute("ROLLBACK")
             self._record_recovery_attempt(
                 outbox_id,
                 state="failed_attribution",
@@ -1502,9 +1505,6 @@ class MasterProjectionService:
             )
             return None
         except Exception:
-            with self.app.state.db_lock:
-                if self.conn.in_transaction:
-                    self.conn.execute("ROLLBACK")
             self._record_recovery_attempt(
                 outbox_id,
                 state="pending",
@@ -1611,53 +1611,55 @@ class MasterProjectionService:
         try:
             with self.app.state.db_lock:
                 self.conn.execute("BEGIN IMMEDIATE")
-                row = self.conn.execute(
-                    "SELECT * FROM task_recovery_corrections WHERE id = ?",
-                    (correction_id,),
-                ).fetchone()
-                if row is None:
+                try:
+                    row = self.conn.execute(
+                        "SELECT * FROM task_recovery_corrections WHERE id = ?",
+                        (correction_id,),
+                    ).fetchone()
+                    if row is None:
+                        self.conn.execute("COMMIT")
+                        return None
+                    if (
+                        row["state"] == "projected"
+                        and row["message_id"] is not None
+                        and row["event_id"] is not None
+                    ):
+                        result = {
+                            "session_id": row["master_session_id"],
+                            "message_id": row["message_id"],
+                            "event_id": row["event_id"],
+                        }
+                        self.conn.execute("COMMIT")
+                        return result
+                    if not self._recovery_correction_ready(
+                        self.conn,
+                        job_id=_as_int(row["job_id"]),
+                    ):
+                        self.conn.execute("COMMIT")
+                        return None
+                    result = publish_master_recovery_correction(
+                        self.conn,
+                        correction=dict(row),
+                    )
+                    self.conn.execute(
+                        "UPDATE task_recovery_corrections "
+                        "SET state = 'projected', master_session_id = ?, "
+                        "message_id = ?, event_id = ?, failure_code = NULL, "
+                        "attempt_count = attempt_count + 1, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (
+                            result["session_id"],
+                            result["message_id"],
+                            result["event_id"],
+                            correction_id,
+                        ),
+                    )
                     self.conn.execute("COMMIT")
-                    return None
-                if (
-                    row["state"] == "projected"
-                    and row["message_id"] is not None
-                    and row["event_id"] is not None
-                ):
-                    result = {
-                        "session_id": row["master_session_id"],
-                        "message_id": row["message_id"],
-                        "event_id": row["event_id"],
-                    }
-                    self.conn.execute("COMMIT")
-                    return result
-                if not self._recovery_correction_ready(
-                    self.conn,
-                    job_id=_as_int(row["job_id"]),
-                ):
-                    self.conn.execute("COMMIT")
-                    return None
-                result = publish_master_recovery_correction(
-                    self.conn,
-                    correction=dict(row),
-                )
-                self.conn.execute(
-                    "UPDATE task_recovery_corrections "
-                    "SET state = 'projected', master_session_id = ?, "
-                    "message_id = ?, event_id = ?, failure_code = NULL, "
-                    "attempt_count = attempt_count + 1, "
-                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (
-                        result["session_id"],
-                        result["message_id"],
-                        result["event_id"],
-                        correction_id,
-                    ),
-                )
-                self.conn.execute("COMMIT")
+                except Exception:
+                    if self.conn.in_transaction:
+                        self.conn.execute("ROLLBACK")
+                    raise
         except RecoveryAttributionError as exc:
-            with self.app.state.db_lock:
-                if self.conn.in_transaction:
-                    self.conn.execute("ROLLBACK")
             self._record_recovery_correction_attempt(
                 correction_id,
                 state="failed_attribution",
@@ -1665,9 +1667,6 @@ class MasterProjectionService:
             )
             return None
         except Exception:
-            with self.app.state.db_lock:
-                if self.conn.in_transaction:
-                    self.conn.execute("ROLLBACK")
             self._record_recovery_correction_attempt(
                 correction_id,
                 state="pending",
