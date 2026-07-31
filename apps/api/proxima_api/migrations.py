@@ -33,6 +33,19 @@ from .runner_specs import FALLBACK_RUNNER
 # manages its own transaction (a table rebuild needing PRAGMA foreign_keys=OFF).
 Migration = tuple
 
+
+def _execute_sql_batch(conn: sqlite3.Connection, sql: str) -> None:
+    statement: list[str] = []
+    for line in sql.splitlines():
+        statement.append(line)
+        candidate = "\n".join(statement).strip()
+        if candidate and sqlite3.complete_statement(candidate):
+            conn.execute(candidate)
+            statement = []
+    if any(line.strip() for line in statement):
+        raise RuntimeError("Incomplete migration SQL statement")
+
+
 def _add_messages_author(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
     if "author" not in cols:
@@ -3067,6 +3080,164 @@ def _preserve_legacy_recovery_ordering_gaps(
     )
 
 
+def _stage_delivered_recovery_corrections(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_recovery_delivered_marker_staging (
+          correction_id INTEGER PRIMARY KEY,
+          job_id INTEGER NOT NULL,
+          successor_outbox_id INTEGER NOT NULL,
+          successor_task_event_id INTEGER NOT NULL
+            CHECK (successor_task_event_id > 0),
+          gap_count INTEGER NOT NULL CHECK (gap_count > 0),
+          first_task_event_id INTEGER NOT NULL
+            CHECK (first_task_event_id > 0),
+          last_task_event_id INTEGER NOT NULL CHECK (
+            last_task_event_id >= first_task_event_id
+          ),
+          master_session_id INTEGER NOT NULL,
+          message_id INTEGER NOT NULL,
+          event_id INTEGER NOT NULL UNIQUE,
+          event_payload TEXT NOT NULL CHECK (
+            length(event_payload) <= 4096
+          ),
+          attempt_count INTEGER NOT NULL CHECK (attempt_count >= 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS
+        task_recovery_delivered_marker_staging_gaps (
+          correction_id INTEGER NOT NULL,
+          gap_id INTEGER NOT NULL,
+          PRIMARY KEY (correction_id, gap_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_delivered_marker_staging_immutable
+        BEFORE UPDATE ON task_recovery_delivered_marker_staging
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'staged recovery correction is immutable'
+          );
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_delivered_marker_staging_delete_immutable
+        BEFORE DELETE ON task_recovery_delivered_marker_staging
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'staged recovery correction is immutable'
+          );
+        END
+        """
+    )
+    for row in conn.execute(
+        "SELECT correction.*, successor.task_event_id "
+        "AS successor_task_event_id, event.payload AS event_payload "
+        "FROM task_recovery_corrections AS correction "
+        "JOIN task_recovery_outbox AS successor "
+        "ON successor.id = correction.successor_outbox_id "
+        "JOIN events AS event ON event.id = correction.event_id "
+        "WHERE correction.state = 'projected' "
+        "ORDER BY correction.id"
+    ).fetchall():
+        gap_ids = [
+            int(gap["id"])
+            for gap in conn.execute(
+                "SELECT id FROM task_recovery_ordering_gaps "
+                "WHERE job_id = ? AND successor_outbox_id = ? "
+                "AND predecessor_task_event_id BETWEEN ? AND ? "
+                "ORDER BY id",
+                (
+                    row["job_id"],
+                    row["successor_outbox_id"],
+                    row["first_task_event_id"],
+                    row["last_task_event_id"],
+                ),
+            ).fetchall()
+        ]
+        if len(gap_ids) != int(row["gap_count"]):
+            raise RuntimeError(
+                "Delivered recovery correction staging is incomplete"
+            )
+        values = (
+            int(row["id"]),
+            int(row["job_id"]),
+            int(row["successor_outbox_id"]),
+            int(row["successor_task_event_id"]),
+            int(row["gap_count"]),
+            int(row["first_task_event_id"]),
+            int(row["last_task_event_id"]),
+            int(row["master_session_id"]),
+            int(row["message_id"]),
+            int(row["event_id"]),
+            str(row["event_payload"]),
+            int(row["attempt_count"]),
+            str(row["created_at"]),
+            str(row["updated_at"]),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO "
+            "task_recovery_delivered_marker_staging("
+            "correction_id, job_id, successor_outbox_id, "
+            "successor_task_event_id, gap_count, first_task_event_id, "
+            "last_task_event_id, master_session_id, message_id, event_id, "
+            "event_payload, attempt_count, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            values,
+        )
+        staged = tuple(
+            conn.execute(
+                "SELECT correction_id, job_id, successor_outbox_id, "
+                "successor_task_event_id, gap_count, first_task_event_id, "
+                "last_task_event_id, master_session_id, message_id, "
+                "event_id, event_payload, attempt_count, created_at, "
+                "updated_at FROM "
+                "task_recovery_delivered_marker_staging "
+                "WHERE correction_id = ?",
+                (row["id"],),
+            ).fetchone()
+        )
+        if staged != values:
+            raise RuntimeError(
+                "Delivered recovery correction staging changed identity"
+            )
+        conn.executemany(
+            "INSERT OR IGNORE INTO "
+            "task_recovery_delivered_marker_staging_gaps("
+            "correction_id, gap_id"
+            ") VALUES (?, ?)",
+            [(int(row["id"]), gap_id) for gap_id in gap_ids],
+        )
+        staged_gap_ids = [
+            int(link["gap_id"])
+            for link in conn.execute(
+                "SELECT gap_id FROM "
+                "task_recovery_delivered_marker_staging_gaps "
+                "WHERE correction_id = ? ORDER BY gap_id",
+                (row["id"],),
+            ).fetchall()
+        ]
+        if staged_gap_ids != gap_ids:
+            raise RuntimeError(
+                "Delivered recovery correction staging changed coverage"
+            )
+
+
 def _aggregate_legacy_recovery_ordering_gaps(
     conn: sqlite3.Connection,
 ) -> None:
@@ -3236,6 +3407,20 @@ def _aggregate_legacy_recovery_ordering_gaps(
         if correction_exists
         else []
     )
+    correction_schema = (
+        " ".join(
+            str(
+                conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'task_recovery_corrections'"
+                ).fetchone()[0]
+            )
+            .lower()
+            .split()
+        )
+        if correction_exists
+        else ""
+    )
     unique_job = any(
         bool(row[2])
         and [
@@ -3253,6 +3438,11 @@ def _aggregate_legacy_recovery_ordering_gaps(
             "first_successor_task_event_id",
             "last_successor_task_event_id",
         }.issubset(correction_columns)
+        and (
+            "unique(job_id)" in correction_schema
+            or "(marker_kind = 'legacy_partial' and state = 'projected'"
+            in correction_schema
+        )
     )
     old_corrections = (
         [
@@ -3264,6 +3454,8 @@ def _aggregate_legacy_recovery_ordering_gaps(
         if correction_exists and not final_corrections
         else []
     )
+    if correction_exists and not final_corrections:
+        _stage_delivered_recovery_corrections(conn)
     if correction_exists and not final_corrections:
         conn.execute(
             "DROP INDEX IF EXISTS idx_task_recovery_corrections_state"
@@ -3468,6 +3660,160 @@ def _aggregate_legacy_recovery_ordering_gaps(
     )
 
 
+def _ensure_recovery_legacy_loss_tables(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_recovery_legacy_losses (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id INTEGER NOT NULL,
+          observed_correction_id INTEGER,
+          successor_outbox_id INTEGER NOT NULL,
+          successor_task_event_id INTEGER NOT NULL CHECK (
+            successor_task_event_id > 0
+          ),
+          gap_count INTEGER NOT NULL CHECK (gap_count > 0),
+          first_task_event_id INTEGER NOT NULL CHECK (
+            first_task_event_id > 0
+          ),
+          last_task_event_id INTEGER NOT NULL CHECK (
+            last_task_event_id >= first_task_event_id
+          ),
+          first_successor_task_event_id INTEGER NOT NULL CHECK (
+            first_successor_task_event_id > 0
+          ),
+          last_successor_task_event_id INTEGER NOT NULL CHECK (
+            last_successor_task_event_id
+              >= first_successor_task_event_id
+          ),
+          master_session_id INTEGER NOT NULL,
+          message_id INTEGER NOT NULL
+            REFERENCES messages(id) ON DELETE RESTRICT,
+          event_id INTEGER NOT NULL UNIQUE
+            REFERENCES events(id) ON DELETE RESTRICT,
+          reason TEXT NOT NULL CHECK (
+            reason IN (
+              'v48_identity_unavailable',
+              'pre_v50_identity_unavailable'
+            )
+          ),
+          event_payload TEXT NOT NULL CHECK (
+            length(event_payload) <= 4096
+          ),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_recovery_legacy_loss_gaps (
+          loss_id INTEGER NOT NULL
+            REFERENCES task_recovery_legacy_losses(id) ON DELETE RESTRICT,
+          gap_id INTEGER NOT NULL,
+          PRIMARY KEY (loss_id, gap_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS task_recovery_legacy_losses_immutable
+        BEFORE UPDATE ON task_recovery_legacy_losses
+        BEGIN
+          SELECT RAISE(ABORT, 'legacy recovery loss is immutable');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_legacy_losses_delete_immutable
+        BEFORE DELETE ON task_recovery_legacy_losses
+        BEGIN
+          SELECT RAISE(ABORT, 'legacy recovery loss is immutable');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_legacy_loss_gaps_immutable
+        BEFORE UPDATE ON task_recovery_legacy_loss_gaps
+        BEGIN
+          SELECT RAISE(ABORT, 'legacy recovery loss coverage is immutable');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_legacy_loss_gaps_delete_immutable
+        BEFORE DELETE ON task_recovery_legacy_loss_gaps
+        BEGIN
+          SELECT RAISE(ABORT, 'legacy recovery loss coverage is immutable');
+        END
+        """
+    )
+
+
+def _record_recovery_legacy_loss(
+    conn: sqlite3.Connection,
+    *,
+    event: sqlite3.Row,
+    payload: dict[str, Any],
+    covered: list[dict[str, Any]],
+    observed_correction_id: int | None,
+    successor_outbox_id: int,
+    successor_task_event_id: int,
+    first_successor_task_event_id: int,
+    last_successor_task_event_id: int,
+    reason: str,
+) -> None:
+    cursor = conn.execute(
+        "INSERT OR IGNORE INTO task_recovery_legacy_losses("
+        "job_id, observed_correction_id, successor_outbox_id, "
+        "successor_task_event_id, gap_count, first_task_event_id, "
+        "last_task_event_id, first_successor_task_event_id, "
+        "last_successor_task_event_id, master_session_id, message_id, "
+        "event_id, reason, event_payload, created_at"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            int(payload["task_id"]),
+            observed_correction_id,
+            successor_outbox_id,
+            successor_task_event_id,
+            int(payload["gap_count"]),
+            int(payload["first_task_event_id"]),
+            int(payload["last_task_event_id"]),
+            first_successor_task_event_id,
+            last_successor_task_event_id,
+            int(event["session_id"]),
+            int(payload["message_id"]),
+            int(event["id"]),
+            reason,
+            str(event["payload"]),
+            str(event["created_at"]),
+        ),
+    )
+    loss_id = (
+        int(cursor.lastrowid)
+        if cursor.rowcount
+        else int(
+            conn.execute(
+                "SELECT id FROM task_recovery_legacy_losses "
+                "WHERE event_id = ?",
+                (event["id"],),
+            ).fetchone()[0]
+        )
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO task_recovery_legacy_loss_gaps("
+        "loss_id, gap_id"
+        ") VALUES (?, ?)",
+        [(loss_id, int(gap["id"])) for gap in covered],
+    )
+
+
 def _preserve_delivered_recovery_corrections(
     conn: sqlite3.Connection,
 ) -> None:
@@ -3486,6 +3832,7 @@ def _preserve_delivered_recovery_corrections(
         "task_recovery_outbox",
     }.issubset(tables):
         return
+    _ensure_recovery_legacy_loss_tables(conn)
     correction_table = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' "
         "AND name = 'task_recovery_corrections'"
@@ -3542,6 +3889,24 @@ def _preserve_delivered_recovery_corrections(
         for row in old_rows
         if row["state"] == "projected" and row["event_id"] is not None
     }
+    staged_by_event = {
+        int(row["event_id"]): dict(row)
+        for row in conn.execute(
+            "SELECT * FROM task_recovery_delivered_marker_staging"
+        ).fetchall()
+    } if "task_recovery_delivered_marker_staging" in tables else {}
+    staged_gap_ids = {
+        int(row["correction_id"]): [
+            int(link["gap_id"])
+            for link in conn.execute(
+                "SELECT gap_id FROM "
+                "task_recovery_delivered_marker_staging_gaps "
+                "WHERE correction_id = ? ORDER BY gap_id",
+                (row["correction_id"],),
+            ).fetchall()
+        ]
+        for row in staged_by_event.values()
+    } if "task_recovery_delivered_marker_staging_gaps" in tables else {}
     delivered: list[dict[str, Any]] = []
     delivered_gap_ids: set[int] = set()
     for event in conn.execute(
@@ -3651,9 +4016,86 @@ def _preserve_delivered_recovery_corrections(
                 "Delivered recovery correction coverage is invalid"
             )
         source = old_by_event.get(int(event["id"]))
+        staged = staged_by_event.get(int(event["id"]))
+        covered_gap_ids = sorted(int(gap["id"]) for gap in covered)
+        if marker_kind == "legacy_partial":
+            if staged is None:
+                _record_recovery_legacy_loss(
+                    conn,
+                    event=event,
+                    payload=payload,
+                    covered=covered,
+                    observed_correction_id=(
+                        int(source["id"]) if source is not None else None
+                    ),
+                    successor_outbox_id=int(successor["id"]),
+                    successor_task_event_id=successor_task_event_id,
+                    first_successor_task_event_id=(
+                        first_successor_task_event_id
+                    ),
+                    last_successor_task_event_id=(
+                        last_successor_task_event_id
+                    ),
+                    reason="v48_identity_unavailable",
+                )
+                delivered_gap_ids.update(covered_gap_ids)
+                continue
+            staged_values = (
+                int(staged["job_id"]),
+                int(staged["successor_outbox_id"]),
+                int(staged["successor_task_event_id"]),
+                int(staged["gap_count"]),
+                int(staged["first_task_event_id"]),
+                int(staged["last_task_event_id"]),
+                int(staged["master_session_id"]),
+                int(staged["message_id"]),
+                str(staged["event_payload"]),
+                staged_gap_ids.get(int(staged["correction_id"]), []),
+            )
+            expected_values = (
+                job_id,
+                int(successor["id"]),
+                successor_task_event_id,
+                gap_count,
+                first_task_event_id,
+                last_task_event_id,
+                int(event["session_id"]),
+                message_id,
+                str(event["payload"]),
+                covered_gap_ids,
+            )
+            if staged_values != expected_values:
+                raise RuntimeError(
+                    "Staged recovery correction identity is invalid"
+                )
+            source = {
+                "id": int(staged["correction_id"]),
+                "attempt_count": int(staged["attempt_count"]),
+                "created_at": str(staged["created_at"]),
+                "updated_at": str(staged["updated_at"]),
+            }
+        elif source is None:
+            _record_recovery_legacy_loss(
+                conn,
+                event=event,
+                payload=payload,
+                covered=covered,
+                observed_correction_id=None,
+                successor_outbox_id=int(successor["id"]),
+                successor_task_event_id=successor_task_event_id,
+                first_successor_task_event_id=(
+                    first_successor_task_event_id
+                ),
+                last_successor_task_event_id=(
+                    last_successor_task_event_id
+                ),
+                reason="v48_identity_unavailable",
+            )
+            delivered_gap_ids.update(covered_gap_ids)
+            continue
         delivered.append(
             {
-                "id": int(source["id"]) if source is not None else None,
+                "id": int(source["id"]),
                 "job_id": job_id,
                 "marker_kind": marker_kind,
                 "successor_outbox_id": int(successor["id"]),
@@ -3673,18 +4115,12 @@ def _preserve_delivered_recovery_corrections(
                 "failure_code": None,
                 "attempt_count": (
                     int(source["attempt_count"])
-                    if source is not None
-                    else 1
                 ),
                 "created_at": (
                     str(source["created_at"])
-                    if source is not None
-                    else str(event["created_at"])
                 ),
                 "updated_at": (
                     str(source["updated_at"])
-                    if source is not None
-                    else str(event["created_at"])
                 ),
                 "gap_ids": [int(gap["id"]) for gap in covered],
             }
@@ -3699,19 +4135,15 @@ def _preserve_delivered_recovery_corrections(
             old_active_by_job.setdefault(
                 int(row["job_id"]), []
             ).append(row)
-    used_ids = {
-        int(marker["id"])
-        for marker in delivered
-        if marker["id"] is not None
-    }
+    used_ids = {int(marker["id"]) for marker in delivered}
     next_id = max(
-        [int(row["id"]) for row in old_rows] + [0]
+        [int(row["id"]) for row in old_rows]
+        + [
+            int(row["correction_id"])
+            for row in staged_by_event.values()
+        ]
+        + [0]
     ) + 1
-    for marker in delivered:
-        if marker["id"] is None:
-            marker["id"] = next_id
-            used_ids.add(next_id)
-            next_id += 1
 
     aggregates: list[dict[str, Any]] = []
     for job_id, job_gaps in gaps_by_job.items():
@@ -4001,6 +4433,275 @@ def _preserve_delivered_recovery_corrections(
     )
 
 
+def _detach_recovery_audit_history(
+    conn: sqlite3.Connection,
+) -> None:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if not {
+        "events",
+        "jobs",
+        "messages",
+        "task_recovery_corrections",
+        "task_recovery_correction_gaps",
+        "task_recovery_ordering_gaps",
+        "task_recovery_outbox",
+    }.issubset(tables):
+        return
+    _ensure_recovery_legacy_loss_tables(conn)
+    staged = "task_recovery_delivered_marker_staging" in tables
+    questionable = conn.execute(
+        "SELECT correction.*, event.payload, event.session_id, "
+        "event.created_at AS event_created_at "
+        "FROM task_recovery_corrections AS correction "
+        "JOIN events AS event ON event.id = correction.event_id "
+        "WHERE correction.marker_kind = 'legacy_partial' "
+        + (
+            "AND NOT EXISTS ("
+            "SELECT 1 FROM task_recovery_delivered_marker_staging AS stage "
+            "WHERE stage.correction_id = correction.id "
+            "AND stage.event_id = correction.event_id "
+            "AND stage.message_id = correction.message_id"
+            ") "
+            if staged
+            else ""
+        )
+        + "ORDER BY correction.id"
+    ).fetchall()
+    for correction in questionable:
+        gap_rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT gap.* FROM task_recovery_correction_gaps AS link "
+                "JOIN task_recovery_ordering_gaps AS gap "
+                "ON gap.id = link.gap_id "
+                "WHERE link.correction_id = ? ORDER BY gap.id",
+                (correction["id"],),
+            ).fetchall()
+        ]
+        successor = conn.execute(
+            "SELECT task_event_id FROM task_recovery_outbox WHERE id = ?",
+            (correction["successor_outbox_id"],),
+        ).fetchone()
+        if (
+            not gap_rows
+            or successor is None
+            or len(gap_rows) != int(correction["gap_count"])
+        ):
+            raise RuntimeError(
+                "Legacy recovery identity loss coverage is incomplete"
+            )
+        payload = json.loads(str(correction["payload"]))
+        _record_recovery_legacy_loss(
+            conn,
+            event=correction,
+            payload=payload,
+            covered=gap_rows,
+            observed_correction_id=int(correction["id"]),
+            successor_outbox_id=int(correction["successor_outbox_id"]),
+            successor_task_event_id=int(successor["task_event_id"]),
+            first_successor_task_event_id=int(
+                correction["first_successor_task_event_id"]
+            ),
+            last_successor_task_event_id=int(
+                correction["last_successor_task_event_id"]
+            ),
+            reason="pre_v50_identity_unavailable",
+        )
+        conn.execute(
+            "DELETE FROM task_recovery_correction_gaps "
+            "WHERE correction_id = ?",
+            (correction["id"],),
+        )
+        conn.execute(
+            "DELETE FROM task_recovery_corrections WHERE id = ?",
+            (correction["id"],),
+        )
+
+    conn.execute("DROP TRIGGER IF EXISTS jobs_archive_recovery_history")
+    conn.execute(
+        "DROP TRIGGER IF EXISTS task_recovery_outbox_archive_history"
+    )
+    _execute_sql_batch(
+        conn,
+        """
+        CREATE TABLE IF NOT EXISTS task_recovery_history_tombstones (
+          job_id INTEGER PRIMARY KEY,
+          task_session_id INTEGER,
+          master_session_id INTEGER,
+          deletion_source TEXT NOT NULL CHECK (
+            deletion_source IN ('job', 'task_event')
+          ),
+          deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS task_recovery_ordering_gap_history (
+          id INTEGER PRIMARY KEY,
+          job_id INTEGER NOT NULL,
+          predecessor_outbox_id INTEGER NOT NULL,
+          successor_outbox_id INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          predecessor_task_event_id INTEGER NOT NULL,
+          successor_task_event_id INTEGER NOT NULL,
+          predecessor_publication_event_id INTEGER,
+          successor_publication_event_id INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS task_recovery_correction_history (
+          id INTEGER PRIMARY KEY,
+          job_id INTEGER NOT NULL,
+          marker_kind TEXT NOT NULL,
+          successor_outbox_id INTEGER NOT NULL,
+          gap_count INTEGER NOT NULL,
+          first_task_event_id INTEGER NOT NULL,
+          last_task_event_id INTEGER NOT NULL,
+          first_successor_task_event_id INTEGER NOT NULL,
+          last_successor_task_event_id INTEGER NOT NULL,
+          state TEXT NOT NULL,
+          master_session_id INTEGER,
+          message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
+          event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
+          failure_code TEXT,
+          attempt_count INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS task_recovery_correction_gap_history (
+          correction_id INTEGER NOT NULL,
+          gap_id INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (correction_id, gap_id)
+        );
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_history_tombstones_immutable
+        BEFORE UPDATE ON task_recovery_history_tombstones
+        BEGIN
+          SELECT RAISE(ABORT, 'recovery history tombstone is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_history_tombstones_delete_immutable
+        BEFORE DELETE ON task_recovery_history_tombstones
+        BEGIN
+          SELECT RAISE(ABORT, 'recovery history tombstone is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_ordering_gap_history_immutable
+        BEFORE UPDATE ON task_recovery_ordering_gap_history
+        BEGIN
+          SELECT RAISE(ABORT, 'archived recovery gap is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_ordering_gap_history_delete_immutable
+        BEFORE DELETE ON task_recovery_ordering_gap_history
+        BEGIN
+          SELECT RAISE(ABORT, 'archived recovery gap is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_correction_history_immutable
+        BEFORE UPDATE ON task_recovery_correction_history
+        BEGIN
+          SELECT RAISE(ABORT, 'archived recovery correction is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_correction_history_delete_immutable
+        BEFORE DELETE ON task_recovery_correction_history
+        BEGIN
+          SELECT RAISE(ABORT, 'archived recovery correction is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_correction_gap_history_immutable
+        BEFORE UPDATE ON task_recovery_correction_gap_history
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'archived recovery correction coverage is immutable'
+          );
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_correction_gap_history_delete_immutable
+        BEFORE DELETE ON task_recovery_correction_gap_history
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'archived recovery correction coverage is immutable'
+          );
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+        jobs_archive_recovery_history
+        BEFORE DELETE ON jobs
+        BEGIN
+          INSERT OR IGNORE INTO task_recovery_history_tombstones(
+            job_id, task_session_id, master_session_id, deletion_source
+          ) VALUES (
+            OLD.id, OLD.session_id, OLD.origin_master_session_id, 'job'
+          );
+          INSERT OR IGNORE INTO task_recovery_ordering_gap_history
+          SELECT gap.*, CURRENT_TIMESTAMP
+          FROM task_recovery_ordering_gaps AS gap
+          WHERE gap.job_id = OLD.id;
+          INSERT OR IGNORE INTO task_recovery_correction_history
+          SELECT correction.*, CURRENT_TIMESTAMP
+          FROM task_recovery_corrections AS correction
+          WHERE correction.job_id = OLD.id;
+          INSERT OR IGNORE INTO task_recovery_correction_gap_history
+          SELECT link.*, CURRENT_TIMESTAMP
+          FROM task_recovery_correction_gaps AS link
+          JOIN task_recovery_corrections AS correction
+          ON correction.id = link.correction_id
+          WHERE correction.job_id = OLD.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_outbox_archive_history
+        BEFORE DELETE ON task_recovery_outbox
+        BEGIN
+          INSERT OR IGNORE INTO task_recovery_history_tombstones(
+            job_id, task_session_id, master_session_id, deletion_source
+          )
+          SELECT OLD.job_id, task_event.session_id,
+            COALESCE(
+              OLD.master_session_id,
+              job.origin_master_session_id
+            ),
+            'task_event'
+          FROM jobs AS job
+          LEFT JOIN events AS task_event
+          ON task_event.id = OLD.task_event_id
+          WHERE job.id = OLD.job_id;
+          INSERT OR IGNORE INTO task_recovery_ordering_gap_history
+          SELECT gap.*, CURRENT_TIMESTAMP
+          FROM task_recovery_ordering_gaps AS gap
+          WHERE gap.job_id = OLD.job_id;
+          INSERT OR IGNORE INTO task_recovery_correction_history
+          SELECT correction.*, CURRENT_TIMESTAMP
+          FROM task_recovery_corrections AS correction
+          WHERE correction.job_id = OLD.job_id;
+          INSERT OR IGNORE INTO task_recovery_correction_gap_history
+          SELECT link.*, CURRENT_TIMESTAMP
+          FROM task_recovery_correction_gaps AS link
+          JOIN task_recovery_corrections AS correction
+          ON correction.id = link.correction_id
+          WHERE correction.job_id = OLD.job_id;
+        END;
+        """
+    )
+    from .master_projection import assert_task_projection_outbox
+
+    assert_task_projection_outbox(
+        conn,
+        require_ordered=True,
+        require_state_generation=True,
+        require_legacy_ordering=True,
+        require_aggregated_recovery_corrections=True,
+        require_recovery_correction_coverage=True,
+    )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -4127,9 +4828,14 @@ MIGRATIONS: list[Migration] = [
         _aggregate_legacy_recovery_ordering_gaps,
     ),
     (
-        49,
+        50,
         "preserve delivered recovery markers and exact gap coverage",
         _preserve_delivered_recovery_corrections,
+    ),
+    (
+        51,
+        "detach recovery audit history from mutable Task records",
+        _detach_recovery_audit_history,
     ),
 ]
 

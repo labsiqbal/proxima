@@ -3,12 +3,12 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 45 tables. Applied migration version: **49**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 53 tables. Applied migration version: **51**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
 
-[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`graph_states`](#graph_states), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`knowledge_rebuild_intents`](#knowledge_rebuild_intents), [`master_focus_epochs`](#master_focus_epochs), [`master_focus_state`](#master_focus_state), [`master_message_context`](#master_message_context), [`master_projections`](#master_projections), [`master_tool_calls`](#master_tool_calls), [`message_focus`](#message_focus), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`self_update_runs`](#self_update_runs), [`sessions`](#sessions), [`task_delegations`](#task_delegations), [`task_dependencies`](#task_dependencies), [`task_projection_outbox`](#task_projection_outbox), [`task_recovery_correction_gaps`](#task_recovery_correction_gaps), [`task_recovery_corrections`](#task_recovery_corrections), [`task_recovery_ordering_gaps`](#task_recovery_ordering_gaps), [`task_recovery_outbox`](#task_recovery_outbox), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
+[`agent_sessions`](#agent_sessions), [`app_settings`](#app_settings), [`artifact_records`](#artifact_records), [`attention_items`](#attention_items), [`audit_log`](#audit_log), [`auth_sessions`](#auth_sessions), [`container_ops_migrations`](#container_ops_migrations), [`container_registry`](#container_registry), [`events`](#events), [`graph_states`](#graph_states), [`job_checkpoints`](#job_checkpoints), [`job_worktrees`](#job_worktrees), [`jobs`](#jobs), [`knowledge_rebuild_intents`](#knowledge_rebuild_intents), [`master_focus_epochs`](#master_focus_epochs), [`master_focus_state`](#master_focus_state), [`master_message_context`](#master_message_context), [`master_projections`](#master_projections), [`master_tool_calls`](#master_tool_calls), [`message_focus`](#message_focus), [`message_reviews`](#message_reviews), [`messages`](#messages), [`node_states`](#node_states), [`profiles`](#profiles), [`project_areas`](#project_areas), [`projects`](#projects), [`prompt_collaborations`](#prompt_collaborations), [`runs`](#runs), [`satpam_interventions`](#satpam_interventions), [`satpam_watch`](#satpam_watch), [`schedules`](#schedules), [`schema_migrations`](#schema_migrations), [`script_trust`](#script_trust), [`self_update_runs`](#self_update_runs), [`sessions`](#sessions), [`task_delegations`](#task_delegations), [`task_dependencies`](#task_dependencies), [`task_projection_outbox`](#task_projection_outbox), [`task_recovery_correction_gap_history`](#task_recovery_correction_gap_history), [`task_recovery_correction_gaps`](#task_recovery_correction_gaps), [`task_recovery_correction_history`](#task_recovery_correction_history), [`task_recovery_corrections`](#task_recovery_corrections), [`task_recovery_delivered_marker_staging`](#task_recovery_delivered_marker_staging), [`task_recovery_delivered_marker_staging_gaps`](#task_recovery_delivered_marker_staging_gaps), [`task_recovery_history_tombstones`](#task_recovery_history_tombstones), [`task_recovery_legacy_loss_gaps`](#task_recovery_legacy_loss_gaps), [`task_recovery_legacy_losses`](#task_recovery_legacy_losses), [`task_recovery_ordering_gap_history`](#task_recovery_ordering_gap_history), [`task_recovery_ordering_gaps`](#task_recovery_ordering_gaps), [`task_recovery_outbox`](#task_recovery_outbox), [`turn_file_journals`](#turn_file_journals), [`users`](#users), [`workflows`](#workflows)
 
 
 ### agent_sessions
@@ -720,6 +720,16 @@ SQLite (WAL mode). 45 tables. Applied migration version: **49**. This is the exa
 **Indexes:** `uq_task_projection_outbox_revision` - UNIQUE (job_id, projection_revision); `idx_task_projection_outbox_state` - (state, id)
 
 
+### task_recovery_correction_gap_history
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `correction_id` | INTEGER | NO |  | PK |
+| `gap_id` | INTEGER | NO |  | PK |
+| `created_at` | TEXT | NO |  |  |
+| `archived_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+
 ### task_recovery_correction_gaps
 
 | Column | Type | Null | Default | Key / FK |
@@ -729,6 +739,30 @@ SQLite (WAL mode). 45 tables. Applied migration version: **49**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
 **Indexes:** `idx_task_recovery_correction_gaps_gap` - (gap_id, correction_id)
+
+
+### task_recovery_correction_history
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `job_id` | INTEGER | NO |  |  |
+| `marker_kind` | TEXT | NO |  |  |
+| `successor_outbox_id` | INTEGER | NO |  |  |
+| `gap_count` | INTEGER | NO |  |  |
+| `first_task_event_id` | INTEGER | NO |  |  |
+| `last_task_event_id` | INTEGER | NO |  |  |
+| `first_successor_task_event_id` | INTEGER | NO |  |  |
+| `last_successor_task_event_id` | INTEGER | NO |  |  |
+| `state` | TEXT | NO |  |  |
+| `master_session_id` | INTEGER | yes |  |  |
+| `message_id` | INTEGER | yes |  | → `messages.id` (ON DELETE RESTRICT) |
+| `event_id` | INTEGER | yes |  | → `events.id` (ON DELETE RESTRICT) |
+| `failure_code` | TEXT | yes |  |  |
+| `attempt_count` | INTEGER | NO |  |  |
+| `created_at` | TEXT | NO |  |  |
+| `updated_at` | TEXT | NO |  |  |
+| `archived_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
 
 ### task_recovery_corrections
@@ -754,6 +788,92 @@ SQLite (WAL mode). 45 tables. Applied migration version: **49**. This is the exa
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
 **Indexes:** `uq_task_recovery_corrections_active_job` - UNIQUE (job_id); `idx_task_recovery_corrections_state` - (state, id)
+
+
+### task_recovery_delivered_marker_staging
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `correction_id` | INTEGER | yes |  | PK |
+| `job_id` | INTEGER | NO |  |  |
+| `successor_outbox_id` | INTEGER | NO |  |  |
+| `successor_task_event_id` | INTEGER | NO |  |  |
+| `gap_count` | INTEGER | NO |  |  |
+| `first_task_event_id` | INTEGER | NO |  |  |
+| `last_task_event_id` | INTEGER | NO |  |  |
+| `master_session_id` | INTEGER | NO |  |  |
+| `message_id` | INTEGER | NO |  |  |
+| `event_id` | INTEGER | NO |  |  |
+| `event_payload` | TEXT | NO |  |  |
+| `attempt_count` | INTEGER | NO |  |  |
+| `created_at` | TEXT | NO |  |  |
+| `updated_at` | TEXT | NO |  |  |
+
+
+### task_recovery_delivered_marker_staging_gaps
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `correction_id` | INTEGER | NO |  | PK |
+| `gap_id` | INTEGER | NO |  | PK |
+
+
+### task_recovery_history_tombstones
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `job_id` | INTEGER | yes |  | PK |
+| `task_session_id` | INTEGER | yes |  |  |
+| `master_session_id` | INTEGER | yes |  |  |
+| `deletion_source` | TEXT | NO |  |  |
+| `deleted_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+
+### task_recovery_legacy_loss_gaps
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `loss_id` | INTEGER | NO |  | PK → `task_recovery_legacy_losses.id` (ON DELETE RESTRICT) |
+| `gap_id` | INTEGER | NO |  | PK |
+
+
+### task_recovery_legacy_losses
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `job_id` | INTEGER | NO |  |  |
+| `observed_correction_id` | INTEGER | yes |  |  |
+| `successor_outbox_id` | INTEGER | NO |  |  |
+| `successor_task_event_id` | INTEGER | NO |  |  |
+| `gap_count` | INTEGER | NO |  |  |
+| `first_task_event_id` | INTEGER | NO |  |  |
+| `last_task_event_id` | INTEGER | NO |  |  |
+| `first_successor_task_event_id` | INTEGER | NO |  |  |
+| `last_successor_task_event_id` | INTEGER | NO |  |  |
+| `master_session_id` | INTEGER | NO |  |  |
+| `message_id` | INTEGER | NO |  | → `messages.id` (ON DELETE RESTRICT) |
+| `event_id` | INTEGER | NO |  | → `events.id` (ON DELETE RESTRICT) |
+| `reason` | TEXT | NO |  |  |
+| `event_payload` | TEXT | NO |  |  |
+| `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
+
+
+### task_recovery_ordering_gap_history
+
+| Column | Type | Null | Default | Key / FK |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes |  | PK |
+| `job_id` | INTEGER | NO |  |  |
+| `predecessor_outbox_id` | INTEGER | NO |  |  |
+| `successor_outbox_id` | INTEGER | NO |  |  |
+| `kind` | TEXT | NO |  |  |
+| `predecessor_task_event_id` | INTEGER | NO |  |  |
+| `successor_task_event_id` | INTEGER | NO |  |  |
+| `predecessor_publication_event_id` | INTEGER | yes |  |  |
+| `successor_publication_event_id` | INTEGER | NO |  |  |
+| `created_at` | TEXT | NO |  |  |
+| `archived_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
 
 ### task_recovery_ordering_gaps

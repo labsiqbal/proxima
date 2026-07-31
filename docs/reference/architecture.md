@@ -662,6 +662,12 @@ summarizes only still-uncovered bounded gap counts and predecessor/successor
 Task-event ranges, and emits at most one new history marker after ordered outboxes
 and the canonical current Task projection are settled. Still-orderable predecessors
 remain on the normal recovery path.
+The v48 compatibility migration stages every delivered marker row and its exact
+coverage before aggregation. V49 restores only from that evidence and records
+bounded legacy identity loss for databases already damaged before staging existed.
+Source deletion first copies marker, gap, and coverage rows into immutable history
+tables keyed by their original ids and writes a Task-source tombstone; only then may
+the live Task event, session, job, or outbox cascades proceed.
 Projection message, event, and ledger rows then commit together. Startup validates
 their strict owner, source/type, foreign-key, index, complete-link, and bounded payload
 contract.

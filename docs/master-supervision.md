@@ -94,6 +94,12 @@ new bounded `master.task.recovery_history_corrected` aggregate per Task summariz
 still-uncovered gap counts and event ranges after the current Task projection
 settles. Previously delivered legacy partial markers and their messages and events
 remain immutable, and an exact coverage ledger links each marker to its causal gaps.
+The v48 upgrade stages each delivered row before aggregation so v49 restores its
+original primary key, payload, links, attempts, and timestamps. A database that
+predates that staging records bounded immutable legacy loss instead of inventing
+replacement metadata. Deleting the Task, Task session, or job archives marker, gap,
+and coverage identity behind a stable tombstone before the live source cascades;
+surviving Master message and event links remain coherent.
 Unavailable legacy Focus is recorded as failed attribution and can be replayed only
 after attribution becomes provable; the Task restore remains committed and no
 unattributed history is published. Each reconciliation candidate has its own

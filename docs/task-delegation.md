@@ -139,6 +139,12 @@ checkpoint, prior/new status, discarded progress, and conflicts through bounded
 server-owned summaries rather than arbitrary graph identifiers. A legacy Task with
 unavailable Focus still restores and exposes every failed-attribution repair intent,
 but publishes no unattributed Master history.
+Delivered v47 marker identity is staged before v48 aggregation and restored only
+from the exact original row, payload, links, timestamps, attempts, and coverage.
+Previously damaged upgrades retain an immutable bounded legacy-loss record instead
+of synthesizing a replacement marker. Task, Task-session, and job deletion archive
+the exact recovery gap, marker, and coverage ids behind a source tombstone before
+live foreign-key cascades, while Master messages and events remain linked.
 Git preflight completes before the immediate write transaction, then
 the restore rereads checkpoint, conflict, job, run, and node state under that lock.
 All validation and durable writes complete before a job worktree reset. A post-reset

@@ -631,7 +631,14 @@ Already-delivered legacy correction messages, events, and durable marker rows re
 immutable partial history, with exact links to the gaps each marker covered. Any
 still-uncovered gaps are combined into at most one new bounded aggregate correction
 marker per Task after the current Task projection, while predecessors without a
-published successor return to normal ordered delivery. SSE
+published successor return to normal ordered delivery. The v48 compatibility path
+stages every delivered marker's original id, links, payload, attempt metadata, and
+timestamps before aggregation; v49 restores only from that exact evidence. Older
+databases that already lost marker identity retain the bounded published event as an
+immutable legacy-loss record instead of receiving invented identity or timestamps.
+Deleting a Task, its Task session, or its job source tombstones and archives the
+correction, gap, and coverage rows before live cascades, preserving their stable ids
+and surviving Master message/event links. SSE
 reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).

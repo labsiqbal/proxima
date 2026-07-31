@@ -976,6 +976,9 @@ def assert_task_projection_outbox(
                     "WHERE NOT EXISTS ("
                     "SELECT 1 FROM task_recovery_correction_gaps AS link "
                     "WHERE link.gap_id = gap.id"
+                    ") AND NOT EXISTS ("
+                    "SELECT 1 FROM task_recovery_legacy_loss_gaps AS link "
+                    "WHERE link.gap_id = gap.id"
                     ") LIMIT 1"
                 ).fetchone():
                     raise RuntimeError(
@@ -987,14 +990,17 @@ def assert_task_projection_outbox(
                     "ON active_link.correction_id = active.id "
                     "WHERE active.state IN ("
                     "'pending', 'failed_attribution'"
-                    ") AND EXISTS ("
+                    ") AND (EXISTS ("
                     "SELECT 1 "
                     "FROM task_recovery_correction_gaps AS delivered_link "
                     "JOIN task_recovery_corrections AS delivered "
                     "ON delivered.id = delivered_link.correction_id "
                     "WHERE delivered_link.gap_id = active_link.gap_id "
                     "AND delivered.state = 'projected'"
-                    ") LIMIT 1"
+                    ") OR EXISTS ("
+                    "SELECT 1 FROM task_recovery_legacy_loss_gaps AS loss "
+                    "WHERE loss.gap_id = active_link.gap_id"
+                    ")) LIMIT 1"
                 ).fetchone():
                     raise RuntimeError(
                         "Task recovery correction aggregate overlaps "
@@ -1087,6 +1093,26 @@ def assert_task_projection_outbox(
                             "Delivered Task recovery correction event "
                             "is invalid"
                         )
+                if conn.execute(
+                    "SELECT 1 FROM task_recovery_legacy_losses AS loss "
+                    "LEFT JOIN ("
+                    "SELECT loss_id, COUNT(*) AS gap_count "
+                    "FROM task_recovery_legacy_loss_gaps GROUP BY loss_id"
+                    ") AS covered ON covered.loss_id = loss.id "
+                    "JOIN events AS event ON event.id = loss.event_id "
+                    "JOIN messages AS message "
+                    "ON message.id = loss.message_id "
+                    "WHERE covered.gap_count IS NULL "
+                    "OR covered.gap_count != loss.gap_count "
+                    "OR event.session_id != loss.master_session_id "
+                    "OR message.session_id != loss.master_session_id "
+                    "OR event.type != "
+                    "'master.task.recovery_history_corrected' "
+                    "OR event.payload != loss.event_payload LIMIT 1"
+                ).fetchone():
+                    raise RuntimeError(
+                        "Legacy Task recovery loss record is invalid"
+                    )
             elif conn.execute(
                 "SELECT 1 FROM task_recovery_ordering_gaps AS gap "
                 "WHERE NOT EXISTS ("

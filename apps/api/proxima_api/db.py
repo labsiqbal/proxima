@@ -898,6 +898,188 @@ CREATE TABLE IF NOT EXISTS task_recovery_correction_gaps (
 );
 CREATE INDEX IF NOT EXISTS idx_task_recovery_correction_gaps_gap
   ON task_recovery_correction_gaps(gap_id, correction_id);
+CREATE TABLE IF NOT EXISTS task_recovery_delivered_marker_staging (
+  correction_id INTEGER PRIMARY KEY,
+  job_id INTEGER NOT NULL,
+  successor_outbox_id INTEGER NOT NULL,
+  successor_task_event_id INTEGER NOT NULL
+    CHECK (successor_task_event_id > 0),
+  gap_count INTEGER NOT NULL CHECK (gap_count > 0),
+  first_task_event_id INTEGER NOT NULL CHECK (first_task_event_id > 0),
+  last_task_event_id INTEGER NOT NULL
+    CHECK (last_task_event_id >= first_task_event_id),
+  master_session_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL,
+  event_id INTEGER NOT NULL UNIQUE,
+  event_payload TEXT NOT NULL CHECK (length(event_payload) <= 4096),
+  attempt_count INTEGER NOT NULL CHECK (attempt_count >= 0),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_recovery_delivered_marker_staging_gaps (
+  correction_id INTEGER NOT NULL,
+  gap_id INTEGER NOT NULL,
+  PRIMARY KEY (correction_id, gap_id)
+);
+CREATE TRIGGER IF NOT EXISTS
+task_recovery_delivered_marker_staging_immutable
+BEFORE UPDATE ON task_recovery_delivered_marker_staging
+BEGIN
+  SELECT RAISE(ABORT, 'staged recovery correction is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS
+task_recovery_delivered_marker_staging_delete_immutable
+BEFORE DELETE ON task_recovery_delivered_marker_staging
+BEGIN
+  SELECT RAISE(ABORT, 'staged recovery correction is immutable');
+END;
+CREATE TABLE IF NOT EXISTS task_recovery_legacy_losses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL,
+  observed_correction_id INTEGER,
+  successor_outbox_id INTEGER NOT NULL,
+  successor_task_event_id INTEGER NOT NULL
+    CHECK (successor_task_event_id > 0),
+  gap_count INTEGER NOT NULL CHECK (gap_count > 0),
+  first_task_event_id INTEGER NOT NULL CHECK (first_task_event_id > 0),
+  last_task_event_id INTEGER NOT NULL
+    CHECK (last_task_event_id >= first_task_event_id),
+  first_successor_task_event_id INTEGER NOT NULL
+    CHECK (first_successor_task_event_id > 0),
+  last_successor_task_event_id INTEGER NOT NULL CHECK (
+    last_successor_task_event_id >= first_successor_task_event_id
+  ),
+  master_session_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE RESTRICT,
+  event_id INTEGER NOT NULL UNIQUE REFERENCES events(id) ON DELETE RESTRICT,
+  reason TEXT NOT NULL CHECK (
+    reason IN (
+      'v48_identity_unavailable', 'pre_v50_identity_unavailable'
+    )
+  ),
+  event_payload TEXT NOT NULL CHECK (length(event_payload) <= 4096),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS task_recovery_legacy_loss_gaps (
+  loss_id INTEGER NOT NULL
+    REFERENCES task_recovery_legacy_losses(id) ON DELETE RESTRICT,
+  gap_id INTEGER NOT NULL,
+  PRIMARY KEY (loss_id, gap_id)
+);
+CREATE TRIGGER IF NOT EXISTS task_recovery_legacy_losses_immutable
+BEFORE UPDATE ON task_recovery_legacy_losses
+BEGIN
+  SELECT RAISE(ABORT, 'legacy recovery loss is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS task_recovery_legacy_losses_delete_immutable
+BEFORE DELETE ON task_recovery_legacy_losses
+BEGIN
+  SELECT RAISE(ABORT, 'legacy recovery loss is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS task_recovery_legacy_loss_gaps_immutable
+BEFORE UPDATE ON task_recovery_legacy_loss_gaps
+BEGIN
+  SELECT RAISE(ABORT, 'legacy recovery loss coverage is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS task_recovery_legacy_loss_gaps_delete_immutable
+BEFORE DELETE ON task_recovery_legacy_loss_gaps
+BEGIN
+  SELECT RAISE(ABORT, 'legacy recovery loss coverage is immutable');
+END;
+CREATE TABLE IF NOT EXISTS task_recovery_history_tombstones (
+  job_id INTEGER PRIMARY KEY,
+  task_session_id INTEGER,
+  master_session_id INTEGER,
+  deletion_source TEXT NOT NULL CHECK (
+    deletion_source IN ('job', 'task_event')
+  ),
+  deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS task_recovery_ordering_gap_history (
+  id INTEGER PRIMARY KEY,
+  job_id INTEGER NOT NULL,
+  predecessor_outbox_id INTEGER NOT NULL,
+  successor_outbox_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  predecessor_task_event_id INTEGER NOT NULL,
+  successor_task_event_id INTEGER NOT NULL,
+  predecessor_publication_event_id INTEGER,
+  successor_publication_event_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS task_recovery_correction_history (
+  id INTEGER PRIMARY KEY,
+  job_id INTEGER NOT NULL,
+  marker_kind TEXT NOT NULL,
+  successor_outbox_id INTEGER NOT NULL,
+  gap_count INTEGER NOT NULL,
+  first_task_event_id INTEGER NOT NULL,
+  last_task_event_id INTEGER NOT NULL,
+  first_successor_task_event_id INTEGER NOT NULL,
+  last_successor_task_event_id INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  master_session_id INTEGER,
+  message_id INTEGER REFERENCES messages(id) ON DELETE RESTRICT,
+  event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT,
+  failure_code TEXT,
+  attempt_count INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS task_recovery_correction_gap_history (
+  correction_id INTEGER NOT NULL,
+  gap_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (correction_id, gap_id)
+);
+CREATE TRIGGER IF NOT EXISTS task_recovery_history_tombstones_immutable
+BEFORE UPDATE ON task_recovery_history_tombstones
+BEGIN
+  SELECT RAISE(ABORT, 'recovery history tombstone is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS
+task_recovery_history_tombstones_delete_immutable
+BEFORE DELETE ON task_recovery_history_tombstones
+BEGIN
+  SELECT RAISE(ABORT, 'recovery history tombstone is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS task_recovery_ordering_gap_history_immutable
+BEFORE UPDATE ON task_recovery_ordering_gap_history
+BEGIN
+  SELECT RAISE(ABORT, 'archived recovery gap is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS
+task_recovery_ordering_gap_history_delete_immutable
+BEFORE DELETE ON task_recovery_ordering_gap_history
+BEGIN
+  SELECT RAISE(ABORT, 'archived recovery gap is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS task_recovery_correction_history_immutable
+BEFORE UPDATE ON task_recovery_correction_history
+BEGIN
+  SELECT RAISE(ABORT, 'archived recovery correction is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS
+task_recovery_correction_history_delete_immutable
+BEFORE DELETE ON task_recovery_correction_history
+BEGIN
+  SELECT RAISE(ABORT, 'archived recovery correction is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS
+task_recovery_correction_gap_history_immutable
+BEFORE UPDATE ON task_recovery_correction_gap_history
+BEGIN
+  SELECT RAISE(ABORT, 'archived recovery correction coverage is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS
+task_recovery_correction_gap_history_delete_immutable
+BEFORE DELETE ON task_recovery_correction_gap_history
+BEGIN
+  SELECT RAISE(ABORT, 'archived recovery correction coverage is immutable');
+END;
 -- Cross-Area outcomes are represented as several one-Area Tasks joined by
 -- these edges. The recursive trigger makes cycle safety a database invariant,
 -- including for writers that do not use TaskDelegationService.
@@ -1475,28 +1657,6 @@ def migrate_existing(conn: sqlite3.Connection) -> None:
             "CHECK (last_successor_task_event_id "
             ">= first_successor_task_event_id)",
         )
-        correction_schema = " ".join(
-            str(
-                conn.execute(
-                    "SELECT sql FROM sqlite_master WHERE type = 'table' "
-                    "AND name = 'task_recovery_corrections'"
-                ).fetchone()[0]
-            )
-            .lower()
-            .split()
-        )
-        if (
-            "(marker_kind = 'legacy_partial' and state = 'projected'"
-            not in correction_schema
-        ):
-            conn.execute(
-                "DELETE FROM task_recovery_corrections AS pending "
-                "WHERE pending.state != 'projected' AND EXISTS ("
-                "SELECT 1 FROM task_recovery_corrections AS delivered "
-                "WHERE delivered.job_id = pending.job_id "
-                "AND delivered.state = 'projected'"
-                ")"
-            )
         if conn.execute(
             "SELECT 1 FROM task_recovery_corrections "
             "WHERE marker_kind = 'aggregate' "
