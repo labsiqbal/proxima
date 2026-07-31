@@ -346,18 +346,18 @@ Legacy Ops rows at `.` remain usable until migration succeeds. Startup creates a
 dry-run manifest with content hashes. It includes an existing owner-authored
 `container.md` as a byte-preserving move, or binds exact generated content only when
 that legacy document is absent. It rejects collisions or ambiguous types before
-moving anything and uses atomic no-clobber creation and rename primitives for only
-known Ops-owned paths on the same filesystem. Creation and rename operate relative
-to stable no-follow directory descriptors and revalidate root identity before the
-durable database switch, so replacing a parent cannot redirect a move. Generated
-documents prefer anonymous same-filesystem temporary storage; the fallback has an
-unpredictable manifest-bound name and durably advances through planned, created,
-ready, published, and complete phases. Device and inode identity proves which
-partial artifact Proxima may resume or clean, while unknown files remain owner
-content. Every manifest entry binds the opened top-level inode plus descendant file
-and directory identities, and descriptor-relative no-follow hashing rejects swaps
-even when replacement bytes match. A durable `moving` marker supports restart after
-any completed rename. Older moving markers upgrade in memory and are persisted at
+publication. Regular files are linked into authoritative names from opened,
+manifest-bound descriptors. Directories are published entry by entry relative to
+stable no-follow descriptors. The legacy name is moved only into a manifest-bound
+retained namespace, so a pathname swap can preserve unknown owner bytes but cannot
+select them as authoritative. Generated documents require anonymous same-filesystem
+storage and persist device, inode, and expected hash before the first visible
+no-clobber recovery link. The exact recovery link remains as a durable anchor; no
+cleanup unlinks a re-resolved name. Every manifest entry binds the opened top-level
+inode plus descendant file and directory identities, and descriptor-relative
+no-follow hashing rejects swaps even when replacement bytes match. A durable
+`moving` marker supports restart after each publication phase. Older moving markers
+upgrade in memory and are persisted at
 the current version only when legacy and physical document state identifies one safe
 continuation; ambiguous candidates remain untouched for owner intervention.
 Failures open a `container_ops_migration` Attention item and retain the legacy row;
@@ -376,20 +376,25 @@ physical Ops root and an exact match for any existing manifest-bound
 filesystem mutations share a cross-process per-Container mutation lock. Design,
 Moodboard, chat-media publication, uploads, and turn restore use that same
 root-resolution boundary. Agent runs, project terminals, and preview apps retain a
-shared activity lease for their complete mutation-capable lifetime. Each writer
-starts beneath a guardian that inherits the lease before publication and holds it
-until the complete process tree exits, including after API exit, cancellation,
-runner recycling, or detached descendants. Migration and complete Project purge
-require exclusive quiescence. Upload request bodies are staged before synchronous
-publication. Virtual roots are resolved only after acquiring the appropriate
-boundary, and late destinations fail without replacement. Generated Container
-documents persist an anonymous inode identity and expected hash before the first
-recovery link; the named fallback binds a manifest ownership token in filesystem
-metadata before content is written.
+shared activity lease for their complete mutation-capable lifetime. The guardian is
+a standalone script selected by verified absolute path, launched with isolated
+Python import behavior, and changes to a trusted working directory before it adopts
+the lease. A detached Linux subreaper sentinel or Windows Job object owns the writer
+tree. If a platform cannot prove complete tree exit, Proxima fails closed by
+refusing to start the guarded writer. Guarded cached runners recycle after
+their turn. Migration and complete
+Project purge require bounded exclusive quiescence and return an active-process
+reason instead of waiting forever. On Linux, explicit owner retry signals only
+project-scoped guardians whose trusted record and live process identity still match.
+Upload request bodies are staged before synchronous publication. Virtual roots are
+resolved only after acquiring the appropriate boundary, and late destinations fail
+without replacement. See
+[ADR-0029](../adr/0029-container-activity-and-migration-publication.md).
 Root-repository exclusion traverses `.git/info/exclude` relative to the already-open
-Container descriptor. Fresh Windows Container creation uses stable no-reparse
-handles, creates starter path components relative to the physical handle, and uses
-a relative no-clobber file create, while unsafe legacy migration remains
+Container descriptor. Fresh Windows Container creation opens and identity-binds the
+Container handle before creating `ops/`, creates every starter path component
+relative to stable no-reparse handles, and uses a relative no-clobber file create,
+while unsafe legacy migration remains
 fail-closed when an equivalent move primitive is unavailable. A repaired
 already-physical layout with open migration Attention
 becomes explicitly retryable; the same boundary revalidates it and resolves Attention

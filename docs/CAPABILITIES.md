@@ -1284,22 +1284,29 @@ A repo at `.` is the one intentional containment case; its local git exclude kee
 Existing Containers whose Ops row is `.` migrate at startup. The migration first
 builds and hashes a dry-run manifest. An owner-authored legacy `container.md` is
 hash-bound and moved byte-for-byte; a generated document is planned only when the
-legacy document is absent. Atomic no-clobber creation and same-filesystem renames
-through stable no-follow directory handles move only manifest-bound inodes for known
-Ops-owned paths. Generated documents prefer anonymous same-filesystem temporary
-storage and persists the anonymous inode identity and expected hash before linking
-it into the recovery namespace. The named fallback persists an unpredictable
-ownership token before creation and binds it as filesystem metadata before writing.
-Creation, preparation, publication, and cleanup are separate fsynced phases. Only
-an exact proven Proxima recovery artifact can be hidden from inspection, resumed,
-or cleaned up. One cross-process per-Container mutation lock serializes the filesystem and
+legacy document is absent. Atomic no-clobber publication through stable no-follow
+directory handles publishes only manifest-bound inodes for known Ops-owned paths.
+Regular files are linked from opened descriptors; directories are published entry
+by entry, and the original legacy name is retained under a manifest-bound recovery
+name rather than deleted. Generated documents require anonymous same-filesystem
+storage and persist the anonymous inode identity and expected hash before the first
+visible recovery link. The exact recovery hardlink remains as a durable anchor, so
+retry never infers ownership from a name and cleanup never unlinks a re-resolved
+entry. One cross-process per-Container mutation lock serializes the filesystem and
 durable marker boundary with supported Area, Files, Design, Moodboard, chat-media,
 and turn restore mutations. A separate shared activity lease spans agent runs,
-project terminals, and preview apps. A guardian process inherits that lease before
+project terminals, and preview apps. A standalone guardian selected by verified
+absolute path runs in isolated Python mode from a trusted working directory. A
+detached Linux subreaper sentinel or a Windows Job object inherits the lease before
 the writer starts and retains it until the complete process tree exits, including
-after API shutdown or cancellation; migration and complete Project deletion require
-an exclusive quiescent lease. Async uploads finish staging before they acquire the
-synchronous publication boundary. The durable marker resumes safely after
+after API shutdown or cancellation. Platforms without a complete tree-proof
+primitive refuse guarded Project writers. Guarded cached runners recycle after
+their turn, and exclusive migration acquisition is bounded; migration and complete
+Project deletion require that exclusive quiescent lease. On Linux, explicit owner
+retry can stop only a project-scoped guardian whose trusted process identity record
+still matches.
+Async uploads finish staging before they acquire the synchronous publication
+boundary. The durable marker resumes safely after
 interruption. Older markers upgrade only when
 the legacy and physical document state is unambiguous; otherwise every candidate is
 preserved for owner intervention. Any collision, changed content, unsupported file
@@ -1311,9 +1318,11 @@ Existing generated content must match its manifest exactly, and a late destinati
 can never be replaced. A repaired physical layout with an open Attention item can use
 the same explicit retry boundary to recheck the layout and resolve the item without
 moving content. Root-repository exclusion is updated through the same opened
-no-follow Container descriptor. Fresh Windows Containers use no-reparse directory
-handles, create every starter component relative to the opened physical Ops handle,
-and use relative no-clobber document creation instead of POSIX descriptor APIs.
+no-follow Container descriptor. Fresh Windows Containers open and identity-bind the
+Container before creating `ops/` and every starter component relative to
+no-reparse handles, then use relative no-clobber document creation instead of POSIX
+descriptor APIs. See
+[ADR-0029](adr/0029-container-activity-and-migration-publication.md).
 The Attention item links to a durable Project settings detail route. That surface
 shows the affected Project, exact stored owner-safe reason, migration phase, legacy
 and physical path states, exact physical-root entries, conflicts, and which Ops paths

@@ -378,6 +378,10 @@ def register(app, deps):
                     "migration": before,
                 },
             )
+        container_registry.recover_container_activity_guardians(
+            db(),
+            project,
+        )
         if not container_registry.migrate_container_ops(db(), project):
             after = container_registry.inspect_ops_migration(db(), project)
             raise HTTPException(

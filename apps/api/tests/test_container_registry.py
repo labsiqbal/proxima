@@ -684,7 +684,7 @@ def test_interrupted_move_is_visible_and_owner_retry_resolves_attention(
     assert body["attention"]["status"] == "open"
     assert body["what_remains_usable"]["unavailable_paths"]
     assert {item["layout"] for item in body["legacy_owned_paths"]} == {
-        "legacy",
+        "both",
         "physical",
     }
 
@@ -1065,6 +1065,34 @@ def test_retry_waits_for_active_container_process_lease(tmp_path: Path):
     assert (root / "ops" / "wiki" / "keep.md").is_file()
 
 
+def test_retry_returns_when_active_process_cannot_be_recovered(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "bounded-active-process"
+    container_id = _legacy_container(conn, root, "bounded-active-process")
+    (root / "wiki").mkdir()
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    monkeypatch.setattr(
+        container_registry,
+        "QUIESCENCE_TIMEOUT_SECONDS",
+        0.05,
+    )
+    started = time.monotonic()
+    try:
+        assert migrate_container_ops(conn, container_id) is False
+    finally:
+        lease.release()
+
+    assert time.monotonic() - started < 1
+    detail = container_registry.inspect_ops_migration(conn, container_id)
+    assert "active processes" in str(detail["stored_reason"])
+
+
 def test_container_activity_lease_excludes_quiescence_in_another_process(
     tmp_path: Path,
 ):
@@ -1179,6 +1207,105 @@ def test_activity_guardian_survives_parent_exit_and_detached_writer(
     assert acquired.read_text(encoding="utf-8") == "acquired"
 
 
+def test_activity_guardian_uses_isolated_verified_script(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "guardian-import-shadow"
+    container_id = _legacy_container(conn, root, "guardian-import-shadow")
+    project_package = root / "proxima_api"
+    project_package.mkdir()
+    (project_package / "__init__.py").write_text("", encoding="utf-8")
+    (project_package / "activity_guardian.py").write_text(
+        "from pathlib import Path\nPath('shadowed').write_text('yes')\n",
+        encoding="utf-8",
+    )
+    target_ran = root / "target-ran"
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    command, options = lease.guard_process(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; "
+                f"Path({str(target_ran)!r}).write_text('yes')"
+            ),
+        ]
+    )
+    assert command[1:3] == ["-I", "-S"]
+    assert Path(command[3]).is_absolute()
+    process = subprocess.Popen(command, cwd=root, **options)
+    lease.mark_process_started()
+    lease.release()
+
+    assert process.wait(timeout=5) == 0
+    assert target_ran.read_text(encoding="utf-8") == "yes"
+    assert not (root / "shadowed").exists()
+
+
+def test_activity_guardian_rejects_unsupported_process_tree_platform(
+    tmp_path: Path,
+    monkeypatch,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "guardian-unsupported-platform"
+    container_id = _legacy_container(
+        conn,
+        root,
+        "guardian-unsupported-platform",
+    )
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    monkeypatch.setattr(container_registry.sys, "platform", "darwin")
+    try:
+        with pytest.raises(
+            container_registry.ContainerBoundaryError,
+            match="cannot prove complete Project process-tree exit",
+        ):
+            lease.guard_process([sys.executable, "-c", "pass"])
+    finally:
+        lease.release()
+
+
+def test_owner_retry_recovers_verified_orphan_guardian(
+    tmp_path: Path,
+):
+    conn = _database(tmp_path)
+    root = tmp_path / "guardian-owner-recovery"
+    container_id = _legacy_container(conn, root, "guardian-owner-recovery")
+    lease = container_registry.acquire_container_activity_lease(
+        conn,
+        container_id,
+    )
+    command, options = lease.guard_process(
+        [sys.executable, "-c", "import time; time.sleep(60)"]
+    )
+    process = subprocess.Popen(command, cwd=root, **options)
+    lease.mark_process_started()
+    lease.release()
+    database = tmp_path / "proxima.db"
+    record_dir = database.parent / f".{database.name}.container-locks"
+    deadline = time.monotonic() + 5
+    while (
+        not list(record_dir.glob(f"{container_id}.activity.*.guardian.json"))
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+
+    assert container_registry.recover_container_activity_guardians(
+        conn,
+        container_id,
+    ) == 1
+    assert process.wait(timeout=5) != 0
+    with container_registry.container_quiescence_lock(conn, container_id):
+        pass
+
+
 def test_generated_container_doc_creation_never_clobbers_late_content(
     tmp_path: Path,
     monkeypatch,
@@ -1209,7 +1336,7 @@ def test_generated_container_doc_creation_never_clobbers_late_content(
     assert (root / "wiki" / "keep.md").read_text(encoding="utf-8") == "keep"
 
 
-def test_manifest_rename_never_clobbers_late_destination(
+def test_manifest_publication_never_clobbers_late_destination(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -1217,19 +1344,19 @@ def test_manifest_rename_never_clobbers_late_destination(
     root = tmp_path / "late-manifest-destination"
     container_id = _legacy_container(conn, root, "late-manifest-destination")
     (root / "design.md").write_bytes(b"legacy design")
-    real_rename = container_registry._rename_noreplace
+    real_publish = container_registry._publish_open_regular_file
     injected = False
 
-    def inject_destination(*args, **kwargs):
+    def inject_destination(source_fd: int, destination_fd: int, name: str):
         nonlocal injected
         if not injected:
             injected = True
-            (root / "ops" / "design.md").write_bytes(b"late destination")
-        return real_rename(*args, **kwargs)
+            (root / "ops" / name).write_bytes(b"late destination")
+        return real_publish(source_fd, destination_fd, name)
 
     monkeypatch.setattr(
         container_registry,
-        "_rename_noreplace",
+        "_publish_open_regular_file",
         inject_destination,
     )
 
@@ -1240,7 +1367,7 @@ def test_manifest_rename_never_clobbers_late_destination(
 
 @pytest.mark.parametrize(
     "stage",
-    ("before_temp", "after_create", "after_ready", "after_publish"),
+    ("before_temp", "after_ready", "after_publish"),
 )
 def test_generated_document_recovers_each_owned_write_stage(
     tmp_path: Path,
@@ -1259,11 +1386,9 @@ def test_generated_document_recovers_each_owned_write_stage(
     container_registry._upsert_marker(conn, container_id, "moving", manifest)
     (root / "ops").mkdir()
     recovery_path = root / "ops" / recovery["path"]
-    if stage in {"after_create", "after_ready", "after_publish"}:
-        recovery_path.write_bytes(
-            b"" if stage == "after_create" else planned["content"].encode()
-        )
-        recovery["phase"] = "created" if stage == "after_create" else "ready"
+    if stage in {"after_ready", "after_publish"}:
+        recovery_path.write_bytes(planned["content"].encode())
+        recovery["phase"] = "ready"
         recovery["identity"] = container_registry._stat_identity(recovery_path.lstat())
         container_registry._upsert_marker(
             conn,
@@ -1278,7 +1403,7 @@ def test_generated_document_recovers_each_owned_write_stage(
     assert (root / "ops" / "container.md").read_text(
         encoding="utf-8"
     ) == planned["content"]
-    assert not (root / "ops" / recovery["path"]).exists()
+    assert recovery_path.samefile(root / "ops" / "container.md")
 
 
 @pytest.mark.parametrize("phase", ("prepared", "ready"))
@@ -1319,10 +1444,10 @@ def test_anonymous_document_publication_resumes_each_link_boundary(
 
     assert target.read_text(encoding="utf-8") == content
     assert recovery["phase"] == "complete"
-    assert not (parent / recovery["path"]).exists()
+    assert (parent / recovery["path"]).samefile(target)
 
 
-def test_named_recovery_reconciles_only_owned_hidden_artifact(
+def test_missing_anonymous_storage_never_creates_named_recovery(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -1333,24 +1458,17 @@ def test_named_recovery_reconciles_only_owned_hidden_artifact(
     expected_hash = hashlib.sha256(content.encode()).hexdigest()
     recovery = container_registry._planned_recovery_temp(expected_hash)
     real_open = os.open
-    real_fsync = os.fsync
-    crashed = False
 
     def no_anonymous(path, flags, *args, **kwargs):
         if hasattr(os, "O_TMPFILE") and flags & os.O_TMPFILE == os.O_TMPFILE:
             raise OSError(errno.ENOTSUP, "anonymous files unavailable")
         return real_open(path, flags, *args, **kwargs)
 
-    def crash_after_hidden_identity(fd: int):
-        nonlocal crashed
-        if recovery["phase"] == "creating" and not crashed:
-            crashed = True
-            raise OSError("simulated process exit")
-        return real_fsync(fd)
-
     monkeypatch.setattr(container_registry.os, "open", no_anonymous)
-    monkeypatch.setattr(container_registry.os, "fsync", crash_after_hidden_identity)
-    with pytest.raises(OSError, match="simulated process exit"):
+    with pytest.raises(
+        container_registry.OpsMigrationCollision,
+        match="cannot publish recovery data anonymously",
+    ):
         container_registry._atomic_write_if_missing(
             target,
             content,
@@ -1359,17 +1477,30 @@ def test_named_recovery_reconciles_only_owned_hidden_artifact(
             persist_recovery=lambda: None,
         )
 
-    monkeypatch.setattr(container_registry.os, "fsync", real_fsync)
-    container_registry._atomic_write_if_missing(
-        target,
-        content,
-        expected_hash=expected_hash,
-        recovery_temp=recovery,
-        persist_recovery=lambda: None,
-    )
+    assert not target.exists()
+    assert not (parent / recovery["path"]).exists()
+    assert recovery["phase"] == "planned"
+
+
+def test_fresh_document_uses_no_clobber_target_without_anonymous_storage(
+    tmp_path: Path,
+    monkeypatch,
+):
+    parent = tmp_path / "fresh-document"
+    parent.mkdir()
+    target = parent / "container.md"
+    content = "fresh document"
+    real_open = os.open
+
+    def no_anonymous(path, flags, *args, **kwargs):
+        if hasattr(os, "O_TMPFILE") and flags & os.O_TMPFILE == os.O_TMPFILE:
+            raise OSError(errno.ENOTSUP, "anonymous files unavailable")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(container_registry.os, "open", no_anonymous)
+    container_registry._atomic_write_if_missing(target, content)
 
     assert target.read_text(encoding="utf-8") == content
-    assert recovery["phase"] == "complete"
 
 
 def test_v2_generated_document_manifest_upgrades_with_owned_recovery(
@@ -1414,7 +1545,7 @@ def test_v4_planned_document_upgrades_to_owned_recovery_protocol(
         container_registry.get_container(conn, container_id),
     )
     manifest["version"] = 4
-    manifest["container_doc"]["recovery_temp"].pop("ownership_token")
+    manifest["container_doc"]["recovery_temp"].pop("ownership_token", None)
     _store_moving_manifest(conn, container_id, manifest)
 
     assert migrate_container_ops(conn, container_id) is True
@@ -1427,7 +1558,7 @@ def test_v4_planned_document_upgrades_to_owned_recovery_protocol(
     recovery = upgraded["container_doc"]["recovery_temp"]
     assert marker["migration_version"] == container_registry.OPS_MIGRATION_VERSION
     assert upgraded["version"] == container_registry.OPS_MIGRATION_VERSION
-    assert len(recovery["ownership_token"]) == 64
+    assert "ownership_token" not in recovery
     assert recovery["phase"] == "complete"
 
 
@@ -1749,7 +1880,7 @@ def test_parent_symlink_swap_cannot_redirect_manifest_move(
     assert (parked / "design.md").read_bytes() == b"legacy design"
 
 
-def test_manifest_move_rejects_same_content_inode_swap(
+def test_manifest_publication_cannot_select_swapped_source_name(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -1757,29 +1888,36 @@ def test_manifest_move_rejects_same_content_inode_swap(
     root = tmp_path / "inode-swap"
     container_id = _legacy_container(conn, root, "inode-swap")
     source = root / "design.md"
-    source.write_bytes(b"owner design")
+    source.write_bytes(b"manifest design")
     parked = root / "design-original.md"
-    real_rename = container_registry._rename_noreplace
+    real_publish = container_registry._publish_open_regular_file
     swapped = False
 
-    def swap_inode_then_rename(*args, **kwargs):
+    def swap_inode_then_publish(*args, **kwargs):
         nonlocal swapped
         if not swapped:
             swapped = True
             source.rename(parked)
-            source.write_bytes(b"owner design")
-        return real_rename(*args, **kwargs)
+            source.write_bytes(b"late owner replacement")
+        return real_publish(*args, **kwargs)
 
     monkeypatch.setattr(
         container_registry,
-        "_rename_noreplace",
-        swap_inode_then_rename,
+        "_publish_open_regular_file",
+        swap_inode_then_publish,
     )
 
-    assert migrate_container_ops(conn, container_id) is False
-    assert source.read_bytes() == b"owner design"
-    assert parked.read_bytes() == b"owner design"
-    assert not (root / "ops" / "design.md").exists()
+    assert migrate_container_ops(conn, container_id) is True
+    assert not source.exists()
+    assert parked.read_bytes() == b"manifest design"
+    assert (root / "ops" / "design.md").read_bytes() == b"manifest design"
+    retained = list(
+        (root / "ops").glob(
+            f"{container_registry.RETAINED_SOURCE_PREFIX}*-design.md"
+        )
+    )
+    assert len(retained) == 1
+    assert retained[0].read_bytes() == b"late owner replacement"
 
 
 def test_git_exclude_uses_opened_root_after_path_replacement(
@@ -2179,6 +2317,7 @@ def test_windows_starter_directories_are_created_relative_to_stable_handles(
 
     assert physical == root / "ops"
     assert created == [
+        (root, "ops"),
         (physical, "wiki"),
         (physical / "wiki", "deep"),
         (physical, "artifacts"),

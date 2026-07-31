@@ -13,10 +13,12 @@ import json
 import logging
 import os
 import secrets
+import signal
 import sqlite3
 import stat
 import sys
 import threading
+import time
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
@@ -47,6 +49,8 @@ MAX_CONTAINER_DOC_BYTES = 64 * 1024
 MAX_IDENTITY_LABEL_CHARS = 120
 MAX_SUMMARY_CHARS = 500
 RECOVERY_TEMP_PREFIX = ".proxima-ops-migration-container-"
+RETAINED_SOURCE_PREFIX = ".proxima-ops-migration-retained-"
+QUIESCENCE_TIMEOUT_SECONDS = 5.0
 
 _CONTAINER_LOCKS_GUARD = threading.Lock()
 _CONTAINER_LOCKS: dict[str, Any] = {}
@@ -75,7 +79,12 @@ def _database_path(conn: sqlite3.Connection) -> Path | None:
     return None
 
 
-def _acquire_file_lock(path: Path, *, shared: bool = False) -> int:
+def _acquire_file_lock(
+    path: Path,
+    *,
+    shared: bool = False,
+    timeout: float | None = None,
+) -> int:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.parent.is_symlink() or not path.parent.is_dir():
         raise ContainerBoundaryError("Container mutation lock directory is unsafe")
@@ -91,14 +100,43 @@ def _acquire_file_lock(path: Path, *, shared: bool = False) -> int:
                 os.write(fd, b"\0")
                 os.fsync(fd)
             os.lseek(fd, 0, os.SEEK_SET)
-            _windows_lock_file(
-                msvcrt.get_osfhandle(fd),
-                shared=shared,
-            )
+            handle = msvcrt.get_osfhandle(fd)
+            if timeout is None:
+                _windows_lock_file(handle, shared=shared)
+            else:
+                deadline = time.monotonic() + timeout
+                while True:
+                    try:
+                        _windows_lock_file(
+                            handle,
+                            shared=shared,
+                            fail_immediately=True,
+                        )
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            raise ContainerBoundaryError(
+                                "Container has active processes; stop them before retrying"
+                            )
+                        time.sleep(0.02)
         else:
             import fcntl
 
-            fcntl.flock(fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+            operation = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+            if timeout is None:
+                fcntl.flock(fd, operation)
+            else:
+                deadline = time.monotonic() + timeout
+                while True:
+                    try:
+                        fcntl.flock(fd, operation | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise ContainerBoundaryError(
+                                "Container has active processes; stop them before retrying"
+                            )
+                        time.sleep(0.02)
     except Exception:
         os.close(fd)
         raise
@@ -111,15 +149,33 @@ class _ContainerActivityState:
         self.readers = 0
         self.writer = False
 
-    def acquire(self, *, shared: bool) -> None:
+    def acquire(
+        self,
+        *,
+        shared: bool,
+        timeout: float | None = None,
+    ) -> None:
         with self.condition:
+            deadline = None if timeout is None else time.monotonic() + timeout
+
+            def wait() -> None:
+                remaining = (
+                    None
+                    if deadline is None
+                    else max(0.0, deadline - time.monotonic())
+                )
+                if remaining == 0.0 or not self.condition.wait(remaining):
+                    raise ContainerBoundaryError(
+                        "Container has active processes; stop them before retrying"
+                    )
+
             if shared:
                 while self.writer:
-                    self.condition.wait()
+                    wait()
                 self.readers += 1
                 return
             while self.writer or self.readers:
-                self.condition.wait()
+                wait()
             self.writer = True
 
     def release(self, *, shared: bool) -> None:
@@ -138,10 +194,12 @@ class ContainerActivityLease:
         *,
         shared: bool,
         fd: int | None,
+        guardian_record: Path | None = None,
     ) -> None:
         self._state = state
         self._shared = shared
         self._fd = fd
+        self._guardian_record = guardian_record
         self._released = False
         self._transferred = False
 
@@ -150,7 +208,27 @@ class ContainerActivityLease:
         command: list[str],
     ) -> tuple[list[str], dict[str, Any]]:
         if self._fd is None:
-            return command, {}
+            raise ContainerBoundaryError(
+                "durable process activity requires a file-backed database"
+            )
+        if not sys.platform.startswith("linux") and os.name != "nt":
+            raise ContainerBoundaryError(
+                "this platform cannot prove complete Project process-tree exit"
+            )
+        package_root = Path(__file__).resolve().parent
+        guardian = package_root / "activity_guardian.py"
+        try:
+            guardian_stat = guardian.lstat()
+        except OSError as exc:
+            raise ContainerBoundaryError(
+                "trusted activity guardian is unavailable"
+            ) from exc
+        if (
+            guardian.is_symlink()
+            or not stat.S_ISREG(guardian_stat.st_mode)
+            or guardian.resolve().parent != package_root
+        ):
+            raise ContainerBoundaryError("trusted activity guardian is unsafe")
         inherited = str(self._fd)
         if os.name == "nt":
             import msvcrt
@@ -162,9 +240,11 @@ class ContainerActivityLease:
             os.set_inheritable(self._fd, True)
         guarded = [
             sys.executable,
-            "-m",
-            "proxima_api.activity_guardian",
+            "-I",
+            "-S",
+            str(guardian),
             inherited,
+            str(self._guardian_record or ""),
             "--",
             *command,
         ]
@@ -217,19 +297,21 @@ def acquire_container_activity_lease(
     container: int | sqlite3.Row | Mapping[str, Any],
     *,
     shared: bool = True,
+    timeout: float | None = None,
 ) -> ContainerActivityLease:
-    _, key, lock_dir = _container_lock_key(conn, container)
+    data, key, lock_dir = _container_lock_key(conn, container)
     with _CONTAINER_LOCKS_GUARD:
         state = _CONTAINER_ACTIVITY_STATES.setdefault(
             key,
             _ContainerActivityState(),
         )
-    state.acquire(shared=shared)
+    state.acquire(shared=shared, timeout=timeout)
     try:
         fd = (
             _acquire_file_lock(
                 lock_dir / f"{key.rsplit(':', 1)[-1]}.activity.lock",
                 shared=shared,
+                timeout=timeout,
             )
             if lock_dir is not None
             else None
@@ -237,7 +319,21 @@ def acquire_container_activity_lease(
     except Exception:
         state.release(shared=shared)
         raise
-    return ContainerActivityLease(state, shared=shared, fd=fd)
+    guardian_record = (
+        lock_dir
+        / (
+            f"{int(data['id'])}.activity."
+            f"{secrets.token_hex(16)}.guardian.json"
+        )
+        if shared and lock_dir is not None
+        else None
+    )
+    return ContainerActivityLease(
+        state,
+        shared=shared,
+        fd=fd,
+        guardian_record=guardian_record,
+    )
 
 
 @contextmanager
@@ -245,11 +341,77 @@ def container_quiescence_lock(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
 ) -> Iterator[None]:
-    lease = acquire_container_activity_lease(conn, container, shared=False)
+    lease = acquire_container_activity_lease(
+        conn,
+        container,
+        shared=False,
+        timeout=QUIESCENCE_TIMEOUT_SECONDS,
+    )
     try:
         yield
     finally:
         lease.release()
+
+
+def recover_container_activity_guardians(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+    *,
+    timeout: float = QUIESCENCE_TIMEOUT_SECONDS,
+) -> int:
+    data, _, lock_dir = _container_lock_key(conn, container)
+    if lock_dir is None or not lock_dir.is_dir() or lock_dir.is_symlink():
+        return 0
+    if not sys.platform.startswith("linux"):
+        return 0
+    guardian = Path(__file__).resolve().with_name("activity_guardian.py")
+    stopped = 0
+    records: list[Path] = []
+    pattern = f"{int(data['id'])}.activity.*.guardian.json"
+    for record in sorted(lock_dir.glob(pattern)):
+        try:
+            record_stat = record.lstat()
+            if stat.S_ISLNK(record_stat.st_mode) or not stat.S_ISREG(
+                record_stat.st_mode
+            ):
+                continue
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            pid = int(payload["sentinel_pid"])
+            if (
+                Path(str(payload["guardian"])).resolve() != guardian
+                or pid <= 1
+            ):
+                continue
+            if sys.platform.startswith("linux"):
+                current_start = Path(f"/proc/{pid}/stat").read_text(
+                    encoding="utf-8"
+                ).split()[21]
+                command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+                executable = Path(f"/proc/{pid}/exe").resolve()
+                if (
+                    current_start != payload.get("sentinel_start")
+                    or os.fsencode(str(guardian)) not in command
+                    or executable
+                    != Path(str(payload.get("python") or "")).resolve()
+                ):
+                    continue
+            os.kill(pid, signal.SIGTERM)
+            records.append(record)
+            stopped += 1
+        except (
+            FileNotFoundError,
+            KeyError,
+            OSError,
+            TypeError,
+            ValueError,
+        ):
+            continue
+    deadline = time.monotonic() + timeout
+    while records and time.monotonic() < deadline:
+        records = [record for record in records if record.exists()]
+        if records:
+            time.sleep(0.02)
+    return stopped
 
 
 def _release_file_lock(fd: int) -> None:
@@ -282,7 +444,12 @@ def _windows_overlapped_type():
     return Overlapped
 
 
-def _windows_lock_file(handle: int, *, shared: bool) -> None:
+def _windows_lock_file(
+    handle: int,
+    *,
+    shared: bool,
+    fail_immediately: bool = False,
+) -> None:
     from ctypes import wintypes
 
     overlapped = _windows_overlapped_type()()
@@ -298,6 +465,8 @@ def _windows_lock_file(handle: int, *, shared: bool) -> None:
     ]
     lock_file.restype = wintypes.BOOL
     flags = 0 if shared else 0x00000002
+    if fail_immediately:
+        flags |= 0x00000001
     if not lock_file(
         ctypes.c_void_p(handle),
         flags,
@@ -620,7 +789,6 @@ def _planned_recovery_temp(
         "sha256": expected_hash,
         "phase": "planned",
         "identity": None,
-        "ownership_token": secrets.token_hex(32),
     }
 
 
@@ -903,17 +1071,143 @@ def _windows_create_file_at(
         os.close(fd)
 
 
+def _windows_read_file_at(
+    parent_handle: int,
+    name: str,
+    *,
+    max_bytes: int,
+) -> bytes:
+    from ctypes import wintypes
+    import msvcrt
+
+    class UnicodeString(ctypes.Structure):
+        _fields_ = [
+            ("length", wintypes.USHORT),
+            ("maximum_length", wintypes.USHORT),
+            ("buffer", wintypes.LPWSTR),
+        ]
+
+    class ObjectAttributes(ctypes.Structure):
+        _fields_ = [
+            ("length", wintypes.ULONG),
+            ("root_directory", wintypes.HANDLE),
+            ("object_name", ctypes.POINTER(UnicodeString)),
+            ("attributes", wintypes.ULONG),
+            ("security_descriptor", wintypes.LPVOID),
+            ("security_qos", wintypes.LPVOID),
+        ]
+
+    class IoStatusBlock(ctypes.Structure):
+        _fields_ = [
+            ("status", wintypes.LPVOID),
+            ("information", ctypes.c_size_t),
+        ]
+
+    buffer = ctypes.create_unicode_buffer(name)
+    encoded = name.encode("utf-16-le")
+    unicode_name = UnicodeString(
+        len(encoded),
+        len(encoded) + 2,
+        ctypes.cast(buffer, wintypes.LPWSTR),
+    )
+    attributes = ObjectAttributes(
+        ctypes.sizeof(ObjectAttributes),
+        ctypes.c_void_p(parent_handle),
+        ctypes.pointer(unicode_name),
+        0x00000040,
+        None,
+        None,
+    )
+    status_block = IoStatusBlock()
+    handle = wintypes.HANDLE()
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    create_file = ntdll.NtCreateFile
+    create_file.restype = ctypes.c_long
+    status = create_file(
+        ctypes.byref(handle),
+        0x80000000 | 0x00100000 | 0x00000080,
+        ctypes.byref(attributes),
+        ctypes.byref(status_block),
+        None,
+        0,
+        0x00000001 | 0x00000002 | 0x00000004,
+        1,
+        0x00000020 | 0x00000040 | 0x00200000,
+        None,
+        0,
+    )
+    if status < 0:
+        raise OSError(int(status), f"cannot open file: {name}")
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time_low", wintypes.DWORD),
+            ("creation_time_high", wintypes.DWORD),
+            ("access_time_low", wintypes.DWORD),
+            ("access_time_high", wintypes.DWORD),
+            ("write_time_low", wintypes.DWORD),
+            ("write_time_high", wintypes.DWORD),
+            ("volume_serial", wintypes.DWORD),
+            ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD),
+            ("links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    information = ByHandleFileInformation()
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    if not get_information(
+        ctypes.c_void_p(handle.value),
+        ctypes.byref(information),
+    ):
+        error = ctypes.get_last_error()
+        _windows_close_handle(int(handle.value))
+        raise OSError(error, f"cannot inspect file: {name}")
+    if (
+        information.attributes & 0x00000010
+        or information.attributes & 0x00000400
+    ):
+        _windows_close_handle(int(handle.value))
+        raise ContainerBoundaryError(
+            f"file is missing or is a reparse point: {name}"
+        )
+    size = (int(information.size_high) << 32) | int(information.size_low)
+    if size > max_bytes:
+        _windows_close_handle(int(handle.value))
+        raise ContainerBoundaryError(f"file is too large: {name}")
+    fd = msvcrt.open_osfhandle(int(handle.value), os.O_RDONLY)
+    try:
+        content = bytearray()
+        while chunk := os.read(fd, min(64 * 1024, max_bytes + 1 - len(content))):
+            content.extend(chunk)
+            if len(content) > max_bytes:
+                raise ContainerBoundaryError(f"file is too large: {name}")
+        return bytes(content)
+    finally:
+        os.close(fd)
+
+
 def _create_physical_ops_root_windows(
     container: Path,
     name: str,
     starter_dirs: tuple[str, ...],
 ) -> Path:
     physical = container / OPS_RELPATH
-    physical.mkdir(mode=0o700, exist_ok=True)
     root_handle, root_identity = _windows_open_directory(container)
     physical_handle: int | None = None
     try:
-        physical_handle, physical_identity = _windows_open_directory(physical)
+        physical_handle, physical_identity = _windows_create_directory_at(
+            root_handle,
+            OPS_RELPATH,
+        )
         for dirname in starter_dirs:
             rel = _safe_rel_path(dirname)
             if not rel.parts:
@@ -947,12 +1241,15 @@ def _create_physical_ops_root_windows(
                 document,
             )
         except FileExistsError:
-            document_path = physical / CONTAINER_DOC
-            if (
-                document_path.is_symlink()
-                or not document_path.is_file()
-                or document_path.read_bytes() != document
-            ):
+            try:
+                existing_document = _windows_read_file_at(
+                    physical_handle,
+                    CONTAINER_DOC,
+                    max_bytes=MAX_CONTAINER_DOC_BYTES,
+                )
+            except (ContainerBoundaryError, OSError):
+                existing_document = None
+            if existing_document != document:
                 raise ContainerBoundaryError(
                     "ops/container.md exists with unexpected content or type"
                 ) from None
@@ -1095,88 +1392,6 @@ def _exact_regular_hash_at(
     )
 
 
-def _recovery_token_matches(fd: int, recovery: Mapping[str, Any]) -> bool:
-    token = recovery.get("ownership_token")
-    if not isinstance(token, str) or len(token) != 64:
-        return False
-    try:
-        current = os.getxattr(fd, "user.proxima.ops_migration")
-    except (AttributeError, OSError):
-        return False
-    return current == token.encode("ascii")
-
-
-def _creating_recovery_matches_at(
-    parent_fd: int,
-    name: str,
-    recovery: Mapping[str, Any],
-) -> bool:
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    try:
-        fd = os.open(name, flags, dir_fd=parent_fd)
-    except OSError:
-        return False
-    try:
-        opened = os.fstat(fd)
-        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        return (
-            stat.S_ISREG(opened.st_mode)
-            and opened.st_size == 0
-            and opened.st_nlink == 1
-            and _same_identity(opened, named)
-            and _recovery_token_matches(fd, recovery)
-        )
-    except OSError:
-        return False
-    finally:
-        os.close(fd)
-
-
-def _creating_recovery_matches(
-    path: Path,
-    recovery: Mapping[str, Any],
-) -> bool:
-    try:
-        parent_fd = os.open(path.parent, _directory_open_flags())
-    except OSError:
-        return False
-    try:
-        return _creating_recovery_matches_at(parent_fd, path.name, recovery)
-    finally:
-        os.close(parent_fd)
-
-
-def _unlink_exact_file_at(
-    parent_fd: int,
-    name: str,
-    expected_hash: str,
-    expected_identity: Mapping[str, Any],
-) -> None:
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    fd = os.open(name, flags, dir_fd=parent_fd)
-    try:
-        opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode):
-            raise OpsMigrationCollision(
-                "container.md recovery file has ambiguous ownership"
-            )
-        digest = hashlib.sha256()
-        while chunk := os.read(fd, 1024 * 1024):
-            digest.update(chunk)
-        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        if (
-            digest.hexdigest() != expected_hash
-            or not _same_identity(opened, current)
-            or not _identity_matches(expected_identity, opened)
-        ):
-            raise OpsMigrationCollision(
-                "container.md recovery file has ambiguous ownership"
-            )
-        os.unlink(name, dir_fd=parent_fd)
-    finally:
-        os.close(fd)
-
-
 def _atomic_write_if_missing(
     path: Path,
     text: str,
@@ -1211,6 +1426,66 @@ def _atomic_write_if_missing(
         parent_fd = os.open(path.parent, _directory_open_flags())
     try:
         target_state = _path_state_at(parent_fd, path.name)
+        if persist_recovery is None:
+            if target_state != "missing":
+                if not _exact_regular_hash_at(
+                    parent_fd,
+                    path.name,
+                    expected_hash,
+                ):
+                    raise OpsMigrationCollision(
+                        f"{path.name} exists with unexpected content or type"
+                    )
+                return
+            anonymous_fd: int | None = None
+            if hasattr(os, "O_TMPFILE"):
+                try:
+                    anonymous_fd = os.open(
+                        ".",
+                        os.O_TMPFILE
+                        | os.O_WRONLY
+                        | getattr(os, "O_CLOEXEC", 0),
+                        0o600,
+                        dir_fd=parent_fd,
+                    )
+                except OSError as exc:
+                    if exc.errno not in {
+                        errno.EINVAL,
+                        errno.EISDIR,
+                        errno.ENOSYS,
+                        errno.ENOTSUP,
+                        errno.EOPNOTSUPP,
+                        errno.EPERM,
+                    }:
+                        raise
+            if anonymous_fd is not None:
+                try:
+                    _write_all(anonymous_fd, content)
+                    os.fsync(anonymous_fd)
+                    _publish_anonymous_file(
+                        anonymous_fd,
+                        parent_fd,
+                        path.name,
+                    )
+                    os.fsync(parent_fd)
+                finally:
+                    os.close(anonymous_fd)
+                return
+            flags = (
+                os.O_CREAT
+                | os.O_EXCL
+                | os.O_WRONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            target_fd = os.open(path.name, flags, 0o600, dir_fd=parent_fd)
+            try:
+                _write_all(target_fd, content)
+                os.fsync(target_fd)
+            finally:
+                os.close(target_fd)
+            os.fsync(parent_fd)
+            return
         recovery_state = _path_state_at(parent_fd, recovery_name)
         if target_state != "missing":
             if not _exact_regular_hash_at(parent_fd, path.name, expected_hash):
@@ -1222,8 +1497,6 @@ def _atomic_write_if_missing(
                 dir_fd=parent_fd,
                 follow_symlinks=False,
             )
-            if persist_recovery is None:
-                return
             if recovery["phase"] not in {"ready", "published", "complete"}:
                 raise OpsMigrationCollision(
                     "existing generated container.md has ambiguous ownership"
@@ -1245,14 +1518,6 @@ def _atomic_write_if_missing(
                         "existing generated container.md has ambiguous ownership"
                     )
                 advance("published", _stat_identity(target_stat))
-            if recovery_state != "missing":
-                _unlink_exact_file_at(
-                    parent_fd,
-                    recovery_name,
-                    expected_hash,
-                    recovery["identity"],
-                )
-                os.fsync(parent_fd)
             advance("complete", _stat_identity(target_stat))
             return
         if recovery_state != "missing":
@@ -1265,30 +1530,11 @@ def _atomic_write_if_missing(
                 dir_fd=parent_fd,
                 follow_symlinks=False,
             )
-            if recovery["phase"] == "creating":
-                flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-                recovery_fd = os.open(
-                    recovery_name,
-                    flags,
-                    dir_fd=parent_fd,
+            if recovery["phase"] in {"creating", "created"}:
+                raise OpsMigrationCollision(
+                    "legacy recovery artifact has ambiguous ownership"
                 )
-                try:
-                    opened = os.fstat(recovery_fd)
-                    if (
-                        not _creating_recovery_matches_at(
-                            parent_fd,
-                            recovery_name,
-                            recovery,
-                        )
-                        or not _same_identity(opened, recovery_stat)
-                    ):
-                        raise OpsMigrationCollision(
-                            "container.md recovery file has ambiguous ownership"
-                        )
-                    advance("created", _stat_identity(opened))
-                finally:
-                    os.close(recovery_fd)
-            elif not _identity_matches(recovery["identity"], recovery_stat):
+            if not _identity_matches(recovery["identity"], recovery_stat):
                 raise OpsMigrationCollision(
                     "container.md recovery file has ambiguous ownership"
                 )
@@ -1304,7 +1550,7 @@ def _atomic_write_if_missing(
                 os.fsync(parent_fd)
                 advance("ready", recovery["identity"])
         else:
-            if recovery["phase"] in {"prepared", "creating"}:
+            if recovery["phase"] == "prepared":
                 advance("planned", None)
             elif recovery["phase"] != "planned":
                 raise OpsMigrationCollision(
@@ -1322,6 +1568,7 @@ def _atomic_write_if_missing(
                         dir_fd=parent_fd,
                     )
                     _write_all(anonymous_fd, content)
+                    os.fsync(anonymous_fd)
                     anonymous_identity = _stat_identity(os.fstat(anonymous_fd))
                     advance("prepared", anonymous_identity)
                     _publish_anonymous_file(
@@ -1355,64 +1602,9 @@ def _atomic_write_if_missing(
                     if anonymous_fd is not None:
                         os.close(anonymous_fd)
             if recovery["phase"] == "planned":
-                advance("creating", None)
-                flags = (
-                    os.O_CREAT
-                    | os.O_EXCL
-                    | os.O_WRONLY
-                    | os.O_NOFOLLOW
-                    | getattr(os, "O_CLOEXEC", 0)
+                raise OpsMigrationCollision(
+                    "this filesystem cannot publish recovery data anonymously"
                 )
-                recovery_fd = os.open(
-                    recovery_name,
-                    flags,
-                    0o600,
-                    dir_fd=parent_fd,
-                )
-                try:
-                    try:
-                        os.setxattr(
-                            recovery_fd,
-                            "user.proxima.ops_migration",
-                            recovery["ownership_token"].encode("ascii"),
-                        )
-                    except (AttributeError, OSError) as exc:
-                        current = os.stat(
-                            recovery_name,
-                            dir_fd=parent_fd,
-                            follow_symlinks=False,
-                        )
-                        opened = os.fstat(recovery_fd)
-                        if _same_identity(current, opened):
-                            os.unlink(recovery_name, dir_fd=parent_fd)
-                            os.fsync(parent_fd)
-                            advance("planned", None)
-                        raise OpsMigrationCollision(
-                            "this filesystem cannot prove recovery-file ownership"
-                        ) from exc
-                    recovery_identity = _stat_identity(os.fstat(recovery_fd))
-                    os.fsync(recovery_fd)
-                    os.fsync(parent_fd)
-                    advance("created", recovery_identity)
-                finally:
-                    os.close(recovery_fd)
-        if recovery["phase"] == "created":
-            flags = os.O_WRONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-            recovery_fd = os.open(
-                recovery_name,
-                flags,
-                dir_fd=parent_fd,
-            )
-            try:
-                if not _identity_matches(recovery["identity"], os.fstat(recovery_fd)):
-                    raise OpsMigrationCollision(
-                        "container.md recovery file has ambiguous ownership"
-                    )
-                os.ftruncate(recovery_fd, 0)
-                _write_all(recovery_fd, content)
-            finally:
-                os.close(recovery_fd)
-            advance("ready", recovery["identity"])
         if recovery["phase"] != "ready" or not _exact_regular_hash_at(
             parent_fd,
             recovery_name,
@@ -1445,13 +1637,6 @@ def _atomic_write_if_missing(
                 "published container.md has ambiguous ownership"
             )
         advance("published", _stat_identity(target_stat))
-        _unlink_exact_file_at(
-            parent_fd,
-            recovery_name,
-            expected_hash,
-            recovery["identity"],
-        )
-        os.fsync(parent_fd)
         advance("complete", _stat_identity(target_stat))
     finally:
         if owns_parent_fd:
@@ -1466,16 +1651,10 @@ def _rename_noreplace(
     destination_dir_fd: int | None = None,
     expected_identity: Mapping[str, Any] | None = None,
 ) -> None:
-    if source_dir_fd is not None and expected_identity is not None:
-        current_source = os.stat(
-            source.name,
-            dir_fd=source_dir_fd,
-            follow_symlinks=False,
+    if expected_identity is not None:
+        raise OpsMigrationCollision(
+            "authoritative content cannot be published by pathname rename"
         )
-        if not _identity_matches(expected_identity, current_source):
-            raise OpsMigrationCollision(
-                f"source identity changed before move: {source.name}"
-            )
     source_bytes = os.fsencode(source.name if source_dir_fd is not None else source)
     destination_bytes = os.fsencode(
         destination.name if destination_dir_fd is not None else destination
@@ -2032,6 +2211,32 @@ def _snapshot_matches(
     )
 
 
+def _snapshot_content_matches(
+    snapshot: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> bool:
+    return (
+        snapshot.get("kind") == expected.get("kind")
+        and snapshot.get("sha256") == expected.get("sha256")
+        and [
+            {
+                "path": item.get("path"),
+                "sha256": item.get("sha256"),
+            }
+            for item in snapshot.get("files") or []
+            if isinstance(item, Mapping)
+        ]
+        == [
+            {
+                "path": item.get("path"),
+                "sha256": item.get("sha256"),
+            }
+            for item in expected.get("files") or []
+            if isinstance(item, Mapping)
+        ]
+    )
+
+
 def _manifest_digest(manifest: dict[str, Any]) -> str:
     raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(raw).hexdigest()
@@ -2097,6 +2302,13 @@ def _build_manifest(
                 "files": snapshot["files"],
                 "nodes": snapshot["nodes"],
                 "identity": snapshot["identity"],
+                "publication": {
+                    "phase": "planned",
+                    "retained_name": (
+                        f"{RETAINED_SOURCE_PREFIX}{secrets.token_hex(16)}-{name}"
+                    ),
+                    "destination_snapshot": None,
+                },
             }
         )
     owner_doc = next(
@@ -2213,13 +2425,255 @@ def _resolve_attention(conn: sqlite3.Connection, container_id: int) -> None:
     )
 
 
+def _hash_open_regular_file(fd: int) -> str:
+    before = os.fstat(fd)
+    if not stat.S_ISREG(before.st_mode):
+        raise OpsMigrationCollision("migration source is not a regular file")
+    os.lseek(fd, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    while chunk := os.read(fd, 1024 * 1024):
+        digest.update(chunk)
+    after = os.fstat(fd)
+    if (
+        not _same_identity(before, after)
+        or before.st_size != after.st_size
+        or before.st_mtime_ns != after.st_mtime_ns
+        or before.st_ctime_ns != after.st_ctime_ns
+    ):
+        raise OpsMigrationCollision("migration source changed while being read")
+    return digest.hexdigest()
+
+
+def _publish_open_regular_file(
+    source_fd: int,
+    destination_fd: int,
+    name: str,
+) -> None:
+    if not sys.platform.startswith("linux"):
+        raise OpsMigrationCollision(
+            "this platform cannot publish an opened migration file"
+        )
+    libc = ctypes.CDLL(None, use_errno=True)
+    linkat = getattr(libc, "linkat", None)
+    if linkat is None:
+        raise OpsMigrationCollision(
+            "this platform cannot publish an opened migration file"
+        )
+    linkat.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+    ]
+    linkat.restype = ctypes.c_int
+    source_path = os.fsencode(f"/proc/self/fd/{source_fd}")
+    if linkat(
+        -100,
+        source_path,
+        destination_fd,
+        os.fsencode(name),
+        0x400,
+    ) == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number == errno.EEXIST:
+        raise FileExistsError(name)
+    raise OSError(error_number, os.strerror(error_number), name)
+
+
+def _publish_bound_file_at(
+    source_parent_fd: int,
+    source_name: str,
+    destination_parent_fd: int,
+    destination_name: str,
+    expected_identity: Mapping[str, Any],
+    expected_hash: str,
+) -> None:
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    source_fd = os.open(source_name, flags, dir_fd=source_parent_fd)
+    try:
+        source_stat = os.fstat(source_fd)
+        if (
+            not _identity_matches(expected_identity, source_stat)
+            or _hash_open_regular_file(source_fd) != expected_hash
+        ):
+            raise OpsMigrationCollision(
+                f"migration source changed: {source_name}"
+            )
+        try:
+            _publish_open_regular_file(
+                source_fd,
+                destination_parent_fd,
+                destination_name,
+            )
+        except FileExistsError:
+            destination_fd = os.open(
+                destination_name,
+                flags,
+                dir_fd=destination_parent_fd,
+            )
+            try:
+                destination_stat = os.fstat(destination_fd)
+                if (
+                    not _same_identity(source_stat, destination_stat)
+                    or _hash_open_regular_file(destination_fd) != expected_hash
+                ):
+                    raise OpsMigrationCollision(
+                        f"destination already exists: {destination_name}"
+                    )
+            finally:
+                os.close(destination_fd)
+    finally:
+        os.close(source_fd)
+
+
+def _publish_bound_directory_at(
+    source_parent_fd: int,
+    source_name: str,
+    destination_parent_fd: int,
+    destination_name: str,
+    entry: Mapping[str, Any],
+) -> None:
+    source_fd = os.open(
+        source_name,
+        _directory_open_flags(),
+        dir_fd=source_parent_fd,
+    )
+    destination_fd: int | None = None
+    try:
+        if not _identity_matches(entry["identity"], os.fstat(source_fd)):
+            raise OpsMigrationCollision(
+                f"migration source changed: {source_name}"
+            )
+        try:
+            os.mkdir(destination_name, mode=0o700, dir_fd=destination_parent_fd)
+            os.fsync(destination_parent_fd)
+        except FileExistsError:
+            pass
+        destination_fd = os.open(
+            destination_name,
+            _directory_open_flags(),
+            dir_fd=destination_parent_fd,
+        )
+        expected_nodes = {
+            str(node["path"]): node
+            for node in entry["nodes"]
+            if isinstance(node, Mapping)
+        }
+        expected_files = {
+            str(file_entry["path"]): file_entry
+            for file_entry in entry["files"]
+            if isinstance(file_entry, Mapping)
+        }
+
+        def publish_directory(
+            current_source_fd: int,
+            current_destination_fd: int,
+            prefix: str,
+        ) -> None:
+            source_names = sorted(os.listdir(current_source_fd))
+            destination_names = set(os.listdir(current_destination_fd))
+            expected_names = set(source_names)
+            unexpected = destination_names - expected_names
+            if unexpected:
+                raise OpsMigrationCollision(
+                    f"destination contains unplanned content: {sorted(unexpected)[0]}"
+                )
+            for child_name in source_names:
+                rel = f"{prefix}/{child_name}" if prefix else child_name
+                expected_node = expected_nodes.get(rel)
+                if expected_node is None:
+                    raise OpsMigrationCollision(
+                        f"migration source contains unplanned content: {rel}"
+                    )
+                source_stat = os.stat(
+                    child_name,
+                    dir_fd=current_source_fd,
+                    follow_symlinks=False,
+                )
+                if (
+                    not _identity_matches(
+                        expected_node["identity"],
+                        source_stat,
+                    )
+                    or stat.S_ISLNK(source_stat.st_mode)
+                ):
+                    raise OpsMigrationCollision(
+                        f"migration source changed: {rel}"
+                    )
+                if expected_node["kind"] == "directory":
+                    if not stat.S_ISDIR(source_stat.st_mode):
+                        raise OpsMigrationCollision(
+                            f"migration source changed type: {rel}"
+                        )
+                    child_source_fd = os.open(
+                        child_name,
+                        _directory_open_flags(),
+                        dir_fd=current_source_fd,
+                    )
+                    try:
+                        if not _identity_matches(
+                            expected_node["identity"],
+                            os.fstat(child_source_fd),
+                        ):
+                            raise OpsMigrationCollision(
+                                f"migration source changed: {rel}"
+                            )
+                        try:
+                            os.mkdir(
+                                child_name,
+                                mode=0o700,
+                                dir_fd=current_destination_fd,
+                            )
+                            os.fsync(current_destination_fd)
+                        except FileExistsError:
+                            pass
+                        child_destination_fd = os.open(
+                            child_name,
+                            _directory_open_flags(),
+                            dir_fd=current_destination_fd,
+                        )
+                        try:
+                            publish_directory(
+                                child_source_fd,
+                                child_destination_fd,
+                                rel,
+                            )
+                        finally:
+                            os.close(child_destination_fd)
+                    finally:
+                        os.close(child_source_fd)
+                    continue
+                expected_file = expected_files.get(rel)
+                if expected_file is None:
+                    raise OpsMigrationCollision(
+                        f"migration source file is unplanned: {rel}"
+                    )
+                _publish_bound_file_at(
+                    current_source_fd,
+                    child_name,
+                    current_destination_fd,
+                    child_name,
+                    expected_file["identity"],
+                    str(expected_file["sha256"]),
+                )
+
+        publish_directory(source_fd, destination_fd, "")
+        os.fsync(destination_fd)
+        os.fsync(destination_parent_fd)
+    finally:
+        if destination_fd is not None:
+            os.close(destination_fd)
+        os.close(source_fd)
+
+
 def _apply_manifest(
     manifest: Mapping[str, Any],
     *,
     root_fd: int,
     physical_fd: int,
-    stable_root: Path,
-    stable_physical: Path,
+    persist_manifest: Callable[[], None],
 ) -> Path:
     root = Path(str(manifest["container_root"]))
     physical = Path(str(manifest["ops_root"]))
@@ -2230,56 +2684,138 @@ def _apply_manifest(
         name = str(entry["name"])
         source = root / name
         destination = physical / name
+        publication = entry["publication"]
+        retained_name = str(publication["retained_name"])
         source_state = _path_state_at(root_fd, name)
         destination_state = _path_state_at(physical_fd, name)
         source_exists = source_state != "missing"
         destination_exists = destination_state != "missing"
-        if source_exists and destination_exists:
+        if publication["phase"] == "complete":
+            if source_exists or not destination_exists:
+                raise OpsMigrationCollision(
+                    f"published Ops layout changed: {name}"
+                )
+            destination_snapshot = _entry_snapshot_at(physical_fd, name)
+            if not _snapshot_matches(
+                destination_snapshot,
+                publication["destination_snapshot"],
+            ):
+                raise OpsMigrationCollision(
+                    f"published Ops content changed: {name}"
+                )
+            continue
+        if not source_exists:
+            if (
+                publication["phase"] == "ready"
+                and destination_exists
+                and _path_state_at(physical_fd, retained_name) != "missing"
+            ):
+                if not _snapshot_matches(
+                    _entry_snapshot_at(physical_fd, name),
+                    publication["destination_snapshot"],
+                ):
+                    raise OpsMigrationCollision(
+                        f"published Ops content changed: {name}"
+                    )
+                publication["phase"] = "complete"
+                persist_manifest()
+                continue
             raise OpsMigrationCollision(
-                f"both source and destination exist for {name}"
+                f"migration source is missing before publication: {name}"
             )
-        if not source_exists and not destination_exists:
-            raise OpsMigrationCollision(
-                f"both source and destination are missing for {name}"
-            )
-        current_state = source_state if source_exists else destination_state
         expected_state = (
             "directory" if entry["kind"] == "directory" else "file"
         )
-        if current_state != expected_state:
-            raise OpsMigrationCollision(
-                f"Ops migration path has an unexpected type: {name}"
+        if publication["phase"] in {"planned", "publishing"} and (
+            source_state != expected_state
+            or not _snapshot_matches(
+                _entry_snapshot_at(root_fd, name),
+                entry,
             )
-        current_fd = root_fd if source_exists else physical_fd
-        snapshot = _entry_snapshot_at(current_fd, name)
-        if not _snapshot_matches(snapshot, entry):
+        ):
             raise OpsMigrationCollision(
                 f"content changed after migration planning: {name}"
             )
-        if source_exists:
-            source_stat = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
-            if source_stat.st_dev != os.fstat(physical_fd).st_dev:
-                raise OpsMigrationCollision(
-                    f"source and destination are on different filesystems: {name}"
-                )
+        if os.stat(name, dir_fd=root_fd, follow_symlinks=False).st_dev != os.fstat(
+            physical_fd
+        ).st_dev:
+            raise OpsMigrationCollision(
+                f"source and destination are on different filesystems: {name}"
+            )
+        if publication["phase"] in {"planned", "publishing"}:
+            if publication["phase"] == "planned":
+                publication["phase"] = "publishing"
+                persist_manifest()
             _revalidate_root_identity(root, root_fd)
             _revalidate_physical_identity(root_fd, physical_fd)
-            _rename_noreplace(
-                source,
-                destination,
-                source_dir_fd=root_fd,
-                destination_dir_fd=physical_fd,
-                expected_identity=entry["identity"],
-            )
-            os.fsync(root_fd)
+            if entry["kind"] == "file":
+                _publish_bound_file_at(
+                    root_fd,
+                    name,
+                    physical_fd,
+                    name,
+                    entry["identity"],
+                    str(entry["sha256"]),
+                )
+            else:
+                _publish_bound_directory_at(
+                    root_fd,
+                    name,
+                    physical_fd,
+                    name,
+                    entry,
+                )
             os.fsync(physical_fd)
             _revalidate_root_identity(root, root_fd)
             _revalidate_physical_identity(root_fd, physical_fd)
-            moved_snapshot = _entry_snapshot_at(physical_fd, name)
-            if not _snapshot_matches(moved_snapshot, entry):
+            destination_snapshot = _entry_snapshot_at(physical_fd, name)
+            if not _snapshot_content_matches(destination_snapshot, entry):
                 raise OpsMigrationCollision(
-                    f"content hash changed during move: {name}"
+                    f"content hash changed during publication: {name}"
                 )
+            publication["destination_snapshot"] = destination_snapshot
+            publication["phase"] = "ready"
+            persist_manifest()
+        if publication["phase"] != "ready":
+            raise OpsMigrationCollision(
+                f"Ops publication state is invalid: {name}"
+            )
+        destination_snapshot = _entry_snapshot_at(physical_fd, name)
+        if not _snapshot_matches(
+            destination_snapshot,
+            publication["destination_snapshot"],
+        ):
+            raise OpsMigrationCollision(
+                f"published Ops content changed: {name}"
+            )
+        if _path_state_at(physical_fd, retained_name) != "missing":
+            raise OpsMigrationCollision(
+                f"retained migration source already exists: {retained_name}"
+            )
+        try:
+            _rename_noreplace(
+                source,
+                physical / retained_name,
+                source_dir_fd=root_fd,
+                destination_dir_fd=physical_fd,
+            )
+        except FileNotFoundError:
+            pass
+        os.fsync(root_fd)
+        os.fsync(physical_fd)
+        if _path_state_at(root_fd, name) != "missing":
+            raise OpsMigrationCollision(
+                f"legacy Ops path reappeared during publication: {name}"
+            )
+        if not _snapshot_matches(
+            _entry_snapshot_at(physical_fd, name),
+            publication["destination_snapshot"],
+        ):
+            raise OpsMigrationCollision(
+                f"published Ops content changed: {name}"
+            )
+        publication["phase"] = "complete"
+        persist_manifest()
     return physical
 
 
@@ -2858,7 +3394,6 @@ def _upgrade_manifest(
                     raise OpsMigrationCollision(
                         "legacy recovery artifact has ambiguous ownership"
                     )
-                recovery["ownership_token"] = secrets.token_hex(32)
         elif planned.get("strategy") != "move":
             raise OpsMigrationCollision(
                 "stored Ops migration manifest has an invalid planned container.md"
@@ -3138,12 +3673,6 @@ def _valid_recovery_temp(
         and "/" not in path
         and "\\" not in path
         and recovery.get("sha256") == expected_hash
-        and isinstance(recovery.get("ownership_token"), str)
-        and len(recovery["ownership_token"]) == 64
-        and all(
-            character in "0123456789abcdef"
-            for character in recovery["ownership_token"]
-        )
         and phase
         in {
             "planned",
@@ -3186,18 +3715,144 @@ def _valid_legacy_recovery_temp(
     )
 
 
+def _ensure_publication_plans(
+    manifest: dict[str, Any],
+    root: Path,
+    physical: Path,
+) -> None:
+    entries = manifest.get("entries")
+    if not isinstance(entries, list):
+        return
+    for entry in entries:
+        if not isinstance(entry, dict) or isinstance(
+            entry.get("publication"),
+            Mapping,
+        ):
+            continue
+        name = str(entry.get("name") or "")
+        source_state = _path_state(root / name)
+        destination_state = _path_state(physical / name)
+        if source_state != "missing" and destination_state == "missing":
+            phase = "planned"
+            destination_snapshot = None
+        elif source_state == "missing" and destination_state != "missing":
+            phase = "complete"
+            destination_snapshot = _entry_snapshot(physical / name)
+        else:
+            raise OpsMigrationCollision(
+                f"legacy manifest path has ambiguous ownership: {name}"
+            )
+        entry["publication"] = {
+            "phase": phase,
+            "retained_name": (
+                f"{RETAINED_SOURCE_PREFIX}{secrets.token_hex(16)}-{name}"
+            ),
+            "destination_snapshot": destination_snapshot,
+        }
+
+
+def _valid_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _valid_snapshot_path(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    if value == ".":
+        return True
+    path = PurePosixPath(value)
+    return (
+        not path.is_absolute()
+        and path.as_posix() == value
+        and all(part not in {"", ".", ".."} for part in path.parts)
+    )
+
+
+def _valid_manifest_snapshot(value: Any) -> bool:
+    if (
+        not isinstance(value, Mapping)
+        or value.get("kind") not in {"directory", "file"}
+        or not _valid_sha256(value.get("sha256"))
+        or not _valid_identity(value.get("identity"))
+        or not isinstance(value.get("files"), list)
+        or not isinstance(value.get("nodes"), list)
+    ):
+        return False
+    file_paths: set[str] = set()
+    for file_entry in value["files"]:
+        path = file_entry.get("path") if isinstance(file_entry, Mapping) else None
+        if (
+            not isinstance(file_entry, Mapping)
+            or not _valid_snapshot_path(path)
+            or path in file_paths
+            or not _valid_sha256(file_entry.get("sha256"))
+            or not _valid_identity(file_entry.get("identity"))
+        ):
+            return False
+        file_paths.add(str(path))
+    node_paths: set[str] = set()
+    for node in value["nodes"]:
+        path = node.get("path") if isinstance(node, Mapping) else None
+        if (
+            not isinstance(node, Mapping)
+            or not _valid_snapshot_path(path)
+            or path in node_paths
+            or node.get("kind") not in {"directory", "file"}
+            or not _valid_identity(node.get("identity"))
+        ):
+            return False
+        node_paths.add(str(path))
+    return True
+
+
 def _validate_manifest_entries(manifest: Mapping[str, Any]) -> None:
     entries = manifest.get("entries")
     if not isinstance(entries, list):
         raise OpsMigrationCollision("stored Ops migration manifest has invalid entries")
     seen: set[str] = set()
+    retained_seen: set[str] = set()
     for entry in entries:
         if not isinstance(entry, Mapping):
             raise OpsMigrationCollision(
                 "stored Ops migration manifest has an invalid entry"
             )
+        publication = entry.get("publication")
+        retained_name = (
+            publication.get("retained_name")
+            if isinstance(publication, Mapping)
+            else None
+        )
+        destination_snapshot = (
+            publication.get("destination_snapshot")
+            if isinstance(publication, Mapping)
+            else None
+        )
+        if (
+            not isinstance(publication, Mapping)
+            or publication.get("phase")
+            not in {"planned", "publishing", "ready", "complete"}
+            or not isinstance(retained_name, str)
+            or not retained_name.startswith(RETAINED_SOURCE_PREFIX)
+            or "/" in retained_name
+            or "\\" in retained_name
+            or retained_name in retained_seen
+            or (
+                publication.get("phase") in {"ready", "complete"}
+                and not _valid_manifest_snapshot(destination_snapshot)
+            )
+            or (
+                publication.get("phase") in {"planned", "publishing"}
+                and destination_snapshot is not None
+            )
+        ):
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest has an invalid publication"
+            )
         name = entry.get("name")
-        digest = entry.get("sha256")
         if (
             not isinstance(name, str)
             or not name
@@ -3206,37 +3861,13 @@ def _validate_manifest_entries(manifest: Mapping[str, Any]) -> None:
             or name in {".", ".."}
             or name in seen
             or entry.get("kind") not in {"directory", "file"}
-            or not isinstance(digest, str)
-            or len(digest) != 64
-            or any(character not in "0123456789abcdef" for character in digest)
-            or not _valid_identity(entry.get("identity"))
-            or not isinstance(entry.get("files"), list)
-            or not isinstance(entry.get("nodes"), list)
+            or not _valid_manifest_snapshot(entry)
         ):
             raise OpsMigrationCollision(
                 "stored Ops migration manifest has an invalid entry"
             )
-        for node in entry["nodes"]:
-            if (
-                not isinstance(node, Mapping)
-                or not isinstance(node.get("path"), str)
-                or node.get("kind") not in {"directory", "file"}
-                or not _valid_identity(node.get("identity"))
-            ):
-                raise OpsMigrationCollision(
-                    "stored Ops migration manifest has an invalid inode binding"
-                )
-        for file_entry in entry["files"]:
-            if (
-                not isinstance(file_entry, Mapping)
-                or not isinstance(file_entry.get("path"), str)
-                or not isinstance(file_entry.get("sha256"), str)
-                or not _valid_identity(file_entry.get("identity"))
-            ):
-                raise OpsMigrationCollision(
-                    "stored Ops migration manifest has an invalid file binding"
-                )
         seen.add(name)
+        retained_seen.add(retained_name)
 
 
 def _validated_retry_manifest(
@@ -3268,6 +3899,7 @@ def _validated_retry_manifest(
     else:
         manifest = _build_manifest(conn, container)
 
+    _ensure_publication_plans(manifest, root, physical)
     _validate_manifest_entries(manifest)
     validated_area_roots(conn, container, deep_ops_scan=True)
     _validate_manifest_area_ownership(conn, container, manifest)
@@ -3282,6 +3914,12 @@ def _validated_retry_manifest(
         str(entry.get("name") or "")
         for entry in manifest.get("entries") or []
     } | {CONTAINER_DOC}
+    allowed_physical.update(
+        str(entry["publication"]["retained_name"])
+        for entry in manifest.get("entries") or []
+        if isinstance(entry, Mapping)
+        and isinstance(entry.get("publication"), Mapping)
+    )
     recovery_temp = _manifest_recovery_temp(manifest)
     if recovery_temp is not None:
         allowed_physical.add(recovery_temp["path"])
@@ -3310,18 +3948,12 @@ def _validated_retry_manifest(
                     raise OpsMigrationCollision(
                         "container.md recovery file has ambiguous ownership"
                     )
-                if phase == "creating":
-                    if not _creating_recovery_matches(
-                        recovery_path,
-                        recovery_temp,
-                    ):
-                        raise OpsMigrationCollision(
-                            "container.md recovery file has ambiguous ownership"
-                        )
-                    recovery_stat = None
-                else:
-                    recovery_stat = recovery_path.lstat()
-                if recovery_stat is not None and not _identity_matches(
+                if phase in {"creating", "created"}:
+                    raise OpsMigrationCollision(
+                        "legacy recovery artifact has ambiguous ownership"
+                    )
+                recovery_stat = recovery_path.lstat()
+                if not _identity_matches(
                     recovery_temp["identity"],
                     recovery_stat,
                 ):
@@ -3329,8 +3961,7 @@ def _validated_retry_manifest(
                         "container.md recovery file has ambiguous ownership"
                     )
                 if (
-                    phase not in {"creating", "created"}
-                    and _hash_file(recovery_path) != recovery_temp["sha256"]
+                    _hash_file(recovery_path) != recovery_temp["sha256"]
                 ):
                     raise OpsMigrationCollision(
                         "container.md recovery file has ambiguous ownership"
@@ -3403,25 +4034,49 @@ def _validated_retry_manifest(
         destination_state = _path_state(destination)
         source_exists = source_state != "missing"
         destination_exists = destination_state != "missing"
-        if source_exists and destination_exists:
-            raise OpsMigrationCollision(f"both source and destination exist for {name}")
+        publication = entry["publication"]
+        publication_phase = publication["phase"]
+        if source_exists and destination_exists and publication_phase not in {
+            "publishing",
+            "ready",
+        }:
+            raise OpsMigrationCollision(
+                f"both source and destination exist for {name}"
+            )
         if not source_exists and not destination_exists:
             raise OpsMigrationCollision(
                 f"both source and destination are missing for {name}"
             )
-        current = source if source_exists else destination
         expected_kind = "directory" if entry.get("kind") == "directory" else "file"
-        current_state = source_state if source_exists else destination_state
-        if current_state == "symlink":
-            raise OpsMigrationCollision(f"Ops migration path is a symlink: {name}")
-        if current_state != expected_kind:
+        if source_exists and publication_phase in {"planned", "publishing"}:
+            if source_state == "symlink":
+                raise OpsMigrationCollision(
+                    f"Ops migration path is a symlink: {name}"
+                )
+            if source_state != expected_kind:
+                raise OpsMigrationCollision(
+                    f"Ops migration path has an unexpected type: {name}"
+                )
+            if not _snapshot_matches(_entry_snapshot(source), entry):
+                raise OpsMigrationCollision(
+                    f"content changed after migration planning: {name}"
+                )
+        if destination_exists and publication_phase in {"ready", "complete"}:
+            expected_destination = publication["destination_snapshot"]
+            if destination_state != expected_kind or not _snapshot_matches(
+                _entry_snapshot(destination),
+                expected_destination,
+            ):
+                raise OpsMigrationCollision(
+                    f"published Ops content changed: {name}"
+                )
+        if publication_phase == "complete" and source_exists:
             raise OpsMigrationCollision(
-                f"Ops migration path has an unexpected type: {name}"
+                f"legacy Ops path reappeared after publication: {name}"
             )
-        snapshot = _entry_snapshot(current)
-        if not _snapshot_matches(snapshot, entry):
+        if publication_phase in {"ready", "complete"} and not destination_exists:
             raise OpsMigrationCollision(
-                f"content changed after migration planning: {name}"
+                f"published Ops destination is missing: {name}"
             )
         if source_exists and _path_device(source) != destination_device:
             raise OpsMigrationCollision(
@@ -3521,25 +4176,13 @@ def inspect_ops_migration(
                 exact_recovery = (
                     state == "file"
                     and (
-                        (
-                            phase == "creating"
-                            and _creating_recovery_matches(
-                                recovery_path,
-                                recovery_temp,
-                            )
+                        phase not in {"planned", "creating", "created"}
+                        and _identity_matches(
+                            recovery_temp["identity"],
+                            recovery_path.lstat(),
                         )
-                        or (
-                            phase not in {"planned", "creating"}
-                            and _identity_matches(
-                                recovery_temp["identity"],
-                                recovery_path.lstat(),
-                            )
-                            and (
-                                phase == "created"
-                                or _hash_file(recovery_path)
-                                == recovery_temp["sha256"]
-                            )
-                        )
+                        and _hash_file(recovery_path)
+                        == recovery_temp["sha256"]
                     )
                 )
             except OSError:
@@ -3788,8 +4431,8 @@ def _migrate_container_ops_locked(
         with _stable_migration_directories(root) as (
             root_fd,
             physical_fd,
-            stable_root,
-            stable_physical,
+            _,
+            _,
         ):
             if strategy == "generate":
                 assert container_doc is not None
@@ -3819,8 +4462,12 @@ def _migrate_container_ops_locked(
                 manifest,
                 root_fd=root_fd,
                 physical_fd=physical_fd,
-                stable_root=stable_root,
-                stable_physical=stable_physical,
+                persist_manifest=lambda: _upsert_marker(
+                    conn,
+                    int(data["id"]),
+                    "moving",
+                    manifest,
+                ),
             )
             if (
                 _hash_file_at(physical_fd, CONTAINER_DOC)
@@ -3870,8 +4517,14 @@ def migrate_container_ops(
 ) -> bool:
     """Migrate one legacy ``.`` Ops Area. Returns True only when complete."""
     with container_mutation_lock(conn, container):
-        with container_quiescence_lock(conn, container):
-            return _migrate_container_ops_locked(conn, container)
+        try:
+            with container_quiescence_lock(conn, container):
+                return _migrate_container_ops_locked(conn, container)
+        except ContainerBoundaryError as exc:
+            data = get_container(conn, container)
+            reason = str(exc)
+            _attention(conn, data, reason)
+            return False
 
 
 def migrate_legacy_ops_containers(conn: sqlite3.Connection) -> dict[str, int]:

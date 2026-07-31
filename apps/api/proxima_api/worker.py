@@ -1193,6 +1193,7 @@ class RunWorker:
         turn_root: Path | None = None
         tool_write_event_seen = False
         project_activity_lease = None
+        guarded_runner_key = None
         try:
             mode_row = db.execute("SELECT mode FROM sessions WHERE id = ?", (session_id,)).fetchone()
             session_mode = (mode_row["mode"] if mode_row else None) or "chat"
@@ -1603,6 +1604,13 @@ class RunWorker:
             return result
 
         try:
+            if project_activity_lease is not None:
+                guarded_runner_key = (
+                    spec,
+                    hermes_home,
+                    cwd,
+                    codex_master,
+                )
             await self.prompting.refresh_credentials_if_needed(
                 cfg,
                 spec,
@@ -2014,6 +2022,22 @@ class RunWorker:
             detail = format_rpc_error(str(exc)[-2000:])
             self._fail_run_exception(run, detail)
         finally:
+            if guarded_runner_key is not None:
+                guarded_spec, guarded_home, guarded_cwd, guarded_master = (
+                    guarded_runner_key
+                )
+                try:
+                    await self.app.state.acp_manager.recycle(
+                        guarded_spec,
+                        guarded_home,
+                        guarded_cwd,
+                        master_chat_only=guarded_master,
+                    )
+                except Exception:
+                    logger.exception(
+                        "failed to recycle activity-guarded runner for %s",
+                        guarded_cwd,
+                    )
             if project_activity_lease is not None:
                 project_activity_lease.release()
             if hb_task:

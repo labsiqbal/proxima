@@ -156,6 +156,68 @@ def test_live_worker_loop_drives_real_acp_subprocess(tmp_path, message, expected
             runner_specs.RUNNER_SPECS["fake-acp"] = saved_spec
 
 
+def test_project_runner_recycles_before_activity_lease_release(tmp_path):
+    script = tmp_path / "fake_project_acp.py"
+    script.write_text(FAKE_ACP_SCRIPT)
+    saved_env = os.environ.get("PROXIMA_DEFAULT_RUNNER")
+    saved_spec = runner_specs.RUNNER_SPECS.get("fake-acp")
+    _install_fake_runner(script)
+    try:
+        app = create_app({
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "ws"),
+            "projectctl_path": "/usr/bin/true",
+            "start_worker": True,
+            "start_scheduler": False,
+            "run_worker_poll_interval_ms": 20,
+        })
+        with TestClient(app) as client:
+            token = client.post("/auth/auto").json()["token"]
+            headers = {"Authorization": f"Bearer {token}"}
+            project = client.post(
+                "/api/projects",
+                headers=headers,
+                json={"slug": "guarded", "name": "Guarded"},
+            )
+            assert project.status_code == 201, project.text
+            session = client.post(
+                "/api/sessions",
+                headers=headers,
+                json={"title": "guarded", "project_slug": "guarded"},
+            ).json()
+            run = client.post(
+                f"/api/sessions/{session['id']}/runs",
+                headers=headers,
+                json={"message": "go"},
+            ).json()
+
+            assert _wait_for_run(
+                client,
+                headers,
+                run["run_id"],
+            ) == "completed"
+            deadline = time.time() + 5
+            while (
+                (
+                    app.state.acp_manager._procs
+                    or run["run_id"] in app.state.worker.active_runs
+                )
+                and time.time() < deadline
+            ):
+                time.sleep(0.02)
+            assert not app.state.acp_manager._procs
+            assert run["run_id"] not in app.state.worker.active_runs
+    finally:
+        if saved_env is None:
+            os.environ.pop("PROXIMA_DEFAULT_RUNNER", None)
+        else:
+            os.environ["PROXIMA_DEFAULT_RUNNER"] = saved_env
+        if saved_spec is None:
+            runner_specs.RUNNER_SPECS.pop("fake-acp", None)
+        else:
+            runner_specs.RUNNER_SPECS["fake-acp"] = saved_spec
+
+
 # --- cancel-during-setup (locks in the worker race fix) ---------------------
 
 class _CancelDuringSetupProcess:

@@ -94,3 +94,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0034](0034-distinct-tls-area-preview-origins.md) | Active file previews require distinct TLS Area origins | Accepted |
 | [0035](0035-frame-bound-area-preview-admission.md) | Area preview admission is frame-bound | Accepted |
 | [0036](0036-active-file-preview-is-explicit-trusted-mode.md) | Active file preview is an explicit trusted mode | Accepted |
+| [0037](0037-container-activity-and-migration-publication.md) | Container activity and migration publication | Accepted |
