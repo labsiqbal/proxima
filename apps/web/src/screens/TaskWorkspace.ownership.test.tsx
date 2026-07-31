@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getJob } from '../api/jobs'
 import { TaskWorkspace } from './TaskWorkspace'
@@ -37,6 +37,7 @@ describe('TaskWorkspace ownership context', () => {
         started_at: null,
         finished_at: null,
         error: null,
+        produced_designs: [{ id: 'poster-b', title: 'Beacon poster' }],
       }],
       schedule_id: null,
       created_by: 1,
@@ -73,5 +74,35 @@ describe('TaskWorkspace ownership context', () => {
     expect(context).toHaveTextContent('Area: Operations')
     expect(context).toHaveTextContent('Work remains Atlas private ops')
     expect(screen.getByText('Project locked to this Task')).toBeInTheDocument()
+  })
+
+  it('opens Task-linked Design through the owning Project while Work stays selected', async () => {
+    const onOpenDesign = vi.fn()
+    render(
+      <TaskWorkspace
+        {...({
+          token: 'token',
+          jobId: 7,
+          onBack: vi.fn(),
+          designStudioEnabled: true,
+          onOpenDesign,
+          owningProject: {
+            id: 22,
+            slug: 'beacon',
+            name: 'Beacon release',
+            identity_label: 'General',
+          },
+          selectedWorkProject: { slug: 'atlas', name: 'Atlas private ops' },
+          owningAreaLabel: 'Operations',
+        } as never)}
+      />,
+    )
+
+    const openDesign = await screen.findByRole('button', { name: /Beacon poster/i })
+    fireEvent.click(openDesign)
+
+    expect(onOpenDesign).toHaveBeenCalledWith('poster-b', 'beacon')
+    expect(screen.getByRole('region', { name: 'Task Project' }))
+      .toHaveTextContent('Work remains Atlas private ops')
   })
 })

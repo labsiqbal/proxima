@@ -44,6 +44,10 @@ import {
   withInAppTaskPolicy,
   withoutTaskPolicy,
 } from './lib/taskHashRoute'
+import {
+  resolveDesignStudioProject,
+  taskLinkedDesignProjectSlug,
+} from './lib/designStudioProject'
 const IterateStage = React.lazy(() => import('./screens/IterateStage').then(m => ({ default: m.IterateStage })))
 const DesignStudio = React.lazy(() => import('./screens/DesignStudio').then(m => ({ default: m.DesignStudio })))
 const WikiScreen = React.lazy(() => import('./screens/WikiScreen').then(m => ({ default: m.WikiScreen })))
@@ -241,6 +245,8 @@ export function App() {
   const [designExitNonce, setDesignExitNonce] = React.useState(0)
   const [pendingDesign, setPendingDesign] = React.useState<{ id: number; title: string } | null>(null)
   const [pendingDesignId, setPendingDesignId] = React.useState<string | null>(null)
+  // Task-linked Design binds FS to the Task owner without adopting it as Work.
+  const [designProjectSlug, setDesignProjectSlug] = React.useState<string | null>(null)
   // Bumped by the iterate stage's "Run recipe" button → ChatScreen sends the dry-run.
   const [runRecipeNonce, setRunRecipeNonce] = React.useState(0)
   const [runRecipePrompt, setRunRecipePrompt] = React.useState<string | undefined>(undefined)
@@ -259,6 +265,7 @@ export function App() {
     setPendingGraphJob(null)
     setPendingDesign(null)
     setPendingDesignId(null)
+    setDesignProjectSlug(null)
     setPendingFile(null)
     setPendingArtifact(null)
     setReturnToChat(null)
@@ -498,6 +505,7 @@ export function App() {
         if (popped.originView !== 'design') {
           setPendingDesign(null)
           setPendingDesignId(null)
+          setDesignProjectSlug(null)
           if (popped.originView === 'task' && activeTaskId != null) {
             window.history.replaceState(
               withInAppTaskPolicy(window.history.state),
@@ -510,6 +518,7 @@ export function App() {
           // Internal Design home: flush + leave studio stage via exitNonce.
           setPendingDesign(null)
           setPendingDesignId(null)
+          setDesignProjectSlug(null)
           setDesignExitNonce(n => n + 1)
           setView('design')
         }
@@ -926,6 +935,7 @@ export function App() {
     if (origin) setReturnToChat(origin)
     if (link.type === 'design' && features.designStudio) {
       setPendingDesign(null)
+      setDesignProjectSlug(null)
       setPendingDesignId(link.id || link.path.split('/').filter(Boolean).slice(-1)[0] || null)
       setNavStack(stack => pushDeep(stack, {
         kind: 'design-canvas',
@@ -1100,6 +1110,7 @@ export function App() {
         const sp = projects.find(p => p.slug === session.project_slug)
         if (sp) setActiveProject(sp)
         markSeen(session.id, session.updated_at)
+        setDesignProjectSlug(null)
         setPendingDesign({ id: session.id, title: session.title })
         setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: view, originLabel: viewOriginLabel(view) }))
         setView('design')
@@ -1146,12 +1157,12 @@ export function App() {
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
         const chat = <ChatScreen activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={setActiveProjectOnly} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} draftSeed={reviewDraft?.text} draftSeedNonce={reviewDraft?.nonce} onDraftSeedConsumed={clearReviewDraft} />
         const body = activeSession?.workflow_id
-          ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'chat', originLabel: 'Chat' })); setView('design') } : undefined} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
+          ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { setDesignProjectSlug(null); setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'chat', originLabel: 'Chat' })); setView('design') } : undefined} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
           : chat
         return pane('chat', chatActive, body)
       })()}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
-      {keep('artifacts') && pane('artifacts', artifactsActive, <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={delegateActive ? undefined : setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={delegateActive ? undefined : openSessionById} designStudioEnabled={delegateActive ? false : features.designStudio} onOpenDesign={delegateActive ? undefined : features.designStudio ? id => { setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: archiveRecord ? 'artifacts' : view, originLabel: viewOriginLabel(archiveRecord ? 'artifacts' : view) })); setView('design') } : undefined} reviewSessionId={delegateActive ? null : returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={delegateActive ? undefined : continueArtifactReview} /></React.Suspense>)}
+      {keep('artifacts') && pane('artifacts', artifactsActive, <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={delegateActive ? undefined : setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={delegateActive ? undefined : openSessionById} designStudioEnabled={delegateActive ? false : features.designStudio} onOpenDesign={delegateActive ? undefined : features.designStudio ? id => { setDesignProjectSlug(null); setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: archiveRecord ? 'artifacts' : view, originLabel: viewOriginLabel(archiveRecord ? 'artifacts' : view) })); setView('design') } : undefined} reviewSessionId={delegateActive ? null : returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={delegateActive ? undefined : continueArtifactReview} /></React.Suspense>)}
       {keep('workflows') && pane('workflows', workflowsActive, <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} backNonce={graphBackNonce} /> : undefined} /></React.Suspense>)}
       {keep('activity') && pane('activity', activityActive, <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={delegateActive ? null : activeProject} projects={projects} globalScope={delegateActive} features={features} profiles={profiles} onOpenTask={jobId => openTask(jobId, 'activity')} onOpenPlan={jobId => {
         // A graph plan editor is a Work surface. Opening it is an explicit
@@ -1159,9 +1170,18 @@ export function App() {
         if (delegateActive) changeShellMode('work')
         openJobByEngine(jobId, 'graph', 'activity')
       }} onNewTask={delegateActive ? undefined : () => goView('home')} /></React.Suspense>)}
-      {view === 'task' && activeTaskId != null && <React.Suspense fallback={<ViewFallback label="Loading task..." />}><section className="tasks-view task-workspace-view"><ContextualTaskWorkspace token={token} jobId={activeTaskId} initialJob={taskProjectContext?.jobId === activeTaskId ? taskProjectContext.initialJob : null} onResolved={handleTaskResolved} onBack={closeTask} projects={projects} selectedWorkProject={delegateActive ? null : activeProject} designStudioEnabled={delegateActive ? false : features.designStudio} onOpenDesign={delegateActive ? undefined : features.designStudio ? id => { clearTaskHash(); setPendingDesignId(id); setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'task', originLabel: 'Task' })); setView('design') } : undefined} onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }} /></section></React.Suspense>}
+      {view === 'task' && activeTaskId != null && <React.Suspense fallback={<ViewFallback label="Loading task..." />}><section className="tasks-view task-workspace-view"><ContextualTaskWorkspace token={token} jobId={activeTaskId} initialJob={taskProjectContext?.jobId === activeTaskId ? taskProjectContext.initialJob : null} onResolved={handleTaskResolved} onBack={closeTask} projects={projects} selectedWorkProject={delegateActive ? null : activeProject} designStudioEnabled={delegateActive ? false : features.designStudio} onOpenDesign={delegateActive ? undefined : features.designStudio ? (id, projectSlug) => {
+          clearTaskHash()
+          setDesignProjectSlug(taskLinkedDesignProjectSlug(
+            projectSlug,
+            taskProjectContext?.jobId === activeTaskId ? taskProjectContext.projectSlug : null,
+          ))
+          setPendingDesignId(id)
+          setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'task', originLabel: 'Task' }))
+          setView('design')
+        } : undefined} onOpenFile={(slug, path) => { setPendingFile({ slug, path }); setView('artifacts') }} /></section></React.Suspense>}
       {features.workflowGraph && view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} /></React.Suspense>}
-      {features.designStudio && keep('design') && pane('design', designActive, <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={activeProject} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onStageChange={handleDesignStageChange} exitNonce={designExitNonce} /></React.Suspense>)}
+      {features.designStudio && keep('design') && pane('design', designActive, <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={resolveDesignStudioProject(projects, designProjectSlug, activeProject)} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onStageChange={handleDesignStageChange} exitNonce={designExitNonce} /></React.Suspense>)}
       {!features.designStudio && designActive && (
         <section className="placeholder-view teaching-empty" data-testid="teaching-empty">
           <h3 className="teaching-empty-title">Design Studio is off</h3>

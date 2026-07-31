@@ -56,7 +56,7 @@ export function TaskWorkspace({
   onBack: () => void
   onChanged?: () => void
   designStudioEnabled?: boolean
-  onOpenDesign?: (id: string) => void
+  onOpenDesign?: (id: string, projectSlug?: string | null) => void
   onOpenFile?: (slug: string, path: string) => void
   projects?: Project[]
   containers?: Container[]
@@ -299,7 +299,7 @@ export function TaskWorkspace({
             : (cur.produced_designs || []).map(d => ({ type: 'design' as const, id: d.id, title: d.title, path: '' }))
           if (!list.length) return null
           const open = (a: Artifact) => a.type === 'design' && designStudioEnabled
-            ? onOpenDesign?.(a.id || '')
+            ? onOpenDesign?.(a.id || '', job?.project_slug)
             : (job?.project_slug && a.path && onOpenFile?.(job.project_slug, a.type === 'design' ? `${a.path.replace(/\/$/, '')}/scene.json` : a.path))
           return <div className="jfd-artifacts">
             {list.map(a => <button key={a.path || a.id} className="artifact-chip" onClick={() => open(a)} disabled={a.type === 'design' && !designStudioEnabled && !a.path} title={`Open ${a.title}`}>
