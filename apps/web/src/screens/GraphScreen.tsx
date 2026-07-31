@@ -343,6 +343,12 @@ export function GraphScreen({
     setBusy(current => current === 'schedule-run-now' ? null : current)
   }
 
+  /** Clear only this path's busy token, and never while Run-now owns the lock. */
+  function releaseOwnedBusy(owner: string) {
+    if (!mounted.current || scheduleHandoffRef.current) return
+    setBusy(current => current === owner ? null : current)
+  }
+
   function dismissScheduleManager() {
     if (scheduleHandoffRef.current || busy === 'schedule-run-now') return
     setSchedulingTemplate(null)
@@ -778,7 +784,7 @@ export function GraphScreen({
         setError(String(cause))
       }
     }).finally(() => {
-      if (mounted.current && seq === draftSeq.current && !scheduleHandoffRef.current) setBusy(null)
+      if (seq === draftSeq.current) releaseOwnedBusy('create')
     })
   }, [pendingDraft, token, activeProject?.slug, profileId, onDraftConsumed, busy])
 
@@ -943,7 +949,7 @@ export function GraphScreen({
       confirmLabel: 'Delete plan',
       danger: true,
     })
-    if (!ok || busy) return
+    if (!ok || busy || scheduleHandoffRef.current) return
     setBusy('delete')
     setError('')
     try {
@@ -954,14 +960,14 @@ export function GraphScreen({
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('delete')
     }
   }
 
   // Pause ⇄ resume: the owner's rule is that only active templates run on a schedule,
   // so "this workflow needs fixing" is one click out of rotation, not a deletion.
   async function toggleTemplatePaused(template: GraphTemplate) {
-    if (busy) return
+    if (busy || scheduleHandoffRef.current) return
     setBusy('template-status')
     setError('')
     try {
@@ -970,7 +976,7 @@ export function GraphScreen({
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('template-status')
     }
   }
 
@@ -980,7 +986,7 @@ export function GraphScreen({
       message: `“${template.name}” will leave the active library and its schedules will stop. Its project ownership and past runs stay intact, and you can restore it later.`,
       confirmLabel: 'Archive workflow',
     })
-    if (!ok || busy) return
+    if (!ok || busy || scheduleHandoffRef.current) return
     setBusy('template-status')
     setError('')
     try {
@@ -991,12 +997,12 @@ export function GraphScreen({
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('template-status')
     }
   }
 
   async function restoreTemplate(template: GraphTemplate) {
-    if (busy) return
+    if (busy || scheduleHandoffRef.current) return
     setBusy('template-status')
     setError('')
     try {
@@ -1007,7 +1013,7 @@ export function GraphScreen({
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('template-status')
     }
   }
 
@@ -1018,7 +1024,7 @@ export function GraphScreen({
       confirmLabel: 'Delete workflow',
       danger: true,
     })
-    if (!ok || busy) return
+    if (!ok || busy || scheduleHandoffRef.current) return
     setBusy('delete')
     setError('')
     try {
@@ -1027,12 +1033,12 @@ export function GraphScreen({
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('delete')
     }
   }
 
   async function duplicatePlan() {
-    if (!job || busy) return
+    if (!job || busy || scheduleHandoffRef.current) return
     setBusy('duplicate')
     setError('')
     let focus: { seq: number; jobId: number } | null = null
@@ -1060,7 +1066,7 @@ export function GraphScreen({
       if (focus) restoreJobFocusIfCurrent(focus.seq, focus.jobId)
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('duplicate')
     }
   }
 
@@ -1068,7 +1074,7 @@ export function GraphScreen({
   // promotion cannot be the only door into the editor — a starter trigger + first step
   // gives the canvas (or the authoring chat) something to build on.
   async function newPlan(description?: string) {
-    if (busy) return
+    if (busy || scheduleHandoffRef.current) return
     setBusy('create')
     setError('')
     let focus: { seq: number; jobId: number } | null = null
@@ -1105,7 +1111,7 @@ export function GraphScreen({
       if (focus) restoreJobFocusIfCurrent(focus.seq, focus.jobId)
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('create')
     }
   }
 
@@ -1155,7 +1161,7 @@ export function GraphScreen({
   }
 
   async function act(label: string, action: () => Promise<GraphJob>, message?: string) {
-    if (busy) return
+    if (busy || scheduleHandoffRef.current) return
     setBusy(label)
     setError('')
     setNotice('')
@@ -1172,7 +1178,7 @@ export function GraphScreen({
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy(label)
     }
   }
 
@@ -1191,7 +1197,7 @@ export function GraphScreen({
   }
 
   async function saveTemplate(meta: { name: string; description: string; category: string }) {
-    if (!job || busy) return
+    if (!job || busy || scheduleHandoffRef.current) return
     setBusy('save-template')
     setError('')
     try {
@@ -1210,7 +1216,7 @@ export function GraphScreen({
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('save-template')
     }
   }
 
@@ -1224,7 +1230,7 @@ export function GraphScreen({
   }
 
   async function runCurrentPlan() {
-    if (!job || busy) return
+    if (!job || busy || scheduleHandoffRef.current) return
     setBusy('start')
     setError('')
     setNotice('')
@@ -1241,12 +1247,12 @@ export function GraphScreen({
     } catch (cause) {
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('start')
     }
   }
 
   async function createFromTemplate(template: GraphTemplate, input?: Record<string, string>) {
-    if (busy) return
+    if (busy || scheduleHandoffRef.current) return
     setBusy('use-template')
     setError('')
     let focus: { seq: number; jobId: number } | null = null
@@ -1298,12 +1304,12 @@ export function GraphScreen({
       if (mounted.current) setError(String(cause))
       throw cause
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('use-template')
     }
   }
 
   async function editTemplate(template: GraphTemplate) {
-    if (busy) return
+    if (busy || scheduleHandoffRef.current) return
     setBusy('edit-template')
     setError('')
     let focus: { seq: number; jobId: number } | null = null
@@ -1335,12 +1341,12 @@ export function GraphScreen({
       if (focus) restoreJobFocusIfCurrent(focus.seq, focus.jobId)
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('edit-template')
     }
   }
 
   async function runDraft(item: GraphJob, input?: Record<string, string>) {
-    if (busy) return
+    if (busy || scheduleHandoffRef.current) return
     setBusy('start')
     setError('')
     const focus = beginJobFocus(item.id)
@@ -1371,7 +1377,7 @@ export function GraphScreen({
       if (mounted.current) setError(String(cause))
       throw cause
     } finally {
-      if (mounted.current) setBusy(null)
+      releaseOwnedBusy('start')
     }
   }
 
@@ -1394,9 +1400,7 @@ export function GraphScreen({
       restoreJobFocusIfCurrent(focus.seq, item.id)
       if (mounted.current) setError(String(cause))
     } finally {
-      if (mounted.current && !scheduleHandoffRef.current) {
-        setBusy(current => current === 'prepare-template' ? null : current)
-      }
+      releaseOwnedBusy('prepare-template')
     }
   }
 

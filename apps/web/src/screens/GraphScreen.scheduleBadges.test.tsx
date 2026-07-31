@@ -2128,4 +2128,55 @@ describe('GraphScreen how-it-runs badges', () => {
     expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
     expect(runScheduleNow).toHaveBeenCalledTimes(1)
   })
+
+  it('keeps Run now busy locked when cancelled runDraft finally cannot clear it', async () => {
+    const draft = queuedDraft(55, 'Home draft')
+    const started = runningJob(55, 'Home draft')
+    const spawned = runningJob(99, 'Nightly publish run')
+    let finishStart: ((value: typeof started) => void) | undefined
+    let finishSpawn: ((value: typeof spawned) => void) | undefined
+    vi.mocked(listGraphJobs).mockResolvedValue({ items: [draft] })
+    vi.mocked(getGraphJob).mockImplementation(async (_token, jobId) => {
+      if (jobId === 55) return draft
+      if (jobId === 99) return spawned
+      throw new Error(`unexpected job ${jobId}`)
+    })
+    vi.mocked(startGraphJob).mockImplementation(() => new Promise(resolve => { finishStart = resolve }))
+    vi.mocked(runScheduleNow).mockImplementation(() => new Promise(resolve => { finishSpawn = resolve }))
+
+    render(<GraphScreen {...screenBase} />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Workflows 2' }))
+    const scheduleRow = (await screen.findByText('Nightly publish')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(scheduleRow).getByRole('button', { name: 'Schedules' }))
+    expect(await screen.findByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+
+    // Start runDraft under the mounted schedule dialog, then cancel it with Run now.
+    fireEvent.click(screen.getByRole('tab', { name: 'Drafts 1' }))
+    const draftRow = (await screen.findByText('Home draft')).closest('[role="row"]') as HTMLElement
+    fireEvent.click(within(draftRow).getByRole('button', { name: 'Run' }))
+    await waitFor(() => expect(startGraphJob).toHaveBeenCalledWith('t', 55))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
+    await waitFor(() => expect(runScheduleNow).toHaveBeenCalledTimes(1))
+
+    await act(async () => {
+      finishStart?.(started)
+      await Promise.resolve()
+    })
+    // Cancelled start path must not clear the parent schedule-run-now lock.
+    expect(within(draftRow).getByRole('button', { name: 'Run' })).toBeDisabled()
+    expect(within(draftRow).getByRole('button', { name: 'Edit' })).toBeDisabled()
+    expect(screen.getByRole('dialog', { name: 'Schedule Nightly publish' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename workflow Home draft' })).not.toBeInTheDocument()
+
+    await act(async () => {
+      finishSpawn?.(spawned)
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByRole('button', { name: 'Rename workflow Nightly publish run' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Schedule Nightly publish' })).not.toBeInTheDocument()
+    expect(runScheduleNow).toHaveBeenCalledTimes(1)
+    expect(startGraphJob).toHaveBeenCalledTimes(1)
+  })
 })
