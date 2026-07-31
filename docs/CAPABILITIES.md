@@ -1311,7 +1311,10 @@ canonical media remains on the authenticated route with an exact framing policy.
 TLS Area origin exchanges its capability for a Secure, host-scoped
 `SameSite=None` cookie, allowing a Tailscale Proxima origin to embed a distinct
 apps-domain host while the token's signed Proxima origin remains the only permitted
-frame ancestor. HTTP same-site relays use `SameSite=Strict`.
+frame ancestor. The HTTPS exchange uses a server-owned bootstrap to enter the clean
+same-origin URL. Cross-origin entry requires a capability-bearing navigation;
+cross-origin subresources and cookie-only navigations are rejected before Area
+dispatch. HTTP same-site relays use `SameSite=Strict`.
 Every resource still crosses the canonical resolver and realpath jail. Dedicated
 worker responses restrict outbound connections, Service Worker scripts are rejected,
 external ancestors cannot frame a preview, and embedded same-site or cross-site
@@ -1324,7 +1327,8 @@ frame-ancestor policy. Capability values are redacted from query, path, and cook
 logs for configured launchers and plain Uvicorn entry points. Cloudflare tunnel
 ingress changes use a cancellation-safe cross-process desired-state lock. They
 preserve every ordered rule, including path-only rules and the terminal catchall,
-and verify that refreshed ingress exactly matches the requested ordered result
+place file-host rules before the first hostname-agnostic matcher, and verify that
+refreshed ingress exactly matches the requested ordered result
 before succeeding. Design Studio loads
 targeted canvas and export images from authenticated raw bytes through managed blob
 URLs rather than cross-origin preview URLs. Markdown siblings resolve from the source

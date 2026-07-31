@@ -155,14 +155,45 @@ def test_add_host_preserves_path_rules_and_terminal_catchall() -> None:
     )
 
     assert updated == [
-        *ingress[:-1],
+        ingress[0],
         {
             "hostname": "file-1-ops-2.example.test",
             "service": "http://127.0.0.1:8766",
         },
+        ingress[1],
         ingress[-1],
     ]
     assert ingress[-1]["originRequest"] == {"connectTimeout": 5}
+
+
+def test_existing_file_host_moves_before_path_matcher() -> None:
+    host = "file-1-ops-2.example.test"
+    ingress = [
+        {
+            "hostname": "preview-existing.example.test",
+            "service": "http://127.0.0.1:8766",
+        },
+        {
+            "path": "/internal/*",
+            "service": "http://127.0.0.1:9000",
+        },
+        {
+            "hostname": host,
+            "service": "http://127.0.0.1:8766",
+            "originRequest": {"connectTimeout": 5},
+        },
+        {"service": "http_status:404"},
+    ]
+
+    updated = cf_hostnames._with_ingress_hostname(ingress, host)
+
+    assert [rule.get("hostname") for rule in updated[:2]] == [
+        "preview-existing.example.test",
+        host,
+    ]
+    assert updated[1]["originRequest"] == {"connectTimeout": 5}
+    assert updated[2:] == [ingress[1], ingress[3]]
+    assert cf_hostnames._hostname_precedes_unscoped(updated, host)
 
 
 def test_concurrent_file_preview_hosts_preserve_shared_tunnel_ingress(
@@ -206,7 +237,14 @@ def test_concurrent_file_preview_hosts_preserve_shared_tunnel_ingress(
         "preview-existing.example.test",
         *hosts,
     }
-    assert client.config["ingress"][1] == {
+    assert client.config["ingress"][0]["hostname"] == (
+        "preview-existing.example.test"
+    )
+    assert {
+        rule["hostname"]
+        for rule in client.config["ingress"][1:3]
+    } == set(hosts)
+    assert client.config["ingress"][3] == {
         "path": "/internal/*",
         "service": "http://127.0.0.1:9000",
     }
@@ -274,7 +312,14 @@ def test_multiprocess_file_preview_hosts_preserve_complete_ingress(
     final_ingress = jsonlib.loads(
         state_path.read_text(encoding="utf-8")
     )["ingress"]
-    assert final_ingress[1] == {
+    assert final_ingress[0]["hostname"] == (
+        "preview-existing.example.test"
+    )
+    assert {
+        rule["hostname"]
+        for rule in final_ingress[1:3]
+    } == set(hosts)
+    assert final_ingress[3] == {
         "path": "/internal/*",
         "service": "http://127.0.0.1:9000",
     }

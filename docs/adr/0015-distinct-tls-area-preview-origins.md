@@ -43,7 +43,10 @@ rejection remain mandatory. TLS exchange uses a Secure, host-scoped
 `SameSite=None` cookie so the Tailscale Proxima origin and apps-domain Area origin
 may remain cross-site; the signed Proxima origin remains the exact permitted frame
 ancestor. HTTP same-site relays retain `SameSite=Strict`. Native module workers use
-same-origin Area URLs.
+same-origin Area URLs. A cross-origin Area entry must carry the signed capability
+on a navigation request. HTTPS exchange returns a server-owned bootstrap that sets
+the cookie and enters the clean same-origin URL. Cross-origin scripts, images,
+fetches, workers, and cookie-only navigations are rejected before Area dispatch.
 
 Named local origins and plain HTTP Area relays retain the same isolated-host model.
 When an HTTPS installation has no distinct TLS Area origin, active preview entry

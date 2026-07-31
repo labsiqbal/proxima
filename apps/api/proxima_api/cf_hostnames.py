@@ -82,17 +82,67 @@ def _with_ingress_hostname(
     host: str,
 ) -> list[dict[str, Any]]:
     updated = copy.deepcopy(ingress)
+    existing_index = next(
+        (
+            index
+            for index, rule in enumerate(updated)
+            if rule.get("hostname") == host
+        ),
+        None,
+    )
+    if existing_index is None:
+        host_rule = {
+            "hostname": host,
+            "service": _existing_service(updated),
+        }
+    else:
+        host_rule = updated.pop(existing_index)
     if (
         not updated
         or updated[-1].get("hostname")
         or updated[-1].get("path")
     ):
         updated.append({"service": "http_status:404"})
+    insert_at = next(
+        (
+            index
+            for index, rule in enumerate(updated)
+            if not rule.get("hostname")
+        ),
+        len(updated),
+    )
     updated.insert(
-        len(updated) - 1,
-        {"hostname": host, "service": _existing_service(updated)},
+        insert_at,
+        host_rule,
     )
     return updated
+
+
+def _hostname_precedes_unscoped(
+    ingress: list[dict[str, Any]],
+    host: str,
+) -> bool:
+    host_index = next(
+        (
+            index
+            for index, rule in enumerate(ingress)
+            if rule.get("hostname") == host
+        ),
+        None,
+    )
+    unscoped_index = next(
+        (
+            index
+            for index, rule in enumerate(ingress)
+            if not rule.get("hostname")
+        ),
+        None,
+    )
+    return (
+        host_index is not None
+        and unscoped_index is not None
+        and host_index < unscoped_index
+    )
 
 
 async def _put_tunnel_config(cfg, client, config: dict[str, Any]) -> None:
@@ -258,7 +308,7 @@ async def _ensure_hostname(cfg: dict[str, Any], host: str) -> None:
             cfg,
             client,
             add_host,
-            lambda ingress: any(r.get("hostname") == host for r in ingress),
+            lambda ingress: _hostname_precedes_unscoped(ingress, host),
         )
 
         # 2. Proxied DNS CNAME → the tunnel.

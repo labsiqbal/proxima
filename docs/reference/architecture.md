@@ -281,6 +281,9 @@ of falling back to the Proxima origin or a plaintext relay. Passive canonical me
 remains on the authenticated route. TLS capability exchange uses a Secure,
 host-scoped `SameSite=None` cookie so a Tailscale Proxima origin can embed the
 separate apps-domain Area origin; HTTP same-site relays retain `SameSite=Strict`.
+The HTTPS exchange uses a server-owned bootstrap to enter the clean same-origin
+URL. Cross-origin entry requires a capability-bearing navigation; cross-origin
+subresources and cookie-only navigations are rejected before Area dispatch.
 The token's signed Proxima origin is enforced by the exact `frame-ancestors` policy
 on every document-viewable response. The Area host retains
 same-origin identity only because its router exposes the validated Area and no
@@ -297,9 +300,9 @@ path, and cookie values are redacted before access logging for every supported
 Uvicorn entry point. Cloudflare tunnel ingress changes share one cross-process
 desired-state mutation lock. Mutation preserves the complete ordered rule list,
 including path-only rules and the terminal catchall, inserts new host rules before
-that catchall, and accepts success only when refreshed ingress exactly matches the
-requested order. Cancellation waits for and releases any late-acquired file-lock
-descriptor before returning.
+the first hostname-agnostic matcher, and accepts success only when refreshed ingress
+exactly matches the requested order. Cancellation waits for and releases any
+late-acquired file-lock descriptor before returning.
 Markdown resources resolve relative to both the source document directory and its
 target. A validated target context is reused throughout each tree, Archive, or
 message-list request while each path still crosses the realpath jail. Artifact links
