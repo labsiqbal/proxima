@@ -6,6 +6,7 @@ import os
 import shutil
 import signal
 import socket
+import ssl
 import sqlite3
 import subprocess
 import sys
@@ -27,6 +28,7 @@ def _request(
     *,
     body: dict | None = None,
     token: str | None = None,
+    tls_context: ssl.SSLContext | None = None,
 ) -> dict:
     headers = {"Content-Type": "application/json"}
     if token:
@@ -37,7 +39,7 @@ def _request(
         headers=headers,
         method="POST" if body is not None else "GET",
     )
-    with urlopen(request, timeout=10) as response:
+    with urlopen(request, timeout=10, context=tls_context) as response:
         value = json.loads(response.read())
     if not isinstance(value, dict):
         raise RuntimeError(f"unexpected response from {url}")
@@ -59,6 +61,62 @@ def _browser() -> str:
         if executable:
             return executable
     raise RuntimeError("Chromium or Google Chrome is required")
+
+
+def _tls_certificate(root: Path) -> tuple[Path, Path]:
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        raise RuntimeError("OpenSSL is required for the TLS browser fixture")
+    config = root / "openssl.cnf"
+    certificate = root / "fixture.crt"
+    private_key = root / "fixture.key"
+    config.write_text(
+        """
+[req]
+distinguished_name = subject
+x509_extensions = extensions
+prompt = no
+
+[subject]
+CN = proxima.tailnet.test
+
+[extensions]
+subjectAltName = @names
+
+[names]
+DNS.1 = proxima.tailnet.test
+DNS.2 = *.preview.test
+""".strip(),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-sha256",
+            "-days",
+            "1",
+            "-config",
+            str(config),
+            "-keyout",
+            str(private_key),
+            "-out",
+            str(certificate),
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode:
+        raise RuntimeError(
+            completed.stderr or completed.stdout or "TLS certificate creation failed"
+        )
+    return certificate, private_key
 
 
 def _build_web() -> None:
@@ -157,6 +215,10 @@ body { font-family: CanonicalProbe, sans-serif; }
   onerror="parent.postMessage({probe:'target-preview-escape',value:'blocked'}, '*')">
 <script type="module" src="module.js"></script>
 <script>
+parent.postMessage({
+  probe: "target-preview-origin",
+  value: location.origin
+}, "*");
 fetch("data.json")
   .then(response => response.json())
   .then(value => parent.postMessage({
@@ -655,6 +717,22 @@ def _browser_expression() -> str:
           && frame.src.includes("/ops/")
           && !frame.hasAttribute("sandbox");
       });
+      if (
+        location.protocol !== "https:"
+        || location.hostname !== "proxima.tailnet.test"
+      ) {
+        throw new Error(`Proxima did not use the TLS fixture origin: ${location.origin}`);
+      }
+      const previewOrigin = await until(
+        `${name} distinct TLS origin`,
+        () => previewMessages["target-preview-origin"]
+      );
+      if (
+        !previewOrigin.startsWith("https://file-")
+        || previewOrigin === location.origin
+      ) {
+        throw new Error(`targeted HTML used an invalid TLS origin: ${previewOrigin}`);
+      }
       await until(`${name} targeted stylesheet load`, () =>
         previewMessages["target-preview-css"] === "loaded"
       );
@@ -677,6 +755,7 @@ def _browser_expression() -> str:
           throw new Error(`${probe} failed inside the Area-bound origin: ${result}`);
         }
       }
+      checks.push("https-area-native-module-worker");
       const serviceWorker = await until(
         `${name} service worker rejection`,
         () => previewMessages["target-preview-service-worker"]
@@ -701,6 +780,7 @@ def _browser_expression() -> str:
       }
       const frame = overlay.querySelector("iframe.av-frame");
       const wrapper = document.createElement("iframe");
+      wrapper.setAttribute("sandbox", "");
       wrapper.srcdoc = `<iframe src="${frame.src}?frame_probe=external"></iframe>`;
       document.body.append(wrapper);
       await wait(750);
@@ -750,13 +830,19 @@ def main() -> None:
         for path in (home, workspace, canonical, legacy, runner_home):
             path.mkdir(parents=True)
         port = _port()
-        base_url = f"http://127.0.0.1:{port}"
+        api_url = f"https://127.0.0.1:{port}"
+        base_url = f"https://proxima.tailnet.test:{port}"
+        certificate, private_key = _tls_certificate(fixture)
+        tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        tls_context.check_hostname = False
+        tls_context.verify_mode = ssl.CERT_NONE
         database = fixture / "candidate.db"
         environment = {
             "HOME": str(home),
             "LANG": "C.UTF-8",
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "PROXIMA_CLAUDE_LIVE_HOME": "0",
+            "PROXIMA_APPS_DOMAIN": "preview.test",
             "PROXIMA_DB_PATH": str(database),
             "PROXIMA_FEATURE_MASTER_ORCHESTRATOR": "0",
             "PROXIMA_FEATURE_DESIGN_STUDIO": "1",
@@ -777,7 +863,20 @@ def main() -> None:
         log_path = fixture / "server.log"
         with log_path.open("wb") as log:
             server = subprocess.Popen(
-                [str(API_PYTHON), str(ROOT / "apps" / "api" / "scripts" / "serve.py")],
+                [
+                    str(API_PYTHON),
+                    "-m",
+                    "uvicorn",
+                    "proxima_api.main:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                    "--ssl-certfile",
+                    str(certificate),
+                    "--ssl-keyfile",
+                    str(private_key),
+                ],
                 cwd=ROOT,
                 env=environment,
                 stdin=subprocess.DEVNULL,
@@ -791,7 +890,10 @@ def main() -> None:
                     if server.poll() is not None:
                         raise RuntimeError(log_path.read_text(encoding="utf-8"))
                     try:
-                        _request(f"{base_url}/api/health")
+                        _request(
+                            f"{api_url}/api/health",
+                            tls_context=tls_context,
+                        )
                         break
                     except Exception:
                         if time.monotonic() >= deadline:
@@ -799,8 +901,9 @@ def main() -> None:
                         time.sleep(0.1)
                 token = str(
                     _request(
-                        f"{base_url}/auth/set-password",
+                        f"{api_url}/auth/set-password",
                         body={"password": PASSWORD},
+                        tls_context=tls_context,
                     )["token"]
                 )
                 for path, name, slug in (
@@ -808,9 +911,10 @@ def main() -> None:
                     (canonical, "Canonical browser", "canonical-browser"),
                 ):
                     _request(
-                        f"{base_url}/api/projects/link",
+                        f"{api_url}/api/projects/link",
                         body={"name": name, "path": str(path), "slug": slug},
                         token=token,
+                        tls_context=tls_context,
                     )
                 _write_fixture_files(canonical)
                 _seed_registry(database, canonical, legacy)
@@ -864,6 +968,13 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                     profile=fixture / "browser-profile",
                     auth_token=token,
                     drop_prefix=[],
+                    host_resolver_rules=(
+                        f"MAP *.preview.test:443 127.0.0.1:{port}, "
+                        "MAP *.preview.test 127.0.0.1, "
+                        "MAP proxima.tailnet.test 127.0.0.1, "
+                        "EXCLUDE 127.0.0.1"
+                    ),
+                    ignore_certificate_errors=True,
                 )
                 print(
                     json.dumps(
@@ -876,6 +987,11 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                         sort_keys=True,
                     )
                 )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{exc}\nDisposable server log:\n"
+                    f"{log_path.read_text(encoding='utf-8', errors='replace')}"
+                ) from exc
             finally:
                 try:
                     os.killpg(server.pid, signal.SIGTERM)

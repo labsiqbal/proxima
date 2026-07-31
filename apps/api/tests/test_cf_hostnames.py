@@ -5,6 +5,7 @@ import copy
 import json as jsonlib
 import multiprocessing
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,10 @@ class _TunnelClient:
                 {
                     "hostname": "preview-existing.example.test",
                     "service": "http://127.0.0.1:8766",
+                },
+                {
+                    "path": "/internal/*",
+                    "service": "http://127.0.0.1:9000",
                 },
                 {"service": "http_status:404"},
             ]
@@ -105,27 +110,59 @@ def _add_host_in_process(
     }
     client = _FileTunnelClient(state_path, host)
 
-    def mutate(ingress):
-        service = cf_hostnames._existing_service(ingress)
-        catchall = (
-            ingress[-1:]
-            if ingress and not ingress[-1].get("hostname")
-            else [{"service": "http_status:404"}]
-        )
-        rules = [rule for rule in ingress if rule.get("hostname")]
-        rules.append({"hostname": host, "service": service})
-        return rules + catchall
-
     asyncio.run(
         cf_hostnames._mutate_tunnel_ingress(
             cfg,
             client,
-            mutate,
+            lambda ingress: cf_hostnames._with_ingress_hostname(
+                ingress,
+                host,
+            ),
             lambda ingress: any(
                 rule.get("hostname") == host for rule in ingress
             ),
         )
     )
+
+
+async def _assert_lock_reusable(cfg: dict) -> None:
+    async def acquire() -> None:
+        async with cf_hostnames._tunnel_mutation_lock(cfg):
+            pass
+
+    await asyncio.wait_for(acquire(), timeout=2)
+
+
+def test_add_host_preserves_path_rules_and_terminal_catchall() -> None:
+    ingress = [
+        {
+            "hostname": "preview-existing.example.test",
+            "service": "http://127.0.0.1:8766",
+        },
+        {
+            "path": "/internal/*",
+            "service": "http://127.0.0.1:9000",
+        },
+        {
+            "service": "http_status:404",
+            "originRequest": {"connectTimeout": 5},
+        },
+    ]
+
+    updated = cf_hostnames._with_ingress_hostname(
+        ingress,
+        "file-1-ops-2.example.test",
+    )
+
+    assert updated == [
+        *ingress[:-1],
+        {
+            "hostname": "file-1-ops-2.example.test",
+            "service": "http://127.0.0.1:8766",
+        },
+        ingress[-1],
+    ]
+    assert ingress[-1]["originRequest"] == {"connectTimeout": 5}
 
 
 def test_concurrent_file_preview_hosts_preserve_shared_tunnel_ingress(
@@ -143,21 +180,13 @@ def test_concurrent_file_preview_hosts_preserve_shared_tunnel_ingress(
     )
 
     async def add(host: str) -> None:
-        def mutate(ingress):
-            service = cf_hostnames._existing_service(ingress)
-            catchall = (
-                ingress[-1:]
-                if ingress and not ingress[-1].get("hostname")
-                else [{"service": "http_status:404"}]
-            )
-            rules = [rule for rule in ingress if rule.get("hostname")]
-            rules.append({"hostname": host, "service": service})
-            return rules + catchall
-
         await cf_hostnames._mutate_tunnel_ingress(
             cfg,
             client,
-            mutate,
+            lambda ingress: cf_hostnames._with_ingress_hostname(
+                ingress,
+                host,
+            ),
             lambda ingress: any(
                 rule.get("hostname") == host for rule in ingress
             ),
@@ -177,6 +206,13 @@ def test_concurrent_file_preview_hosts_preserve_shared_tunnel_ingress(
         "preview-existing.example.test",
         *hosts,
     }
+    assert client.config["ingress"][1] == {
+        "path": "/internal/*",
+        "service": "http://127.0.0.1:9000",
+    }
+    assert client.config["ingress"][-1] == {
+        "service": "http_status:404"
+    }
 
 
 def test_multiprocess_file_preview_hosts_preserve_complete_ingress(
@@ -190,6 +226,10 @@ def test_multiprocess_file_preview_hosts_preserve_complete_ingress(
                     {
                         "hostname": "preview-existing.example.test",
                         "service": "http://127.0.0.1:8766",
+                    },
+                    {
+                        "path": "/internal/*",
+                        "service": "http://127.0.0.1:9000",
                     },
                     {"service": "http_status:404"},
                 ]
@@ -231,6 +271,14 @@ def test_multiprocess_file_preview_hosts_preserve_complete_ingress(
         "preview-existing.example.test",
         *hosts,
     }
+    final_ingress = jsonlib.loads(
+        state_path.read_text(encoding="utf-8")
+    )["ingress"]
+    assert final_ingress[1] == {
+        "path": "/internal/*",
+        "service": "http://127.0.0.1:9000",
+    }
+    assert final_ingress[-1] == {"service": "http_status:404"}
 
 
 def test_tunnel_update_rejects_a_refreshed_partial_ingress(
@@ -244,16 +292,6 @@ def test_tunnel_update_rejects_a_refreshed_partial_ingress(
     client = _DroppingTunnelClient()
     host = "file-1-ops-2.example.test"
 
-    def mutate(ingress):
-        rules = [rule for rule in ingress if rule.get("hostname")]
-        rules.append(
-            {
-                "hostname": host,
-                "service": "http://127.0.0.1:8766",
-            }
-        )
-        return rules + [{"service": "http_status:404"}]
-
     with pytest.raises(
         RuntimeError,
         match="tunnel ingress update did not converge",
@@ -262,9 +300,95 @@ def test_tunnel_update_rejects_a_refreshed_partial_ingress(
             cf_hostnames._mutate_tunnel_ingress(
                 cfg,
                 client,
-                mutate,
+                lambda ingress: cf_hostnames._with_ingress_hostname(
+                    ingress,
+                    host,
+                ),
                 lambda ingress: any(
                     rule.get("hostname") == host for rule in ingress
                 ),
             )
         )
+
+
+def test_cancelled_waiter_releases_late_file_lock(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    cfg = {
+        "cf_account_id": "account",
+        "cf_tunnel_id": "cancelled-waiter-test",
+        "cf_ingress_lock_dir": str(tmp_path),
+    }
+    holder = cf_hostnames._acquire_ingress_file_lock(cfg)
+    original_acquire = cf_hostnames._acquire_ingress_file_lock
+    attempting = threading.Event()
+
+    def observed_acquire(config):
+        attempting.set()
+        return original_acquire(config)
+
+    monkeypatch.setattr(
+        cf_hostnames,
+        "_acquire_ingress_file_lock",
+        observed_acquire,
+    )
+
+    async def run() -> None:
+        async def wait_for_lock() -> None:
+            async with cf_hostnames._tunnel_mutation_lock(cfg):
+                raise AssertionError("cancelled waiter entered the lock")
+
+        task = asyncio.create_task(wait_for_lock())
+        holder_released = False
+        task_collected = False
+        try:
+            assert await asyncio.to_thread(attempting.wait, 2)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            cf_hostnames._release_ingress_file_lock(holder)
+            holder_released = True
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            task_collected = True
+            await _assert_lock_reusable(cfg)
+        finally:
+            if not holder_released:
+                cf_hostnames._release_ingress_file_lock(holder)
+            if not task_collected:
+                if not task.done():
+                    task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, AssertionError):
+                    pass
+
+    asyncio.run(run())
+
+
+def test_cancelled_owner_releases_acquired_file_lock(
+    tmp_path: Path,
+) -> None:
+    cfg = {
+        "cf_account_id": "account",
+        "cf_tunnel_id": "cancelled-owner-test",
+        "cf_ingress_lock_dir": str(tmp_path),
+    }
+
+    async def run() -> None:
+        entered = asyncio.Event()
+
+        async def own_lock() -> None:
+            async with cf_hostnames._tunnel_mutation_lock(cfg):
+                entered.set()
+                await asyncio.Future()
+
+        task = asyncio.create_task(own_lock())
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await _assert_lock_reusable(cfg)
+
+    asyncio.run(run())

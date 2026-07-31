@@ -1360,7 +1360,11 @@ installs use an Area-specific relay. HTTPS remote installs require a TLS-capable
 Area-specific hostname under the configured apps domain so native same-Area module
 workers retain real same-origin behavior without gaining Proxima authority. Active
 preview entry fails with 503 when that distinct TLS origin is unavailable. Passive
-canonical media remains on the authenticated route with an exact framing policy.
+canonical media remains on the authenticated route with an exact framing policy. A
+TLS Area origin exchanges its capability for a Secure, host-scoped
+`SameSite=None` cookie, allowing a Tailscale Proxima origin to embed a distinct
+apps-domain host while the token's signed Proxima origin remains the only permitted
+frame ancestor. HTTP same-site relays use `SameSite=Strict`.
 Every resource still crosses the canonical resolver and realpath jail. Dedicated
 worker responses restrict outbound connections, Service Worker scripts are rejected,
 external ancestors cannot frame a preview, and embedded same-site or cross-site
@@ -1371,8 +1375,10 @@ response sandbox policy; XHTML, SVG, and other active XML media download safely.
 Every document-viewable response, including PDF, receives the exact authenticated
 frame-ancestor policy. Capability values are redacted from query, path, and cookie
 logs for configured launchers and plain Uvicorn entry points. Cloudflare tunnel
-ingress changes use a cross-process desired-state lock and verify the complete
-refreshed ingress set. Design Studio loads
+ingress changes use a cancellation-safe cross-process desired-state lock. They
+preserve every ordered rule, including path-only rules and the terminal catchall,
+and verify that refreshed ingress exactly matches the requested ordered result
+before succeeding. Design Studio loads
 targeted canvas and export images from authenticated raw bytes through managed blob
 URLs rather than cross-origin preview URLs. Markdown siblings resolve from the source
 document's Area and directory.

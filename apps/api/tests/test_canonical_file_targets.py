@@ -511,6 +511,8 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
 
     capability_gate = remote.get(location, follow_redirects=False)
     assert capability_gate.status_code == 307
+    assert "SameSite=none" in capability_gate.headers["set-cookie"]
+    assert "Secure" in capability_gate.headers["set-cookie"]
     page_url = urljoin(location, capability_gate.headers["location"])
     page = remote.get(page_url)
     assert page.status_code == 200

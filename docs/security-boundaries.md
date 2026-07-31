@@ -401,7 +401,11 @@ Area-only origin. Plain HTTP remote deployments use an Area-only relay. HTTPS re
 deployments require a TLS-capable Area-only hostname under the configured apps
 domain. Without one, active preview entry fails with 503 rather than sharing the
 Proxima origin or using a plaintext relay. Passive canonical media remains on the
-authenticated route with an exact framing policy. The dedicated origin lets native
+authenticated route with an exact framing policy. TLS exchange uses a Secure,
+host-scoped `SameSite=None` capability cookie so Tailscale and apps-domain origins
+can remain distinct; the capability's signed Proxima origin is the exact permitted
+frame ancestor. HTTP same-site relays retain `SameSite=Strict`. The dedicated
+origin lets native
 module workers use same-origin Area URLs without gaining Proxima authority.
 
 Legacy active files never execute on the Proxima origin. HTML is upgraded to the

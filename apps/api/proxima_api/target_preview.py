@@ -523,6 +523,7 @@ class TargetPreviewManager:
             location = scope.get("path") or "/"
             if clean_query:
                 location = f"{location}?{clean_query}"
+            secure = scope.get("scheme") == "https"
             response = RedirectResponse(location, status_code=307)
             response.set_cookie(
                 cookie_name,
@@ -530,8 +531,8 @@ class TargetPreviewManager:
                 path="/",
                 max_age=FILE_PREVIEW_TTL_SECONDS,
                 httponly=True,
-                secure=scope.get("scheme") == "https",
-                samesite="strict",
+                secure=secure,
+                samesite="none" if secure else "strict",
             )
             response.headers["Cache-Control"] = "private, no-store"
             response.headers["Referrer-Policy"] = "no-referrer"
