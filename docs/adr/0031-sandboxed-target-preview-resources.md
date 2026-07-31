@@ -1,11 +1,11 @@
-# ADR-0012: Targeted HTML previews use a sandboxed resource scope
+# ADR-0031: Targeted HTML previews use a sandboxed resource scope
 
-- Status: Superseded by ADR-0013
+- Status: Superseded by ADR-0032
 - Date: 2026-07-31
 
 ## Context
 
-ADR-0011 separated targeted preview URLs from the legacy path-only preview
+ADR-0030 separated targeted preview URLs from the legacy path-only preview
 route. A path namespace alone is not an isolation boundary. A relative URL with
 enough parent segments is normalized by the browser before the request and can
 therefore reach `/api/preview` or another same-origin route.
@@ -64,6 +64,6 @@ only as an explicit legacy request, not as a targeted document subresource.
 
 ## Related
 
-- [ADR-0010](0010-canonical-file-targets.md)
-- [ADR-0011](0011-area-scoped-artifact-media.md)
+- [ADR-0029](0029-canonical-file-targets.md)
+- [ADR-0030](0030-area-scoped-artifact-media.md)
 - [Architecture and data model](../reference/architecture.md)

@@ -1,11 +1,11 @@
-# ADR-0014: File previews use capability-scoped execution boundaries
+# ADR-0033: File previews use capability-scoped execution boundaries
 
-- Status: Superseded by ADR-0015
+- Status: Superseded by ADR-0034
 - Date: 2026-07-31
 
 ## Context
 
-ADR-0013 isolated canonical file previews on Area-specific origins. Its cookie
+ADR-0032 isolated canonical file previews on Area-specific origins. Its cookie
 exchange and same-origin document policy left four gaps. An embedded document
 could navigate itself back to executable content on the Proxima origin, an
 external ancestor could frame a known Area document, workers were not governed
@@ -90,8 +90,8 @@ reporting success.
 
 ## Related
 
-- Superseded by [ADR-0015](0015-distinct-tls-area-preview-origins.md)
-- Supersedes [ADR-0013](0013-area-bound-file-preview-origins.md)
-- [ADR-0010](0010-canonical-file-targets.md)
-- [ADR-0011](0011-area-scoped-artifact-media.md)
+- Superseded by [ADR-0034](0034-distinct-tls-area-preview-origins.md)
+- Supersedes [ADR-0032](0032-area-bound-file-preview-origins.md)
+- [ADR-0029](0029-canonical-file-targets.md)
+- [ADR-0030](0030-area-scoped-artifact-media.md)
 - [Architecture and data model](../reference/architecture.md)

@@ -271,64 +271,17 @@ as traversal enters that Area, so cross-Area aliases are rejected.
 Display names never select a physical root. Path-only callers remain a compatibility
 input, with historical virtual Ops names and physical `ops/...` support; legacy
 Ops-at-dot keeps `ops/...` as an Area-relative literal instead of stripping it.
-`/api/target-preview/{slug}/{kind}/{id}/{path}` is an authenticated entry route
-for targeted previews. It validates the locator and redirects through a short-lived
-capability bound to the authoritative Area and authenticated Proxima frame origin.
-Named localhost and apps-domain installs use an Area-specific host whose router
-exposes no application routes. Plain HTTP IP installs use one relay per Area and
-interface. HTTPS remote entries require a TLS-capable Area-specific hostname under
-the configured apps domain. Without one, active preview entry fails with 503 instead
-of falling back to the Proxima origin or a plaintext relay. Passive canonical media
-remains on the authenticated route. TLS capability exchange uses a Secure,
-host-scoped `SameSite=None` cookie so a Tailscale Proxima origin can embed the
-separate apps-domain Area origin; HTTP same-site relays retain `SameSite=Strict`.
-Host-routed HTTPS and named-local HTTP exchanges use a server-owned bootstrap to
-enter the clean same-origin URL. One manager-owned dispatch gate covers named hosts,
-plain HTTP relays, TLS hosts, and clean redirects. Cross-origin entry requires a
-capability-bearing iframe or frame navigation; the clean frame may use the validated
-host-scoped cookie and remains bound by the signed frame ancestor. Top-level
-document navigation is rejected before same-origin or capability trust, including a
-clean URL with an ambient Area cookie. Same-origin non-document resources and proven
-frame navigations remain available. Resource requests must match an explicit
-browser-valid mode and destination tuple; fetch and XHR may use the `empty`
-destination token with `cors`, `no-cors`, or `same-origin`. Missing, unknown,
-contradictory, active-document, malformed-entry, and cross-origin subresource
-metadata is rejected before file service. Named-local HTTP uses a Secure
-`SameSite=None` cookie under the browser's trustworthy-localhost exception.
-The matrix follows the
-[Fetch destination types](https://fetch.spec.whatwg.org/#concept-request-destination)
-plus the HTML request algorithms for
-[manifests](https://html.spec.whatwg.org/multipage/links.html#link-type-manifest),
-[tracks](https://html.spec.whatwg.org/multipage/media.html#attr-track-src), and
-[HTML module request algorithm](https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script).
-Manifests and worklets remain `cors`; a same-origin track without a CORS setting
-uses `same-origin`; and only top-level worker, shared-worker, and service-worker
-module requests switch to `same-origin`. The dispatch gate accepts exactly one
-canonical Structured Field occurrence for site, mode, destination, and optional
-user activation. Duplicate, combined, non-ASCII, differently cased, and
-whitespace-padded metadata fails before dispatch.
-The token's signed Proxima origin is enforced by the exact `frame-ancestors` policy
-on every document-viewable response. The Area host retains
-same-origin identity only because its router exposes the validated Area and no
-application routes, which keeps native module workers functional. Worker responses
-restrict connections, Service Worker requests are rejected, active XML formats
-download, every document-viewable response including PDF receives the exact
-authenticated frame-ancestor policy, and every file still crosses the canonical
-resolver and realpath jail. The legacy `/api/preview`
-route rejects target parameters and upgrades active content to this isolated boundary.
-Main-origin executable responses deny framing, so absolute document navigation cannot
-regain Proxima authority. Embedded requests from same-site, cross-site, or opaque
-preview origins are rejected before route dispatch. Capability query, retired gateway
-path, and cookie values are redacted before access logging for every supported
-Uvicorn entry point. Successful file responses expose only a hash of their capability
-generation. The browser fixture binds that hash and a strong request nonce to one
-post-resolution record of the normalized Area-relative target without logging the
-capability. Cloudflare tunnel ingress changes share one cross-process
-desired-state mutation lock. Mutation preserves the complete ordered rule list,
-including path-only rules and the terminal catchall, inserts new host rules before
-the first hostname-agnostic matcher, and accepts success only when refreshed ingress
-exactly matches the requested order. Cancellation waits for and releases any
-late-acquired file-lock descriptor before returning.
+`target_preview.py` owns targeted preview transport. The authenticated
+`/api/target-preview/{slug}/{kind}/{id}/{path}` entry validates the locator and asks
+`TargetPreviewManager` for an Area-only origin: a named local host, an apps-domain
+host, or a plain HTTP relay. HTTPS remote entry fails with 503 when no distinct TLS
+Area origin is configured. `TargetPreviewMiddleware` routes Area hosts before the
+application and applies one capability and Fetch Metadata admission gate to every
+transport. Each admitted resource is resolved again through `file_targets.py`.
+`cf_hostnames.py` serializes and verifies apps-domain ingress updates, while
+`logging_config.py` redacts preview capabilities before access logging. The complete
+admission, cookie, framing, worker, and response-policy contract lives in
+[Security boundaries](../security-boundaries.md#canonical-file-preview).
 Markdown resources resolve relative to both the source document directory and its
 target. A validated target context is reused throughout each tree, Archive, or
 message-list request while each path still crosses the realpath jail. Artifact links
@@ -339,9 +292,10 @@ which are revoked with component lifetime. Design reply locator fields are treat
 untrusted:
 an existing image or frame target survives only when both the layer id and source
 remain unchanged, and model-supplied targets are otherwise removed. See
-[ADR-0010](../adr/0010-canonical-file-targets.md),
-[ADR-0011](../adr/0011-area-scoped-artifact-media.md), and
-[ADR-0015](../adr/0015-distinct-tls-area-preview-origins.md).
+[ADR-0029](../adr/0029-canonical-file-targets.md),
+[ADR-0030](../adr/0030-area-scoped-artifact-media.md), and
+[ADR-0034](../adr/0034-distinct-tls-area-preview-origins.md), with frame admission
+extended by [ADR-0035](../adr/0035-frame-bound-area-preview-admission.md).
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
 (slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).

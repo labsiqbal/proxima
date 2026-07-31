@@ -1331,90 +1331,31 @@ project artifact scan are merged into the same picker on the client.
 Merged tree entries and produced/Archive artifacts carry a server-owned file target:
 the project slug, authoritative Container Area kind/id, and Area-relative path. Tree,
 read/write, raw/preview, file mutation, Archive presence checks, and ArtifactViewer all
-resolve that target through the same jailed resolver. The resolver rejects a Container
-or Code target when the path belongs to a more specific active Area, and merged tree
-traversal switches to the authoritative Ops or Code target when it enters that Area.
-Each file-tree child and artifact scan result resolves through the active-root
-realpath jail before the server assigns ownership. Safe symlinks receive the target
-of their resolved authoritative Area; broken and escaping tree entries are omitted.
-Artifact enrichment is per item, so one unsafe scan result does not discard valid
-results. Ops-at-dot scans preserve nested Code identity instead of forcing Ops.
-This keeps direct files at the physical Ops root distinct from same-name Container
-files, including Markdown, images, and PDFs. Session artifact reads, inline chat media,
-Task and Iterate results, Archive Markdown, deletion, and the Design Studio image
-bridge retain that target. Design scenes persist image targets and use them across
-canvas, thumbnail, frame, and export rendering. Agent replies cannot introduce or
-replace locator metadata: a prior target survives only when the layer id and image
-source are unchanged, and source changes clear it. Merely finding an Ops file does
-not create an Archive record; only established producer/registry flows do.
+resolve that target through the same jailed resolver. Merged traversal changes to the
+authoritative Ops or Code identity when it enters an Area, so direct physical Ops files
+stay distinct from same-name Container files. Broken, escaping, or otherwise invalid
+tree and artifact entries are omitted individually instead of weakening the jail or
+discarding the rest of the response.
 Historical virtual paths such as `wiki/...`, `artifacts/...`, `scripts/...`, and
 `uploads/...` remain stable at the API boundary. The server maps those paths to the
 canonical Ops root, while repo files continue to resolve from the Container root.
 Path-only clients remain compatible, including explicit `ops/...` paths for physical
 layouts. For a legacy Ops Area at `.`, `ops/...` remains literal Area-relative input
-and is not stripped or reinterpreted. `/api/target-preview` validates a canonical
-target, then redirects through a short-lived capability bound to the Area and the
-authenticated Proxima frame origin. Named localhost and apps-domain installs use an
-Area-specific host whose router exposes only that validated Area. Plain HTTP IP
-installs use an Area-specific relay. HTTPS remote installs require a TLS-capable
-Area-specific hostname under the configured apps domain so native same-Area module
-workers retain real same-origin behavior without gaining Proxima authority. Active
-preview entry fails with 503 when that distinct TLS origin is unavailable. Passive
-canonical media remains on the authenticated route with an exact framing policy. A
-TLS Area origin exchanges its capability for a Secure, host-scoped
-`SameSite=None` cookie, allowing a Tailscale Proxima origin to embed a distinct
-apps-domain host while the token's signed Proxima origin remains the only permitted
-frame ancestor. Host-routed HTTPS and named-local HTTP exchanges use a server-owned
-bootstrap to enter the clean same-origin URL. One Area dispatch gate covers named
-hosts, plain HTTP relays, TLS hosts, and clean redirects. Cross-origin entry requires
-a capability-bearing iframe or frame navigation; the clean frame may use the
-validated host-scoped cookie and remains bound by the signed frame ancestor.
-Top-level document navigation is rejected before same-origin or capability trust,
-including a clean URL with an ambient Area cookie. Same-origin non-document
-resources and proven frame navigations remain available. Resource requests must
-match an explicit browser-valid mode and destination tuple; fetch and XHR may use
-the `empty` destination token with `cors`, `no-cors`, or `same-origin`. Missing,
-unknown, contradictory, active-document, malformed-entry, and cross-origin
-subresource metadata is rejected before file service. Named-local HTTP uses a Secure
-`SameSite=None` cookie under the browser's trustworthy-localhost exception; plain
-HTTP relays use `SameSite=Strict`.
-The tuple matrix follows the
-[Fetch destination types](https://fetch.spec.whatwg.org/#concept-request-destination)
-plus the HTML request algorithms for
-[manifests](https://html.spec.whatwg.org/multipage/links.html#link-type-manifest),
-[tracks](https://html.spec.whatwg.org/multipage/media.html#attr-track-src), and
-[HTML module request algorithm](https://html.spec.whatwg.org/multipage/webappapis.html#fetch-a-single-module-script):
-manifests and worklets remain `cors`; a same-origin track without a CORS setting
-uses `same-origin`; and only top-level worker, shared-worker, and service-worker
-module requests switch to `same-origin`. Each `Sec-Fetch-Site`,
-`Sec-Fetch-Mode`, and `Sec-Fetch-Dest` must be one canonical Structured Field
-token, and optional `Sec-Fetch-User` must be the canonical `?1` boolean on a
-navigation. Duplicate, comma-combined, non-ASCII, differently cased, or
-whitespace-padded fields fail closed.
-Every resource still crosses the canonical resolver and realpath jail. Dedicated
-worker responses restrict outbound connections, Service Worker scripts are rejected,
-external ancestors cannot frame a preview, and embedded same-site or cross-site
-requests cannot leave the preview boundary for Proxima routes. Legacy `/api/preview` remains
-path-only and rejects target parameters, but active content is upgraded to the
-canonical boundary instead of executing on the Proxima origin. HTML renders under
-response sandbox policy; XHTML, SVG, and other active XML media download safely.
-Every document-viewable response, including PDF, receives the exact authenticated
-frame-ancestor policy. Successful file responses expose a non-secret hash identifying
-the capability generation. Browser verification binds that hash and a strong request
-nonce to exactly one post-resolution admission record containing the normalized
-Area-relative target; the capability itself is never logged. Capability values are
-redacted from query, path, and cookie
-logs for configured launchers and plain Uvicorn entry points. Cloudflare tunnel
-ingress changes use a cancellation-safe cross-process desired-state lock. They
-preserve every ordered rule, including path-only rules and the terminal catchall,
-place file-host rules before the first hostname-agnostic matcher, and verify that
-refreshed ingress exactly matches the requested ordered result
-before succeeding. Design Studio loads
-targeted canvas and export images from authenticated raw bytes through managed blob
-URLs rather than cross-origin preview URLs. Markdown siblings resolve from the source
-document's Area and directory.
-Artifact lists and chat messages omit links that cannot be assigned a validated
-canonical target instead of returning a path-only fallback.
+and is not stripped or reinterpreted.
+
+Session and Task results, Archive records, ArtifactViewer, Markdown sibling media,
+deletion, and Design Studio retain the server target. Design scenes persist image
+targets, but agent replies cannot create or replace that trusted metadata. Artifact
+lists and chat messages omit links that cannot be assigned a validated target.
+Workspace discovery alone does not create Archive records.
+
+Active file previews run on an Area-only origin selected from a named local host, an
+apps-domain host, or a plain HTTP relay. An HTTPS remote install without a distinct
+TLS Area origin returns 503 for active canonical previews; passive media remains
+available through the authenticated route. The security contract and deployment
+matrix are owned by [Security boundaries](security-boundaries.md#canonical-file-preview);
+the locator and request flow are detailed in
+[Architecture](reference/architecture.md) and [ADR-0029](adr/0029-canonical-file-targets.md).
 These APIs power the **Files tool** on the right rail (the project tree + inline
 editor as an overlay panel, any context), the **Archive**'s record viewer
 view, the **Wiki** tree under Settings → Knowledge, chat attachments, and `@`
