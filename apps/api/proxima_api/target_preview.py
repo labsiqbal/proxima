@@ -30,7 +30,6 @@ from .preview_proxy import resolve_preview_bind_host
 
 FILE_PREVIEW_COOKIE = "proxima_file_preview"
 FILE_PREVIEW_TTL_SECONDS = 60 * 60
-FILE_PREVIEW_GATEWAY = "/_proxima/file-preview"
 _CAPABILITY_QUERY = "__proxima_cap"
 _ACTIVE_MEDIA_TYPES = frozenset(
     {
@@ -101,7 +100,6 @@ def mint_file_preview_token(
     *,
     ttl_seconds: int = FILE_PREVIEW_TTL_SECONDS,
     frame_origin: str = "",
-    gateway_origin: str = "",
 ) -> str:
     encoded = _encode_payload(
         {
@@ -111,7 +109,6 @@ def mint_file_preview_token(
             "area": area.area_id,
             "nonce": secrets.token_urlsafe(12),
             "frame_origin": frame_origin,
-            "gateway_origin": gateway_origin,
         }
     )
     signature = base64.urlsafe_b64encode(
@@ -238,6 +235,17 @@ def _frame_source(origin: str) -> str:
         return "'none'"
 
 
+def passive_preview_headers(request: Request) -> dict[str, str]:
+    frame_source = _frame_source(_request_origin(request))
+    return {
+        "Cache-Control": "private, no-store",
+        "Content-Security-Policy": f"frame-ancestors {frame_source}",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+    }
+
+
 def _is_service_worker_request(scope: Scope) -> bool:
     return (
         _header(scope, "service-worker").strip().lower() == "script"
@@ -347,7 +355,6 @@ class TargetPreviewManager:
             for key, value in request.query_params.multi_items()
             if key != _CAPABILITY_QUERY
         ]
-        suffix = f"?{urlencode(query)}" if query else ""
 
         if self.apps_domain:
             if self.provision_hostname is not None and area not in self._provisioned:
@@ -377,15 +384,8 @@ class TargetPreviewManager:
                 f"{suffix_host}{port_suffix}"
             )
         elif parsed_origin.scheme == "https":
-            token = mint_file_preview_token(
-                self.secret,
-                area,
-                frame_origin=frame_origin,
-                gateway_origin=frame_origin,
-            )
-            return (
-                f"{frame_origin}{FILE_PREVIEW_GATEWAY}/"
-                f"{quote(token, safe='')}/{encoded}{suffix}"
+            raise RuntimeError(
+                "a distinct TLS file preview origin is unavailable"
             )
         else:
             bind_host = (
@@ -546,57 +546,6 @@ class TargetPreviewManager:
             frame_origin=str(payload.get("frame_origin") or ""),
         )
 
-    async def serve_gateway(
-        self,
-        scope: Scope,
-        receive: Receive,
-        send: Send,
-    ) -> None:
-        if self.maintenance is not None and self.maintenance.fenced():
-            await self._reject(scope, send, 423, "maintenance write fenced")
-            return
-        if scope.get("method") not in {"GET", "HEAD"}:
-            await self._reject(scope, send, 405, "preview method not allowed")
-            return
-        prefix = f"{FILE_PREVIEW_GATEWAY}/"
-        path = str(scope.get("path") or "")
-        if not path.startswith(prefix):
-            await self._reject(scope, send, 404, "preview route not found")
-            return
-        token, separator, relative = path[len(prefix) :].partition("/")
-        if not separator or not token or not relative:
-            await self._reject(scope, send, 404, "preview route not found")
-            return
-        payload = _file_preview_token_payload(self.secret, token)
-        area = _area_from_payload(payload or {})
-        try:
-            origin = _scope_origin(scope)
-        except ValueError:
-            origin = ""
-        if (
-            payload is None
-            or area is None
-            or not origin
-            or not hmac.compare_digest(
-                str(payload.get("gateway_origin") or ""),
-                origin,
-            )
-        ):
-            await self._reject(scope, send, 403, "preview capability is invalid")
-            return
-        if _is_service_worker_request(scope):
-            await self._reject(scope, send, 403, "service workers are unavailable")
-            return
-        await self._serve_file(
-            area,
-            relative,
-            scope,
-            receive,
-            send,
-            frame_origin=str(payload.get("frame_origin") or ""),
-            gateway_scope=f"{origin}{prefix}{quote(token, safe='')}/",
-        )
-
     async def _serve_file(
         self,
         area: PreviewArea,
@@ -606,7 +555,6 @@ class TargetPreviewManager:
         send: Send,
         *,
         frame_origin: str,
-        gateway_scope: str = "",
     ) -> None:
         try:
             normalized = file_targets.normalize_relative_path(
@@ -668,74 +616,41 @@ class TargetPreviewManager:
             "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",
         }
-        if gateway_scope:
-            headers.update(
-                {
-                    "Access-Control-Allow-Origin": "null",
-                    "Cross-Origin-Resource-Policy": "cross-origin",
-                    "Vary": "Origin",
-                }
-            )
         if media_type in _HTML_MEDIA_TYPES:
-            if gateway_scope:
-                headers["Content-Security-Policy"] = "; ".join(
-                    (
-                        "sandbox allow-scripts",
-                        "default-src 'none'",
-                        f"script-src 'unsafe-inline' {gateway_scope} blob:",
-                        f"style-src 'unsafe-inline' {gateway_scope}",
-                        f"img-src {gateway_scope} data: blob:",
-                        f"media-src {gateway_scope} blob:",
-                        f"font-src {gateway_scope} data:",
-                        f"connect-src {gateway_scope}",
-                        f"worker-src {gateway_scope} blob:",
-                        f"frame-src {gateway_scope}",
-                        "object-src 'none'",
-                        "base-uri 'none'",
-                        "form-action 'none'",
-                        f"frame-ancestors {frame_ancestors}",
-                    )
-                )
-            else:
-                headers["Content-Security-Policy"] = "; ".join(
-                    (
-                        "sandbox allow-scripts allow-same-origin",
-                        "default-src 'self' data: blob:",
-                        "script-src 'self' 'unsafe-inline' blob:",
-                        "style-src 'self' 'unsafe-inline'",
-                        "img-src 'self' data: blob:",
-                        "media-src 'self' blob:",
-                        "font-src 'self' data:",
-                        "connect-src 'self'",
-                        "worker-src 'self' blob:",
-                        "frame-src 'self'",
-                        "object-src 'none'",
-                        "base-uri 'none'",
-                        "form-action 'none'",
-                        f"frame-ancestors {frame_ancestors}",
-                    )
-                )
+            policy = (
+                "sandbox allow-scripts allow-same-origin",
+                "default-src 'self' data: blob:",
+                "script-src 'self' 'unsafe-inline' blob:",
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data: blob:",
+                "media-src 'self' blob:",
+                "font-src 'self' data:",
+                "connect-src 'self'",
+                "worker-src 'self' blob:",
+                "frame-src 'self'",
+                "object-src 'none'",
+                "base-uri 'none'",
+                "form-action 'none'",
+            )
         elif is_active_preview_media_type(media_type):
-            headers["Content-Security-Policy"] = "; ".join(
-                (
-                    "sandbox",
-                    "default-src 'none'",
-                    "object-src 'none'",
-                    f"frame-ancestors {frame_ancestors}",
-                )
+            policy = (
+                "sandbox",
+                "default-src 'none'",
+                "object-src 'none'",
             )
         elif media_type in _SCRIPT_MEDIA_TYPES:
-            connect_source = gateway_scope or "'self'"
-            script_source = gateway_scope or "'self'"
-            headers["Content-Security-Policy"] = "; ".join(
-                (
-                    "default-src 'none'",
-                    f"script-src {script_source}",
-                    f"connect-src {connect_source}",
-                    "worker-src 'none'",
-                    "object-src 'none'",
-                )
+            policy = (
+                "default-src 'none'",
+                "script-src 'self'",
+                "connect-src 'self'",
+                "worker-src 'none'",
+                "object-src 'none'",
             )
+        else:
+            policy = ()
+        headers["Content-Security-Policy"] = "; ".join(
+            (*policy, f"frame-ancestors {frame_ancestors}")
+        )
 
         if is_active_preview_media_type(media_type) and media_type not in _HTML_MEDIA_TYPES:
             response = FileResponse(
@@ -774,20 +689,6 @@ class TargetPreviewMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in {"http", "websocket"}:
-            path = str(scope.get("path") or "")
-            if path == FILE_PREVIEW_GATEWAY or path.startswith(
-                f"{FILE_PREVIEW_GATEWAY}/"
-            ):
-                if scope["type"] != "http":
-                    await self.manager._reject(
-                        scope,
-                        send,
-                        404,
-                        "preview route not found",
-                    )
-                    return
-                await self.manager.serve_gateway(scope, receive, send)
-                return
             host = _header(scope, "host")
             area = self.manager._host_area(host)
             if area is not None:

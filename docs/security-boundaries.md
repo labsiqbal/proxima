@@ -389,23 +389,28 @@ The legacy `?token=` fallback remains available for compatible clients, but new
 clients should use the cookie because URL credentials can be observed by proxies
 and diagnostics. Proxima's Uvicorn configuration redacts `token` query values from
 both HTTP access logs and WebSocket/error logs before they reach the journal. Canonical
-file-preview capability values are likewise redacted in query strings, gateway paths,
-and capability cookies.
+file-preview capability values are likewise redacted in query strings, retired
+gateway paths, and capability cookies. The filter is installed for configured
+launchers and plain `uvicorn proxima_api.main:app` startup.
 
 ## Canonical file preview
 
 Canonical file previews bind a short-lived capability to one validated Area and the
 authenticated Proxima frame origin. Named local and apps-domain deployments use an
 Area-only origin. Plain HTTP remote deployments use an Area-only relay. HTTPS remote
-deployments without an apps domain use the existing TLS origin under an opaque,
-capability-scoped gateway that exposes only canonical file reads.
+deployments require a TLS-capable Area-only hostname under the configured apps
+domain. Without one, active preview entry fails with 503 rather than sharing the
+Proxima origin or using a plaintext relay. Passive canonical media remains on the
+authenticated route with an exact framing policy. The dedicated origin lets native
+module workers use same-origin Area URLs without gaining Proxima authority.
 
 Legacy active files never execute on the Proxima origin. HTML is upgraded to the
 canonical response sandbox, active XML and SVG download, main-origin HTML denies
 framing, worker responses restrict connections, and Service Worker scripts are
 rejected. Fetch Metadata and opaque-origin checks reject embedded requests that try
 to leave the preview boundary for Proxima routes. Same-Area resources still cross
-the canonical resolver and realpath jail.
+the canonical resolver and realpath jail. Every document-viewable response,
+including PDF, receives the exact authenticated frame-ancestor policy.
 Design Studio obtains targeted canvas and export pixels through authenticated raw
 bytes and temporary blob URLs rather than through preview-origin CORS.
 

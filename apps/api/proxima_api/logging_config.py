@@ -30,22 +30,38 @@ def _redact(value: Any) -> Any:
     return value
 
 
-class QueryTokenRedactionFilter(logging.Filter):
-    """Remove query-string auth tokens before Uvicorn formats a log record."""
-
+class CredentialRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.msg = _redact(record.msg)
         record.args = _redact(record.args)
         return True
 
 
-def uvicorn_log_config() -> dict[str, Any]:
-    config = deepcopy(LOGGING_CONFIG)
+def _configure_redaction(config: dict[str, Any]) -> dict[str, Any]:
     config["filters"] = {
         **config.get("filters", {}),
-        "query_token_redaction": {"()": "proxima_api.logging_config.QueryTokenRedactionFilter"},
+        "credential_redaction": {
+            "()": "proxima_api.logging_config.CredentialRedactionFilter"
+        },
     }
     for handler_name in ("default", "access"):
         handler = config["handlers"][handler_name]
-        handler["filters"] = [*handler.get("filters", []), "query_token_redaction"]
+        filters = handler.setdefault("filters", [])
+        if "credential_redaction" not in filters:
+            filters.append("credential_redaction")
     return config
+
+
+def install_uvicorn_redaction() -> None:
+    _configure_redaction(LOGGING_CONFIG)
+    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        for handler in logging.getLogger(logger_name).handlers:
+            if not any(
+                isinstance(item, CredentialRedactionFilter)
+                for item in handler.filters
+            ):
+                handler.addFilter(CredentialRedactionFilter())
+
+
+def uvicorn_log_config() -> dict[str, Any]:
+    return _configure_redaction(deepcopy(LOGGING_CONFIG))

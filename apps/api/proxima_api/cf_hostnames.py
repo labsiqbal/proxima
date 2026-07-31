@@ -13,8 +13,16 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import json
 import logging
-from typing import Any, Callable
+import os
+import stat
+import tempfile
+from collections import Counter
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, AsyncIterator, Callable
 
 import httpx
 
@@ -22,6 +30,10 @@ _LOG = logging.getLogger("proxima.cf_hostnames")
 _API = "https://api.cloudflare.com/client/v4"
 _FALLBACK_SERVICE = "http://127.0.0.1:8766"
 _INGRESS_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def _owner_id() -> int:
+    return int(getattr(os, "getuid", lambda: 0)())
 
 
 def configured(cfg: dict[str, Any]) -> bool:
@@ -80,24 +92,126 @@ def _ingress_lock(cfg: dict[str, Any]) -> asyncio.Lock:
     return _INGRESS_LOCKS.setdefault(key, asyncio.Lock())
 
 
+def _ingress_lock_path(cfg: dict[str, Any]) -> Path:
+    root = Path(
+        str(
+            cfg.get("cf_ingress_lock_dir")
+            or os.environ.get("XDG_RUNTIME_DIR")
+            or tempfile.gettempdir()
+        )
+    )
+    digest = hashlib.sha256(
+        f"{cfg['cf_account_id']}:{cfg['cf_tunnel_id']}".encode()
+    ).hexdigest()
+    return root / f".proxima-cf-ingress-{_owner_id()}-{digest}.lock"
+
+
+def _acquire_ingress_file_lock(cfg: dict[str, Any]) -> int:
+    path = _ingress_lock_path(cfg)
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or (
+                hasattr(metadata, "st_uid")
+                and metadata.st_uid != _owner_id()
+            )
+        ):
+            raise RuntimeError("Cloudflare ingress lock is unsafe")
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        elif os.name == "nt":
+            import msvcrt
+
+            if metadata.st_size == 0:
+                os.write(descriptor, b"\0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+        else:
+            raise RuntimeError("cross-process file locking is unavailable")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _release_ingress_file_lock(descriptor: int) -> None:
+    try:
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        elif os.name == "nt":
+            import msvcrt
+
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    finally:
+        os.close(descriptor)
+
+
+@asynccontextmanager
+async def _tunnel_mutation_lock(
+    cfg: dict[str, Any],
+) -> AsyncIterator[None]:
+    async with _ingress_lock(cfg):
+        descriptor = await asyncio.to_thread(
+            _acquire_ingress_file_lock,
+            cfg,
+        )
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(
+                _release_ingress_file_lock,
+                descriptor,
+            )
+
+
+def _ingress_fingerprint(rule: dict[str, Any]) -> str:
+    return json.dumps(rule, separators=(",", ":"), sort_keys=True)
+
+
+def _preserves_ingress(
+    actual: list[dict[str, Any]],
+    expected: list[dict[str, Any]],
+) -> bool:
+    actual_rules = Counter(_ingress_fingerprint(rule) for rule in actual)
+    expected_rules = Counter(_ingress_fingerprint(rule) for rule in expected)
+    return not expected_rules - actual_rules
+
+
 async def _mutate_tunnel_ingress(
     cfg: dict[str, Any],
     client,
     mutate: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
     complete: Callable[[list[dict[str, Any]]], bool],
 ) -> None:
-    async with _ingress_lock(cfg):
-        for _ in range(3):
-            config = await _tunnel_config(cfg, client)
-            ingress = config.get("ingress") or [{"service": "http_status:404"}]
-            if complete(ingress):
-                return
-            updated = mutate(copy.deepcopy(ingress))
-            next_config = {**config, "ingress": updated}
-            await _put_tunnel_config(cfg, client, next_config)
+    async with _tunnel_mutation_lock(cfg):
+        config = await _tunnel_config(cfg, client)
+        ingress = config.get("ingress") or [{"service": "http_status:404"}]
+        if complete(ingress):
+            return
+        updated = mutate(copy.deepcopy(ingress))
+        next_config = {**config, "ingress": updated}
+        await _put_tunnel_config(cfg, client, next_config)
+        for _ in range(5):
             refreshed = await _tunnel_config(cfg, client)
-            if complete(refreshed.get("ingress") or []):
+            refreshed_ingress = refreshed.get("ingress") or []
+            if (
+                complete(refreshed_ingress)
+                and _preserves_ingress(refreshed_ingress, updated)
+            ):
                 return
+            await asyncio.sleep(0)
         raise RuntimeError("Cloudflare tunnel ingress update did not converge")
 
 

@@ -1,6 +1,6 @@
 # ADR-0014: File previews use capability-scoped execution boundaries
 
-- Status: Accepted
+- Status: Superseded by ADR-0015
 - Date: 2026-07-31
 
 ## Context
@@ -90,6 +90,7 @@ reporting success.
 
 ## Related
 
+- Superseded by [ADR-0015](0015-distinct-tls-area-preview-origins.md)
 - Supersedes [ADR-0013](0013-area-bound-file-preview-origins.md)
 - [ADR-0010](0010-canonical-file-targets.md)
 - [ADR-0011](0011-area-scoped-artifact-media.md)

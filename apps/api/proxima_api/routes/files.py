@@ -36,6 +36,7 @@ from ..schemas import (
 )
 from ..target_preview import (
     is_active_preview_media_type,
+    passive_preview_headers,
     preview_media_type,
 )
 
@@ -1199,6 +1200,13 @@ def register(app, deps):
         )
         if not resolved.path.is_file():
             raise HTTPException(status_code=404, detail="not a file")
+        media_type = preview_media_type(resolved.path)
+        if not is_active_preview_media_type(media_type):
+            return FileResponse(
+                str(resolved.path),
+                media_type=media_type,
+                headers=passive_preview_headers(request),
+            )
         try:
             preview_url = await app.state.target_previews.issue_url(
                 request,
@@ -1258,5 +1266,5 @@ def register(app, deps):
         return FileResponse(
             str(resolved.path),
             media_type=media_type,
-            headers={"X-Content-Type-Options": "nosniff"},
+            headers=passive_preview_headers(request),
         )
