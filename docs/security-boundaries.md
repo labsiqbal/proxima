@@ -407,6 +407,9 @@ can remain distinct; the capability's signed Proxima origin is the exact permitt
 frame ancestor. HTTP same-site relays retain `SameSite=Strict`. The dedicated
 origin lets native
 module workers use same-origin Area URLs without gaining Proxima authority.
+HTTPS exchange uses a server-owned bootstrap to enter the clean same-origin URL.
+Cross-origin Area entry requires a capability-bearing navigation. Cross-origin
+subresources and cookie-only navigations are rejected before Area dispatch.
 
 Legacy active files never execute on the Proxima origin. HTML is upgraded to the
 canonical response sandbox, active XML and SVG download, main-origin HTML denies

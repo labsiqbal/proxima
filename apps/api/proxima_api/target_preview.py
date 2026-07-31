@@ -7,6 +7,7 @@ import binascii
 import contextlib
 import hashlib
 import hmac
+import html
 import ipaddress
 import json
 import mimetypes
@@ -210,6 +211,33 @@ def _header(scope: Scope, name: str) -> str:
         if key.lower() == encoded:
             return value.decode("latin-1")
     return ""
+
+
+def _capability_query(scope: Scope) -> tuple[str, str]:
+    pairs = parse_qsl(
+        (scope.get("query_string") or b"").decode("latin-1"),
+        keep_blank_values=True,
+    )
+    token = next(
+        (value for key, value in pairs if key == _CAPABILITY_QUERY),
+        "",
+    )
+    clean = urlencode(
+        [(key, value) for key, value in pairs if key != _CAPABILITY_QUERY]
+    )
+    return token, clean
+
+
+def _is_external_preview_request(scope: Scope) -> bool:
+    return (
+        _header(scope, "sec-fetch-site").strip().lower()
+        in {"same-site", "cross-site"}
+        or _header(scope, "origin").strip().lower() == "null"
+    )
+
+
+def _is_preview_navigation(scope: Scope) -> bool:
+    return _header(scope, "sec-fetch-mode").strip().lower() == "navigate"
 
 
 def _scope_origin(scope: Scope) -> str:
@@ -481,21 +509,6 @@ class TargetPreviewManager:
                 return item[len(name) + 1 :]
         return ""
 
-    @staticmethod
-    def _capability_query(scope: Scope) -> tuple[str, str]:
-        pairs = parse_qsl(
-            (scope.get("query_string") or b"").decode("latin-1"),
-            keep_blank_values=True,
-        )
-        token = next(
-            (value for key, value in pairs if key == _CAPABILITY_QUERY),
-            "",
-        )
-        clean = urlencode(
-            [(key, value) for key, value in pairs if key != _CAPABILITY_QUERY]
-        )
-        return token, clean
-
     async def serve(
         self,
         area: PreviewArea,
@@ -509,7 +522,7 @@ class TargetPreviewManager:
         if scope.get("method") not in {"GET", "HEAD"}:
             await self._reject(scope, send, 405, "preview method not allowed")
             return
-        query_token, clean_query = self._capability_query(scope)
+        query_token, clean_query = _capability_query(scope)
         cookie_name = area.cookie_name()
         token = query_token or self._cookie(scope, cookie_name)
         payload = _file_preview_token_payload(self.secret, token)
@@ -524,7 +537,28 @@ class TargetPreviewManager:
             if clean_query:
                 location = f"{location}?{clean_query}"
             secure = scope.get("scheme") == "https"
-            response = RedirectResponse(location, status_code=307)
+            if secure:
+                frame_source = _frame_source(
+                    str(payload.get("frame_origin") or "")
+                )
+                escaped_location = html.escape(location, quote=True)
+                response = Response(
+                    (
+                        "<!doctype html><meta charset=\"utf-8\">"
+                        "<meta http-equiv=\"refresh\" "
+                        f"content=\"0;url={escaped_location}\">"
+                    ),
+                    media_type="text/html",
+                    headers={
+                        "Content-Security-Policy": (
+                            "default-src 'none'; base-uri 'none'; "
+                            "form-action 'none'; "
+                            f"frame-ancestors {frame_source}"
+                        ),
+                    },
+                )
+            else:
+                response = RedirectResponse(location, status_code=307)
             response.set_cookie(
                 cookie_name,
                 query_token,
@@ -693,6 +727,19 @@ class TargetPreviewMiddleware:
             host = _header(scope, "host")
             area = self.manager._host_area(host)
             if area is not None:
+                if _is_external_preview_request(scope):
+                    query_token, _ = _capability_query(scope)
+                    if (
+                        not _is_preview_navigation(scope)
+                        or not query_token
+                    ):
+                        await self.manager._reject(
+                            scope,
+                            send,
+                            403,
+                            "preview request must enter with a capability",
+                        )
+                        return
                 await self.manager.serve(area, scope, receive, send)
                 return
             label = self.manager._preview_host_label(host)

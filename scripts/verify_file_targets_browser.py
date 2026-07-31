@@ -63,10 +63,15 @@ def _browser() -> str:
     raise RuntimeError("Chromium or Google Chrome is required")
 
 
-def _tls_certificate(root: Path) -> tuple[Path, Path]:
+def _fixture_toolchain() -> tuple[str, str]:
+    browser = _browser()
     openssl = shutil.which("openssl")
     if openssl is None:
         raise RuntimeError("OpenSSL is required for the TLS browser fixture")
+    return browser, openssl
+
+
+def _tls_certificate(root: Path, openssl: str) -> tuple[Path, Path]:
     config = root / "openssl.cnf"
     certificate = root / "fixture.crt"
     private_key = root / "fixture.key"
@@ -816,6 +821,7 @@ def _browser_expression() -> str:
 def main() -> None:
     if not API_PYTHON.is_file():
         raise RuntimeError(f"API Python is unavailable: {API_PYTHON}")
+    browser_executable, openssl = _fixture_toolchain()
     _build_web()
     sys.path.insert(0, str(PROBE_ROOT))
     from browser import run_scenario
@@ -832,7 +838,7 @@ def main() -> None:
         port = _port()
         api_url = f"https://127.0.0.1:{port}"
         base_url = f"https://proxima.tailnet.test:{port}"
-        certificate, private_key = _tls_certificate(fixture)
+        certificate, private_key = _tls_certificate(fixture, openssl)
         tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         tls_context.check_hostname = False
         tls_context.verify_mode = ssl.CERT_NONE
@@ -962,7 +968,7 @@ new Promise(resolve => setTimeout(() => resolve({ok: true}), 2000))
                     ],
                 }
                 transcript = run_scenario(
-                    executable=_browser(),
+                    executable=browser_executable,
                     base_url=base_url,
                     scenario=scenario,
                     profile=fixture / "browser-profile",

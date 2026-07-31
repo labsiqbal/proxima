@@ -37,6 +37,7 @@ cd apps/api && .venv/bin/ruff check proxima_api tests
 cd apps/api && .venv/bin/python -m pytest -q tests
 npm --prefix apps/web test -- --run
 npm --prefix apps/web run build
+apps/api/.venv/bin/python scripts/verify_file_targets_browser.py
 npm --prefix apps/web run test:accessibility
 npm --prefix apps/web run test:artifact-feedback-browser
 python3 scripts/verify_preview_browser.py --evidence-dir /tmp/proxima-preview-evidence
@@ -71,6 +72,10 @@ composer focus. It does not read or write a live Proxima runtime.
 (assertion-only by default). Details and before/after PNGs live in
 [evidence/scheduled-workflow-trust/README.md](evidence/scheduled-workflow-trust/README.md)
 and [workflow-graph.md](workflow-graph.md#scheduling-a-graph).
+
+The canonical-file browser fixture requires Chromium or Google Chrome and
+OpenSSL on `PATH`. It preflights both executables before building or creating its
+disposable TLS environment.
 
 Current local environment note:
 

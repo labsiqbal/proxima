@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -472,7 +472,7 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
 ):
     api, headers, root = _api(
         tmp_path,
-        {"apps_domain": "preview.example.test"},
+        {"apps_domain": "preview.test"},
     )
     ops = root / "ops"
     (ops / "index.html").write_text(
@@ -483,6 +483,11 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
         "self.postMessage('canonical')",
         encoding="utf-8",
     )
+    (ops / "image.png").write_bytes(PNG_1X1)
+    (ops / "data.json").write_text(
+        '{"source":"canonical"}',
+        encoding="utf-8",
+    )
     area = api.app.state.db.execute(
         "SELECT pa.id, pa.project_id FROM project_areas pa "
         "JOIN projects p ON p.id = pa.project_id "
@@ -490,7 +495,7 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
     ).fetchone()
     remote = TestClient(
         api.app,
-        base_url="https://proxima.example.test",
+        base_url="https://proxima.tailnet.test",
     )
     entry = remote.get(
         f"/api/target-preview/identity/ops/{area['id']}/index.html",
@@ -503,24 +508,51 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
     parsed = urlsplit(location)
     preview_origin = (
         f"https://file-{area['project_id']}-ops-{area['id']}."
-        "preview.example.test"
+        "preview.test"
     )
     assert f"{parsed.scheme}://{parsed.netloc}" == preview_origin
-    assert parsed.netloc != "proxima.example.test"
+    assert parsed.netloc != "proxima.tailnet.test"
     assert parse_qs(parsed.query)["__proxima_cap"]
 
-    capability_gate = remote.get(location, follow_redirects=False)
-    assert capability_gate.status_code == 307
+    external_navigation = {
+        "Sec-Fetch-Site": "cross-site",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "iframe",
+    }
+    capability_gate = remote.get(
+        location,
+        headers=external_navigation,
+        follow_redirects=False,
+    )
+    assert capability_gate.status_code == 200
     assert "SameSite=none" in capability_gate.headers["set-cookie"]
     assert "Secure" in capability_gate.headers["set-cookie"]
-    page_url = urljoin(location, capability_gate.headers["location"])
-    page = remote.get(page_url)
+    page_url = urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, "", "")
+    )
+    assert f'content="0;url={parsed.path}"' in capability_gate.text
+    assert (
+        "frame-ancestors https://proxima.tailnet.test"
+        in capability_gate.headers["content-security-policy"]
+    )
+    cookie_only_entry = remote.get(
+        page_url,
+        headers=external_navigation,
+    )
+    assert cookie_only_entry.status_code == 403
+
+    same_origin_navigation = {
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "iframe",
+    }
+    page = remote.get(page_url, headers=same_origin_navigation)
     assert page.status_code == 200
     policy = page.headers["content-security-policy"]
     assert "sandbox allow-scripts allow-same-origin" in policy
     assert "worker-src 'self' blob:" in policy
     assert (
-        "frame-ancestors https://proxima.example.test "
+        "frame-ancestors https://proxima.tailnet.test "
         f"{preview_origin}"
     ) in policy
 
@@ -528,7 +560,11 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
     assert urlsplit(worker_url).netloc == parsed.netloc
     worker = remote.get(
         worker_url,
-        headers={"Sec-Fetch-Dest": "worker"},
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "same-origin",
+            "Sec-Fetch-Dest": "worker",
+        },
     )
     assert worker.status_code == 200
     assert "script-src 'self'" in worker.headers[
@@ -537,9 +573,66 @@ def test_https_remote_preview_uses_a_distinct_tls_area_origin(
     assert "connect-src 'self'" in worker.headers[
         "content-security-policy"
     ]
+    image_url = urljoin(page_url, "image.png")
+    image = remote.get(
+        image_url,
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Dest": "image",
+        },
+    )
+    assert image.status_code == 200
+    assert image.content == PNG_1X1
+    data_url = urljoin(page_url, "data.json")
+    data = remote.get(
+        data_url,
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "",
+        },
+    )
+    assert data.status_code == 200
+    assert data.json() == {"source": "canonical"}
+
+    for attack_url, attack_headers in (
+        (
+            worker_url,
+            {
+                "Sec-Fetch-Site": "cross-site",
+                "Sec-Fetch-Mode": "no-cors",
+                "Sec-Fetch-Dest": "script",
+            },
+        ),
+        (
+            image_url,
+            {
+                "Sec-Fetch-Site": "cross-site",
+                "Sec-Fetch-Mode": "no-cors",
+                "Sec-Fetch-Dest": "image",
+            },
+        ),
+        (
+            data_url,
+            {
+                "Sec-Fetch-Site": "cross-site",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Dest": "",
+            },
+        ),
+    ):
+        attack = remote.get(attack_url, headers=attack_headers)
+        assert attack.status_code == 403
+        assert attack.text == (
+            "preview request must enter with a capability"
+        )
     service_worker = remote.get(
         worker_url,
-        headers={"Service-Worker": "script"},
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Service-Worker": "script",
+        },
     )
     assert service_worker.status_code == 403
 
