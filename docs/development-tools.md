@@ -75,7 +75,9 @@ and [workflow-graph.md](workflow-graph.md#scheduling-a-graph).
 
 The canonical-file browser fixture requires Chromium or Google Chrome and
 OpenSSL on `PATH`. It preflights both executables before building or creating its
-disposable TLS environment.
+disposable TLS environment. The fixture drives TLS and named-local Area hosts plus
+the plain HTTP IP relay, and inspects popup response status, final target, and
+execution state directly through the browser debugging protocol.
 
 Current local environment note:
 

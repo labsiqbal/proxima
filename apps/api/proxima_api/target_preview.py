@@ -497,7 +497,7 @@ class TargetPreviewManager:
             if scope["type"] != "http":
                 await self._reject(scope, send, 404, "preview route not found")
                 return
-            await self.serve(area, scope, receive, send)
+            await self.dispatch(area, scope, receive, send)
 
         return relay_app
 
@@ -531,7 +531,29 @@ class TargetPreviewManager:
                 return item[len(name) + 1 :]
         return ""
 
-    async def serve(
+    async def dispatch(
+        self,
+        area: PreviewArea,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        query_token, _ = _capability_query(scope)
+        cookie_token = self._cookie(scope, area.cookie_name())
+        metadata = _PreviewFetchMetadata.from_scope(scope)
+        if not metadata.admits_area_request(
+            capability_present=bool(query_token or cookie_token),
+        ):
+            await self._reject(
+                scope,
+                send,
+                403,
+                "preview request metadata is invalid",
+            )
+            return
+        await self._serve_admitted(area, scope, receive, send)
+
+    async def _serve_admitted(
         self,
         area: PreviewArea,
         scope: Scope,
@@ -754,23 +776,7 @@ class TargetPreviewMiddleware:
             host = _header(scope, "host")
             area = self.manager._host_area(host)
             if area is not None:
-                query_token, _ = _capability_query(scope)
-                cookie_token = self.manager._cookie(
-                    scope,
-                    area.cookie_name(),
-                )
-                metadata = _PreviewFetchMetadata.from_scope(scope)
-                if not metadata.admits_area_request(
-                    capability_present=bool(query_token or cookie_token),
-                ):
-                    await self.manager._reject(
-                        scope,
-                        send,
-                        403,
-                        "preview request metadata is invalid",
-                    )
-                    return
-                await self.manager.serve(area, scope, receive, send)
+                await self.manager.dispatch(area, scope, receive, send)
                 return
             label = self.manager._preview_host_label(host)
             if label is not None and label.startswith("file-"):

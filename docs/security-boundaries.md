@@ -408,12 +408,14 @@ frame ancestor. HTTP same-site relays retain `SameSite=Strict`. The dedicated
 origin lets native
 module workers use same-origin Area URLs without gaining Proxima authority.
 Host-routed HTTPS and named-local HTTP exchanges use a server-owned bootstrap to
-enter the clean same-origin URL. Cross-origin Area entry requires a
-capability-bearing iframe or frame navigation; the clean frame may use the validated
-host-scoped cookie and remains bound by the signed frame ancestor. Top-level,
-malformed-entry, missing-entry-metadata, and cross-origin subresource requests are
-rejected before Area dispatch. Named-local HTTP uses a Secure `SameSite=None`
-cookie under the browser's trustworthy-localhost exception.
+enter the clean same-origin URL. A shared Area dispatch gate applies capability and
+Fetch Metadata admission to named hosts, plain HTTP relays, TLS hosts, and clean
+redirects. Cross-origin Area entry requires a capability-bearing iframe or frame
+navigation; the clean frame may use the validated host-scoped cookie and remains
+bound by the signed frame ancestor. Top-level, malformed-entry,
+missing-entry-metadata, and cross-origin subresource requests are rejected before
+file service. Named-local HTTP uses a Secure `SameSite=None` cookie under the
+browser's trustworthy-localhost exception.
 
 Legacy active files never execute on the Proxima origin. HTML is upgraded to the
 canonical response sandbox, active XML and SVG download, main-origin HTML denies
