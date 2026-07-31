@@ -990,10 +990,46 @@ CREATE TABLE IF NOT EXISTS task_recovery_history_tombstones (
   job_id INTEGER PRIMARY KEY,
   task_session_id INTEGER,
   master_session_id INTEGER,
+  first_task_event_id INTEGER,
+  last_task_event_id INTEGER,
+  first_recovery_outbox_id INTEGER,
+  last_recovery_outbox_id INTEGER,
+  capture_source TEXT CHECK (
+    capture_source IS NULL OR capture_source IN (
+      'job', 'session', 'event', 'outbox'
+    )
+  ),
   deletion_source TEXT NOT NULL CHECK (
     deletion_source IN ('job', 'task_event')
   ),
-  deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (
+    (first_task_event_id IS NULL AND last_task_event_id IS NULL)
+    OR (
+      first_task_event_id IS NOT NULL
+      AND last_task_event_id >= first_task_event_id
+    )
+  ),
+  CHECK (
+    (
+      first_recovery_outbox_id IS NULL
+      AND last_recovery_outbox_id IS NULL
+    )
+    OR (
+      first_recovery_outbox_id IS NOT NULL
+      AND last_recovery_outbox_id >= first_recovery_outbox_id
+    )
+  )
+);
+CREATE TABLE IF NOT EXISTS task_recovery_source_history (
+  job_id INTEGER NOT NULL,
+  task_session_id INTEGER,
+  master_session_id INTEGER,
+  recovery_outbox_id INTEGER NOT NULL,
+  task_event_id INTEGER NOT NULL,
+  captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (job_id, recovery_outbox_id),
+  UNIQUE(job_id, task_event_id)
 );
 CREATE TABLE IF NOT EXISTS task_recovery_ordering_gap_history (
   id INTEGER PRIMARY KEY,
@@ -1045,6 +1081,16 @@ task_recovery_history_tombstones_delete_immutable
 BEFORE DELETE ON task_recovery_history_tombstones
 BEGIN
   SELECT RAISE(ABORT, 'recovery history tombstone is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS task_recovery_source_history_immutable
+BEFORE UPDATE ON task_recovery_source_history
+BEGIN
+  SELECT RAISE(ABORT, 'recovery source history is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS task_recovery_source_history_delete_immutable
+BEFORE DELETE ON task_recovery_source_history
+BEGIN
+  SELECT RAISE(ABORT, 'recovery source history is immutable');
 END;
 CREATE TRIGGER IF NOT EXISTS task_recovery_ordering_gap_history_immutable
 BEFORE UPDATE ON task_recovery_ordering_gap_history

@@ -665,9 +665,12 @@ remain on the normal recovery path.
 The v48 compatibility migration stages every delivered marker row and its exact
 coverage before aggregation. V49 restores only from that evidence and records
 bounded legacy identity loss for databases already damaged before staging existed.
-Source deletion first copies marker, gap, and coverage rows into immutable history
-tables keyed by their original ids and writes a Task-source tombstone; only then may
-the live Task event, session, job, or outbox cascades proceed.
+Source deletion enters one capture path from `BEFORE DELETE` triggers on the job,
+Task session, Task event, and recovery outbox. It preserves stable session, job,
+event, and outbox identities plus the exact outbox-to-event map, copies marker, gap,
+and coverage rows into immutable history tables keyed by their original ids, and
+writes or safely completes the Task-source tombstone. Only then may the live
+cascades proceed; later boundaries cannot rewrite captured identity.
 Projection message, event, and ledger rows then commit together. Startup validates
 their strict owner, source/type, foreign-key, index, complete-link, and bounded payload
 contract.

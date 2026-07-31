@@ -142,9 +142,13 @@ but publishes no unattributed Master history.
 Delivered v47 marker identity is staged before v48 aggregation and restored only
 from the exact original row, payload, links, timestamps, attempts, and coverage.
 Previously damaged upgrades retain an immutable bounded legacy-loss record instead
-of synthesizing a replacement marker. Task, Task-session, and job deletion archive
-the exact recovery gap, marker, and coverage ids behind a source tombstone before
-live foreign-key cascades, while Master messages and events remain linked.
+of synthesizing a replacement marker. Task, Task-session, and job deletion captures
+the stable Task session, job, Task-event, and recovery-outbox identity at the
+job/session/event/outbox `BEFORE DELETE` boundary. The exact outbox-to-event map and
+recovery gap, marker, and coverage ids are archived behind a source tombstone before
+live foreign-key cascades, while Master messages and events remain linked. A later
+boundary may safely complete a partial legacy tombstone, but cannot rewrite captured
+identity.
 Git preflight completes before the immediate write transaction, then
 the restore rereads checkpoint, conflict, job, run, and node state under that lock.
 All validation and durable writes complete before a job worktree reset. A post-reset

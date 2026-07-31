@@ -97,9 +97,13 @@ remain immutable, and an exact coverage ledger links each marker to its causal g
 The v48 upgrade stages each delivered row before aggregation so v49 restores its
 original primary key, payload, links, attempts, and timestamps. A database that
 predates that staging records bounded immutable legacy loss instead of inventing
-replacement metadata. Deleting the Task, Task session, or job archives marker, gap,
-and coverage identity behind a stable tombstone before the live source cascades;
-surviving Master message and event links remain coherent.
+replacement metadata. Deleting the Task, Task session, or job captures stable Task
+session, job, Task-event, and recovery-outbox identity at the
+job/session/event/outbox `BEFORE DELETE` boundary. The exact outbox-to-event map,
+marker, gap, and coverage identity are archived behind a stable tombstone before the
+live source cascades; surviving Master message and event links remain coherent.
+Repeated boundaries may complete missing legacy tombstone fields without rewriting
+identity already captured.
 Unavailable legacy Focus is recorded as failed attribution and can be replayed only
 after attribution becomes provable; the Task restore remains committed and no
 unattributed history is published. Each reconciliation candidate has its own

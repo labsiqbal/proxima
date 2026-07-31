@@ -636,9 +636,13 @@ stages every delivered marker's original id, links, payload, attempt metadata, a
 timestamps before aggregation; v49 restores only from that exact evidence. Older
 databases that already lost marker identity retain the bounded published event as an
 immutable legacy-loss record instead of receiving invented identity or timestamps.
-Deleting a Task, its Task session, or its job source tombstones and archives the
-correction, gap, and coverage rows before live cascades, preserving their stable ids
-and surviving Master message/event links. SSE
+Deleting a Task, its Task session, or its job source captures the stable Task
+session, job, Task-event, and recovery-outbox identities at the job, session, event,
+or outbox `BEFORE DELETE` boundary. It records the exact outbox-to-event map, then
+tombstones and archives the correction, gap, and coverage rows before live cascades,
+preserving their stable ids and surviving Master message/event links. Repeated
+boundaries can complete missing legacy tombstone fields and expand captured ranges,
+but cannot replace identity already preserved. SSE
 reconnect accepts the existing cursor query and `Last-Event-ID`. No projection can approve review,
 landing, Attention, or Satpam gates. See
 [Master supervision and durable projections](master-supervision.md).

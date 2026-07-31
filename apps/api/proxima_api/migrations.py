@@ -4702,6 +4702,551 @@ def _detach_recovery_audit_history(
     )
 
 
+def _capture_recovery_identity_before_delete(
+    conn: sqlite3.Connection,
+) -> None:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if not {
+        "events",
+        "jobs",
+        "sessions",
+        "task_recovery_corrections",
+        "task_recovery_correction_gaps",
+        "task_recovery_history_tombstones",
+        "task_recovery_ordering_gaps",
+        "task_recovery_outbox",
+    }.issubset(tables):
+        return
+    tombstone_columns = {
+        str(row[1])
+        for row in conn.execute(
+            "PRAGMA table_info(task_recovery_history_tombstones)"
+        ).fetchall()
+    }
+    additions = {
+        "first_task_event_id": (
+            "first_task_event_id INTEGER "
+            "CHECK (first_task_event_id IS NULL OR first_task_event_id > 0)"
+        ),
+        "last_task_event_id": (
+            "last_task_event_id INTEGER "
+            "CHECK (last_task_event_id IS NULL OR last_task_event_id > 0)"
+        ),
+        "first_recovery_outbox_id": (
+            "first_recovery_outbox_id INTEGER CHECK ("
+            "first_recovery_outbox_id IS NULL "
+            "OR first_recovery_outbox_id > 0)"
+        ),
+        "last_recovery_outbox_id": (
+            "last_recovery_outbox_id INTEGER CHECK ("
+            "last_recovery_outbox_id IS NULL "
+            "OR last_recovery_outbox_id > 0)"
+        ),
+        "capture_source": (
+            "capture_source TEXT CHECK (capture_source IS NULL "
+            "OR capture_source IN ('job', 'session', 'event', 'outbox'))"
+        ),
+    }
+    for column, definition in additions.items():
+        if column not in tombstone_columns:
+            conn.execute(
+                "ALTER TABLE task_recovery_history_tombstones "
+                f"ADD COLUMN {definition}"
+            )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_recovery_source_history (
+          job_id INTEGER NOT NULL,
+          task_session_id INTEGER,
+          master_session_id INTEGER,
+          recovery_outbox_id INTEGER NOT NULL,
+          task_event_id INTEGER NOT NULL,
+          captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (job_id, recovery_outbox_id),
+          UNIQUE(job_id, task_event_id)
+        )
+        """
+    )
+    for trigger in (
+        "jobs_archive_recovery_history",
+        "sessions_capture_recovery_history",
+        "events_capture_recovery_history",
+        "task_recovery_outbox_archive_history",
+        "task_recovery_history_capture_apply",
+        "task_recovery_history_tombstones_immutable",
+    ):
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    conn.execute("DROP VIEW IF EXISTS task_recovery_history_capture")
+    conn.execute(
+        """
+        UPDATE task_recovery_history_tombstones AS tombstone
+        SET task_session_id = COALESCE(
+              tombstone.task_session_id,
+              (
+                SELECT COALESCE(
+                  job.session_id,
+                  MIN(task_event.session_id)
+                )
+                FROM jobs AS job
+                LEFT JOIN task_recovery_outbox AS recovery
+                  ON recovery.job_id = job.id
+                LEFT JOIN events AS task_event
+                  ON task_event.id = recovery.task_event_id
+                WHERE job.id = tombstone.job_id
+              )
+            ),
+            master_session_id = COALESCE(
+              tombstone.master_session_id,
+              (
+                SELECT COALESCE(
+                  MAX(recovery.master_session_id),
+                  job.origin_master_session_id
+                )
+                FROM jobs AS job
+                LEFT JOIN task_recovery_outbox AS recovery
+                  ON recovery.job_id = job.id
+                WHERE job.id = tombstone.job_id
+              )
+            ),
+            first_task_event_id = COALESCE(
+              tombstone.first_task_event_id,
+              (
+                SELECT MIN(recovery.task_event_id)
+                FROM task_recovery_outbox AS recovery
+                WHERE recovery.job_id = tombstone.job_id
+              )
+            ),
+            last_task_event_id = COALESCE(
+              tombstone.last_task_event_id,
+              (
+                SELECT MAX(recovery.task_event_id)
+                FROM task_recovery_outbox AS recovery
+                WHERE recovery.job_id = tombstone.job_id
+              )
+            ),
+            first_recovery_outbox_id = COALESCE(
+              tombstone.first_recovery_outbox_id,
+              (
+                SELECT MIN(recovery.id)
+                FROM task_recovery_outbox AS recovery
+                WHERE recovery.job_id = tombstone.job_id
+              )
+            ),
+            last_recovery_outbox_id = COALESCE(
+              tombstone.last_recovery_outbox_id,
+              (
+                SELECT MAX(recovery.id)
+                FROM task_recovery_outbox AS recovery
+                WHERE recovery.job_id = tombstone.job_id
+              )
+            ),
+            capture_source = COALESCE(
+              tombstone.capture_source,
+              CASE tombstone.deletion_source
+                WHEN 'job' THEN 'job'
+                ELSE 'outbox'
+              END
+            )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO task_recovery_source_history(
+          job_id, task_session_id, master_session_id,
+          recovery_outbox_id, task_event_id
+        )
+        SELECT recovery.job_id,
+          COALESCE(task_event.session_id, tombstone.task_session_id),
+          COALESCE(
+            recovery.master_session_id,
+            tombstone.master_session_id
+          ),
+          recovery.id, recovery.task_event_id
+        FROM task_recovery_history_tombstones AS tombstone
+        JOIN task_recovery_outbox AS recovery
+          ON recovery.job_id = tombstone.job_id
+        LEFT JOIN events AS task_event
+          ON task_event.id = recovery.task_event_id
+        """
+    )
+    _execute_sql_batch(
+        conn,
+        """
+        CREATE TRIGGER task_recovery_history_tombstones_immutable
+        BEFORE UPDATE ON task_recovery_history_tombstones
+        WHEN NEW.job_id != OLD.job_id
+          OR NEW.deletion_source != OLD.deletion_source
+          OR NEW.deleted_at != OLD.deleted_at
+          OR NOT (
+            NEW.task_session_id IS OLD.task_session_id
+            OR (
+              OLD.task_session_id IS NULL
+              AND NEW.task_session_id IS NOT NULL
+            )
+          )
+          OR NOT (
+            NEW.master_session_id IS OLD.master_session_id
+            OR (
+              OLD.master_session_id IS NULL
+              AND NEW.master_session_id IS NOT NULL
+            )
+          )
+          OR NOT (
+            NEW.first_task_event_id IS OLD.first_task_event_id
+            OR (
+              NEW.first_task_event_id IS NOT NULL
+              AND (
+                OLD.first_task_event_id IS NULL
+                OR NEW.first_task_event_id < OLD.first_task_event_id
+              )
+            )
+          )
+          OR NOT (
+            NEW.last_task_event_id IS OLD.last_task_event_id
+            OR (
+              NEW.last_task_event_id IS NOT NULL
+              AND (
+                OLD.last_task_event_id IS NULL
+                OR NEW.last_task_event_id > OLD.last_task_event_id
+              )
+            )
+          )
+          OR NOT (
+            NEW.first_recovery_outbox_id
+              IS OLD.first_recovery_outbox_id
+            OR (
+              NEW.first_recovery_outbox_id IS NOT NULL
+              AND (
+                OLD.first_recovery_outbox_id IS NULL
+                OR NEW.first_recovery_outbox_id
+                  < OLD.first_recovery_outbox_id
+              )
+            )
+          )
+          OR NOT (
+            NEW.last_recovery_outbox_id IS OLD.last_recovery_outbox_id
+            OR (
+              NEW.last_recovery_outbox_id IS NOT NULL
+              AND (
+                OLD.last_recovery_outbox_id IS NULL
+                OR NEW.last_recovery_outbox_id
+                  > OLD.last_recovery_outbox_id
+              )
+            )
+          )
+          OR NOT (
+            NEW.capture_source IS OLD.capture_source
+            OR (
+              OLD.capture_source IS NULL
+              AND NEW.capture_source IS NOT NULL
+            )
+          )
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'recovery history tombstone identity is immutable'
+          );
+        END;
+        CREATE TRIGGER IF NOT EXISTS task_recovery_source_history_immutable
+        BEFORE UPDATE ON task_recovery_source_history
+        BEGIN
+          SELECT RAISE(ABORT, 'recovery source history is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+        task_recovery_source_history_delete_immutable
+        BEFORE DELETE ON task_recovery_source_history
+        BEGIN
+          SELECT RAISE(ABORT, 'recovery source history is immutable');
+        END;
+        CREATE VIEW task_recovery_history_capture AS
+        SELECT job_id, task_session_id, master_session_id,
+          first_task_event_id, last_task_event_id,
+          first_recovery_outbox_id, last_recovery_outbox_id,
+          capture_source, deletion_source
+        FROM task_recovery_history_tombstones
+        WHERE 0;
+        CREATE TRIGGER task_recovery_history_capture_apply
+        INSTEAD OF INSERT ON task_recovery_history_capture
+        BEGIN
+          INSERT INTO task_recovery_history_tombstones(
+            job_id, task_session_id, master_session_id,
+            first_task_event_id, last_task_event_id,
+            first_recovery_outbox_id, last_recovery_outbox_id,
+            capture_source, deletion_source
+          ) VALUES (
+            NEW.job_id, NEW.task_session_id, NEW.master_session_id,
+            NEW.first_task_event_id, NEW.last_task_event_id,
+            NEW.first_recovery_outbox_id,
+            NEW.last_recovery_outbox_id,
+            NEW.capture_source, NEW.deletion_source
+          )
+          ON CONFLICT(job_id) DO UPDATE SET
+            task_session_id = COALESCE(
+              task_recovery_history_tombstones.task_session_id,
+              excluded.task_session_id
+            ),
+            master_session_id = COALESCE(
+              task_recovery_history_tombstones.master_session_id,
+              excluded.master_session_id
+            ),
+            first_task_event_id = CASE
+              WHEN task_recovery_history_tombstones.first_task_event_id
+                IS NULL
+                THEN excluded.first_task_event_id
+              WHEN excluded.first_task_event_id IS NULL
+                THEN task_recovery_history_tombstones.first_task_event_id
+              ELSE MIN(
+                task_recovery_history_tombstones.first_task_event_id,
+                excluded.first_task_event_id
+              )
+            END,
+            last_task_event_id = CASE
+              WHEN task_recovery_history_tombstones.last_task_event_id
+                IS NULL
+                THEN excluded.last_task_event_id
+              WHEN excluded.last_task_event_id IS NULL
+                THEN task_recovery_history_tombstones.last_task_event_id
+              ELSE MAX(
+                task_recovery_history_tombstones.last_task_event_id,
+                excluded.last_task_event_id
+              )
+            END,
+            first_recovery_outbox_id = CASE
+              WHEN task_recovery_history_tombstones
+                .first_recovery_outbox_id IS NULL
+                THEN excluded.first_recovery_outbox_id
+              WHEN excluded.first_recovery_outbox_id IS NULL
+                THEN task_recovery_history_tombstones
+                  .first_recovery_outbox_id
+              ELSE MIN(
+                task_recovery_history_tombstones
+                  .first_recovery_outbox_id,
+                excluded.first_recovery_outbox_id
+              )
+            END,
+            last_recovery_outbox_id = CASE
+              WHEN task_recovery_history_tombstones
+                .last_recovery_outbox_id IS NULL
+                THEN excluded.last_recovery_outbox_id
+              WHEN excluded.last_recovery_outbox_id IS NULL
+                THEN task_recovery_history_tombstones
+                  .last_recovery_outbox_id
+              ELSE MAX(
+                task_recovery_history_tombstones
+                  .last_recovery_outbox_id,
+                excluded.last_recovery_outbox_id
+              )
+            END,
+            capture_source = COALESCE(
+              task_recovery_history_tombstones.capture_source,
+              excluded.capture_source
+            );
+          INSERT OR IGNORE INTO task_recovery_source_history(
+            job_id, task_session_id, master_session_id,
+            recovery_outbox_id, task_event_id
+          )
+          SELECT NEW.job_id,
+            COALESCE(task_event.session_id, NEW.task_session_id),
+            COALESCE(
+              recovery.master_session_id,
+              NEW.master_session_id
+            ),
+            recovery.id, recovery.task_event_id
+          FROM task_recovery_outbox AS recovery
+          LEFT JOIN events AS task_event
+            ON task_event.id = recovery.task_event_id
+          WHERE recovery.job_id = NEW.job_id;
+          INSERT OR IGNORE INTO task_recovery_ordering_gap_history
+          SELECT gap.*, CURRENT_TIMESTAMP
+          FROM task_recovery_ordering_gaps AS gap
+          WHERE gap.job_id = NEW.job_id;
+          INSERT OR IGNORE INTO task_recovery_correction_history
+          SELECT correction.*, CURRENT_TIMESTAMP
+          FROM task_recovery_corrections AS correction
+          WHERE correction.job_id = NEW.job_id;
+          INSERT OR IGNORE INTO task_recovery_correction_gap_history
+          SELECT link.*, CURRENT_TIMESTAMP
+          FROM task_recovery_correction_gaps AS link
+          JOIN task_recovery_corrections AS correction
+            ON correction.id = link.correction_id
+          WHERE correction.job_id = NEW.job_id;
+        END;
+        CREATE TRIGGER jobs_archive_recovery_history
+        BEFORE DELETE ON jobs
+        BEGIN
+          INSERT INTO task_recovery_history_capture(
+            job_id, task_session_id, master_session_id,
+            first_task_event_id, last_task_event_id,
+            first_recovery_outbox_id, last_recovery_outbox_id,
+            capture_source, deletion_source
+          ) VALUES (
+            OLD.id, OLD.session_id,
+            COALESCE(
+              (
+                SELECT MAX(recovery.master_session_id)
+                FROM task_recovery_outbox AS recovery
+                WHERE recovery.job_id = OLD.id
+              ),
+              OLD.origin_master_session_id
+            ),
+            (
+              SELECT MIN(recovery.task_event_id)
+              FROM task_recovery_outbox AS recovery
+              WHERE recovery.job_id = OLD.id
+            ),
+            (
+              SELECT MAX(recovery.task_event_id)
+              FROM task_recovery_outbox AS recovery
+              WHERE recovery.job_id = OLD.id
+            ),
+            (
+              SELECT MIN(recovery.id)
+              FROM task_recovery_outbox AS recovery
+              WHERE recovery.job_id = OLD.id
+            ),
+            (
+              SELECT MAX(recovery.id)
+              FROM task_recovery_outbox AS recovery
+              WHERE recovery.job_id = OLD.id
+            ),
+            'job', 'job'
+          );
+        END;
+        CREATE TRIGGER sessions_capture_recovery_history
+        BEFORE DELETE ON sessions
+        BEGIN
+          INSERT INTO task_recovery_history_capture(
+            job_id, task_session_id, master_session_id,
+            first_task_event_id, last_task_event_id,
+            first_recovery_outbox_id, last_recovery_outbox_id,
+            capture_source, deletion_source
+          )
+          SELECT job.id, COALESCE(job.session_id, OLD.id),
+            COALESCE(
+              (
+                SELECT MAX(recovery.master_session_id)
+                FROM task_recovery_outbox AS recovery
+                WHERE recovery.job_id = job.id
+              ),
+              job.origin_master_session_id
+            ),
+            (
+              SELECT MIN(recovery.task_event_id)
+              FROM task_recovery_outbox AS recovery
+              WHERE recovery.job_id = job.id
+            ),
+            (
+              SELECT MAX(recovery.task_event_id)
+              FROM task_recovery_outbox AS recovery
+              WHERE recovery.job_id = job.id
+            ),
+            (
+              SELECT MIN(recovery.id)
+              FROM task_recovery_outbox AS recovery
+              WHERE recovery.job_id = job.id
+            ),
+            (
+              SELECT MAX(recovery.id)
+              FROM task_recovery_outbox AS recovery
+              WHERE recovery.job_id = job.id
+            ),
+            'session', 'task_event'
+          FROM jobs AS job
+          WHERE job.session_id = OLD.id
+            OR (
+              job.session_id IS NULL
+              AND job.id = OLD.job_id
+            );
+        END;
+        CREATE TRIGGER events_capture_recovery_history
+        BEFORE DELETE ON events
+        BEGIN
+          INSERT INTO task_recovery_history_capture(
+            job_id, task_session_id, master_session_id,
+            first_task_event_id, last_task_event_id,
+            first_recovery_outbox_id, last_recovery_outbox_id,
+            capture_source, deletion_source
+          )
+          SELECT DISTINCT recovery.job_id, OLD.session_id,
+            COALESCE(
+              recovery.master_session_id,
+              job.origin_master_session_id
+            ),
+            (
+              SELECT MIN(candidate.task_event_id)
+              FROM task_recovery_outbox AS candidate
+              WHERE candidate.job_id = recovery.job_id
+            ),
+            (
+              SELECT MAX(candidate.task_event_id)
+              FROM task_recovery_outbox AS candidate
+              WHERE candidate.job_id = recovery.job_id
+            ),
+            (
+              SELECT MIN(candidate.id)
+              FROM task_recovery_outbox AS candidate
+              WHERE candidate.job_id = recovery.job_id
+            ),
+            (
+              SELECT MAX(candidate.id)
+              FROM task_recovery_outbox AS candidate
+              WHERE candidate.job_id = recovery.job_id
+            ),
+            'event', 'task_event'
+          FROM task_recovery_outbox AS recovery
+          JOIN jobs AS job ON job.id = recovery.job_id
+          WHERE recovery.task_event_id = OLD.id;
+        END;
+        CREATE TRIGGER task_recovery_outbox_archive_history
+        BEFORE DELETE ON task_recovery_outbox
+        BEGIN
+          INSERT INTO task_recovery_history_capture(
+            job_id, task_session_id, master_session_id,
+            first_task_event_id, last_task_event_id,
+            first_recovery_outbox_id, last_recovery_outbox_id,
+            capture_source, deletion_source
+          )
+          SELECT OLD.job_id,
+            COALESCE(task_event.session_id, job.session_id),
+            COALESCE(
+              OLD.master_session_id,
+              job.origin_master_session_id
+            ),
+            (
+              SELECT MIN(candidate.task_event_id)
+              FROM task_recovery_outbox AS candidate
+              WHERE candidate.job_id = OLD.job_id
+            ),
+            (
+              SELECT MAX(candidate.task_event_id)
+              FROM task_recovery_outbox AS candidate
+              WHERE candidate.job_id = OLD.job_id
+            ),
+            (
+              SELECT MIN(candidate.id)
+              FROM task_recovery_outbox AS candidate
+              WHERE candidate.job_id = OLD.job_id
+            ),
+            (
+              SELECT MAX(candidate.id)
+              FROM task_recovery_outbox AS candidate
+              WHERE candidate.job_id = OLD.job_id
+            ),
+            'outbox', 'task_event'
+          FROM jobs AS job
+          LEFT JOIN events AS task_event
+            ON task_event.id = OLD.task_event_id
+          WHERE job.id = OLD.job_id;
+        END;
+        """
+    )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -4836,6 +5381,11 @@ MIGRATIONS: list[Migration] = [
         51,
         "detach recovery audit history from mutable Task records",
         _detach_recovery_audit_history,
+    ),
+    (
+        52,
+        "capture recovery source identity before deletion cascades",
+        _capture_recovery_identity_before_delete,
     ),
 ]
 
