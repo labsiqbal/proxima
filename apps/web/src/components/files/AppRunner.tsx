@@ -143,24 +143,28 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     }
     finally { if (mountedRef.current && seq === actionSeq.current) setBusy(false) }
   }
-  async function stop() {
-    if (busy) return
+  async function stop(): Promise<boolean> {
+    if (busy) return false
     setBusy(true)
     const seq = ++actionSeq.current
+    let succeeded = false
     try {
       await appStop(token, slug)
-      if (mountedRef.current && seq === actionSeq.current) poll()
+      succeeded = true
     } catch (e) {
       if (mountedRef.current && seq === actionSeq.current) setError(String(e))
-    } finally {
-      if (mountedRef.current && seq === actionSeq.current) setBusy(false)
     }
+    if (mountedRef.current && seq === actionSeq.current) {
+      await poll()
+      setBusy(false)
+    }
+    return succeeded && mountedRef.current && seq === actionSeq.current
   }
 
   async function changePort() {
     if (busy) return
-    await stop()
-    if (!mountedRef.current) return
+    const stopped = await stop()
+    if (!mountedRef.current || !stopped) return
     setStatus({ state: 'stopped', running: false, ready: false })
     setError('')
     window.setTimeout(() => {

@@ -136,6 +136,44 @@ describe('AppRunner collision feedback', () => {
     expect(screen.getByRole('spinbutton')).toHaveFocus()
   })
 
+  it('keeps ownership_unknown after Change port when Stop returns 409', async () => {
+    const user = userEvent.setup()
+    let currentStatus: Awaited<ReturnType<typeof appStatus>> = {
+      state: 'port_conflict',
+      running: false,
+      ready: false,
+      requested_port: 5180,
+      command: 'npm run dev',
+      log: ['address already in use'],
+      message: 'Port 5180 belongs to another process. Proxima did not open, proxy, or stop it.',
+    }
+    vi.mocked(appStatus).mockImplementation(async () => currentStatus)
+    vi.mocked(appStop).mockImplementation(async () => {
+      currentStatus = {
+        state: 'ownership_unknown',
+        running: true,
+        ready: false,
+        requested_port: 5180,
+        command: 'npm run dev',
+        log: ['supervisor still live'],
+        message: 'Proxima cannot verify who owns the listener on this host.',
+      }
+      throw new Error('Authenticated stop could not finish. The prior preview scope remains unresolved.')
+    })
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+
+    expect(await screen.findByRole('heading', { name: 'Port 5180 is already in use' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Change port' }))
+
+    await waitFor(() => expect(appStop).toHaveBeenCalledWith('token', 'demo'))
+    expect(await screen.findByRole('heading', { name: 'Preview ownership could not be verified' })).toBeInTheDocument()
+    expect(screen.getByText(/cannot verify who owns the listener/i)).toBeInTheDocument()
+    expect(screen.getByText(/will not proxy this port/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /run/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'App stopped' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument()
+  })
+
   it('keeps ready logs open across Reload and shows the buffer after Stop', async () => {
     const user = userEvent.setup()
     vi.mocked(appStatus)

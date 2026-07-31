@@ -2277,9 +2277,10 @@ class AppManager:
     async def shutdown(self) -> None:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + SHUTDOWN_GRACE_SECONDS
+        slugs = set(self._apps) | set(self._unadopted)
         stop_requests = [
             self._track_cleanup(self.stop(slug, preserve_status=False))
-            for slug in list(self._apps)
+            for slug in slugs
         ]
         if stop_requests:
             await asyncio.wait(

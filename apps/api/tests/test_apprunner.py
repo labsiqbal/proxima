@@ -1293,6 +1293,123 @@ def test_shutdown_reconciles_many_apps_concurrently(monkeypatch):
     asyncio.run(run_case())
 
 
+def test_shutdown_stops_unadopted_and_registered_slugs(monkeypatch):
+    manager = AppManager()
+    manager._apps["live"] = {"registered": True}
+    manager._unadopted.add("ghost")
+    stopped: list[tuple[str, bool]] = []
+
+    async def fake_stop(slug, *, preserve_status=True):
+        stopped.append((slug, preserve_status))
+        await asyncio.sleep(0.05)
+        manager._apps.pop(slug, None)
+        manager._unadopted.discard(slug)
+        return {"ok": True}
+
+    monkeypatch.setattr(manager, "stop", fake_stop)
+
+    async def run_case():
+        started = time.monotonic()
+        await manager.shutdown()
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.4
+        assert sorted(slug for slug, _ in stopped) == ["ghost", "live"]
+        assert all(preserve is False for _, preserve in stopped)
+        assert not manager._apps
+        assert not manager._unadopted
+
+    asyncio.run(run_case())
+
+
+def test_shutdown_recovers_ended_unadopted_scope(tmp_path):
+    state_root = tmp_path / "preview-supervisors"
+    state_root.mkdir()
+    record = {
+        "version": 2,
+        "phase": "attached",
+        "profile": "direct",
+        "slug": "demo",
+        "generation": 3,
+        "port": 5180,
+        "command": "sleep 60",
+        "started_at": time.time() - 30,
+        "lineage_token": "ended-token",
+        "contained": False,
+        "broker": {
+            "pid": 2**22,
+            "start_time": 1,
+            "cgroup": "broker-cgroup",
+            "controller_cgroup": "controller-cgroup",
+            "profile": "direct",
+        },
+        "process": {
+            "pid": 2**22 + 1,
+            "start_time": 1,
+            "cgroup": "process-cgroup",
+        },
+    }
+    (state_root / "demo.3.json").write_text(
+        json.dumps(record),
+        encoding="utf-8",
+    )
+    manager = AppManager(state_root=state_root)
+
+    class Lease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    lease = Lease()
+
+    async def run_case():
+        manager._unadopted.add("demo")
+        manager._generations["demo"] = 3
+        manager._retain_effect("demo", lease)
+        manager._last_exit["demo"] = manager._adoption_unknown_status(
+            record,
+            "Preview adoption exceeded the startup deadline.",
+        )
+
+        await manager.shutdown()
+
+        assert "demo" not in manager._unadopted
+        assert lease.released is True
+        assert not list(state_root.glob("*.json"))
+
+    asyncio.run(run_case())
+
+
+def test_shutdown_retains_unresolved_unadopted_authority(tmp_path):
+    manager = AppManager()
+
+    class Lease:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    lease = Lease()
+
+    async def run_case():
+        manager._unadopted.add("demo")
+        manager._generations["demo"] = 1
+        manager._retain_effect("demo", lease)
+        manager._last_exit["demo"] = manager._adoption_unknown_status(
+            {"port": 5180, "command": "sleep 60"},
+            "Preview registration failed and terminal cleanup could not "
+            "be authenticated.",
+        )
+
+        await manager.shutdown()
+
+        assert "demo" in manager._unadopted
+        assert lease.released is False
+        assert manager.status("demo")["state"] == "ownership_unknown"
+
+    asyncio.run(run_case())
+
+
 def test_cancelled_start_before_spawn_releases_effect_lease(
     monkeypatch,
     tmp_path,
