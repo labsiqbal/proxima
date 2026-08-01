@@ -1,6 +1,7 @@
 """Work-container areas (Phase-1 slice 1, T1): detection, override API, payload."""
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -237,7 +238,10 @@ def test_detect_on_demand_picks_up_new_repo_and_drops_gone_auto(tmp_path: Path):
     _link(api, h, folder, "container")
     # A repo appears after link; the old one stops being a repo.
     _repo(folder / "new")
-    (folder / "old" / ".git").rmdir()
+    # Drop the whole directory: with Master on, registering the area queues a
+    # Code rebuild whose graph context writes .git/info/exclude, so a bare
+    # rmdir would trip over content the test does not care about.
+    shutil.rmtree(folder / "old" / ".git")
     res = api.post("/api/projects/container/areas/detect", headers=h)
     assert res.status_code == 200, res.text
     body = res.json()

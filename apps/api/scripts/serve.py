@@ -164,7 +164,7 @@ app = create_app(
         "feature_design_studio": env_bool("PROXIMA_FEATURE_DESIGN_STUDIO", True),
         "feature_workflow_graph": env_bool("PROXIMA_FEATURE_WORKFLOW_GRAPH", True),
         "feature_master_orchestrator": env_bool(
-            "PROXIMA_FEATURE_MASTER_ORCHESTRATOR", False
+            "PROXIMA_FEATURE_MASTER_ORCHESTRATOR", True
         ),
         **safe_update_config_from_env(),
         # On by default since slice 4 (review UI); the env var is the escape hatch.

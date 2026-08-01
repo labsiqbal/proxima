@@ -212,7 +212,7 @@ and refuses ambiguous identities, conflicting compatibility columns, malformed
 owned JSON payloads, or foreign-key violations. It does not create a parallel
 ledger or a second Master session.
 
-`feature_master_orchestrator` is server-owned and defaults off. Persistence
+`feature_master_orchestrator` is server-owned and defaults on. Persistence
 migration and identity recovery still run while it is off, but canonical and
 deprecated compatibility routes reject use, the supervisor does not start, and
 the run worker leaves both Master turns and Master-owned Task runs queued. This

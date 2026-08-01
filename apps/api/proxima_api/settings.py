@@ -57,9 +57,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # switch stays as an owner escape hatch - off = the machinery is inert and
     # job execution matches the pre-worktree behavior.
     "feature_repo_worktrees": True,
-    # Durable Master data is migrated unconditionally. Runtime behavior stays
-    # off until the integrated Master slices pass their acceptance gate.
-    "feature_master_orchestrator": False,
+    # Durable Master data is migrated unconditionally. Runtime behavior is on
+    # by default now that the integrated Master slices have passed their
+    # acceptance gate; the env var is the escape hatch.
+    "feature_master_orchestrator": True,
     # Group 14 creates only the external updater contracts. Group 15/16 evidence
     # is disposable and cannot replace installer and service-manager qualification.
     "feature_safe_self_update": False,

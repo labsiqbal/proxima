@@ -880,7 +880,7 @@ def _config_from_env() -> dict[str, Any]:
         ).lower()
         in ("1", "true", "yes", "on"),
         "feature_master_orchestrator": os.environ.get(
-            "PROXIMA_FEATURE_MASTER_ORCHESTRATOR", "0"
+            "PROXIMA_FEATURE_MASTER_ORCHESTRATOR", "1"
         ).lower()
         in ("1", "true", "yes", "on"),
         **safe_update_config_from_env(),

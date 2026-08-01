@@ -48,10 +48,10 @@ project adds a warning. The journal belongs to that chat session and disappears 
 ## Master
 
 Master navigation, settings, tours, and deep links are omitted unless the
-server-owned `feature_master_orchestrator` flag is enabled. It defaults off
-until the
+server-owned `feature_master_orchestrator` flag is enabled. It defaults on now
+that the
 [documented product and installation-specific runner gates](master-integrated-acceptance.md#activation-decision)
-pass. Stale local view state cannot bypass this gate.
+have passed. Stale local view state cannot bypass this gate.
 
 Delegate presents Master as a first-class desk, not a Chat tab or Tasks filter. It keeps
 the shared, persisted sidebar panel but replaces Work navigation with **Master**,

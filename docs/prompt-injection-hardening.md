@@ -55,7 +55,7 @@ OS sandbox.
 
 Master persistence is not a permission grant. Migration 31 preserves the hidden
 orchestrator session and Task ownership in SQLite, while
-`feature_master_orchestrator` defaults off. With the flag off, Master APIs reject
+`feature_master_orchestrator` defaults on. With the flag off, Master APIs reject
 use and the worker does not claim Master turns or Master-owned Task runs. Codex
 app-server 0.145.0 or newer is the only current production adapter that proves the
 central `master_chat_only` runner contract; every other adapter fails closed.

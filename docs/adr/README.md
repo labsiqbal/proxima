@@ -96,3 +96,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0036](0036-active-file-preview-is-explicit-trusted-mode.md) | Active file preview is an explicit trusted mode | Accepted |
 | [0037](0037-container-activity-and-migration-publication.md) | Container activity and migration publication | Superseded by ADR-0038 |
 | [0038](0038-owner-safe-container-activity-boundaries.md) | Owner-safe Container activity boundaries | Accepted |
+| [0039](0039-master-orchestrator-ships-enabled.md) | Master orchestrator ships enabled | Accepted |

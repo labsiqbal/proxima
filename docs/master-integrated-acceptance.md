@@ -40,7 +40,7 @@ an earlier boundary.
 
 | Requirement | Direct evidence |
 | --- | --- |
-| Master and safe self-update remain disabled until their gates pass | `DEFAULT_CONFIG`, `scripts/smoke-fresh`, and `test_feature_flags.py` assert both defaults false and feature-off routes inert before side effects. |
+| Safe self-update remains disabled until its gate passes, and a disabled Master stays inert | `DEFAULT_CONFIG`, `scripts/smoke-fresh`, and `test_feature_flags.py` assert the safe-update default false, the Master default true, and feature-off routes inert before side effects. |
 | Alpha-to-Master migration preserves identity and data | Migrations 31 and 33-42 plus `master_persistence.py` preserve primary keys and compatibility aliases. Persistence and migration tests cover fresh, upgrade, conflict, rerun, and historical attribution cases. |
 | Unsupported or unavailable runners are not selectable | `/api/runners/detect` publishes static `masterChatOnly` plus dynamic `masterEligible` and `masterUnavailableReason`, derived from `master_runner_conformance` on the server runtime path while admitted. Pending or active maintenance and ingress-unavailable fence transitions skip process probes and report Master ineligible; focused HTTP tests cover runner and dashboard reads through active-fence and fence-removal states. The UI enables only `masterEligible=true`; settings, message creation, and worker spawn repeat conformance. |
 | Master supervision does not duplicate Satpam authority | `MasterSupervisor` claims eligible queued Tasks only. Satpam remains the sole detector and recovery owner. Projection tests cover restart reconciliation, capacity, attribution, and idempotency. |
@@ -88,7 +88,10 @@ reviewable UI acceptance contract.
 
 ## Activation decision
 
-This matrix proves implementation and disposable-fixture coverage. It does not
-activate either feature. Master remains off until an operator explicitly accepts
-the runner and product gates for that installation. Safe self-update remains off
-until a qualified external updater is separately installed and enrolled.
+This matrix proves implementation and disposable-fixture coverage. The gates it
+records have passed, so Master ships on by default (ADR-0039); an operator who
+wants a cockpit without delegation sets `PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0`.
+Enabling the surface is not the same as enabling autonomy: unattended starts
+remain a separate opt-in toggle, and delegation still fails closed without an
+authenticated Master-eligible runner. Safe self-update remains off until a
+qualified external updater is separately installed and enrolled.

@@ -177,7 +177,7 @@ PROXIMA_UPDATE_REPO=labsiqbal/proxima
 PROXIMA_SERVICE_NAME=proxima
 PROXIMA_FEATURE_DESIGN_STUDIO=1
 PROXIMA_FEATURE_WORKFLOW_GRAPH=1
-PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0
+PROXIMA_FEATURE_MASTER_ORCHESTRATOR=1
 PROXIMA_FEATURE_SAFE_SELF_UPDATE=0
 PROXIMA_SAFE_UPDATE_FENCE_PATH=
 PROXIMA_MASTER_MAX_PARALLEL=3
@@ -203,10 +203,12 @@ Notes:
 - Workflow Graph defaults to `1` because it is the current authoring UI. Set it to `0`
   only as a recovery switch; the classic linear engine is unaffected either way.
 - Master persistence migration always runs. The Master runtime and UI default to
-  off with `PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0` until the product and
-  installation-specific runner gates in
+  on; the product and host-runner gates in
   [integrated acceptance](master-integrated-acceptance.md#activation-decision)
-  have passed.
+  have passed. Set `PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0` to run without the
+  Delegate surface -- the unattended supervisor then never starts. Delegation
+  still needs an authenticated Master-eligible runner; without one the surface
+  appears but every adapter fails closed.
 - Safe self-update defaults off. Only a future administrator enrollment may set
   `PROXIMA_FEATURE_SAFE_SELF_UPDATE=1` and an absolute, root-owned
   `PROXIMA_SAFE_UPDATE_FENCE_PATH`; the application only reads that fence.

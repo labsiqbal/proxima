@@ -239,8 +239,16 @@ def test_delete_job_preserves_recovery_source_identity(tmp_path):
             (task_session_id,),
         ).fetchone()[0]
     )
+    # One Master session per owner: startup already provisions it while the
+    # feature is on, so adopt that row instead of inserting a second one.
+    existing_master = app.state.db.execute(
+        "SELECT id FROM sessions WHERE owner_user_id = ? AND mode = 'master'",
+        (owner_id,),
+    ).fetchone()
     master_session_id = int(
-        app.state.db.execute(
+        existing_master[0]
+        if existing_master
+        else app.state.db.execute(
             "INSERT INTO sessions(title, owner_user_id, mode) "
             "VALUES ('Master', ?, 'master')",
             (owner_id,),

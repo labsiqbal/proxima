@@ -47,9 +47,9 @@ def _counts(app):
     }
 
 
-def test_public_config_defaults_shipped_features_on_and_master_off(tmp_path):
-    # Durable Master migration is unconditional, but its runtime stays off until
-    # the integrated orchestrator acceptance gate passes.
+def test_public_config_defaults_shipped_features_on_and_safe_update_off(tmp_path):
+    # Master ships on now that its acceptance gates have passed (ADR-0039).
+    # Safe self-update stays off until an external updater is enrolled.
     app = _app(tmp_path)
     response = TestClient(app).get("/api/config")
 
@@ -58,7 +58,7 @@ def test_public_config_defaults_shipped_features_on_and_master_off(tmp_path):
         "design_studio": True,
         "workflow_graph": True,
         "repo_worktrees": True,
-        "master_orchestrator": False,
+        "master_orchestrator": True,
         "safe_self_update": False,
     }
 
@@ -76,7 +76,7 @@ def test_public_config_reports_explicit_boot_opt_out(tmp_path):
         "design_studio": True,
         "workflow_graph": True,
         "repo_worktrees": False,
-        "master_orchestrator": False,
+        "master_orchestrator": True,
         "safe_self_update": False,
     }
 
@@ -133,7 +133,7 @@ def test_master_environment_flag_reaches_production_serve_entrypoint(tmp_path):
 
 
 def test_programmatic_zero_values_do_not_enable_features():
-    config = normalize_config({"feature_design_studio": "false", "feature_workflow_graph": "0", "feature_repo_worktrees": "0"})
+    config = normalize_config({"feature_design_studio": "false", "feature_workflow_graph": "0", "feature_repo_worktrees": "0", "feature_master_orchestrator": "0"})
     assert features.public_flags(config) == {
         "design_studio": False,
         "workflow_graph": False,
@@ -146,7 +146,8 @@ def test_programmatic_zero_values_do_not_enable_features():
 def test_disabled_master_runtime_leaves_master_and_owned_task_runs_queued(
     tmp_path,
 ):
-    app = _app(tmp_path)
+    # Master is on by default, so this feature-off path opts out explicitly.
+    app = _app(tmp_path, feature_master_orchestrator=False)
     client = TestClient(app)
     assert client.post("/auth/auto").status_code == 200
     owner = app.state.worker_db.execute(

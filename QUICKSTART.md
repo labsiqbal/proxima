@@ -96,7 +96,7 @@ Key variables:
 | `PROXIMA_FEATURE_SAFE_SELF_UPDATE` | `0` | External updater request surface remains disabled |
 | `PROXIMA_SAFE_UPDATE_FENCE_PATH` | _(unset)_ | Absolute root-owned maintenance fence read by the app |
 | `PROXIMA_FEATURE_DESIGN_STUDIO` | `1` | Set to `0` to disable Design Studio |
-| `PROXIMA_FEATURE_MASTER_ORCHESTRATOR` | `0` | Master runtime, UI, and graph routes remain off until the [documented product and host-runner gates](docs/master-integrated-acceptance.md#activation-decision) pass |
+| `PROXIMA_FEATURE_MASTER_ORCHESTRATOR` | `1` | Master runtime, UI, and graph routes. Set to `0` to run Proxima as a plain chat/workflow cockpit with no Delegate surface |
 | `PROXIMA_GRAPH_SEMANTIC_EGRESS` | `0` | Reserved graph-policy flag; see [configuration notes](docs/installation.md#configuration) |
 
 ## 6. Phone and other devices (Tailscale)
