@@ -189,7 +189,11 @@ def _scenario_ready_run_now() -> dict:
         "name": "scheduled-workflow-ready-run-now",
         "authenticated": True,
         "steps": [
-            {"action": "click", "selector": "button", "text": "Skip tour"},
+            # Second scenario, fresh browser profile, same owner. With Master on
+            # the core tour records completion server-side, so the first
+            # scenario's skip already retired it and there is nothing to click;
+            # with Master off it is localStorage-only and the tour returns.
+            {"action": "click_if_present", "selector": "button", "text": "Skip tour"},
             {"action": "click", "selector": "nav button", "text": "Workflows"},
             {
                 "action": "assert",
