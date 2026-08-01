@@ -3737,3 +3737,134 @@ def test_v56_versions_turn_journal_root_semantics(tmp_path: Path):
     }
     assert run_migrations(conn, str(db_path)) == []
     assert current_version(conn) == 56
+
+
+def _reshape_runs_and_restore_focus_column(conn):
+    """Stand-in for the real chain: reshape `runs`, then add the missing column.
+
+    The paired RENAME COLUMN is what forces SQLite to reparse the whole schema —
+    the step a stale trigger used to make fail.
+    """
+    conn.execute("ALTER TABLE runs RENAME COLUMN continuation_count TO _tmp_count")
+    conn.execute("ALTER TABLE runs RENAME COLUMN _tmp_count TO continuation_count")
+    conn.execute(
+        "ALTER TABLE runs ADD COLUMN focus_epoch_id "
+        "INTEGER REFERENCES master_focus_epochs(id) ON DELETE SET NULL"
+    )
+
+
+def test_legacy_db_upgrades_despite_schema_trigger_ahead_of_its_column(
+    tmp_path: Path,
+):
+    """A trigger installed ahead of the column it names must not block the chain.
+
+    Releases before the SCHEMA/trigger split applied `db.SCHEMA` wholesale to
+    existing databases. `CREATE TABLE IF NOT EXISTS` was a no-op there, but
+    `CREATE TRIGGER IF NOT EXISTS` was not, so the database ended up carrying a
+    trigger whose body named a column the pending migrations had yet to add.
+    SQLite accepts that at CREATE time and fails the next schema reparse instead
+    — the first ALTER TABLE a migration runs — so startup aborted before the
+    chain could repair anything.
+    """
+    db_path = tmp_path / "legacy-trigger.db"
+    conn = connect(db_path)
+    init_db(conn, [], None, None)
+    run_migrations(conn, str(db_path))
+
+    # Rewind `runs` to its pre-focus_epoch_id shape, then put the trigger that
+    # references that column back — exactly the state the old path produced, and
+    # only reachable in this order because DROP COLUMN reparses the schema too.
+    focus_trigger = str(
+        conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'runs_master_focus_insert'"
+        ).fetchone()[0]
+    )
+    for name in (
+        "runs_focus_epoch_immutable",
+        "runs_master_focus_insert",
+        "messages_master_focus_insert",
+        "messages_master_focus_run_update",
+    ):
+        conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+    conn.execute("ALTER TABLE runs DROP COLUMN focus_epoch_id")
+    conn.execute(focus_trigger)
+
+    next_version = max(m[0] for m in MIGRATIONS) + 1
+    applied = run_migrations(
+        conn,
+        str(db_path),
+        migrations=[
+            (next_version, "reshape runs", _reshape_runs_and_restore_focus_column)
+        ],
+    )
+
+    assert applied == [next_version]
+    assert "focus_epoch_id" in {
+        row[1] for row in conn.execute("PRAGMA table_info(runs)")
+    }
+    # The withheld trigger is back now that its column exists again.
+    assert "runs_master_focus_insert" in {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+    }
+
+
+def test_table_rebuild_keeps_referencing_foreign_keys_pointing_at_the_real_table(
+    tmp_path: Path,
+):
+    """Rebuild migrations must not drag other tables' REFERENCES along.
+
+    Migration 55 renames `master_projections` aside, recreates it under the
+    original name, copies, then drops the temporary. Modern SQLite rewrites
+    referencing tables to follow that rename, so
+    `task_projection_outbox.projection_id` ended up bound to the temporary name
+    that was dropped moments later. `PRAGMA foreign_keys = OFF` does not suppress
+    the rewrite; only legacy rename semantics do. A fresh install never notices
+    because the migration early-returns on an already-current table.
+    """
+    db_path = tmp_path / "rebuild.db"
+    conn = connect(db_path)
+    init_db(conn, [], None, None)
+    run_migrations(conn, str(db_path))
+
+    current_sql = str(
+        conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'master_projections'"
+        ).fetchone()[0]
+    )
+    assert "master.decision.resolved" in current_sql
+
+    # Rewind master_projections to its pre-55 shape so the migration really runs.
+    # The fixture rebuild itself uses legacy rename semantics, so the outbox
+    # starts out correctly bound — the assertion below is about migration 55.
+    pre_55_sql = current_sql.replace("    'master.decision.resolved',\n", "").replace(
+        "      'master.decision.resolved',\n", ""
+    )
+    assert "master.decision.resolved" not in pre_55_sql
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("ALTER TABLE master_projections RENAME TO master_projections_pre55")
+    conn.execute(pre_55_sql)
+    conn.execute("DROP TABLE master_projections_pre55")
+    conn.execute("PRAGMA legacy_alter_table = OFF")
+    conn.execute("PRAGMA foreign_keys = ON")
+    assert (
+        "references master_projections(id)"
+        in str(
+            conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name = 'task_projection_outbox'"
+            ).fetchone()[0]
+        ).lower()
+    )
+    conn.execute("DELETE FROM schema_migrations WHERE version >= 55")
+
+    assert 55 in run_migrations(conn, str(db_path))
+
+    outbox_sql = str(
+        conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'task_projection_outbox'"
+        ).fetchone()[0]
+    ).lower()
+    assert "references master_projections(id) on delete set null" in outbox_sql
+    assert "_before_decisions" not in outbox_sql
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

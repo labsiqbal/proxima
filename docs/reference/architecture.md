@@ -228,6 +228,37 @@ actions are omitted while the corresponding feature is disabled. Video Studio an
 video-provider modules were removed; rendered video files remain generic playable
 artifacts.
 
+## Schema bootstrap contract
+
+Startup runs `init_db` (applies `db.SCHEMA`, the current-shape declaration) and then
+`run_migrations` (the versioned chain). On a *fresh* database SCHEMA creates everything;
+on an *existing* one every `CREATE ... IF NOT EXISTS` is a no-op, so its tables stay on
+their old shape until the migration chain catches them up. Two consequences shape how
+`db.py` and `migrations.py` are written:
+
+- **Triggers are applied separately from tables.** SQLite accepts a `CREATE TRIGGER`
+  whose body names a column that does not exist, then fails the *next* schema reparse —
+  i.e. the first `ALTER TABLE` a migration runs. Installing SCHEMA's triggers wholesale
+  onto a legacy database therefore aborted startup before any migration could run.
+  `db.SCHEMA` is split into `SCHEMA_TABLES` plus a trigger list;
+  `apply_schema_triggers` installs the triggers and
+  `prune_unparseable_schema_triggers` sets aside the ones the current tables cannot
+  satisfy. `run_migrations` prunes before the chain and calls `restore_schema_triggers`
+  after it, so a withheld trigger comes back once its column exists. Both use
+  `_schema_reparses` — a rolled-back table rename — to let SQLite itself decide what is
+  satisfiable, rather than parsing trigger bodies (they reference other tables through
+  aliases, not just `NEW`/`OLD`). Triggers a migration creates itself are never touched.
+- **Migrations run under `PRAGMA legacy_alter_table = ON`.** The table rebuilds all use
+  the 12-step recipe: rename the old table aside, recreate it under the original name,
+  copy, drop. Modern SQLite rewrites *other* tables' `REFERENCES` clauses to follow that
+  rename, so the referencing table ends up pointing at the temporary name that is then
+  dropped — a dangling foreign key. `PRAGMA foreign_keys = OFF` does not prevent this;
+  only legacy rename semantics do, and those are what the migrations were written
+  against. `run_migrations` sets the pragma for the chain and restores it afterwards.
+
+Both behaviours only ever mattered on the upgrade path — a fresh install skips the
+rebuild migrations entirely — which is why they need explicit coverage here.
+
 ## Data model in one breath
 
 `users` (single owner) → `profiles` (personas) and `projects` (folders). Work happens

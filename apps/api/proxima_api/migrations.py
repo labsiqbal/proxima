@@ -26,7 +26,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .db import backfill_project_path_identities
+from .db import (
+    backfill_project_path_identities,
+    prune_unparseable_schema_triggers,
+    restore_schema_triggers,
+)
 from .runner_specs import FALLBACK_RUNNER
 
 # (version, human description, apply function[, opts]).
@@ -6509,8 +6513,6 @@ def run_migrations(
     """Apply pending migrations once each, in version order. Backs up the DB
     file (when ``db_path`` points to a real file) before applying anything.
     Returns the list of versions applied this call."""
-    from .auth import iso_now
-
     migs = sorted(
         migrations if migrations is not None else MIGRATIONS, key=lambda m: m[0]
     )
@@ -6522,7 +6524,41 @@ def run_migrations(
     if db_path:
         _backup(conn, db_path, cur, pending[-1][0])
 
+    # Migrations reshape tables (ALTER TABLE ADD/DROP/RENAME COLUMN), and every
+    # such statement makes SQLite reparse the whole schema — trigger bodies
+    # included. A SCHEMA trigger left over from an older release can name a
+    # column this database does not have yet; it would fail that reparse and
+    # abort the upgrade before a single migration ran. Set those aside for the
+    # duration and put them back once their columns exist.
+    withheld_triggers = prune_unparseable_schema_triggers(conn)
+
+    # The table rebuilds below all follow the 12-step recipe: rename the old
+    # table aside, create the replacement under the original name, copy, drop.
+    # Modern SQLite rewrites other tables' REFERENCES clauses to follow a rename
+    # — so `task_projection_outbox` ends up pointing at the temporary name, which
+    # is then dropped, leaving a dangling foreign key. (`PRAGMA foreign_keys=OFF`
+    # does not prevent this; only legacy_alter_table does.) Legacy rename
+    # semantics are what every one of these migrations was written against.
+    legacy_alter = conn.execute("PRAGMA legacy_alter_table").fetchone()[0]
+    conn.execute("PRAGMA legacy_alter_table = ON")
+
     applied: list[int] = []
+    try:
+        _apply_pending(conn, pending, applied)
+    finally:
+        conn.execute(f"PRAGMA legacy_alter_table = {int(legacy_alter)}")
+
+    restore_schema_triggers(conn, withheld_triggers)
+    return applied
+
+
+def _apply_pending(
+    conn: sqlite3.Connection,
+    pending: list[Migration],
+    applied: list[int],
+) -> None:
+    from .auth import iso_now
+
     for entry in pending:
         version, description, apply = entry[0], entry[1], entry[2]
         opts = entry[3] if len(entry) > 3 else {}
@@ -6554,4 +6590,3 @@ def run_migrations(
                 conn.execute("ROLLBACK")
                 raise
         applied.append(version)
-    return applied

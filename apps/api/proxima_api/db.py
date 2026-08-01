@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -1476,6 +1477,193 @@ CREATE INDEX IF NOT EXISTS idx_events_run_seq ON events(run_id, seq);
 """.replace("__DEFAULT_RUNNER__", FALLBACK_RUNNER)
 
 
+def _split_statements(script: str) -> list[str]:
+    """Split a SQL script into individual statements.
+
+    ``sqlite3.complete_statement`` knows that a ``CREATE TRIGGER`` is only
+    finished at its trailing ``END;``, so trigger bodies survive intact instead
+    of being cut at the first inner semicolon.
+    """
+    statements: list[str] = []
+    buffer = ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            statements.append(buffer)
+            buffer = ""
+    if buffer.strip():
+        statements.append(buffer)
+    return statements
+
+
+_TRIGGER_HEAD = re.compile(
+    r"^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z0-9_]+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_TRIGGER_TARGET = re.compile(r"\bON\s+([A-Za-z0-9_]+)", re.IGNORECASE)
+
+
+def _trigger_target_table(statement: str) -> str:
+    """The table a CREATE TRIGGER statement fires on."""
+    header = re.split(r"\bBEGIN\b", statement, maxsplit=1, flags=re.IGNORECASE)[0]
+    match = _TRIGGER_TARGET.search(header)
+    return match.group(1) if match else ""
+
+
+_SCHEMA_STATEMENTS = _split_statements(SCHEMA)
+_SCHEMA_TRIGGER_STATEMENTS = [
+    (match.group(1), _trigger_target_table(statement), statement)
+    for statement, match in (
+        (statement, _TRIGGER_HEAD.match(statement))
+        for statement in _SCHEMA_STATEMENTS
+    )
+    if match is not None
+]
+
+# The table/index/view half of SCHEMA, split out from the trigger half. SCHEMA
+# is applied wholesale to *existing* databases too, where `CREATE TABLE IF NOT
+# EXISTS` is a no-op and the tables therefore stay on their pre-migration shape
+# until run_migrations catches them up. A trigger whose body names a column that
+# a pending migration has yet to add is still accepted at CREATE time, but it
+# makes SQLite fail the next schema reparse — i.e. the very first ALTER TABLE a
+# migration runs — which aborted startup on every legacy database. Triggers are
+# therefore installed through apply_schema_triggers, which only creates the ones
+# the current tables can actually satisfy.
+SCHEMA_TABLES = "".join(
+    statement
+    for statement in _SCHEMA_STATEMENTS
+    if _TRIGGER_HEAD.match(statement) is None
+)
+SCHEMA_TRIGGER_NAMES = tuple(name for name, _, _ in _SCHEMA_TRIGGER_STATEMENTS)
+
+def _schema_reparses(conn: sqlite3.Connection) -> bool:
+    """Whether SQLite can still reparse the whole schema.
+
+    This is the exact check every ALTER TABLE performs before it runs, so it is
+    the honest oracle for "will the next migration blow up?" — far more reliable
+    than reading trigger bodies ourselves, since a body may reference columns of
+    other tables through aliases as well as NEW/OLD. A table rename forces the
+    reparse; rolling it back leaves the schema untouched.
+    """
+    probe = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 1"
+    ).fetchone()
+    if probe is None:
+        return True
+    table = probe[0]
+    # Only a non-legacy rename reparses the schema, so force that mode for the
+    # probe even when the caller has switched it off (run_migrations does).
+    legacy = conn.execute("PRAGMA legacy_alter_table").fetchone()[0]
+    conn.execute("PRAGMA legacy_alter_table = OFF")
+    conn.execute("SAVEPOINT proxima_schema_probe")
+    try:
+        conn.execute(f'ALTER TABLE "{table}" RENAME TO "{table}__proxima_probe"')
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        conn.execute("ROLLBACK TO proxima_schema_probe")
+        conn.execute("RELEASE proxima_schema_probe")
+        conn.execute(f"PRAGMA legacy_alter_table = {int(legacy)}")
+
+
+def _installable_schema_triggers(
+    conn: sqlite3.Connection,
+) -> list[tuple[str, str]]:
+    """SCHEMA triggers whose target table exists in this database.
+
+    Partially built databases — legacy installs mid-upgrade, migration test
+    fixtures — do not have every table yet, and CREATE TRIGGER on a missing one
+    is an outright error rather than something to prune later.
+    """
+    tables = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    return [
+        (name, statement)
+        for name, table, statement in _SCHEMA_TRIGGER_STATEMENTS
+        if table in tables
+    ]
+
+
+def _present_schema_triggers(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    """The SCHEMA triggers this database currently has installed."""
+    installed = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+        )
+    }
+    return [
+        (name, statement)
+        for name, _, statement in _SCHEMA_TRIGGER_STATEMENTS
+        if name in installed
+    ]
+
+
+def _install_all_schema_triggers(conn: sqlite3.Connection) -> None:
+    for name, statement in _installable_schema_triggers(conn):
+        conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+        conn.execute(statement)
+
+
+def prune_unparseable_schema_triggers(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """Drop installed SCHEMA triggers that the current tables cannot satisfy.
+
+    Returns their names so the caller can reinstall them once the tables catch
+    up. Nothing is installed here: a database that never had a given trigger is
+    left exactly as it is.
+    """
+    if _schema_reparses(conn):
+        return ()
+
+    present = _present_schema_triggers(conn)
+    for name, _ in present:
+        conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+    if not _schema_reparses(conn):
+        # Something outside SCHEMA's triggers is unparseable. Withholding them
+        # would hide that, so put them back and let the real error surface.
+        for name, statement in present:
+            conn.execute(statement)
+        return ()
+
+    withheld: list[str] = []
+    for name, statement in present:
+        conn.execute(statement)
+        if _schema_reparses(conn):
+            continue
+        conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+        withheld.append(name)
+    return tuple(withheld)
+
+
+def restore_schema_triggers(conn: sqlite3.Connection, names: tuple[str, ...]) -> None:
+    """Reinstall triggers that prune_unparseable_schema_triggers had to withhold."""
+    if not names:
+        return
+    wanted = dict(_installable_schema_triggers(conn))
+    for name in names:
+        statement = wanted.get(name)
+        if statement is None:
+            continue
+        conn.execute(statement)
+        if not _schema_reparses(conn):
+            conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+
+
+def apply_schema_triggers(conn: sqlite3.Connection) -> None:
+    """Install SCHEMA's triggers, minus any this database cannot satisfy yet.
+
+    Every SCHEMA trigger is dropped and recreated so its body always matches
+    SCHEMA rather than whatever an older release left behind.
+    """
+    _install_all_schema_triggers(conn)
+    prune_unparseable_schema_triggers(conn)
+
+
 def connect(
     path: str | Path,
     *,
@@ -1861,8 +2049,9 @@ def init_db(
     hermes_home_factory: Any | None = None,
     source_hermes_home: str | None = None,
 ) -> None:
-    conn.executescript(SCHEMA)
+    conn.executescript(SCHEMA_TABLES)
     migrate_existing(conn)
+    apply_schema_triggers(conn)
     from .auth import hash_password, iso_now
 
     for user in seed_users or []:
