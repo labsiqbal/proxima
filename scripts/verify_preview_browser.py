@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 API_PYTHON = ROOT / "apps" / "api" / ".venv" / "bin" / "python"
 WEB_DIR = ROOT / "apps" / "web"
-PROBE_ROOT = ROOT / "trusted-probes" / "safe-update"
+HARNESS_ROOT = ROOT / "scripts" / "browser-harness"
 ASTRO_VERSION = "5.13.5"
 
 
@@ -167,7 +167,7 @@ def _stop_group(process: subprocess.Popen | None) -> None:
 
 
 def _browser_session(executable: str, profile: Path):
-    sys.path.insert(0, str(PROBE_ROOT))
+    sys.path.insert(0, str(HARNESS_ROOT))
     from browser import _WebSocket
 
     debug_port = _port()
@@ -319,7 +319,6 @@ def main() -> None:
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "PROXIMA_CLAUDE_LIVE_HOME": "0",
             "PROXIMA_DB_PATH": str(fixture / "proxima.db"),
-            "PROXIMA_FEATURE_SAFE_SELF_UPDATE": "0",
             "PROXIMA_HERMES_PROFILES_ROOT": str(fixture / "runner-home"),
             "PROXIMA_LINK_ROOTS": str(workspace),
             "PROXIMA_PORT": str(api_port),

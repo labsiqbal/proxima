@@ -1,4 +1,4 @@
-"""Chrome DevTools driver for trusted candidate browser scenarios."""
+"""Chrome DevTools driver for the scripts/verify_*_browser.py E2E scenarios."""
 from __future__ import annotations
 
 import base64

@@ -26,7 +26,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 API_PYTHON = ROOT / "apps" / "api" / ".venv" / "bin" / "python"
 WEB_DIR = ROOT / "apps" / "web"
-PROBE_ROOT = ROOT / "trusted-probes" / "safe-update"
+HARNESS_ROOT = ROOT / "scripts" / "browser-harness"
 PASSWORD = "file-target-browser-password"
 MANIFEST_NONCE_QUERY = "__proxima_request_nonce"
 CAPABILITY_GENERATION_HEADER = "x-proxima-preview-generation"
@@ -1666,7 +1666,7 @@ def main() -> None:
     browser_executable, openssl = _fixture_toolchain()
     manifest_probe_nonce = _new_manifest_probe_nonce()
     _build_web()
-    sys.path.insert(0, str(PROBE_ROOT))
+    sys.path.insert(0, str(HARNESS_ROOT))
     from browser import run_scenario
 
     with tempfile.TemporaryDirectory(prefix="proxima-file-target-browser-") as raw_root:
@@ -1696,7 +1696,6 @@ def main() -> None:
             "PROXIMA_DB_PATH": str(database),
             "PROXIMA_FEATURE_MASTER_ORCHESTRATOR": "0",
             "PROXIMA_FEATURE_DESIGN_STUDIO": "1",
-            "PROXIMA_FEATURE_SAFE_SELF_UPDATE": "0",
             "PROXIMA_HERMES_PROFILES_ROOT": str(runner_home),
             "PROXIMA_LINK_ROOTS": str(workspace),
             "PROXIMA_PORT": str(port),

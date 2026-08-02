@@ -25,7 +25,7 @@ def _fixture_module():
 
 
 def _browser_module():
-    script = ROOT / "trusted-probes" / "safe-update" / "browser.py"
+    script = ROOT / "scripts" / "browser-harness" / "browser.py"
     spec = importlib.util.spec_from_file_location(
         "proxima_file_target_browser_driver",
         script,

@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 API_PYTHON = ROOT / "apps" / "api" / ".venv" / "bin" / "python"
 WEB_DIR = ROOT / "apps" / "web"
-PROBE_ROOT = ROOT / "trusted-probes" / "safe-update"
+HARNESS_ROOT = ROOT / "scripts" / "browser-harness"
 
 
 def _request(
@@ -74,11 +74,11 @@ def main() -> None:
     if not API_PYTHON.is_file():
         raise RuntimeError(f"API Python is unavailable: {API_PYTHON}")
     _build_web()
-    sys.path.insert(0, str(PROBE_ROOT))
+    sys.path.insert(0, str(HARNESS_ROOT))
     from browser import run_scenario
 
     manifest = json.loads(
-        (PROBE_ROOT / "browser-scenarios.json").read_text(encoding="utf-8")
+        (HARNESS_ROOT / "browser-scenarios.json").read_text(encoding="utf-8")
     )
     scenario = next(
         item
@@ -94,7 +94,7 @@ def main() -> None:
         fake_bin = fixture / "bin"
         for path in (home, workspace, container, runner_home, fake_bin):
             path.mkdir(parents=True)
-        fixture_codex = PROBE_ROOT / "codex-fixture"
+        fixture_codex = HARNESS_ROOT / "codex-fixture"
         if (
             not fixture_codex.is_file()
             or fixture_codex.is_symlink()
@@ -113,7 +113,6 @@ def main() -> None:
             "PROXIMA_CLAUDE_LIVE_HOME": "0",
             "PROXIMA_DB_PATH": str(fixture / "candidate.db"),
             "PROXIMA_FEATURE_MASTER_ORCHESTRATOR": "1",
-            "PROXIMA_FEATURE_SAFE_SELF_UPDATE": "0",
             "PROXIMA_HERMES_PROFILES_ROOT": str(runner_home),
             "PROXIMA_LINK_ROOTS": str(workspace),
             "PROXIMA_PORT": str(port),

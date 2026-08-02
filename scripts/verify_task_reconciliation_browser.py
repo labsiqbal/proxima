@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 ROOT = Path(__file__).resolve().parents[1]
 API_ROOT = ROOT / "apps" / "api"
 WEB_ROOT = ROOT / "apps" / "web"
-PROBE_ROOT = ROOT / "trusted-probes" / "safe-update"
+HARNESS_ROOT = ROOT / "scripts" / "browser-harness"
 DEFAULT_SCREENSHOT_ROOT = Path(
     "/tmp/no-mistakes-evidence/task-reconciliation"
 )
@@ -31,7 +31,7 @@ SCREENSHOT_NAMES = (
     "after-checkpoint-recovery-history.png",
 )
 sys.path.insert(0, str(API_ROOT))
-sys.path.insert(0, str(PROBE_ROOT))
+sys.path.insert(0, str(HARNESS_ROOT))
 
 from browser import run_scenario  # noqa: E402
 from proxima_api.job_checkpoints import create_checkpoint  # noqa: E402

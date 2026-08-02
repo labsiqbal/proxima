@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 API_PYTHON = ROOT / "apps" / "api" / ".venv" / "bin" / "python"
 WEB_DIR = ROOT / "apps" / "web"
-PROBE_ROOT = ROOT / "trusted-probes" / "safe-update"
+HARNESS_ROOT = ROOT / "scripts" / "browser-harness"
 ATLAS_DRAFT = "Atlas draft survives Work and Delegate."
 BOREALIS_DRAFT = "Borealis draft stays isolated from Atlas."
 WORKFLOW_TITLE = "URL restore plan"
@@ -97,7 +97,7 @@ class Browser:
         mobile: bool,
         start_url: str | None = None,
     ) -> None:
-        sys.path.insert(0, str(PROBE_ROOT))
+        sys.path.insert(0, str(HARNESS_ROOT))
         from browser import _WebSocket, _evaluation
 
         self._WebSocket = _WebSocket
@@ -708,7 +708,7 @@ def _run(
             fixture / "workspace",
         ):
             path.mkdir(parents=True)
-        fixture_codex = PROBE_ROOT / "codex-fixture"
+        fixture_codex = HARNESS_ROOT / "codex-fixture"
         fake_codex = fixture / "bin" / "codex"
         shutil.copyfile(fixture_codex, fake_codex, follow_symlinks=False)
         fake_codex.chmod(0o555)
@@ -720,7 +720,6 @@ def _run(
             "PROXIMA_CLAUDE_LIVE_HOME": "0",
             "PROXIMA_DB_PATH": str(fixture / "candidate.db"),
             "PROXIMA_FEATURE_MASTER_ORCHESTRATOR": "1",
-            "PROXIMA_FEATURE_SAFE_SELF_UPDATE": "0",
             "PROXIMA_HERMES_PROFILES_ROOT": str(fixture / "runner-home"),
             "PROXIMA_LINK_ROOTS": str(fixture / "workspace"),
             "PROXIMA_PORT": str(port),

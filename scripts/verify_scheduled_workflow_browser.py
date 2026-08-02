@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 API_PYTHON = ROOT / "apps" / "api" / ".venv" / "bin" / "python"
 WEB_DIR = ROOT / "apps" / "web"
-PROBE_ROOT = ROOT / "trusted-probes" / "safe-update"
+HARNESS_ROOT = ROOT / "scripts" / "browser-harness"
 WORKFLOW_NAME = "Scheduled browser trust"
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 SCREENSHOT_NAMES = (
@@ -359,7 +359,7 @@ def main(screenshot_dir: Path | None = None) -> None:
     if screenshot_dir is not None:
         screenshot_dir.mkdir(parents=True, exist_ok=True)
     _build_web()
-    sys.path.insert(0, str(PROBE_ROOT))
+    sys.path.insert(0, str(HARNESS_ROOT))
     from browser import run_scenario
 
     with tempfile.TemporaryDirectory(prefix="proxima-schedule-browser-") as raw_root:
@@ -370,7 +370,7 @@ def main(screenshot_dir: Path | None = None) -> None:
         fake_bin = fixture / "bin"
         for path in (fixture / "home", workspace, container, runner_home, fake_bin):
             path.mkdir(parents=True)
-        fixture_codex = PROBE_ROOT / "codex-fixture"
+        fixture_codex = HARNESS_ROOT / "codex-fixture"
         if (
             not fixture_codex.is_file()
             or fixture_codex.is_symlink()
