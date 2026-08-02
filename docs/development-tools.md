@@ -100,6 +100,25 @@ bash scripts/proxima build
 bash scripts/proxima serve
 ```
 
+## Running the live server
+
+The live server runs as the `proxima` **systemd user service**, installed and
+enabled by `bash scripts/install-user` (re-running the installer is also the
+update path: it rebuilds and restarts the service). Manage it with:
+
+```bash
+systemctl --user status proxima      # or: proxima status
+journalctl --user -u proxima -f      # or: proxima logs
+systemctl --user restart proxima     # or: proxima restart
+```
+
+Do not run the live server in an ad-hoc tmux/terminal session. A
+session-scoped server leaves preview processes orphaned across restarts
+(the recurring "port in use" class this service migration killed), and its
+piped stdout logging can silently die while the server keeps serving.
+Foreground `bash scripts/proxima serve` remains fine for throwaway local
+testing on a non-live port.
+
 ## Runtime paths
 
 User-local install:
