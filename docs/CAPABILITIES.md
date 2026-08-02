@@ -2021,7 +2021,10 @@ disclosure with the message plus a bounded stack snippet for pasting into a bug 
 - **API failures:** `api()` reports only transport failures (no response) and 5xx. 4xx —
   validation, governance refusals, not-found — stays owned by the flow that made the
   call, which already renders its own error state, so the global surface never
-  duplicates a visible message. Deliberate `AbortError` cancellations are never reported.
+  duplicates a visible message. Deliberate `AbortError` cancellations, and requests
+  killed by a reload or navigation, are never reported. A later successful response
+  retires the "could not reach Proxima" toasts (a condition that has ended must not
+  keep shouting) while 5xx and code errors stay until dismissed.
 - **Storms:** repeats collapse by identity (kind + message, or method+path+status for
   API failures) into one toast with a `×N` repeat count, and at most three toasts are
   ever visible — a render loop cannot bury the app. Known browser noise

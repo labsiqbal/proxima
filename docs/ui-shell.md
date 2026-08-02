@@ -267,12 +267,13 @@ Projects remain shared application entities: one active project across Work (`ac
 
 A **global error surface** sits below every destination. Uncaught errors, unhandled
 promise rejections, failed dynamic imports, and API calls that got no response (or a
-5xx) raise a dismissible bottom-centre toast with a short human message and a `Details`
+5xx) raise a dismissible top-centre toast with a short human message and a `Details`
 disclosure carrying the message plus a stack snippet. It uses the same toast card as the
 Master notifications column but its own anchor, so the two never collide. A stale-chunk
 failure after a redeploy offers **Reload Proxima**. Repeats collapse into one toast with
-a `×N` count and at most three are visible at once; 4xx refusals stay with the flow that
-raised them, so a screen with its own error state never gets a duplicate toast. The
+a `×N` count and at most three are visible at once, and an unreachable-server toast
+retires itself once a call succeeds again; 4xx refusals stay with the flow that raised
+them, so a screen with its own error state never gets a duplicate toast. The
 surface is mounted outside the render error boundary, so it also works on the auth gate,
 in Delegate, and after a render crash.
 

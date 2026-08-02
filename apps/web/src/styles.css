@@ -15339,10 +15339,14 @@ button.moodboard-add-method:hover {
 	right: var(--master-popup-tool-clearance);
 	width: min(var(--toast-width), calc(100vw - var(--left-w) - var(--toolrail-w) - var(--space-8)));
 }
-.toast-region.at-bottom-center {
-	bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+/* App-level errors sit top-centre: the one band that never covers the composer,
+   the tool dock, or the Master trigger. Stacked above the Master column so a
+   rare simultaneous run-event toast can't hide the failure. */
+.toast-region.at-top-center {
+	top: var(--toast-top);
 	left: 50%;
 	transform: translateX(-50%);
+	z-index: calc(var(--z-toast) + 1);
 	width: min(var(--toast-width), calc(100vw - var(--space-8)));
 }
 .toast {
@@ -15362,10 +15366,6 @@ button.moodboard-add-method:hover {
 @keyframes toast-in {
 	from { opacity: 0; transform: translateY(calc(var(--space-2) * -1)); }
 }
-@keyframes toast-in-up {
-	from { opacity: 0; transform: translateY(var(--space-2)); }
-}
-.toast-region.at-bottom-center .toast { animation-name: toast-in-up; }
 .toast.success { border-left-color: var(--ui-success); }
 .toast.warning { border-left-color: var(--ui-warning); }
 .toast.danger { border-left-color: var(--ui-danger); }
@@ -15580,6 +15580,9 @@ button.moodboard-add-method:hover {
 		top: calc(var(--mobile-topbar-h) + var(--space-2) + env(safe-area-inset-top));
 		right: var(--master-popup-tool-clearance);
 		width: calc(100vw - var(--toolrail-w) - var(--space-8));
+	}
+	.toast-region.at-top-center {
+		top: calc(var(--mobile-topbar-h) + var(--space-2) + env(safe-area-inset-top));
 	}
 	.header-status-cluster {
 		position: fixed;

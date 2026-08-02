@@ -1,4 +1,4 @@
-import { reportApiFailure } from '../lib/errorSurface'
+import { noteApiSuccess, reportApiFailure } from '../lib/errorSurface'
 
 export class ApiError extends Error {
   status: number
@@ -94,6 +94,8 @@ export async function api<T>(path: string, token?: string, options: RequestInit 
     reportApiFailure({ status: res.status, method, path, message: error.message })
     throw error
   }
+  // Reachable again: retire any "could not reach Proxima" toast.
+  noteApiSuccess()
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }

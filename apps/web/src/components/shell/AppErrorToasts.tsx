@@ -12,11 +12,11 @@ const emptySnapshot: readonly AppErrorEntry[] = []
 
 /**
  * The global error surface. Mounted next to the app root (outside the render
- * error boundary) so it works in every app state — boot, auth gate, delegate
- * mode — and survives a crash of the tree it reports on.
+ * error boundary) so it works in every app state - boot, auth gate, delegate
+ * mode - and survives a crash of the tree it reports on.
  *
- * Anchored bottom-centre so it never collides with the Master toast column
- * (top-right), the Master popup trigger, or the tool dock.
+ * Anchored top-centre so it never covers the composer, the tool dock, or the
+ * Master trigger, and stacks above the Master toast column (top-right).
  */
 export function AppErrorToasts({ onReload }: { onReload?: () => void } = {}) {
   React.useEffect(() => installGlobalErrorHandlers(window), [])
@@ -30,7 +30,7 @@ export function AppErrorToasts({ onReload }: { onReload?: () => void } = {}) {
   if (!errors.length) return null
 
   return (
-    <section className="toast-region at-bottom-center" aria-label="App errors">
+    <section className="toast-region at-top-center" aria-label="App errors">
       {errors.map(entry => (
         <ToastCard
           key={entry.id}

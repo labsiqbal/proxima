@@ -4,7 +4,7 @@ import { IconClose } from '../shell/icons'
 export type ToastTone = 'info' | 'success' | 'warning' | 'danger'
 
 /**
- * One toast card. The single visual language for transient shell notices —
+ * One toast card. The single visual language for transient shell notices -
  * Master run events and the global error surface both render through it, so
  * there is exactly one toast look to maintain.
  */

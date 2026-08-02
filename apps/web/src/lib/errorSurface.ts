@@ -1,4 +1,4 @@
-// Global error surface — the store behind the app-wide error toasts.
+// Global error surface - the store behind the app-wide error toasts.
 //
 // Why: the app's worst failure mode is silent. A throw inside an event handler,
 // a rejected promise nobody awaited, a hashed chunk that 404s after a redeploy,
@@ -13,7 +13,7 @@ export type AppErrorKind = 'error' | 'rejection' | 'chunk' | 'api'
 
 export interface AppErrorEntry {
   id: number
-  /** Dedupe identity — repeats of the same key bump `count` instead of stacking. */
+  /** Dedupe identity - repeats of the same key bump `count` instead of stacking. */
   key: string
   kind: AppErrorKind
   title: string
@@ -25,11 +25,12 @@ export interface AppErrorEntry {
   count: number
 }
 
-/** Hard ceiling on visible toasts — an error storm must never bury the app. */
+/** Hard ceiling on visible toasts - an error storm must never bury the app. */
 export const APP_ERROR_LIMIT = 3
 const DETAIL_STACK_LINES = 8
 const BODY_MAX = 300
 const KEY_MAX = 160
+const UNREACHABLE_PREFIX = 'api:0:'
 
 // A failed dynamic import is a deploy-seam failure, not a code bug: the tab
 // holds an index that points at chunks the new build no longer serves.
@@ -170,7 +171,7 @@ export interface ApiFailure {
  * Report an API call that failed for reasons no screen can meaningfully render.
  *
  * Only transport failures (`status === 0`, server unreachable) and 5xx are
- * surfaced globally. 4xx — validation, governance refusals, not-found — belong
+ * surfaced globally. 4xx - validation, governance refusals, not-found - belong
  * to the flow that made the call and already have their own error states; a
  * global toast there would be a duplicate, not a diagnosis.
  */
@@ -192,11 +193,24 @@ export function reportApiFailure(failure: ApiFailure): void {
   })
 }
 
+/**
+ * A successful response proves the server is reachable again, so the
+ * "could not reach Proxima" toasts are reporting a condition that has ended.
+ * Leaving them up would train the owner to ignore the surface. Failures the
+ * server itself produced (5xx) and real code errors are left alone.
+ */
+export function noteApiSuccess(): void {
+  const next = entries.filter(entry => !entry.key.startsWith(UNREACHABLE_PREFIX))
+  if (next.length === entries.length) return
+  entries = next
+  emit()
+}
+
 let installedTarget: Window | null = null
 let installCount = 0
 let detach: (() => void) | null = null
 // A reload or navigation aborts every in-flight request. Those failures are the
-// owner leaving, not a bug — reporting them would flash a toast on every reload.
+// owner leaving, not a bug - reporting them would flash a toast on every reload.
 let unloading = false
 
 /**

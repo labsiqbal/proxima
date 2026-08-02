@@ -5,6 +5,7 @@ import {
   clearAppErrors,
   dismissAppError,
   installGlobalErrorHandlers,
+  noteApiSuccess,
   reportApiFailure,
   reportAppError,
   subscribeAppErrors,
@@ -130,6 +131,18 @@ describe('errorSurface', () => {
     }
     expect(appErrorSnapshot()).toHaveLength(1)
     expect(appErrorSnapshot()[0].count).toBe(50)
+  })
+
+  it('retires the unreachable toast once a call succeeds again', () => {
+    reportApiFailure({ status: 0, method: 'GET', path: '/api/runs/active', message: 'Failed to fetch' })
+    reportApiFailure({ status: 500, method: 'GET', path: '/api/projects', message: 'boom' })
+    reportAppError('error', new Error('unrelated'))
+    noteApiSuccess()
+    const kinds = appErrorSnapshot().map(entry => entry.title)
+    expect(kinds).not.toContain('Could not reach Proxima')
+    // A server-side failure and a real code error are not cured by reachability.
+    expect(kinds).toContain('The server failed a request')
+    expect(kinds).toContain('Something went wrong')
   })
 
   it('goes quiet once the page is unloading', () => {
