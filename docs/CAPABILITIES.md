@@ -1453,7 +1453,12 @@ box — Enter commits, Escape or empty blur cancels.
 **Why:** Launch a project's dev server and preview it in-app — from the **Preview**
 tool on the right rail, from an app-type artifact, or from the recipe test bench.
 **How:** `AppManager` runs one owner-confirmed dev process per project with a filtered
-environment. The preview must be served root-relative on its own origin (SPA HTML uses
+environment. The owner-power confirmation is asked once per browser and persisted
+(localStorage `proxima.ownerpower.ack`), not re-asked on every panel mount or project
+switch; declining persists nothing, so the next Run asks again. In that dialog - as in
+every non-destructive confirm - the primary action holds initial focus, so Enter
+confirms; only destructive (danger) confirms focus Cancel, and Escape always cancels.
+The preview must be served root-relative on its own origin (SPA HTML uses
 absolute asset paths and HMR opens a WebSocket to the page origin), so each vantage gets
 one: local and remote preview use the app's **preview relay port** on the Proxima host
 (reported as `preview_port` in app status; bind interface via

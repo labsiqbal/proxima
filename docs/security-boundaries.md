@@ -484,7 +484,10 @@ bytes and temporary blob URLs rather than through preview-origin CORS.
 
 ## Project app preview
 
-Run & Preview remains an explicit owner-power action. Its subprocess receives a
+Run & Preview remains an explicit owner-power action: the first Run in a browser
+requires the owner to confirm what owner-power execution means, and that
+acknowledgement is then persisted locally (single owner - it is an informed-consent
+notice, not a per-run authorization). Its subprocess receives a
 filtered environment (additional names require `PROXIMA_APP_ENV_ALLOWLIST`) but runs as
 the service OS user. Preview transport is isolated from owner credentials: local and
 remote previews use a short-lived preview-only capability, reverse proxies strip

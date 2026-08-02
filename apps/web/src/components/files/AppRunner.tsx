@@ -15,6 +15,12 @@ type VKey = typeof VIEWPORTS[number]['key']
 // panel (not a popup), with viewport presets like a real preview tool.
 const PORT_PIN_KEY = 'proxima.appport.v2.'
 const LEGACY_PORT_PIN_KEY = 'proxima.appport.'
+// The owner-power acknowledgement is asked once per browser, then persisted.
+// It used to be a component ref, which re-asked on every panel mount and every
+// project switch - pure friction for a single owner who already accepted what
+// "runs with your account permissions" means (PRUNE-SPEC B6). Global, not
+// per-project: the dialog explains a category of power, not a project fact.
+const OWNER_POWER_ACK_KEY = 'proxima.ownerpower.ack'
 export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: { token: string; slug: string; onClose: () => void; initialDir?: string; initialCommand?: string }) {
   const [command, setCommand] = React.useState(() => initialCommand || localStorage.getItem('proxima.appcmd.' + slug) || 'npm run dev')
   const [dir, setDir] = React.useState(() => initialDir || localStorage.getItem('proxima.appdir.' + slug) || '')
@@ -45,7 +51,6 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
   const statusSeq = React.useRef(0)
   const actionSeq = React.useRef(0)
   const appsSeq = React.useRef(0)
-  const ownerPowerAck = React.useRef(false)
 
   React.useEffect(() => {
     mountedRef.current = true
@@ -67,7 +72,6 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     setError('')
     setShowLogs(false)
     setReloadKey(0)
-    ownerPowerAck.current = false
   }, [slug])
 
   const poll = React.useCallback(async () => {
@@ -134,7 +138,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     if (busy) return
     const cmd = command.trim()
     if (!cmd) return
-    if (!ownerPowerAck.current) {
+    if (localStorage.getItem(OWNER_POWER_ACK_KEY) !== '1') {
       const displayDir = dir.trim() ? `${slug}/${dir.trim()}` : `${slug} (project root)`
       const ok = await confirmDialog({
         title: 'Run project command?',
@@ -142,7 +146,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
         confirmLabel: 'Run app',
       })
       if (!ok) return
-      ownerPowerAck.current = true
+      localStorage.setItem(OWNER_POWER_ACK_KEY, '1')
     }
     setError(''); setBusy(true)
     localStorage.setItem('proxima.appcmd.' + slug, cmd); localStorage.setItem('proxima.appdir.' + slug, dir)

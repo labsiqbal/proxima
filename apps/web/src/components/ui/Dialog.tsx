@@ -23,6 +23,7 @@ export function DialogHost() {
   const [val, setVal] = React.useState('')
   const cardRef = React.useRef<HTMLDivElement>(null)
   const cancelRef = React.useRef<HTMLButtonElement>(null)
+  const acceptRef = React.useRef<HTMLButtonElement>(null)
   const triggerRef = React.useRef<HTMLElement | null>(null)
   React.useEffect(() => {
     listener = r => {
@@ -33,7 +34,13 @@ export function DialogHost() {
     return () => { listener = null }
   }, [])
   React.useEffect(() => {
-    if (req?.kind === 'confirm') cancelRef.current?.focus()
+    if (req?.kind !== 'confirm') return
+    // Focus the primary action so a reflexive Enter confirms. Focusing Cancel
+    // made Enter dismiss the dialog silently - "clicked, pressed Enter, nothing
+    // happened" with zero trace. Destructive confirms are the exception: there
+    // the safe control keeps focus so Enter can never delete by reflex.
+    if (req.danger) cancelRef.current?.focus()
+    else acceptRef.current?.focus()
   }, [req])
   if (!req) return null
   const finish = (resolve: () => void) => {
@@ -76,7 +83,7 @@ export function DialogHost() {
       </label>}
       <div className="confirm-actions">
         <button type="button" className="ghost-button" ref={cancelRef} onClick={cancel}>{req.kind === 'confirm' ? req.cancelLabel || 'Cancel' : 'Cancel'}</button>
-        <button type="button" className={`primary-button ${req.kind === 'confirm' && req.danger ? 'danger' : ''}`} onClick={accept} disabled={acceptDisabled}>
+        <button type="button" ref={acceptRef} className={`primary-button ${req.kind === 'confirm' && req.danger ? 'danger' : ''}`} onClick={accept} disabled={acceptDisabled}>
           {req.confirmLabel || (req.kind === 'confirm' ? 'Confirm' : 'Save')}
         </button>
       </div>

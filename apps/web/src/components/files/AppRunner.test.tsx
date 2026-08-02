@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppRunner } from './AppRunner'
 import { appExitSummary, appStart, appStatus, appStop, detectApps, getPublicConfig, previewAuth } from '../../api/files'
+import { confirmDialog } from '../ui/Dialog'
 
 vi.mock('../../api/files', () => ({
   appExitSummary: vi.fn(),
@@ -302,6 +303,61 @@ describe('AppRunner collision feedback', () => {
     await screen.findByText('Command failed (exit 1)')
     await user.click(screen.getByRole('button', { name: 'View logs' }))
     expect(await screen.findByText('No command logs yet.')).toBeInTheDocument()
+  })
+})
+
+describe('AppRunner owner-power acknowledgement', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+    vi.mocked(confirmDialog).mockResolvedValue(true)
+    vi.mocked(getPublicConfig).mockResolvedValue({ apps_domain: null })
+    vi.mocked(previewAuth).mockResolvedValue({ ok: true })
+    vi.mocked(detectApps).mockResolvedValue({ apps: [] })
+    vi.mocked(appStart).mockResolvedValue({ ok: true })
+    vi.mocked(appStatus).mockResolvedValue({ state: 'stopped', running: false, ready: false })
+  })
+
+  it('asks once, persists the acknowledgement, and never re-asks after a remount or project switch', async () => {
+    const user = userEvent.setup()
+    const first = render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+    await user.click(await first.findByRole('button', { name: /run/i }))
+    await waitFor(() => expect(appStart).toHaveBeenCalledTimes(1))
+    expect(confirmDialog).toHaveBeenCalledTimes(1)
+    expect(localStorage.getItem('proxima.ownerpower.ack')).toBe('1')
+    first.unmount()
+
+    // Remount on a different project - the single owner already accepted what
+    // owner-power execution means; re-asking on every mount was the B6 friction.
+    const second = render(<AppRunner token="token" slug="other" onClose={vi.fn()} />)
+    await user.click(await second.findByRole('button', { name: /run/i }))
+    await waitFor(() => expect(appStart).toHaveBeenCalledTimes(2))
+    expect(confirmDialog).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips the dialog entirely when the acknowledgement is already persisted', async () => {
+    localStorage.setItem('proxima.ownerpower.ack', '1')
+    const user = userEvent.setup()
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: /run/i }))
+    await waitFor(() => expect(appStart).toHaveBeenCalledTimes(1))
+    expect(confirmDialog).not.toHaveBeenCalled()
+  })
+
+  it('does not persist a declined acknowledgement and asks again on the next Run', async () => {
+    const user = userEvent.setup()
+    vi.mocked(confirmDialog).mockResolvedValueOnce(false)
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+
+    await user.click(await screen.findByRole('button', { name: /run/i }))
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalledTimes(1))
+    expect(appStart).not.toHaveBeenCalled()
+    expect(localStorage.getItem('proxima.ownerpower.ack')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: /run/i }))
+    await waitFor(() => expect(appStart).toHaveBeenCalledTimes(1))
+    expect(confirmDialog).toHaveBeenCalledTimes(2)
+    expect(localStorage.getItem('proxima.ownerpower.ack')).toBe('1')
   })
 })
 
