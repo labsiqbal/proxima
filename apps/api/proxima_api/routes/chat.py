@@ -142,7 +142,6 @@ async def _stream_session_events(
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
-    maintenance = deps["maintenance"]
     feature_cfg = cfg
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
@@ -1447,10 +1446,7 @@ def register(app, deps):
         (keeps the stale-run reaper away), then lands the result — or the error — as
         an assistant message + run events, exactly like an agent run finishing."""
         worker = app.state.worker
-        conn = connect(
-            database_path,
-            writes_fenced=maintenance.database_write_check(),
-        )
+        conn = connect(database_path)
         generation_thread: threading.Thread | None = None
         try:
             done = threading.Event()
@@ -1647,8 +1643,8 @@ def register(app, deps):
         database_path = str(
             (getattr(app.state, "config", {}) or {}).get("database_path") or ""
         )
-        maintenance.start_thread(
-            _finish_media_run,
+        threading.Thread(
+            target=_finish_media_run,
             args=(
                 run_id,
                 session["id"],
@@ -1659,7 +1655,7 @@ def register(app, deps):
             ),
             daemon=True,
             name=f"media-run-{run_id}",
-        )
+        ).start()
         return {
             "run_id": run_id,
             "session_id": session["id"],
@@ -2012,11 +2008,9 @@ def register(app, deps):
             "OR (status = 'queued' AND created_at >= datetime('now', ?)))",
             stale_params(stale_seconds),
         ).fetchone()["c"]
-        process_probes_allowed = maintenance.process_probes_allowed()
         runners = detect_runners(
             path_env=str(cfg.get("_runtime_path") or ""),
             create_shim=False,
-            allow_process_probes=process_probes_allowed,
         )
         system_health = {
             "activeRuns": active_runs_count,
@@ -2045,19 +2039,15 @@ def register(app, deps):
         # refreshed off the request path (checks shell out to CLIs). Gated off in unit
         # tests via start_worker so no check threads spawn there.
         app_cfg = getattr(app.state, "config", {}) or {}
-        auth_checks_enabled = (
-            bool(
-                app_cfg.get(
-                    "auth_health_checks",
-                    app_cfg.get("start_worker", True),
-                )
+        auth_checks_enabled = bool(
+            app_cfg.get(
+                "auth_health_checks",
+                app_cfg.get("start_worker", True),
             )
-            and process_probes_allowed
         )
         auth_health = auth_health_mod.snapshot(
             str(app_cfg.get("database_path") or ""),
             enabled=auth_checks_enabled,
-            spawn=(maintenance.start_thread if auth_checks_enabled else None),
         )
         return {
             "counts": counts,
@@ -2120,9 +2110,6 @@ def register(app, deps):
         """In-browser PTY shell (like SSH from the cockpit). Auth via ?token= or the
         proxima_session cookie — a valid session is always required. cwd = project path
         or workspace."""
-        if maintenance.fenced():
-            await websocket.close(code=4423)
-            return
         # Require a valid session (cookie or ?token=) — same stance as ws_events + the
         # SSE stream. The FE always holds a proxima_session cookie (from /auth/auto or
         # login), so no owner fallback is needed. (The old cfg["single_user"] fallback
@@ -2158,24 +2145,15 @@ def register(app, deps):
                 except BaseException:
                     activity_lease.release()
                     raise
-        session_lease = maintenance.acquire()
-        if not session_lease.acquired or maintenance.fenced():
-            session_lease.release()
-            if activity_lease is not None:
-                activity_lease.release()
-            await websocket.close(code=4423)
-            return
         try:
             Path(cwd).mkdir(parents=True, exist_ok=True)
             await websocket.accept()
             term = TerminalSession(
                 cwd,
-                contained=maintenance.process_containment_required,
                 activity_lease=activity_lease,
             )
             term.start()
         except Exception:
-            session_lease.release()
             if activity_lease is not None:
                 activity_lease.release()
             raise
@@ -2198,9 +2176,6 @@ def register(app, deps):
         out_task = asyncio.create_task(pump_out())
         try:
             while True:
-                if maintenance.fenced():
-                    await websocket.close(code=4423)
-                    break
                 try:
                     msg = await asyncio.wait_for(
                         websocket.receive(),
@@ -2209,9 +2184,6 @@ def register(app, deps):
                 except asyncio.TimeoutError:
                     continue
                 if msg.get("type") == "websocket.disconnect":
-                    break
-                if maintenance.fenced():
-                    await websocket.close(code=4423)
                     break
                 if msg.get("bytes") is not None:
                     term.write(msg["bytes"])
@@ -2246,20 +2218,11 @@ def register(app, deps):
             out_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await out_task
-            session_stopped = (
-                bool(getattr(close_result, "session_stopped", close_result))
-                if close_result is not None
-                else False
-            )
             child_reaped = (
                 bool(getattr(close_result, "child_reaped", close_result))
                 if close_result is not None
                 else False
             )
-            if session_stopped:
-                session_lease.release()
-            else:
-                maintenance.retain(session_lease)
             if activity_lease is not None:
                 if child_reaped:
                     activity_lease.release()

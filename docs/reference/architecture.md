@@ -193,10 +193,8 @@ the approval card fetches content + sha256 together (`GET …/nodes/{node_id}/sc
 and the one-time `POST …/approve-script` approval echoes that hash (409 if the file
 changed after review — audit F4), records the sha256, and reruns the step. The
 runner hashes and executes the same in-memory bytes via a private temp copy, so a
-concurrent swap of the project file cannot run unapproved content. When an
-external maintenance boundary is configured, the private copy executes inside the
-shared PID containment and its process-lifetime ingress lease is released only
-after the namespace exits. `scripts_library.scan_catalog` also feeds the reuse-awareness
+concurrent swap of the project file cannot run unapproved content.
+`scripts_library.scan_catalog` also feeds the reuse-awareness
 surfaces: the script catalog is injected into every project run preamble
 (`wiki_memory.build_run_preamble`) and into the plan slicer's prompt
 (`workflows.architect_system`).
@@ -748,8 +746,7 @@ cannot break unrelated routes. Migration ambiguity still fails closed.
 ```text
 GET /api/runners/detect
       -> resolve binaries on the server-controlled runtime PATH
-      -> with ingress admission, apply conformance, including minimum version
-      -> when fenced or not admitted, skip process probes and fail eligibility closed
+      -> apply conformance, including minimum version
       -> publish masterChatOnly + masterEligible + masterUnavailableReason
       -> Master selector enables only masterEligible=true
       -> settings and runtime repeat conformance before mutation or spawn
@@ -813,12 +810,7 @@ controlled runtime path and publishes `masterEligible` with an exact
 `masterUnavailableReason`. The Master selector enables only dynamically eligible
 entries. An unavailable stored selection remains visible only as a disabled
 explanation. The browser result is advisory presentation data: settings, message
-creation, and worker spawn each repeat the server check. During pending or active
-external maintenance, and while exclusive ingress remains held during fence
-removal, runner discovery retains read-only binary detection but skips
-process-backed conformance and reports Master ineligible with a maintenance
-reason. This applies to both the runner endpoint and the dashboard projection;
-probes resume only after ingress admission resumes.
+creation, and worker spawn each repeat the server check.
 
 Codex conformance has two pre-turn gates: strict version parsing and a behavioral
 app-server handshake that registers the exact server-owned dynamic schemas on an
@@ -1441,7 +1433,8 @@ also ownership-unknown. When a scope is unadopted, Stop tries authenticated reco
 from durable supervisor evidence and otherwise returns HTTP 409 with an
 ownership-unknown message instead of claiming success; start refuses a replacement
 generation while that authority stays unresolved. Once `AppManager.start` accepts a
-launch, it owns the ingress effect lease through cancel and failed-spawn cleanup. Bubblewrap reports the exact launch-specific namespace
+launch, it owns the writer-activity effect lease through cancel and failed-spawn
+cleanup. Bubblewrap reports the exact launch-specific namespace
 identity at start; every contained socket owner must match it and carry the ephemeral
 launch marker. The marker alone never grants authority. It keeps an observed
 descendant that is later reparented ownership-unknown instead of becoming a
@@ -1525,13 +1518,13 @@ actionable experimental or unsupported guidance.
 support claim. It composes temporary HOME/XDG installs, fake service managers, a
 real POSIX PTY, temporary SQLite backup/restore targets, loopback preview servers,
 and a synthetic HTTPS MagicDNS reverse-proxy request. The acceptance environment
-sets Master on and Safe Self-Update off. It never targets the installed database,
+sets Master on. It never targets the installed database,
 service, Tailscale state, privileged enrollment, or release custody. The decision
 and row-level evidence live in
 [ADR-0028](../adr/0028-linux-first-daily-driver-support.md) and the
 [acceptance matrix](../linux-daily-driver-acceptance.md).
 
-### 9. Update check and candidate gate plus disabled switch fixture
+### 9. Update check
 
 ```text
 VERSION (repo root) → read_local_version() → FastAPI app.version → GET /api/health
@@ -1540,14 +1533,6 @@ UpdateManager: every 6h → GET api.github.com/repos/<repo>/releases/latest
                            (never raises — offline/404/hiccup → last_error)
                                     │
    GET /api/update/status · POST /api/update/check (metadata only)
-
-App integration
-  ├─ GET /api/maintenance → authenticated read-only external-fence projection
-  └─ feature_safe_self_update (default off) → authenticated request/run projection
-                                                  │
-       external root-owned controller → native lock + fsynced hash-chained journal
-                                                  │
-       exact manifest/provenance tree → immutable releases / external fence / adapter
                             (legacy HTTP and CLI apply paths remain inert)
 ```
 
@@ -1556,119 +1541,16 @@ unauthenticated GitHub Releases GET on a 6-hour timer (first check 60s after
 boot), holding only in-memory state (current version, latest release,
 `checked_at`, `last_error`) — `PROXIMA_UPDATE_CHECK=0` disables just that
 loop (the manual check route still works) and `PROXIMA_UPDATE_REPO` defaults to
-`labsiqbal/proxima`; forks can point it at their own repo. `apply()` now always
-fails closed. Group 14 adds the feature-gated `/api/self-updates/*` request and
-run-status projection plus the always-available authenticated, read-only
-`/api/maintenance` fence projection. `self_update_runs` is an owner-visible mirror,
-never the source of promotion truth. Both production entrypoints read
-`PROXIMA_FEATURE_SAFE_SELF_UPDATE` and the optional absolute
-`PROXIMA_SAFE_UPDATE_FENCE_PATH`; the flag defaults off and a configured fence is
-read-only application status.
+`labsiqbal/proxima`; forks can point it at their own repo. `apply()` always
+fails closed: updating is a manual `git pull` plus a service restart.
 
-The external updater owns exact signed regular-file manifest verification, canonical
-Python/web lockfile digests, local provenance revalidation, native POSIX/Windows
-single-flight locking, platform-selected directory durability, the journal, and the
-recovery decision. Local provenance additionally binds normalized file modes and
-safe in-tree file-symlink targets; authenticated-source copying materializes their
-target bytes into fresh regular files. Signed or local verification returns an
-immutable verified file set bound to the candidate commit and, for signed releases,
-the release identifier. Release publication accepts only that result, traverses
-candidates from pinned directory descriptors, copies content into fresh
-controller-owned staging inodes, revalidates digests and normalized modes, freezes
-the tree, and atomically renames it inside the trusted releases directory. Source
-ownership, ancestor substitutions, symlinks, and hardlinks cannot carry into the
-published release. Every created trusted directory and its parent are durably
-flushed.
-
-The authenticated request projection asks the external authority first. A newly
-accepted external run supersedes stale local requested/in-progress rows; a local row
-never vetoes submission. The API package reads the nonsecret root-owned fence without
-importing repository-only controller code. Its dedicated parent and file are
-searchable/readable but not writable by the application identity. A nonterminal
-journal continues to own single-flight after the kernel lock is released. Missing,
-truncated, unterminated, unreadable, or hostile-path journals produce
-`do_not_start_any_release`, including through the machine-readable recovery CLI.
-systemd, launchd, and unmanaged adapters remain unmanaged until the qualification
-matrix in
-[`adding-safe-updater-adapter.md`](../adding-safe-updater-adapter.md) passes. See
-[ADR-0008](../adr/0008-external-safe-update-authority.md).
-
-Before the fixture-only fence and switch exercise, Group 15's controller-only
-candidate gate reverifies local provenance in trusted controller code. Git checks
-and every candidate-controlled command run inside the same mandatory Bubblewrap
-execution boundary. The boundary exposes only read-only system inputs and
-phase-specific candidate-local writable mounts, removes network egress, uses a
-namespace identity without host privileges, applies resource and output ceilings,
-and kills the complete process group on timeout. A fixed offline
-build/test/type/doc manifest runs in a disposable writable tree. The controller
-then rehashes that post-build tree, copies it to fresh release inodes, freezes it,
-and runs probes only from that frozen release.
-
-SQLite's backup API creates a clone in its own writable directory. A fixed migration
-entrypoint can modify only that clone, and the controller requires an exact,
-contiguous `schema_migrations` ledger through the policy-pinned expected version.
-The served fixture is created from migrated schema, not copied live rows: only
-synthetic owner, authentication, project, and session data are inserted, with
-separate candidate workspace and runner-home paths. Candidate-mode startup skips
-schema mutation and every background writer. The separately installed, hash-pinned
-probe suite starts the candidate inside a loopback-only namespace and requires API
-identity, version, authenticated maintenance, SSE, served static assets, the complete
-asset digest, and every trusted headless-browser scenario. Its Master scenario
-asserts the accessible popup and Home bridge, labeled controls, server-derived
-runner eligibility, and the absence of enabled unqualified choices. The runner
-fixture crosses only the trusted auxiliary-tool boundary owned by
-[Security Boundaries](../security-boundaries.md#safe-update-boundary). The frozen evidence tree
-contains build logs, migration and fixture proof, identities, and probe results.
-Recovery revalidates its journal-pinned digest and file set. Sandboxed candidate
-commands cannot reach the journal, active or last-good pointers, fence, backups, or
-production paths. After independently revalidating the evidence, the controller
-appends its digest to the accepted-run journal as `candidate_staged`.
-
-Group 16 supplies a disabled transaction model for explicitly initialized
-disposable fixture roots beneath the system temporary directory only. It fixes the
-fence at canonical `status/fence.json`, confines live and staged databases to
-disjoint role directories, and holds the native single-flight lock. The fixture
-fences mutating HTTP, preview and terminal WebSocket ingress, and SQLite writes;
-pauses and drains the fixture service; verifies a truncate WAL checkpoint; seals
-and validates backup images; quarantines WAL/SHM sidecars; changes fixture pointers;
-runs read-only and writable proofs; and commits last-good only after the writable
-proof.
-
-Every exception before a successfully returned `last_good_committed` append
-persists a rollback-required breaker verdict before restoring the sealed backup and
-both previous fixture pointers, proving the previous fixture service, and
-finalizing the breaker state. A full or partial unacknowledged journal write
-latches fail closed after rollback, and the persisted breaker verdict takes
-precedence over a valid-looking journal tail. Recovery also rejects a safe
-candidate discard when owner-bound pending or active fence state was created before
-`write_fenced` was acknowledged. A failure after the acknowledged last-good
-boundary resumes the committed candidate or latches the breaker without rolling
-back candidate data.
-
-Maintenance activation durably publishes owner-bound pending state before taking
-the exclusive side of a controller-provisioned cross-process ingress lock. An
-interrupted activation cannot be adopted or cleared by a later run. The application
-opens that lock read-only and never provisions controller status state. Startup
-initialization, admitted HTTP requests, active agent and deterministic script runs,
-project-app and preview proxies, and terminal sessions hold shared leases through
-their possible effects. New mutating work fails closed while already admitted work
-drains before the fence is published. Runner, script, project-app, and terminal
-processes use PID namespaces under the configured boundary. Cached runners retain
-lifetime admission between turns, and pending activation stops and positively
-verifies them before releasing those leases. Script leases release only after
-namespace exit, preventing detached descendants from outliving the drain.
-
-Maintenance startup opens SQLite read-only, creates no PATH compatibility shim, and
-starts no background writers. Connections configured for dynamic fencing disable
-statement caching, allow database effects already covered by an ingress lease to
-finish, and skip write-capable WAL setup; ordinary connections retain caching and
-skip fence checks for read-only opcodes. Fenced reads avoid profile, wiki, relay,
-provider-readiness, and legacy process-reaping mutations, while normal first-use
-wiki reads still provision `index.md` under an ingress lease and the read-only
-authenticated `/auth/resume` projection remains available. The only runnable
-adapter is `DisposableServiceAdapter`; systemd and launchd remain unmanaged and
-inert. No production pointer, fence, database, service, workspace, runner home, or
-release can be touched.
+The former safe-self-update pipeline (external updater authority, candidate
+sandbox, maintenance fence, ingress leases, `/api/self-updates/*`,
+`/api/maintenance`) has been unhooked from the running app; the remaining
+on-disk stack (`apps/safe_updater/`, `trusted-probes/safe-update/`,
+`infra/safe-updater/`) is unreferenced and scheduled for deletion (prune A1).
+See [ADR-0008](../adr/0008-external-safe-update-authority.md) for the
+historical decision.
 
 ## Runner abstraction
 

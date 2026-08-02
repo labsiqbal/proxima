@@ -10,15 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
-import time
 from pathlib import Path
 from typing import Any
 
-import pytest
 from fastapi.testclient import TestClient
 
-from apps.safe_updater.write_fence import prepare_ingress_lock
 from proxima_api import features, scripts_library
 from proxima_api.graph_executor import SCRIPT_NODE_RUN_KIND
 from proxima_api.main import create_app
@@ -87,18 +83,6 @@ def _execute_next(app) -> dict[str, Any]:
     run = app.state.worker.claim_run()
     assert run is not None, "no queued run to execute"
     asyncio.run(app.state.worker.execute_run(run))
-    return run
-
-
-def _execute_next_admitted(app) -> dict[str, Any]:
-    run = app.state.worker.claim_run()
-    assert run is not None, "no queued run to execute"
-
-    async def execute() -> None:
-        lease = app.state.maintenance.claim_effect()
-        await app.state.worker._execute_admitted_run(run, lease)
-
-    asyncio.run(execute())
     return run
 
 
@@ -468,47 +452,6 @@ def test_script_timeout_fails_loudly_without_continuation(tmp_path):
         "SELECT COUNT(*) AS c FROM runs WHERE kind = ?", (SCRIPT_NODE_RUN_KIND,)
     ).fetchone()["c"]
     assert runs == 1
-
-
-@pytest.mark.skipif(
-    shutil.which("bwrap") is None,
-    reason="Bubblewrap is required for process containment",
-)
-def test_contained_script_cannot_leave_a_detached_writer(tmp_path):
-    fence = tmp_path / "status" / "fence.json"
-    prepare_ingress_lock(fence)
-    app = _app(
-        tmp_path,
-        safe_update_fence_path=str(fence),
-    )
-    client = _client(app)
-    folder = _project(client, tmp_path)
-    escaped = tmp_path / "escaped.txt"
-    script = _write_script(
-        folder,
-        "detach.py",
-        "import subprocess, sys\n"
-        "subprocess.Popen([\n"
-        "    sys.executable, '-c',\n"
-        "    \"import pathlib,sys,time; time.sleep(.3); \"\n"
-        "    \"pathlib.Path(sys.argv[1]).write_text('escaped')\",\n"
-        "    sys.argv[1],\n"
-        "], start_new_session=True)\n"
-        "print('done')\n",
-    )
-    _seed_trust(app, client, "proj", "detach.py", script)
-    job_id = _create_and_start(
-        client,
-        _script_graph("detach.py", args=[str(escaped)]),
-        "proj",
-    )
-    app.state.startup_lease.release()
-
-    _execute_next_admitted(app)
-    time.sleep(0.6)
-
-    assert _node(app, job_id, "run")["status"] == "done"
-    assert escaped.exists() is False
 
 
 def test_script_step_without_a_project_fails_loudly(tmp_path):

@@ -37,7 +37,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [linux-daily-driver-acceptance.md](linux-daily-driver-acceptance.md) | Linux Mint server and CachyOS/Tailscale daily-driver support matrix | by hand |
 | [runner-conformance.md](runner-conformance.md) | Runner contracts and the fail-closed chat-only Master boundary | by hand |
 | [adding-workflow-node-type.md](adding-workflow-node-type.md) | Extension playbook and invariants for node execution/output contracts | by hand |
-| [adding-safe-updater-adapter.md](adding-safe-updater-adapter.md) | Qualification and extension contract for external updater service adapters | by hand |
+| [adding-safe-updater-adapter.md](adding-safe-updater-adapter.md) | Qualification contract for the unhooked safe-updater stack (unreferenced; deletion pending, prune A1) | by hand |
 | [reference/feature-map.md](reference/feature-map.md) | Per-feature grid: where the code lives, tables/events touched, relations, status/flag | by hand |
 | [product/vision.md](product/vision.md) · [product/core-flows.md](product/core-flows.md) | Product direction + the intended user flows | by hand |
 | [security-boundaries.md](security-boundaries.md) · [prompt-injection-hardening.md](prompt-injection-hardening.md) | Threat model + hardening | by hand |

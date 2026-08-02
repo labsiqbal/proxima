@@ -14,7 +14,7 @@ for source_root in (REPO_ROOT, APP_ROOT):
 
 from proxima_api.main import create_app
 from proxima_api.logging_config import uvicorn_log_config
-from proxima_api.settings import DEFAULT_CONFIG, safe_update_config_from_env
+from proxima_api.settings import DEFAULT_CONFIG
 
 
 def env_path(name: str, default: Path) -> str:
@@ -166,7 +166,6 @@ app = create_app(
         "feature_master_orchestrator": env_bool(
             "PROXIMA_FEATURE_MASTER_ORCHESTRATOR", True
         ),
-        **safe_update_config_from_env(),
         # On by default since slice 4 (review UI); the env var is the escape hatch.
         "feature_repo_worktrees": env_bool("PROXIMA_FEATURE_REPO_WORKTREES", True),
         # systemd --user unit Diagnostics reads via journalctl (CLI + staging use the same env).

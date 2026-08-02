@@ -5,6 +5,7 @@ Extracted via the register() pattern — handler bodies verbatim. No behavior ch
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
@@ -51,10 +52,9 @@ logger = logging.getLogger("proxima.api")
 
 
 class _LeaseGroup:
-    """Ingress admission plus optional writer-activity lease for one effect."""
+    """Writer-activity lease wrapper for one launch effect."""
 
-    def __init__(self, *ingress_leases: Any, activity: Any | None = None) -> None:
-        self._ingress = list(ingress_leases)
+    def __init__(self, *, activity: Any | None = None) -> None:
         self._activity = activity
         self._released = False
 
@@ -64,12 +64,8 @@ class _LeaseGroup:
         self._released = True
         activity = self._activity
         self._activity = None
-        ingress = list(self._ingress)
-        self._ingress.clear()
         if activity is not None:
             activity.release()
-        for lease in reversed(ingress):
-            lease.release()
 
     def finish(
         self,
@@ -78,15 +74,12 @@ class _LeaseGroup:
         pid: int | None = None,
         start_identity: str | None = None,
         tree: Any | None = None,
-        retain_ingress: Any | None = None,
     ) -> None:
         if self._released:
             return
         self._released = True
         activity = self._activity
         self._activity = None
-        ingress = list(self._ingress)
-        self._ingress.clear()
         # Launcher exit alone is not writer-tree exit. When a tree handle is
         # present, only release once it proves clear; otherwise retain.
         tree_clear = True
@@ -98,8 +91,6 @@ class _LeaseGroup:
         if process_exited and tree_clear:
             if activity is not None:
                 activity.release()
-            for lease in reversed(ingress):
-                lease.release()
             return
         if activity is not None:
             container_registry.retain_activity_lease(
@@ -108,11 +99,6 @@ class _LeaseGroup:
                 start_identity=start_identity,
                 tree=tree,
             )
-        for lease in ingress:
-            if retain_ingress is not None:
-                retain_ingress(lease)
-            else:
-                lease.release()
 
     def guard_process(
         self,
@@ -122,10 +108,6 @@ class _LeaseGroup:
             guard = getattr(self._activity, "guard_process", None)
             if guard is not None:
                 return guard(command)
-        for lease in self._ingress:
-            guard = getattr(lease, "guard_process", None)
-            if guard is not None:
-                return guard(command)
         return command, {}
 
     def mark_process_started(self) -> None:
@@ -133,16 +115,11 @@ class _LeaseGroup:
             mark = getattr(self._activity, "mark_process_started", None)
             if mark is not None:
                 mark()
-        for lease in self._ingress:
-            mark = getattr(lease, "mark_process_started", None)
-            if mark is not None:
-                mark()
 
 
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
-    maintenance = deps["maintenance"]
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
     session_for_user = deps["session_for_user"]
@@ -607,7 +584,6 @@ def register(app, deps):
         key = cfg.get("apiKey")
         spec = image_providers.get_provider(cfg["provider"])
         readiness = image_providers.readiness_snapshot(
-            enabled=not maintenance.fenced(),
             codex=spec.kind in ("auto", "codex"),
             higgsfield_cli=spec.kind in ("auto", "higgsfield"),
             xai_oauth=True,
@@ -720,7 +696,6 @@ def register(app, deps):
     @app.get("/api/settings/higgsfield")
     def get_higgsfield_settings(user: dict[str, Any] = Depends(current_user)):
         readiness = image_providers.readiness_snapshot(
-            enabled=not maintenance.fenced(),
             higgsfield_cli=True,
         )
         return {
@@ -1086,15 +1061,7 @@ def register(app, deps):
             except BaseException:
                 activity_lease.release()
                 raise
-        try:
-            maintenance_lease = maintenance.background_lease()
-        except BaseException:
-            activity_lease.release()
-            raise
-        effect_lease = _LeaseGroup(
-            maintenance_lease,
-            activity=activity_lease,
-        )
+        effect_lease = _LeaseGroup(activity=activity_lease)
         try:
             await app.state.app_manager.start(
                 slug,
@@ -1135,7 +1102,7 @@ def register(app, deps):
         # Provision the remote-preview subdomain in the background (best-effort; app
         # start never waits on / fails from Cloudflare). No-op if CF isn't configured.
         if cf_hostnames.configured(app.state.config):
-            maintenance.create_task(
+            asyncio.create_task(
                 cf_hostnames.provision(app.state.config, slug),
                 name=f"cf-provision-{slug}",
             )
@@ -1160,7 +1127,7 @@ def register(app, deps):
             )
         await app.state.preview_relays.stop(slug)
         if cf_hostnames.configured(app.state.config):
-            maintenance.create_task(
+            asyncio.create_task(
                 cf_hostnames.deprovision(app.state.config, slug),
                 name=f"cf-deprovision-{slug}",
             )

@@ -18,7 +18,6 @@ from ..schemas import FileWriteRequest, FsPathRequest, FsRenameRequest
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
-    maintenance = deps["maintenance"]
     current_user = deps["current_user"]
     _ops_root = deps["_ops_root"]
 
@@ -45,7 +44,7 @@ def register(app, deps):
     def wiki_all(user: dict[str, Any] = Depends(current_user)):
         return {
             "notes": fsapi.walk_files(
-                _wiki_root(user, create=not maintenance.fenced())
+                _wiki_root(user, create=True)
             )
         }
 
@@ -55,7 +54,7 @@ def register(app, deps):
             return {
                 "path": path,
                 "entries": fsapi.list_tree(
-                    _wiki_root(user, create=not maintenance.fenced()),
+                    _wiki_root(user, create=True),
                     path,
                 ),
             }
@@ -68,7 +67,7 @@ def register(app, deps):
             return {
                 "path": path,
                 "content": fsapi.read_file(
-                    _wiki_root(user, create=not maintenance.fenced()),
+                    _wiki_root(user, create=True),
                     path,
                 ),
             }

@@ -99,7 +99,7 @@ def test_install_user_refuses_non_linux_before_any_side_effect(tmp_path: Path) -
     assert list(home.iterdir()) == []
 
 
-def test_linux_reinstall_preserves_master_on_and_safe_update_off(
+def test_linux_reinstall_preserves_existing_config(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
@@ -112,7 +112,6 @@ def test_linux_reinstall_preserves_master_on_and_safe_update_off(
     config_file.parent.mkdir(parents=True)
     original = (
         'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"\n'
-        'PROXIMA_FEATURE_SAFE_SELF_UPDATE="0"\n'
         'PROXIMA_PORT="18765"\n'
     )
     config_file.write_text(original, encoding="utf-8")

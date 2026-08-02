@@ -31,7 +31,6 @@ from ..schemas import CommandRequest, ProfileCreateRequest, ProfileUpdateRequest
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
-    maintenance = deps["maintenance"]
     current_user = deps["current_user"]
     profile_payload = deps["profile_payload"]
     profile_for_user = deps["profile_for_user"]
@@ -74,8 +73,7 @@ def register(app, deps):
                 profile = None
         if profile is None:
             try:
-                if not maintenance.fenced():
-                    ensure_default_profile(user)
+                ensure_default_profile(user)
                 row = db().execute(
                     "SELECT * FROM profiles WHERE user_id = ? AND is_default = 1 "
                     "AND COALESCE(system_kind, '') = '' ORDER BY id LIMIT 1",
@@ -93,8 +91,7 @@ def register(app, deps):
 
     @app.get("/api/profiles")
     def list_profiles(user: dict[str, Any] = Depends(current_user)):
-        if not maintenance.fenced():
-            ensure_default_profile(user)
+        ensure_default_profile(user)
         rows = db().execute(
             "SELECT * FROM profiles WHERE user_id = ? AND COALESCE(system_kind, '') = '' "
             "ORDER BY is_default DESC, name", (user["id"],)
@@ -231,7 +228,6 @@ def register(app, deps):
         runners = detect_runners(
             path_env=runtime_path,
             create_shim=False,
-            allow_process_probes=maintenance.process_probes_allowed(),
         )
         return {
             "user": user["username"],

@@ -1017,7 +1017,7 @@ def retain_activity_lease(
 ) -> None:
     """Retain a writer-activity lease until the guarded writer tree exits.
 
-    Ingress/maintenance leases are not handled here. Launcher death alone never
+    Launcher death alone never
     releases the lease when a guardian sentinel or other bound tree member is
     still live. When no tree identity can be bound, the lease stays retained
     fail-closed so exclusive quiescence remains blocked instead of leaking

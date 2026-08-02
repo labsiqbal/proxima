@@ -10,13 +10,10 @@ from ..updates import NoUpdateAvailable, UpdateInProgress, UpdateUnsupported
 
 def register(app, deps):
     admin_user = deps["admin_user"]
-    maintenance = deps["maintenance"]
 
     @app.get("/api/update/status")
     def update_status(user: dict[str, Any] = Depends(admin_user)):
-        return app.state.updates.status(
-            reconcile=not maintenance.fenced(),
-        )
+        return app.state.updates.status()
 
     @app.post("/api/update/check")
     async def update_check(user: dict[str, Any] = Depends(admin_user)):

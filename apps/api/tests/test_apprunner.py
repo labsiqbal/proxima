@@ -2238,16 +2238,10 @@ def test_app_runner_holds_effect_lease_until_process_stops(tmp_path):
     asyncio.run(run_case())
 
 
-def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
+def test_app_runner_retains_activity_on_unverified_stop(
     tmp_path,
     monkeypatch,
 ):
-    class IngressLease:
-        released = False
-
-        def release(self) -> None:
-            self.released = True
-
     class ActivityLease:
         released = False
 
@@ -2260,15 +2254,13 @@ def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
         def mark_process_started(self) -> None:
             return None
 
-    class SplitLease:
+    class EffectLease:
         def __init__(self) -> None:
-            self.ingress = IngressLease()
             self.activity = ActivityLease()
             self.finished = None
 
         def release(self) -> None:
             self.activity.release()
-            self.ingress.release()
 
         def guard_process(self, command):
             return self.activity.guard_process(command)
@@ -2281,9 +2273,6 @@ def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
             if kwargs.get("process_exited"):
                 self.release()
                 return
-            retain = kwargs.get("retain_ingress")
-            if retain is not None:
-                retain(self.ingress)
             from proxima_api.container_activity import retain_activity_lease
 
             retain_activity_lease(
@@ -2294,7 +2283,7 @@ def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
             )
 
     manager = AppManager()
-    lease = SplitLease()
+    lease = EffectLease()
 
     async def run_case():
         await manager.start(
@@ -2345,16 +2334,13 @@ def test_app_runner_splits_ingress_and_activity_on_unverified_stop(
         assert lease.finished["process_exited"] is False
         assert lease.finished["pid"] == pid
         assert lease.finished["start_identity"] == identity
-        assert lease.ingress.released is False
         assert lease.activity.released is False
-        assert lease.ingress in manager._retained_ingress
 
         os.kill(pid, 9)
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline and not lease.activity.released:
             await asyncio.sleep(0.02)
         assert lease.activity.released is True
-        assert lease.ingress.released is False
 
     asyncio.run(run_case())
 
@@ -2829,11 +2815,7 @@ def test_guarded_preview_launcher_sigkill_keeps_lease_until_tree_exits(tmp_path)
     ).lastrowid
     lease = acquire_container_activity_lease(conn, int(container_id))
     manager = AppManager()
-    released = {"activity": False, "ingress": False}
-
-    class Ingress:
-        def release(self):
-            released["ingress"] = True
+    released = {"activity": False}
 
     class Activity:
         def __init__(self, inner):
@@ -2852,13 +2834,11 @@ def test_guarded_preview_launcher_sigkill_keeps_lease_until_tree_exits(tmp_path)
     class Group:
         def __init__(self):
             self.activity = Activity(lease)
-            self.ingress = Ingress()
             self._activity = lease
             self.finished = None
 
         def release(self):
             self.activity.release()
-            self.ingress.release()
 
         def guard_process(self, command):
             return self.activity.guard_process(command)
@@ -2873,9 +2853,6 @@ def test_guarded_preview_launcher_sigkill_keeps_lease_until_tree_exits(tmp_path)
                 return
             from proxima_api.container_activity import retain_activity_lease
 
-            retain = kwargs.get("retain_ingress")
-            if retain is not None:
-                retain(self.ingress)
             retain_activity_lease(
                 self.activity._inner,
                 pid=kwargs.get("pid"),
@@ -2926,17 +2903,12 @@ def test_guarded_preview_launcher_sigkill_keeps_lease_until_tree_exits(tmp_path)
             assert not _listener_pids(port), (
                 "writer tree listener survived launcher death"
             )
-            # Ingress must not have been released early on launcher-only death.
             # Activity may release only after tree proof.
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline and not released["activity"]:
                 manager.status("demo")
                 await asyncio.sleep(0.05)
-            assert released["ingress"] is False or (
-                group.finished is not None
-                and group.finished.get("process_exited") is True
-            )
-            # After tree exit, activity can release; ingress only on verified finish.
+            # After tree exit, activity can release.
             if group.finished and group.finished.get("process_exited"):
                 assert released["activity"] is True
             else:

@@ -34,119 +34,17 @@ Anyone with physical access, SSH, AnyDesk, sudo, or direct filesystem access can
 inspect source code, runtime data, DB files, runner profile homes, and project
 files. This is outside Proxima app control.
 
-## Safe-update boundary
+## Safe-update boundary (removed from the app)
 
-Safe self-update is not an app privilege. When enrolled in a future managed
-installation, a root-owned external updater owns the release journal, pointers,
-maintenance fence, backups, trust metadata, service configuration, and recovery
-authority outside candidate code and runtime data. The app's authenticated
-`self_update_runs` record is an owner-visible projection, not the decision record.
-Candidate code cannot use it to promote itself. Until the installer qualifies a
-manager and sandbox, `feature_safe_self_update` is off and all activation fails
-closed. Enrollment must prove that the candidate identity neither owns nor has
-mode, group, ACL, or inherited write access to each trusted journal, pointer,
-fence, backup, and service-configuration path or any replaceable ancestor. Every
-trusted path and ancestor must be owned by root or the controller identity. The
-foundation rejects privileged candidate identities, declared service capabilities,
-and candidate configurations that allow privilege escalation. Its POSIX access probe
-drops to the actual candidate UID, primary GID, and supplementary groups, sets
-no-new-privileges on Linux, and rejects retained permitted, effective, or ambient
-capabilities, so effective ACL and inherited access participate in the decision.
-Release publication consumes an authenticated verified file set and uses pinned
-directory descriptors plus fresh controller-owned inodes rather than path-based
-reopens, renames, or hardlinks of candidate-owned files. No installer enrolls this
-boundary yet. See
-[ADR-0008](adr/0008-external-safe-update-authority.md) and the [adapter
-playbook](adding-safe-updater-adapter.md).
-
-The candidate gate runs before any live mutation. Candidate-controlled Git checks,
-package hooks, tests, builds, documentation generation, migrations, API servers, and
-browsers all pass through one Bubblewrap boundary with no host network, no host
-privilege, no ambient environment, phase-specific read-only and candidate-local
-writable mounts, bounded resources and output, timeouts, and process-group cleanup.
-The build uses a disposable writable copy and offline cache. Only the exact verified
-post-build tree is copied into fresh controller-owned release inodes and frozen.
-SQLite's backup API makes the raw clone; a fixed migration entrypoint can write only
-its clone directory, and controller validation checks the complete
-`schema_migrations` ledger. The served fixture is fresh migrated schema populated
-only with synthetic rows and candidate-local workspace and runner-home paths.
-
-The candidate cannot select migration or probe commands or replace the separately
-installed trusted probe bundle, whose complete tree digest is policy-pinned. That
-suite starts the frozen candidate in a loopback-only network namespace and exercises
-API identity, version, authenticated maintenance, SSE, served assets, the complete
-asset digest, and trusted browser scenarios. Candidate-mode startup rejects schema
-initialization, migration, and background writers. Evidence contains the fixed logs
-and proofs, is frozen at both file and directory levels, and is rehashed against the
-journal digest during recovery. A failed build, migration, identity, static asset,
-probe, or sandbox check leaves the live database, workspace, runner homes, services,
-pointers, fence, and backups untouched. The accepted preflight journal remains
-nonterminal, and frozen failure evidence is retained for inspection. This is not
-enrollment or activation.
-
-For the Master selector scenario, the controller mounts the policy-pinned probe
-bundle's version-only Codex fixture through an explicit read-only auxiliary-tool
-boundary. Before candidate server startup, the trusted probe requires its exact
-namespace path and version, verifies that it refuses turn invocation, and proves
-that candidate code cannot write it. The fixture is candidate evidence only: it
-does not carry credentials, signing authority, or production update authority.
-
-Group 16 adds only a disabled transaction fixture. Its controller root must be an
-explicitly initialized empty directory beneath the system temporary directory,
-its fence uses the canonical `status/fence.json` path, and live-fixture and
-staged-fixture database paths are confined to separate role directories. The only
-accepted service adapter is the in-memory
-`DisposableServiceAdapter`; no system adapter gains enrollment or service-control
-authority.
-
-The fixture controller holds the native single-flight lock across switching and
-recovery. Before the `last_good_committed` append returns successfully, any
-possibly committed database or pointer replacement restores the sealed database
-and both prior pointers before the previous fixture service is resumed. A full or
-partial journal write whose append does not return is never treated as an
-acknowledged phase and latches the breaker after rollback. Once the last-good
-append is acknowledged, recovery can only resume the candidate or latch the
-breaker. The persisted breaker verdict is checked before journal recovery, so an
-unacknowledged but complete journal tail cannot override a physical rollback.
-Before the first physical rollback mutation, the controller persists a
-`rollback_required` verdict and finalizes that verdict only after database,
-pointer, service, writer, and fence restoration finishes. An unreadable journal
-or interrupted breaker write leaves a durable pending marker and latches fail
-closed. Recovery also reconciles the fixture's owner-bound pending and active
-fence state with the journal, so a fence created before `write_fenced` was
-acknowledged cannot be reported as a safe candidate discard.
-
-External maintenance activation first publishes a durable pending marker, then
-takes an exclusive ingress lock that only the controller provisions. The
-application opens that existing lock read-only and never creates or modifies the
-controller status directory. Pending state records its activation owner, and a
-later controller run cannot adopt or clear an interrupted activation. Startup
-initialization, HTTP requests, active agent runs, project-app and preview proxy
-requests, deterministic script runs, and terminal WebSocket sessions hold a
-shared ingress lease through their last possible side effect. Terminal,
-project-app, agent-runner, and deterministic script processes use a PID namespace
-while this boundary is configured. Cached runners retain a lifetime lease after a
-turn, and pending activation stops and positively verifies those namespaces before
-their leases release. Script leases release only after the script namespace exits.
-Detached descendants therefore cannot outlive the drain. New ingress fails closed
-as soon as activation is pending, while the controller waits for already admitted
-operations to drain before publishing the fence. Read endpoints do not
-initialize personal wiki or profile state, stop preview relays, create PATH
-compatibility shims, launch provider readiness probes, or reap legacy update
-processes while fenced. Normal
-first-use personal wiki reads still seed `index.md` while holding the ingress
-lease. Application SQLite connections configured for an external fence disable
-prepared-statement caching, allow an admitted operation to finish its database
-effects, and deny writes outside an admission dynamically. Ordinary unconfigured
-connections retain statement caching and do not run fence checks for read-only
-opcodes. New fenced connections skip write-capable WAL setup.
-`POST /auth/resume` remains available because it only projects an
-already-authenticated session; session creation, including `/auth/auto`, is fenced.
-A process started directly in maintenance mode opens SQLite read-only with
-authorizer denial and starts no workers, schedulers, graph lifecycle tasks,
-registry refreshers, or Master supervisor. These controls validate fixture
-behavior only. They do not activate a production service, replace live data,
-switch a live release, grant signing authority, or add remote push.
+The app no longer self-updates and no longer carries any safe-update surface:
+the `/api/self-updates/*` and `/api/maintenance` routes, the
+`feature_safe_self_update` flag, the maintenance fence / ingress-lease plumbing,
+and candidate mode have all been removed from the running app (prune A1).
+Updating is a manual `git pull` plus a service restart. The remaining on-disk
+stack (`apps/safe_updater/`, `trusted-probes/safe-update/`,
+`infra/safe-updater/`) is unreferenced and scheduled for deletion; the
+historical design is recorded in
+[ADR-0008](adr/0008-external-safe-update-authority.md).
 
 ## App Owner
 
@@ -339,10 +237,8 @@ card shows the script's actual content + sha256 (read together), the approve req
 must echo that hash (409 if the file changed after review), and the run executes the
 hashed bytes from a private temp copy taken at hash time — so neither an
 edit-before-click nor a swap-after-hash can run content the owner never saw.
-When the disabled external maintenance boundary is configured, a PID namespace
-ensures the script and any detached descendants exit before its ingress lease
-releases. This process-lifetime control does not reduce the script's filesystem or
-service-user authority and does not turn approval into a general sandbox.
+Approval is a trust gate, not a sandbox: it does not reduce the script's
+filesystem or service-user authority.
 
 ## Push after merge (pinned target, hardened invocation)
 

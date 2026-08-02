@@ -19,7 +19,6 @@ if [[ ! -x "$PYTHON" ]]; then
 fi
 
 export PROXIMA_FEATURE_MASTER_ORCHESTRATOR=1
-export PROXIMA_FEATURE_SAFE_SELF_UPDATE=0
 export PROXIMA_UPDATE_CHECK=0
 
 cat <<'EOF'
@@ -33,7 +32,7 @@ Linux daily-driver acceptance matrix
   DIAGNOSTICS  systemd journal targeting and experimental-platform guidance
   PREVIEW      loopback/tailnet bind selection, auth relay, assets, and WebSocket HMR
   ACCESS       local and synthetic Tailscale HTTPS reverse-proxy entry
-  UPGRADE      inert update path with Master on and Safe Self-Update off
+  UPGRADE      inert update path with Master on
 EOF
 
 cd "$ROOT/apps/api"
@@ -45,7 +44,6 @@ cd "$ROOT/apps/api"
   tests/test_debug_logs_route.py \
   tests/test_preview_bind.py \
   tests/test_preview_relay.py \
-  tests/test_updates.py::test_apply_is_inert_and_never_spawns_legacy_live_checkout_updater \
-  tests/test_safe_update_api.py::test_safe_update_routes_are_disabled_by_default
+  tests/test_updates.py::test_apply_is_inert_and_never_spawns_legacy_live_checkout_updater
 
 echo "Linux daily-driver acceptance matrix: PASS"

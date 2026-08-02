@@ -245,7 +245,6 @@ async function driveEvidence(cdp) {
       rows,
       masterVisible,
       server: config.platform_support?.server,
-      safeSelfUpdate: config.features?.safe_self_update,
       targetText: document.querySelector('.platform-support-panel > p')?.textContent || '',
     }
   })()`)
@@ -257,7 +256,6 @@ async function driveEvidence(cdp) {
   assert.equal(assertions.server?.key, 'linux')
   assert.equal(assertions.server?.tier, 'supported')
   assert.equal(assertions.masterVisible, true)
-  assert.equal(assertions.safeSelfUpdate, false)
   assert.match(assertions.targetText, /Linux Mint/)
   assert.match(assertions.targetText, /CachyOS/)
   assert.match(assertions.targetText, /Tailscale/)

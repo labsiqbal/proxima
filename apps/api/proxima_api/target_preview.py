@@ -584,13 +584,11 @@ class TargetPreviewManager:
         database_path: str,
         apps_domain: str | None,
         bind_host: str | None,
-        maintenance: Any = None,
         provision_hostname: Callable[[PreviewArea], Awaitable[None]] | None = None,
     ) -> None:
         self.database_path = database_path
         self.apps_domain = (apps_domain or "").strip().lower() or None
         self.bind_host = resolve_preview_bind_host(bind_host)
-        self.maintenance = maintenance
         self.provision_hostname = provision_hostname
         self.secret = secrets.token_bytes(32)
         self._relays: dict[tuple[PreviewArea, str], dict[str, Any]] = {}
@@ -753,8 +751,6 @@ class TargetPreviewManager:
         *,
         owner_session: str | None = None,
     ) -> str:
-        if self.maintenance is not None and self.maintenance.fenced():
-            raise RuntimeError("dedicated file previews are unavailable")
         area = PreviewArea.from_locator(project_id, locator)
         frame_origin = _request_origin(request)
         parsed_origin = urlsplit(frame_origin)
@@ -956,9 +952,6 @@ class TargetPreviewManager:
         send: Send,
         metadata: _PreviewFetchMetadata,
     ) -> None:
-        if self.maintenance is not None and self.maintenance.fenced():
-            await self._reject(scope, send, 423, "maintenance write fenced")
-            return
         if scope.get("method") not in {"GET", "HEAD"}:
             await self._reject(scope, send, 405, "preview method not allowed")
             return

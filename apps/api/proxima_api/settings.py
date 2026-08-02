@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$|^[a-z0-9]$")
 
@@ -61,21 +61,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # by default now that the integrated Master slices have passed their
     # acceptance gate; the env var is the escape hatch.
     "feature_master_orchestrator": True,
-    # Group 14 creates only the external updater contracts. Group 15/16 evidence
-    # is disposable and cannot replace installer and service-manager qualification.
-    "feature_safe_self_update": False,
-    # Read-only app projection of a root-owned fence. The app never creates or
-    # removes it; an absent path means no maintenance fence is active.
-    "safe_update_fence_path": None,
-    # Candidate-only startup is configured by the root-owned external updater.
-    # It never applies migrations or starts background writers.
-    "candidate_mode": False,
-    "candidate_release_id": None,
-    "candidate_commit": None,
-    "candidate_asset_manifest_digest": None,
-    # Maintenance mode is controller-only startup for a stopped-service switch.
-    # It opens a read-only DB and never starts application writers.
-    "safe_update_maintenance_mode": False,
     # Maximum queued/running Task-agent runs owned by Master. The supervisor
     # and worker claim guard share this value.
     "master_max_parallel": 3,
@@ -135,33 +120,6 @@ def _bool_flag(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def safe_update_config_from_env(
-    environ: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
-    source = os.environ if environ is None else environ
-    fence = str(source.get("PROXIMA_SAFE_UPDATE_FENCE_PATH") or "").strip()
-    result = {
-        "feature_safe_self_update": _bool_flag(
-            source.get("PROXIMA_FEATURE_SAFE_SELF_UPDATE", "0")
-        ),
-        "safe_update_fence_path": fence or None,
-    }
-    if _bool_flag(source.get("PROXIMA_CANDIDATE_MODE", "0")):
-        result.update(
-            {
-                "candidate_mode": True,
-                "candidate_release_id": source.get("PROXIMA_CANDIDATE_RELEASE_ID")
-                or None,
-                "candidate_commit": source.get("PROXIMA_CANDIDATE_COMMIT") or None,
-                "candidate_asset_manifest_digest": source.get(
-                    "PROXIMA_CANDIDATE_ASSET_MANIFEST_DIGEST"
-                )
-                or None,
-            }
-        )
-    return result
-
-
 def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     workspace_root = Path(cfg["workspace_root"])
@@ -185,24 +143,6 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["feature_master_orchestrator"] = _bool_flag(
         cfg.get("feature_master_orchestrator")
     )
-    cfg["feature_safe_self_update"] = _bool_flag(cfg.get("feature_safe_self_update"))
-    cfg["candidate_mode"] = _bool_flag(cfg.get("candidate_mode"))
-    cfg["safe_update_maintenance_mode"] = _bool_flag(
-        cfg.get("safe_update_maintenance_mode")
-    )
-    if cfg["candidate_mode"]:
-        # Candidate configuration is controller-owned. Do not honour a supplied
-        # link root or source profile home because either could expose the owner
-        # workspace or runner credentials through otherwise ordinary routes.
-        cfg["link_roots"] = [cfg["workspace_root"]]
-        cfg["source_hermes_home"] = cfg["hermes_profiles_root"]
-        cfg["claude_live_home"] = False
-    raw_fence = str(cfg.get("safe_update_fence_path") or "").strip()
-    if raw_fence and not Path(raw_fence).is_absolute():
-        raise ValueError("safe update fence path must be absolute")
-    cfg["safe_update_fence_path"] = raw_fence or None
-    if cfg["safe_update_maintenance_mode"] and not cfg["safe_update_fence_path"]:
-        raise ValueError("maintenance mode requires an external fence path")
     cfg["graph_semantic_egress_enabled"] = _bool_flag(
         cfg.get("graph_semantic_egress_enabled")
     )

@@ -44,7 +44,7 @@ from . import app_settings, scripts_library
 from .container_registry import ops_root
 from .graph import normalize_graph
 from .container_activity import GuardedWriterTree, retain_activity_lease
-from .process_containment import pid_namespace_argv, terminate_and_verify
+from .process_containment import terminate_and_verify
 from .runners import augmented_path
 from .workflows import substitute
 
@@ -255,18 +255,10 @@ class ScriptRunner:
             self._heartbeat(run_id, float(cfg.get("run_heartbeat_seconds") or 10))
         )
         proc: asyncio.subprocess.Process | None = None
-        effect_lease = None
         exit_verified = True
         writer_tree: GuardedWriterTree | None = None
         try:
             command = [*argv, *args]
-            if self.app.state.maintenance.process_containment_required:
-                command = pid_namespace_argv(
-                    command,
-                    cwd=str(project_root),
-                    label="script",
-                )
-                effect_lease = self.app.state.maintenance.background_lease()
             guard_options: dict[str, Any] = {}
             if activity_lease is not None:
                 command, guard_options = activity_lease.guard_process(command)
@@ -348,12 +340,6 @@ class ScriptRunner:
                     exit_verified = False
             elif writer_tree is not None and writer_tree.exited() is not True:
                 exit_verified = False
-            if effect_lease is not None:
-                if exit_verified:
-                    effect_lease.release()
-                else:
-                    effect_lease.suspend_admission()
-                    self.app.state.maintenance.retain(effect_lease)
             if activity_lease is not None and not exit_verified:
                 # Transfer the shared activity flock to a tree monitor so the
                 # worker's outer finally cannot drop it while writers live.

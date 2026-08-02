@@ -23,7 +23,6 @@ def _app(tmp_path: Path):
             "projectctl_path": "/usr/bin/true",
             "start_worker": False,
             "feature_master_orchestrator": True,
-            "feature_safe_self_update": False,
             "preview_bind_host": "127.0.0.1",
             "update_check": False,
         }
@@ -47,8 +46,7 @@ def test_service_lifecycle_targets_only_the_isolated_linux_user_unit(
     config.parent.mkdir()
     config.write_text(
         'PROXIMA_SERVICE_NAME="proxima-acceptance"\n'
-        'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"\n'
-        'PROXIMA_FEATURE_SAFE_SELF_UPDATE="0"\n',
+        'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"\n',
         encoding="utf-8",
     )
     _write_executable(
@@ -85,7 +83,6 @@ def test_service_lifecycle_targets_only_the_isolated_linux_user_unit(
     ]
     persisted = config.read_text(encoding="utf-8")
     assert 'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"' in persisted
-    assert 'PROXIMA_FEATURE_SAFE_SELF_UPDATE="0"' in persisted
 
 
 def test_service_lifecycle_refuses_unknown_platform_before_manager_call(
@@ -142,8 +139,7 @@ def test_linux_doctor_reports_supported_platform_in_isolated_runtime(
         f'PROXIMA_DB_PATH="{data / "proxima.db"}"\n'
         f'PROXIMA_WORKSPACE_ROOT="{data / "workspace"}"\n'
         f'PROXIMA_HERMES_PROFILES_ROOT="{data / "profiles"}"\n'
-        'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"\n'
-        'PROXIMA_FEATURE_SAFE_SELF_UPDATE="0"\n',
+        'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"\n',
         encoding="utf-8",
     )
     for name in ("uv", "npm", "python3"):
@@ -171,7 +167,6 @@ def test_linux_doctor_reports_supported_platform_in_isolated_runtime(
     assert 'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"' in config.read_text(
         encoding="utf-8"
     )
-    assert 'PROXIMA_FEATURE_SAFE_SELF_UPDATE="0"' in config.read_text(encoding="utf-8")
 
 
 def test_pty_terminal_round_trip_matches_owner_shell(tmp_path: Path) -> None:
@@ -262,10 +257,7 @@ def test_upgrade_readiness_is_fail_closed_and_preserves_fixture_flags(
     service_calls = tmp_path / "service-calls"
     home.mkdir()
     config.parent.mkdir()
-    expected = (
-        'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"\n'
-        'PROXIMA_FEATURE_SAFE_SELF_UPDATE="0"\n'
-    )
+    expected = 'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"\n' 
     config.write_text(expected, encoding="utf-8")
 
     result = subprocess.run(
@@ -283,7 +275,7 @@ def test_upgrade_readiness_is_fail_closed_and_preserves_fixture_flags(
     )
 
     assert result.returncode == 1
-    assert "safe self-update activation is unavailable" in result.stderr
+    assert "proxima update is unavailable" in result.stderr
     assert (
         "No checkout, runtime data, service, or database was changed." in result.stderr
     )
@@ -291,10 +283,9 @@ def test_upgrade_readiness_is_fail_closed_and_preserves_fixture_flags(
     assert not service_calls.exists()
 
 
-def test_acceptance_fixture_keeps_master_enabled_and_safe_update_disabled(
+def test_acceptance_fixture_keeps_master_enabled(
     tmp_path: Path,
 ) -> None:
     app = _app(tmp_path)
 
     assert app.state.config["feature_master_orchestrator"] is True
-    assert app.state.config["feature_safe_self_update"] is False

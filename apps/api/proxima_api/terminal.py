@@ -28,7 +28,7 @@ class CloseResult:
     ``session_stopped`` is True only when the full identity-bound writer tree
     could be verified empty. ``child_reaped`` is True once that tree is proven
     exited and the direct child is reaped (or was never started). Callers may
-    release writer-activity and maintenance-ingress leases only when the
+    release writer-activity leases only when the
     corresponding flag is True; otherwise they must retain the lease behind an
     identity-bound lifecycle monitor.
     """

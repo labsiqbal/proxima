@@ -60,8 +60,8 @@ load_config() {
   export PROXIMA_PORT="${PROXIMA_PORT:-8765}"
   # Per-app remote preview (optional): export whatever the config file set so serve.py sees them.
   export PROXIMA_ENV_NAME PROXIMA_APPS_DOMAIN PROXIMA_CF_API_TOKEN PROXIMA_CF_ACCOUNT_ID PROXIMA_CF_TUNNEL_ID PROXIMA_CF_ZONE PROXIMA_CF_ZONE_ID PROXIMA_UPDATE_CHECK PROXIMA_UPDATE_REPO
-  export PROXIMA_FEATURE_DESIGN_STUDIO PROXIMA_FEATURE_SAFE_SELF_UPDATE
-  export PROXIMA_SAFE_UPDATE_FENCE_PATH PROXIMA_SERVICE_NAME PROXIMA_LAUNCHD_LABEL
+  export PROXIMA_FEATURE_DESIGN_STUDIO
+  export PROXIMA_SERVICE_NAME PROXIMA_LAUNCHD_LABEL
   export PROXIMA_OUTPUT_BROKER_SOCKET PROXIMA_OUTPUT_BROKER_PROTOCOL
   export PROXIMA_PREVIEW_PROFILE PROXIMA_PREVIEW_SCOPE_STATE_ROOT
   export PYTHONPATH="$ROOT:$API_DIR${PYTHONPATH:+:$PYTHONPATH}"
@@ -128,8 +128,6 @@ PROXIMA_UPDATE_REPO="labsiqbal/proxima"
 PROXIMA_FEATURE_DESIGN_STUDIO="1"
 PROXIMA_FEATURE_WORKFLOW_GRAPH="1"
 PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"
-PROXIMA_FEATURE_SAFE_SELF_UPDATE="0"
-PROXIMA_SAFE_UPDATE_FENCE_PATH=""
 PROXIMA_GRAPH_SEMANTIC_EGRESS="0"
 PROXIMA_RUNNER_ENV_ALLOWLIST=""
 PROXIMA_APP_ENV_ALLOWLIST=""
@@ -171,7 +169,7 @@ EOF
     exec "$ROOT/scripts/build" "$@"
     ;;
   update)
-    echo "safe self-update activation is unavailable" >&2
+    echo "proxima update is unavailable: pull the new checkout with git and run 'proxima restart'" >&2
     echo "No checkout, runtime data, service, or database was changed." >&2
     exit 1
     ;;
@@ -219,7 +217,7 @@ Usage:
   proxima init-config   Create local config at $CONFIG_FILE
   proxima doctor        Check dependencies and runtime dirs
   proxima build         Sync deps, run tests, build web
-  proxima update        Refuse activation while the safe updater is unavailable
+  proxima update        Unavailable; update via git pull + proxima restart
   proxima restart       Restart the service
   proxima stop          Stop the service
   proxima status        Show service status

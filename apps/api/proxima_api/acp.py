@@ -17,7 +17,7 @@ import shutil
 from collections import deque
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
 from .container_activity import (
     GuardedWriterTree,
@@ -26,9 +26,6 @@ from .container_activity import (
 )
 from .process_containment import pid_namespace_argv, terminate_and_verify
 from .runners import subprocess_env
-
-if TYPE_CHECKING:
-    from .maintenance_status import IngressLease, MaintenanceBoundary
 
 logger = logging.getLogger("proxima.acp")
 
@@ -665,40 +662,15 @@ class AcpManager:
         self,
         *,
         contained: bool = False,
-        maintenance: MaintenanceBoundary | None = None,
     ) -> None:
         self.contained = contained
-        self.maintenance = maintenance
         self._procs: dict[
             tuple[str, str, str, bool, str | None],
             Any,
         ] = {}
-        self._effect_leases: dict[
-            tuple[str, str, str, bool, str | None],
-            IngressLease,
-        ] = {}
         self._lock = asyncio.Lock()
 
-    def _finish_effect_lease(
-        self,
-        lease: IngressLease | None,
-        *,
-        verified: bool,
-    ) -> None:
-        if lease is None:
-            return
-        if verified:
-            lease.release()
-            return
-        lease.suspend_admission()
-        if self.maintenance is not None:
-            self.maintenance.retain(lease)
-
-    async def _stop_detached(
-        self,
-        proc: Any,
-        lease: IngressLease | None,
-    ) -> Any:
+    async def _stop_detached(self, proc: Any) -> Any:
         tree = getattr(proc, "writer_tree", None)
 
         def _attach_tree(exc: BaseException) -> BaseException:
@@ -711,7 +683,6 @@ class AcpManager:
         try:
             await proc.stop()
         except BaseException as exc:
-            self._finish_effect_lease(lease, verified=False)
             raise _attach_tree(exc)
         process = getattr(proc, "proc", None)
         tree_clear = True
@@ -722,14 +693,11 @@ class AcpManager:
             except Exception:
                 tree_clear = False
         if process is not None and process.returncode is None:
-            self._finish_effect_lease(lease, verified=False)
             raise _attach_tree(RuntimeError("runner process exit was not verified"))
         if not tree_clear:
-            self._finish_effect_lease(lease, verified=False)
             raise _attach_tree(
                 RuntimeError("runner process tree exit was not verified")
             )
-        self._finish_effect_lease(lease, verified=True)
         return tree
 
     async def get(
@@ -759,8 +727,7 @@ class AcpManager:
                     home,
                 )
                 self._procs.pop(key, None)
-                lease = self._effect_leases.pop(key, None)
-                await self._stop_detached(proc, lease)
+                await self._stop_detached(proc)
             process_class = _process_class(spec)
             if getattr(spec, "protocol", "acp") == "codex-app-server":
                 process_options: dict[str, Any] = {
@@ -789,11 +756,6 @@ class AcpManager:
                     cwd,
                     **process_options,
                 )
-            lease = (
-                self.maintenance.background_lease()
-                if self.maintenance is not None
-                else None
-            )
             try:
                 await proc.start()
             except BaseException:
@@ -839,11 +801,8 @@ class AcpManager:
                                 tree.launcher_start if tree is not None else None
                             ),
                         )
-                self._finish_effect_lease(lease, verified=verified)
                 raise
             self._procs[key] = proc
-            if lease is not None:
-                self._effect_leases[key] = lease
             return proc
 
     def resolve_permission(self, request_id: str, option_id: str) -> bool:
@@ -884,22 +843,17 @@ class AcpManager:
         )
         async with self._lock:
             proc = self._procs.pop(key, None)
-            lease = self._effect_leases.pop(key, None)
         if not proc:
             return None
         logger.info("acp: recycling process for %s (cwd=%s)", home, cwd)
-        return await self._stop_detached(proc, lease)
+        return await self._stop_detached(proc)
 
     async def shutdown(self) -> None:
         async with self._lock:
-            processes = [
-                (proc, self._effect_leases.get(key))
-                for key, proc in self._procs.items()
-            ]
+            processes = list(self._procs.values())
             self._procs.clear()
-            self._effect_leases.clear()
         results = await asyncio.gather(
-            *(self._stop_detached(proc, lease) for proc, lease in processes),
+            *(self._stop_detached(proc) for proc in processes),
             return_exceptions=True,
         )
         failures = [result for result in results if isinstance(result, BaseException)]

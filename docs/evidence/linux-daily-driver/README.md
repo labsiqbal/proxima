@@ -2,7 +2,7 @@
 
 Captured on 2026-07-31 from a disposable loopback server rooted at a temporary
 HOME, database, workspace, runner-home, browser profile, and cache. The server
-fixture had Master enabled, Safe Self-Update disabled, the worker disabled,
+fixture had Master enabled, the worker disabled,
 release checks disabled, and preview relays disabled. No installed service,
 database, Tailscale state, privileged enrollment, signing material, or release
 custody was used.
@@ -30,7 +30,6 @@ The same browser pass asserted:
 - the Linux Mint server, CachyOS client, and Tailscale target copy is visible
 - the detected server catalog is `linux` / `supported`
 - the Master Settings entry is visible
-- `/api/config` reports `safe_self_update: false`
 
 ## Reproduce against an isolated server
 

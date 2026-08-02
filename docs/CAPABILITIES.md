@@ -1800,82 +1800,27 @@ Linux daily-driver reliability is release-gated by
 service status/restart/stop, POSIX PTY behavior, online backup and isolated restore,
 diagnostics, preview, local and synthetic Tailscale HTTPS entry, and fail-closed
 upgrade readiness. All cases use temporary roots, fake managers, or loopback
-fixtures. Master is enabled and Safe Self-Update remains disabled inside the
+fixtures. Master is enabled inside the
 acceptance process. See
 [Linux Daily-Driver Acceptance](linux-daily-driver-acceptance.md) and
 [ADR-0028](adr/0028-linux-first-daily-driver-support.md).
 
-## 21. Updates (version check + disabled safe-update fixtures)
+## 21. Updates (release check only)
 
 **Why:** Owners should see release availability without letting the running
-application or candidate code promote itself.
+application promote itself.
 **How:** `UpdateManager` may check GitHub release metadata every 6h, but its old
-live-checkout apply route and `proxima update` are inert. The safe-update request
-and run-status projections are behind the server-enforced
-`feature_safe_self_update` flag, default off in both production entrypoints. A
-managed external updater, not candidate code or the app database, owns the
-append-only fsynced journal, native single-flight lock, immutable releases, release
-pointers, maintenance fence, backups, service configuration, and recovery verdict.
-Signed release manifests bind an exact regular-file set. Unsigned local provenance
-also binds normalized file modes and safe in-tree file-symlink targets, which are
-materialized as regular files. Both paths bind the canonical Python/web lockfiles
-and produce an immutable verified-file-set result. Publication consumes that result
-rather than deriving new trust from mutable candidate bytes, copies through pinned
-directory descriptors into fresh controller-owned inodes, rechecks trusted staging,
-and then renames it atomically. Directory creation fsyncs every new directory and
-its parent; unsupported durability or pinned traversal fails closed. The app exposes
-only authenticated owner projections and a package-local read-only maintenance
-client. Fence status is nonsecret and controller-owned with read-only application
-access. Submission consults the external single-flight authority before reconciling
-SQLite projections. systemd, launchd, and unmanaged adapters fail closed until the
-[adapter qualification matrix](adding-safe-updater-adapter.md), candidate proof,
-and rollback fault testing pass. The authority decision is recorded in
-[ADR-0008](adr/0008-external-safe-update-authority.md).
+live-checkout apply route and `proxima update` are inert: updating is a manual
+`git pull` plus a service restart. The former safe-self-update stack (external
+updater authority, candidate sandbox, maintenance fence, ingress leases) is no
+longer referenced by the running app; its remaining on-disk code
+(`apps/safe_updater/`, `trusted-probes/safe-update/`, `infra/safe-updater/`)
+is inert and scheduled for deletion (prune A1, ADR-0008).
 
-The update modal treats external recovery evidence as authoritative: timeout and
-failure states do not claim that either release is healthy, and manual promotion
-remains unavailable.
-
-Group 15 adds a pre-switch gate only. Controller-owned code copies verified source
-and the offline cache into disposable candidate storage, then runs every fixed
-build, test, type, documentation, migration, server, and browser command inside a
-Bubblewrap user, mount, PID, and network namespace with bounded resources, output,
-time, and process cleanup. Only candidate-local writable mounts are visible. The
-exact post-build tree is rehashed, published into fresh release inodes, and frozen
-before probing. SQLite's backup API creates the raw clone; a fixed sandbox command
-migrates only its dedicated clone directory, and the controller requires the
-complete `schema_migrations` ledger through its policy-pinned expected version.
-The browser fixture is a fresh copy of migrated schema with synthetic owner,
-session, and project rows only, plus separate workspace and runner-home paths.
-Candidate-mode startup refuses migrations and background writers. The separately
-installed, hash-pinned probe suite starts the frozen release and requires API
-identity, version, authenticated maintenance, SSE, served-static-asset, complete
-asset-manifest, and headless-browser scenario results. The Master scenario asserts
-the modal popup and Home bridge, labeled controls, dynamic runner eligibility, and
-the absence of any enabled unqualified runner against a trusted fixture. The
-[safe-update boundary](security-boundaries.md#safe-update-boundary) owns the
-fixture's isolation and refusal requirements. Evidence includes fixed
-build logs, migration proof, fixture metadata, assets, and probe results; its files
-and directories are frozen, and recovery rehashes the journal-pinned bundle before
-reporting a run safe.
-
-Group 16 adds a disabled disposable-fixture A/B transaction harness. It accepts
-only the in-memory disposable service adapter, an explicitly initialized temporary
-fixture root, canonical `status/fence.json`, and disjoint role-confined live and
-staged database paths. The harness exercises fencing and ingress drain, service
-stop and restart, WAL/SHM handling, sealed database images, both-pointer rollback,
-read-only and writable probes, process-lifetime containment, and interruption
-recovery. The detailed sequence is owned by the [architecture
-flow](reference/architecture.md#9-update-check-and-candidate-gate-plus-disabled-switch-fixture);
-the rollback, breaker, and maintenance invariants are owned by the [safe-update
-security boundary](security-boundaries.md#safe-update-boundary). The harness cannot
-enroll an updater, control a real service, switch a live release, replace live data,
-or remove a production fence. Activation remains unavailable.
+The update modal only reports availability; manual promotion remains unavailable.
 
 **Endpoints:** `GET /api/update/status`, `POST /api/update/check`,
-`POST /api/update/apply` (inert),
-`GET /api/maintenance`, `GET /api/self-updates/capability`, `POST /api/self-updates`,
-`GET /api/self-updates/{id}`, `POST /api/self-updates/{id}/recovery-status`.
+`POST /api/update/apply` (inert).
 
 ---
 

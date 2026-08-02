@@ -34,7 +34,7 @@ Self-Update disabled for the acceptance process only.
 | Diagnostics | Linux targets the configured systemd journal and reports active/stale work. Experimental macOS guidance does not attempt `journalctl`. | `test_debug_logs_route.py` |
 | Preview | Default binding chooses a Tailscale address or loopback, never wildcard. The capability-gated relay serves root assets and WebSocket HMR without forwarding owner credentials, and stops with the app. | `test_preview_bind.py`, `test_preview_relay.py` |
 | Local and Tailscale access | Local health and a synthetic HTTPS MagicDNS reverse-proxy entry reach the same isolated app; HTTPS entry mints a Secure owner cookie. | `test_linux_daily_driver_acceptance.py` |
-| Upgrade readiness | Release identity is visible, the legacy apply path remains inert, Master stays enabled in its fixture, Safe Self-Update stays disabled, and no checkout, service, database, or config is changed. | `test_updates.py`, `test_safe_update_api.py`, `test_linux_daily_driver_acceptance.py` |
+| Upgrade readiness | Release identity is visible, the legacy apply path remains inert, Master stays enabled in its fixture, and no checkout, service, database, or config is changed. | `test_updates.py`, `test_linux_daily_driver_acceptance.py` |
 
 The web support-label test and production build run separately:
 
@@ -45,7 +45,7 @@ npm --prefix apps/web run build
 
 The [real-browser evidence](evidence/linux-daily-driver/README.md) uses an isolated
 raw Chrome DevTools Protocol pass. It asserts the platform labels, target copy,
-Master visibility, Safe Self-Update disabled state, and zero console errors before
+Master visibility, and zero console errors before
 writing and validating the PNG bytes.
 
 ## Isolation and prohibited operations
@@ -56,7 +56,6 @@ reverse-proxy request. It does not:
 
 - read or write the installed Proxima database
 - restart, stop, or update the installed Proxima service
-- enable Safe Self-Update or create a maintenance fence
 - call `tailscale set` or `tailscale serve`
 - perform privileged enrollment
 - modify signing keys, release manifests, or release custody
@@ -71,6 +70,6 @@ Do not change host enrollment merely to run this matrix.
 - The supported server claim is Linux-first, with systemd and the POSIX PTY backend.
 - CachyOS is a browser client in this contract, not a second Proxima server install.
 - macOS LaunchAgent and Windows Scheduled Task installers are experimental.
-- Safe Self-Update remains unavailable. Upgrade readiness means version visibility,
-  data separation, backup/restore evidence, and fail-closed activation, not live
-  self-promotion.
+- Self-updating remains unavailable. Upgrade readiness means version visibility,
+  data separation, and backup/restore evidence, not live self-promotion; updating
+  is a manual git pull plus a service restart.

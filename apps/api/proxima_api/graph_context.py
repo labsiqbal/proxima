@@ -32,7 +32,6 @@ from typing import Any, Callable, Mapping, TypeAlias
 from . import container_registry
 from .auth import iso_now
 from .db import connect as connect_database
-from .maintenance_status import MaintenanceBoundary
 
 GRAPHIFY_DISTRIBUTION = "graphifyy"
 GRAPHIFY_VERSION = "0.9.28"
@@ -2107,12 +2106,7 @@ class GraphContextService:
             raise GraphValidationError(
                 "graph publication database is unavailable"
             )
-        return connect_database(
-            configured_path,
-            writes_fenced=MaintenanceBoundary(
-                self.config
-            ).database_write_check(),
-        )
+        return connect_database(configured_path)
 
     def _freshness(self, row: GraphStateRow) -> dict[str, Any]:
         payload = {

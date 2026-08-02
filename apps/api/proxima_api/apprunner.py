@@ -444,7 +444,6 @@ class AppManager:
         self._unadopted: set[str] = set()
         self._state_root = Path(state_root) if state_root else None
         self._profile = profile
-        self._retained_ingress: list[Any] = []
 
     def _retain_effect(
         self,
@@ -458,9 +457,6 @@ class AppManager:
     def _release_retained_effects(self, slug: str) -> None:
         for lease in self._retained_effects.pop(slug, []):
             lease.release()
-
-    def _retain_ingress(self, lease: Any) -> None:
-        self._retained_ingress.append(lease)
 
     def _writer_tree(self, app: dict[str, Any]):
         tree = app.get("writer_tree")
@@ -500,7 +496,6 @@ class AppManager:
                 pid=pid,
                 start_identity=start_identity,
                 tree=tree,
-                retain_ingress=self._retain_ingress,
             )
             return
         if terminated:
@@ -2148,7 +2143,7 @@ class AppManager:
                 except Exception:
                     terminated = tree.exited() is True
                 if not terminated:
-                    # Identity-bound tree still live: split ingress from activity
+                    # Identity-bound tree still live: retain the activity lease
                     # and leave ownership unresolved. Never claim a clean stop.
                     await self._snapshot_output(app)
                     if self._apps.get(slug) is app:

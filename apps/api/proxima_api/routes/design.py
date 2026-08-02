@@ -32,7 +32,6 @@ from ..schemas import ImageGenRequest
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
-    maintenance = deps["maintenance"]
     current_user = deps["current_user"]
     _ops_root = deps["_ops_root"]
     profile_for_user = deps["profile_for_user"]
@@ -491,7 +490,6 @@ def register(app, deps):
             }
         if spec.kind == "higgsfield":
             readiness = image_providers.readiness_snapshot(
-                enabled=not maintenance.fenced(),
                 higgsfield_cli=True,
             )
             hstatus = readiness["higgsfield"] or {}

@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -1669,27 +1668,24 @@ def connect(
     *,
     read_only: bool = False,
     deny_writes: bool = False,
-    writes_fenced: Callable[[], bool] | None = None,
 ) -> sqlite3.Connection:
     db_path = Path(path)
-    dynamically_fenced = deny_writes or writes_fenced is not None
-    initially_fenced = deny_writes or (writes_fenced is not None and writes_fenced())
     connect_kwargs: dict[str, Any] = {
         "check_same_thread": False,
         "isolation_level": None,
-        "cached_statements": 0 if dynamically_fenced else 128,
+        "cached_statements": 0 if deny_writes else 128,
     }
     if read_only:
         if not db_path.is_file():
-            raise FileNotFoundError("maintenance database is missing")
+            raise FileNotFoundError("database is missing")
         conn = sqlite3.connect(
             f"file:{db_path}?mode=ro",
             uri=True,
             **connect_kwargs,
         )
-    elif initially_fenced:
+    elif deny_writes:
         if not db_path.is_file():
-            raise FileNotFoundError("fenced database is missing")
+            raise FileNotFoundError("read-only database is missing")
         conn = sqlite3.connect(
             f"file:{db_path}?mode=rw",
             uri=True,
@@ -1701,7 +1697,7 @@ def connect(
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
-    if dynamically_fenced:
+    if deny_writes:
         denied = frozenset(
             getattr(sqlite3, name)
             for name in (
@@ -1747,12 +1743,10 @@ def connect(
         ) -> int:
             if action not in denied:
                 return sqlite3.SQLITE_OK
-            if deny_writes or (writes_fenced is not None and writes_fenced()):
-                return sqlite3.SQLITE_DENY
-            return sqlite3.SQLITE_OK
+            return sqlite3.SQLITE_DENY
 
         conn.set_authorizer(authorize)
-    if not read_only and not initially_fenced:
+    if not read_only and not deny_writes:
         try:
             conn.execute("PRAGMA journal_mode = WAL")
         except Exception:

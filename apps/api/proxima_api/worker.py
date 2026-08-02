@@ -32,7 +32,6 @@ from . import app_settings
 from . import file_targets
 from . import master_runtime
 from . import features
-from .maintenance_status import IngressLease
 from . import state
 from . import turn_restore
 from .artifacts import scan_project_artifacts
@@ -184,32 +183,8 @@ class RunWorker:
                     "run task %s crashed: %s", run_id, exc
                 )
 
-    async def _execute_admitted_run(
-        self,
-        run: dict[str, Any],
-        lease: IngressLease,
-    ) -> None:
-        lease.activate_admission()
-        try:
-            await self.execute_run(run)
-        finally:
-            release_lease = True
-            try:
-                if self.app.state.maintenance.fenced():
-                    try:
-                        await self.app.state.acp_manager.shutdown()
-                    except BaseException:
-                        lease.suspend_admission()
-                        self.app.state.maintenance.retain(lease)
-                        release_lease = False
-                        raise
-            finally:
-                if release_lease:
-                    lease.release()
-
     async def loop(self) -> None:
         cfg = self.app.state.config
-        maintenance = self.app.state.maintenance
         poll = max(0.05, _as_int(cfg.get("run_worker_poll_interval_ms", 250)) / 1000)
         concurrency = max(1, _as_int(cfg.get("run_worker_concurrency") or 1))
         stale_seconds = _as_int(cfg.get("run_stale_seconds") or 60)
@@ -217,53 +192,25 @@ class RunWorker:
         last_reap = 0.0
         while not self.stop_event.is_set():
             try:
-                try:
-                    cycle_lease = maintenance.claim_effect()
-                except RuntimeError:
-                    try:
-                        await self.app.state.acp_manager.shutdown()
-                    except BaseException:
-                        logging.getLogger("proxima.worker").exception(
-                            "cached runner shutdown failed during maintenance"
-                        )
-                    await asyncio.sleep(poll)
-                    continue
-                try:
-                    self._collect_finished_run_tasks()
-                    now = time.monotonic()
-                    if now - last_reap >= reap_every:
-                        last_reap = now
-                        self.reap_stale_runs(stale_seconds)
-                        self.reap_orphaned_jobs()
-                    self.satpam.maybe_tick(now)
-                    claimed = False
-                    while len(self.run_tasks) < concurrency:
-                        try:
-                            run_lease = maintenance.claim_effect()
-                        except RuntimeError:
-                            break
-                        try:
-                            run = self.claim_run()
-                        except BaseException:
-                            run_lease.release()
-                            raise
-                        if not run:
-                            run_lease.release()
-                            break
-                        run_id = _as_int(run["id"])
-                        run_lease.suspend_admission()
-                        try:
-                            task = asyncio.create_task(
-                                self._execute_admitted_run(run, run_lease),
-                                name=f"proxima-run-{run_id}",
-                            )
-                        except BaseException:
-                            run_lease.release()
-                            raise
-                        self.run_tasks[run_id] = task
-                        claimed = True
-                finally:
-                    cycle_lease.release()
+                self._collect_finished_run_tasks()
+                now = time.monotonic()
+                if now - last_reap >= reap_every:
+                    last_reap = now
+                    self.reap_stale_runs(stale_seconds)
+                    self.reap_orphaned_jobs()
+                self.satpam.maybe_tick(now)
+                claimed = False
+                while len(self.run_tasks) < concurrency:
+                    run = self.claim_run()
+                    if not run:
+                        break
+                    run_id = _as_int(run["id"])
+                    task = asyncio.create_task(
+                        self.execute_run(run),
+                        name=f"proxima-run-{run_id}",
+                    )
+                    self.run_tasks[run_id] = task
+                    claimed = True
                 if not claimed:
                     await asyncio.sleep(poll)
                 else:

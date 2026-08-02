@@ -15,17 +15,12 @@ REPO_WORKTREES = "repo_worktrees"
 # Durable Master data is migrated independently, while the runtime and product
 # surface stay fail-closed until the integrated orchestrator slices ship.
 MASTER_ORCHESTRATOR = "master_orchestrator"
-# The external updater remains unavailable until its installer enrollment and
-# fault/soak evidence are accepted.  This flag gates only app request surfaces;
-# it never grants the app authority over updater-owned state.
-SAFE_SELF_UPDATE = "safe_self_update"
 
 _CONFIG_KEYS = {
     DESIGN_STUDIO: "feature_design_studio",
     WORKFLOW_GRAPH: "feature_workflow_graph",
     REPO_WORKTREES: "feature_repo_worktrees",
     MASTER_ORCHESTRATOR: "feature_master_orchestrator",
-    SAFE_SELF_UPDATE: "feature_safe_self_update",
 }
 
 _DISPLAY_NAMES = {
@@ -33,7 +28,6 @@ _DISPLAY_NAMES = {
     WORKFLOW_GRAPH: "Workflow Graph",
     REPO_WORKTREES: "Repo worktrees",
     MASTER_ORCHESTRATOR: "Master orchestrator",
-    SAFE_SELF_UPDATE: "Safe self-update",
 }
 
 _COMMAND_FEATURES = {
@@ -57,7 +51,6 @@ def public_flags(config: Mapping[str, Any] | None) -> dict[str, bool]:
         WORKFLOW_GRAPH: enabled(config, WORKFLOW_GRAPH),
         REPO_WORKTREES: enabled(config, REPO_WORKTREES),
         MASTER_ORCHESTRATOR: enabled(config, MASTER_ORCHESTRATOR),
-        SAFE_SELF_UPDATE: enabled(config, SAFE_SELF_UPDATE),
     }
 
 

@@ -11,12 +11,10 @@ occasional broken UI after updates. That is normal for this stage - report issue
 rather than treating the product as finished SaaS polish.
 
 Sessions, chat history, projects, and other owner data live in the **data
-directory** (SQLite and workspace files), not in the git checkout. The current
-safe-update activation paths change neither code nor live data: both HTTP apply
-and `proxima update` refuse activation. Normal startup still applies migrations:
-43 adds the app-owned `self_update_runs` projection table, while 44 pins existing
-Project roots to their platform filesystem identities. Details:
-[Updating](#updating).
+directory** (SQLite and workspace files), not in the git checkout. Updating is a
+manual `git pull` plus a service restart; the legacy HTTP apply route and
+`proxima update` stay inert. Normal startup still applies versioned migrations
+(with a backup first). Details: [Updating](#updating).
 
 ## Requirements
 
@@ -209,9 +207,6 @@ Notes:
   Delegate surface -- the unattended supervisor then never starts. Delegation
   still needs an authenticated Master-eligible runner; without one the surface
   appears but every adapter fails closed.
-- Safe self-update defaults off. Only a future administrator enrollment may set
-  `PROXIMA_FEATURE_SAFE_SELF_UPDATE=1` and an absolute, root-owned
-  `PROXIMA_SAFE_UPDATE_FENCE_PATH`; the application only reads that fence.
 - Graphify structural extraction for Code and allowlisted Ops Knowledge is local.
   Keep `PROXIMA_GRAPH_SEMANTIC_EGRESS=0`. Setting the reserved opt-in to `1` is
   visible in graph policy, state, and logs, but Knowledge rebuilds fail closed
@@ -262,55 +257,29 @@ proxima update
 # exits nonzero without changing the checkout, data, database, or service
 ```
 
-Safe self-update is unavailable until a root-admin enrolls a managed external
-updater, trust root, launcher, qualified service-manager adapter, candidate
-sandbox, and probe bundle. `PROXIMA_FEATURE_SAFE_SELF_UPDATE` defaults to `0` and
-must remain off until target-platform service-manager, switch, fault, and rollback
-evidence is accepted for production enrollment.
-Foreground, ordinary user-service, Windows, and unqualified macOS installs fail
-closed. Local self-edit commits carry reverified provenance, not a release
-signature.
+To update, pull the new checkout and restart the service:
 
-The shipped candidate gate and its disabled Group 16 switch model are
-controller-only and not installer features.
-The candidate gate runs the fixed offline build and clone-only migration inside a
-mandatory Bubblewrap boundary, publishes and freezes only the verified post-build
-tree, and creates a fresh-schema fixture containing synthetic rows and separate
-workspace and runner-home paths. A separately installed, digest-pinned probe bundle
-must pass its API, version, authenticated maintenance, SSE, served-asset,
-asset-manifest, and headless-browser checks. Frozen evidence is revalidated during
-recovery. The Group 16 model can run only with an in-memory disposable test-service
-adapter, an explicitly initialized empty fixture root beneath the system temporary
-directory, and disjoint role-confined fixture paths. It exercises the transaction
-and maintenance boundaries described in the [architecture
-flow](reference/architecture.md#9-update-check-and-candidate-gate-plus-disabled-switch-fixture)
-and [security boundary](security-boundaries.md#safe-update-boundary) without
-touching an installed service or live runtime. Neither path can switch a release,
-start an enrolled service, touch the live database, or remove a production fence.
-Do not set candidate-only environment variables manually.
+```bash
+git pull
+systemctl --user restart proxima
+```
 
-Future enrollment must place the nonsecret maintenance fence in a dedicated
-controller-owned status directory whose ancestors are searchable by the application
-identity. The directory and fence are application-readable but not
-application-writable. The controller must provision the ingress lock before the
-application starts; the application opens that existing lock read-only and holds
-startup admission through every side-effecting initialization step. Trusted
-release, journal, and fence directory creation is durably flushed at every new
-parent entry; a platform without qualified pinned candidate-tree traversal remains
-unenrolled.
+The former safe-self-update pipeline is no longer part of the running app; its
+remaining on-disk code is unreferenced and scheduled for deletion (prune A1,
+ADR-0008).
+
 
 ### Code checkout vs data directory
 
-The inert activation path keeps the two locations separate:
+Updating only touches the code checkout; the two locations stay separate:
 
-| Location | Contents | Safe-update foundation effect |
+| Location | Contents | Update effect |
 | --- | --- | --- |
-| **Git checkout** (install source) | App code | No activation write |
-| **Data dir** (default `~/.local/share/proxima`, or `PROXIMA_DATA_DIR` / env from install) | `proxima.db` (sessions, messages, projects registry), workspace, hermes-profiles, backups | Migration 43 adds the app-owned projection table; migration 44 pins Project-root identities; no application-data swap or activation |
+| **Git checkout** (install source) | App code | Replaced by `git pull` |
+| **Data dir** (default `~/.local/share/proxima`, or `PROXIMA_DATA_DIR` / env from install) | `proxima.db` (sessions, messages, projects registry), workspace, hermes-profiles, backups | Untouched; versioned migrations run at next startup (with a backup first) |
 
 Chat history lives in **SQLite under the data dir** (`PROXIMA_DB_PATH`, default
-`$DATA_DIR/proxima.db`), not in the git tree. Any future qualified updater must
-preserve that boundary and use updater-owned backups and recovery evidence.
+`$DATA_DIR/proxima.db`), not in the git tree.
 
 ### When history can look "gone"
 
@@ -341,12 +310,6 @@ Disable it (or point forks elsewhere) in `proxima.env`:
 PROXIMA_UPDATE_CHECK=0
 PROXIMA_UPDATE_REPO=your-account/your-fork
 ```
-
-The external updater owns its lock, fsynced journal, release pointers, maintenance
-fence, backup location, and service configuration outside the candidate release.
-The application exposes only authenticated, typed request/status projections; it
-cannot promote code or modify those trusted files. Adapter qualification is defined
-in [Adding a Safe-Updater Service Adapter](adding-safe-updater-adapter.md).
 
 ## Development
 

@@ -84,7 +84,6 @@ def _config(fixture: Path) -> dict:
         "start_scheduler": False,
         "update_check": False,
         "feature_master_orchestrator": True,
-        "feature_safe_self_update": False,
     }
 
 

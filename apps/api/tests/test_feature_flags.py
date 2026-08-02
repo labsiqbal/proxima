@@ -47,9 +47,8 @@ def _counts(app):
     }
 
 
-def test_public_config_defaults_shipped_features_on_and_safe_update_off(tmp_path):
+def test_public_config_defaults_shipped_features_on(tmp_path):
     # Master ships on now that its acceptance gates have passed (ADR-0039).
-    # Safe self-update stays off until an external updater is enrolled.
     app = _app(tmp_path)
     response = TestClient(app).get("/api/config")
 
@@ -59,7 +58,6 @@ def test_public_config_defaults_shipped_features_on_and_safe_update_off(tmp_path
         "workflow_graph": True,
         "repo_worktrees": True,
         "master_orchestrator": True,
-        "safe_self_update": False,
     }
 
 
@@ -77,7 +75,6 @@ def test_public_config_reports_explicit_boot_opt_out(tmp_path):
         "workflow_graph": True,
         "repo_worktrees": False,
         "master_orchestrator": True,
-        "safe_self_update": False,
     }
 
 
@@ -139,7 +136,6 @@ def test_programmatic_zero_values_do_not_enable_features():
         "workflow_graph": False,
         "repo_worktrees": False,
         "master_orchestrator": False,
-        "safe_self_update": False,
     }
 
 

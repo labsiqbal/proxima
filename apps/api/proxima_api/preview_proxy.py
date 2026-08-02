@@ -185,16 +185,6 @@ async def _reject(scope, send, status: int, msg: str) -> None:
     await send({"type": "http.response.body", "body": msg.encode()})
 
 
-def _ingress_lease(maintenance):
-    if maintenance is None:
-        return None, True
-    lease = maintenance.acquire()
-    allowed = lease.acquired and not maintenance.fenced()
-    if not allowed:
-        lease.release()
-    return lease, allowed
-
-
 class PreviewConnectionRejected(httpcore.ConnectError):
     pass
 
@@ -338,7 +328,6 @@ async def _proxy_http(
     send,
     port: int,
     verify_connection: Callable[[int, int], bool],
-    maintenance=None,
 ) -> None:
     body = b""
     more = True
@@ -346,10 +335,6 @@ async def _proxy_http(
         m = await receive()
         body += m.get("body", b"")
         more = m.get("more_body", False)
-    lease, allowed = _ingress_lease(maintenance)
-    if not allowed:
-        await _reject(scope, send, 423, "maintenance write fenced")
-        return
     raw_path = scope.get("raw_path") or scope["path"].encode("utf-8")
     target = _request_target(raw_path, scope.get("query_string") or b"")
     try:
@@ -382,9 +367,6 @@ async def _proxy_http(
         httpcore.TimeoutException,
     ):
         await _reject(scope, send, 502, "preview app not reachable yet")
-    finally:
-        if lease is not None:
-            lease.release()
 
 
 async def _proxy_ws(
@@ -393,7 +375,6 @@ async def _proxy_ws(
     send,
     port: int,
     verify_connection: Callable[[int, int], bool],
-    maintenance=None,
 ) -> None:
     path = scope["path"]
     qs = scope.get("query_string") or b""
@@ -401,10 +382,6 @@ async def _proxy_ws(
         path += "?" + qs.decode("latin-1")
     first = await receive()
     if first["type"] != "websocket.connect":
-        return
-    lease, allowed = _ingress_lease(maintenance)
-    if not allowed:
-        await _reject(scope, send, 423, "maintenance write fenced")
         return
     subprotocols = scope.get("subprotocols") or None
     uri = f"ws://127.0.0.1:{port}{path}"
@@ -433,8 +410,6 @@ async def _proxy_ws(
         )
     except Exception:
         sock.close()
-        if lease is not None:
-            lease.release()
         await send({"type": "websocket.close", "code": 1013})
         return
     accept: dict[str, Any] = {"type": "websocket.accept"}
@@ -445,28 +420,18 @@ async def _proxy_ws(
     except Exception:
         await up.close()
         raise
-    finally:
-        if lease is not None:
-            lease.release()
 
     async def client_to_up() -> None:
         while True:
             m = await receive()
-            input_lease, input_allowed = _ingress_lease(maintenance)
-            if not input_allowed:
+            t = m["type"]
+            if t == "websocket.receive":
+                if m.get("text") is not None:
+                    await up.send(m["text"])
+                elif m.get("bytes") is not None:
+                    await up.send(m["bytes"])
+            elif t == "websocket.disconnect":
                 return
-            try:
-                t = m["type"]
-                if t == "websocket.receive":
-                    if m.get("text") is not None:
-                        await up.send(m["text"])
-                    elif m.get("bytes") is not None:
-                        await up.send(m["bytes"])
-                elif t == "websocket.disconnect":
-                    return
-            finally:
-                if input_lease is not None:
-                    input_lease.release()
 
     async def up_to_client() -> None:
         try:
@@ -500,11 +465,8 @@ async def _serve_preview(
     validate_token,
     resolve_port: Callable[[], int | None],
     verify_connection: Callable[[int, int], bool],
-    maintenance=None,
 ) -> None:
     """Shared request path: capability gate → target lookup → proxy."""
-    if maintenance is not None and maintenance.fenced():
-        return await _reject(scope, send, 423, "maintenance write fenced")
     if not _authed(scope, validate_token):
         return await _reject(scope, send, 403, "preview: not authorized")
     port = resolve_port()
@@ -517,7 +479,6 @@ async def _serve_preview(
             send,
             port,
             verify_connection,
-            maintenance,
         )
     return await _proxy_ws(
         scope,
@@ -525,7 +486,6 @@ async def _serve_preview(
         send,
         port,
         verify_connection,
-        maintenance,
     )
 
 
@@ -536,7 +496,6 @@ class PreviewProxyMiddleware:
         fastapi_app: Any,
         apps_domain: str | None,
         validate_token=None,
-        maintenance=None,
     ) -> None:
         self.app = app
         self.fastapi_app = fastapi_app  # for app.state.app_manager at request time
@@ -545,7 +504,6 @@ class PreviewProxyMiddleware:
         # so THIS is their only auth: require a short-lived preview-only capability.
         # It is never an owner API session and is never forwarded to project code.
         self.validate_token = validate_token
-        self.maintenance = maintenance
 
     def _slug_for(self, scope: dict[str, Any]) -> str | None:
         """Return the project slug if this request targets a preview subdomain."""
@@ -592,7 +550,6 @@ class PreviewProxyMiddleware:
                     validate_token=self.validate_token,
                     resolve_port=resolve_port,
                     verify_connection=verify_connection,
-                    maintenance=self.maintenance,
                 )
         await self.app(scope, receive, send)
 
@@ -623,7 +580,6 @@ class PreviewRelayManager:
         port_for: Callable[[str], int | None],
         verify_connection: Callable[[str, int, int], bool] | None = None,
         validate_token=None,
-        maintenance=None,
     ) -> None:
         # bind_host must be remote-reachable for remote preview to work. "auto"
         # adds loopback beside the tailnet interface - never 0.0.0.0; "off"
@@ -636,7 +592,6 @@ class PreviewRelayManager:
         self.port_for = port_for
         self.verify_connection = verify_connection
         self.validate_token = validate_token
-        self.maintenance = maintenance
         self._relays: dict[str, dict[str, Any]] = {}
 
     def port(self, slug: str) -> int | None:
@@ -668,7 +623,6 @@ class PreviewRelayManager:
                 validate_token=self.validate_token,
                 resolve_port=lambda: self.port_for(slug),
                 verify_connection=verify_connection,
-                maintenance=self.maintenance,
             )
 
         return relay_app
