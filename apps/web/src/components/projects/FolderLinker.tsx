@@ -4,7 +4,7 @@ import type { DirectoryBrowse } from '../../api/projects'
 import type { Project } from '../../types'
 
 type Mode = 'link' | 'create'
-type ErrorField = 'path' | 'folder' | 'display'
+type ErrorField = 'path' | 'folder' | 'display' | 'ops'
 type FormError = { id: number; message: string; field: ErrorField }
 
 const PROJECT_NAME_MAX_LENGTH = 120
@@ -16,9 +16,15 @@ function formErrorField(
   const apiField = linkProjectErrorField(error)
   if (apiField === 'name') return 'display'
   if (apiField === 'folder') return 'folder'
+  if (apiField === 'ops') return 'ops'
   if (apiField === 'path') return 'path'
   return fallback
 }
+
+// The link-time default for the per-project Ops path (prune C3), mirroring the
+// server's detection: an existing ops/ subfolder, else the project root.
+const detectedOpsPath = (cur: DirectoryBrowse): string =>
+  cur.dirs.some(d => d.name === 'ops') ? 'ops' : '.'
 
 // Browse the folders under the configured link roots (default: home) and either
 // register an EXISTING folder as a Proxima project, or create a brand-new empty
@@ -29,6 +35,9 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
   const [cur, setCur] = React.useState<DirectoryBrowse | null>(null)
   const [name, setName] = React.useState('')
   const [folderName, setFolderName] = React.useState('')
+  // null = follow the detected default; a string = explicit owner override
+  // sent as ops_path (and persisted per project by the server).
+  const [opsOverride, setOpsOverride] = React.useState<string | null>(null)
   const [error, setError] = React.useState<FormError | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
@@ -40,10 +49,13 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
   const pathRef = React.useRef<HTMLButtonElement>(null)
   const folderNameRef = React.useRef<HTMLInputElement>(null)
   const displayNameRef = React.useRef<HTMLInputElement>(null)
+  const opsPathRef = React.useRef<HTMLSelectElement>(null)
   const reportError = React.useCallback((message: string, field: ErrorField) => {
     const target = field === 'path'
       ? pathRef
-      : field === 'folder' ? folderNameRef : displayNameRef
+      : field === 'folder'
+        ? folderNameRef
+        : field === 'ops' ? opsPathRef : displayNameRef
     target.current?.focus()
     setError({ id: errorSeq.current += 1, message, field })
   }, [])
@@ -63,6 +75,8 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       .then(next => {
         if (mountedRef.current && seq === loadSeq.current) {
           setCur(next)
+          // A new folder means a new detection - drop any Ops override.
+          setOpsOverride(null)
           setLoading(false)
         }
       })
@@ -87,6 +101,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
     setError(null)
     setName('')
     setFolderName('')
+    setOpsOverride(null)
   }
 
   const submit = async () => {
@@ -126,11 +141,15 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
           path: cur.path,
           root_id: cur.root_id,
           name: name.trim() || undefined,
+          // Only an explicit override travels; omitting ops_path keeps the
+          // server-detected default (existing ops/ -> "ops", else ".").
+          ...(opsOverride !== null ? { ops_path: opsOverride } : {}),
         })
       }
       if (!mountedRef.current || seq !== actionSeq.current) return
       setName('')
       setFolderName('')
+      setOpsOverride(null)
       await onLinked(p)
     } catch (e) {
       if (mountedRef.current && seq === actionSeq.current) {
@@ -171,6 +190,7 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
   const here = cur.path.split('/').filter(Boolean).pop() || cur.path
   const createLabel = folderName.trim() || 'new-folder'
   const errorField = error?.field
+  const detectedOps = detectedOpsPath(cur)
   return <div className="folder-linker">
     <div className="seg fl-mode" role="group" aria-label="Folder action">
       <button type="button" aria-pressed={mode === 'link'} className={mode === 'link' ? 'active' : ''} disabled={busy} onClick={() => switchMode('link')}>
@@ -248,16 +268,48 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
         </button>
       </div>
     ) : (
-      <div className="fl-link">
-        <input ref={displayNameRef} name="project-display-name" value={name}
-          onChange={e => {
-            setName(e.target.value)
-            if (errorField === 'display') setError(null)
-          }}
-          placeholder={here} readOnly={busy} aria-label="Project display name"
-          aria-invalid={errorField === 'display' || undefined} />
-        <button type="button" className="primary-button" disabled={busy} onClick={() => void submit()}>{busy ? 'Linking…' : `Link “${here}”`}</button>
-      </div>
+      <>
+        <label className="fl-field fl-ops">
+          <span className="muted">
+            Ops folder <span className="fl-optional">(wiki, tasks, artifacts live here)</span>
+          </span>
+          <select
+            ref={opsPathRef}
+            name="ops-path"
+            value={opsOverride ?? detectedOps}
+            // No `disabled` while busy: a disabled select cannot receive the
+            // corrective focus when the server rejects the choice (inputs use
+            // readOnly for the same reason; selects have no readOnly).
+            aria-disabled={busy || undefined}
+            aria-invalid={errorField === 'ops' || undefined}
+            onChange={e => {
+              if (busy) return
+              const value = e.target.value
+              setOpsOverride(value === detectedOps ? null : value)
+              if (errorField === 'ops') setError(null)
+            }}
+          >
+            <option value=".">
+              {detectedOps === '.' ? 'Project root (detected)' : 'Project root'}
+            </option>
+            {cur.dirs.map(d => (
+              <option key={d.name} value={d.name}>
+                {detectedOps === d.name ? `${d.name}/ (detected)` : `${d.name}/`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="fl-link">
+          <input ref={displayNameRef} name="project-display-name" value={name}
+            onChange={e => {
+              setName(e.target.value)
+              if (errorField === 'display') setError(null)
+            }}
+            placeholder={here} readOnly={busy} aria-label="Project display name"
+            aria-invalid={errorField === 'display' || undefined} />
+          <button type="button" className="primary-button" disabled={busy} onClick={() => void submit()}>{busy ? 'Linking…' : `Link “${here}”`}</button>
+        </div>
+      </>
     )}
     {error && <p key={error.id} className="error-text" role="alert">{error.message}</p>}
   </div>

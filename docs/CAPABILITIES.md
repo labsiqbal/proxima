@@ -1258,23 +1258,36 @@ The selected Work Project is an owner-keyed browser preference and survives a fu
 refresh. Boot validates the saved slug against the owner's current Projects. If it
 was removed, Work selects an existing private Project and shows an explicit,
 dismissible fallback notice naming both the missing and replacement Projects.
-**Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` optional, `root_id` required),
+**Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` and `ops_path`
+optional, `root_id` required),
 `GET /api/fs/dirs` (`root_id` required once a path is selected), `PATCH/DELETE /api/projects/{slug}`.
 
 ### Container Areas and physical Ops storage
 
 **Why:** A Container is not a repo. It holds zero or more **repo Areas** plus exactly
 one **Ops Area** for durable non-code work. A repo Area may be a nested folder or `.`
-when the Container root is itself a repo. The Ops Area is physically rooted at
-`ops/`, so Ops-owned files cannot be confused with a sibling repo.
+when the Container root is itself a repo. **The Ops root is a per-project path**
+(prune C3), picked at link time and persisted on the Ops Area row - there is no
+global assumption that Ops lives at `ops/`.
 
 **How:** The compatibility `projects` and `project_areas` tables remain the storage
-and foreign-key truth. Workspace-created Containers (`POST /api/projects`, under
+and foreign-key truth; the Ops row's `rel_path` is the persisted per-project Ops
+path and every Ops feature resolves through it (`ops_root`). Workspace-created
+Containers (`POST /api/projects`, under
 Proxima's own data dir) still scaffold `ops/`, `ops/container.md`, and one active
 Ops row with `rel_path='ops'`. **Linked folders are never written to** (prune C2,
-below): link registers the Ops row at `.` (or adopts an existing populated
-`ops/`), and `mkdir`-linking creates exactly the empty directory the owner asked
-for - nothing inside it. `container_registry.py` is the canonical
+below): the link flow offers the detected default (an existing `ops/` folder ->
+`ops`, else the project root -> `.`) in the folder picker's "Ops folder" select;
+the owner may override it with any existing subfolder or the root (`ops_path` on
+`POST /api/projects/link`, validated as a real non-symlink directory, rejected
+with a field-scoped 400 otherwise). A detected default is recorded with
+`source='auto'`, an override with `source='manual'` - a manual choice is never
+adopted away by the settle sweep. Code-area auto-detection skips the chosen Ops
+subtree (a repo inside it is Ops content, not a code Area), and the merged file
+tree, `@`-reference index, and path-only file requests all resolve through the
+persisted path. `mkdir`-linking creates exactly the empty directory the owner
+asked for - nothing inside it (its Ops path is the root). `container_registry.py`
+is the canonical
 resolver for Container, Area, and Ops roots. It validates realpath containment and
 rejects path traversal, duplicate roots, unsafe overlaps, and Container-or-Ops-root
 symlinks on every resolution; the recursive scan that rejects every symlink under the
@@ -1290,20 +1303,27 @@ do not depend on registry projection; `container_registry.py` orchestrates them.
 
 **Link and startup are non-mutating (prune C2).** `POST /api/projects/link` and
 the boot sweep run `settle_container_ops` / `migrate_legacy_ops_containers`,
-which only ever take zero-write paths: **adoption first (prune C1)** - when the
-folder already contains a real, populated `ops/` directory, Proxima adopts it
-exactly as it exists on disk (the Ops row flips to `ops`, the durable marker
+which only ever take zero-write paths: **adoption first (prune C1/C3)** - the
+link-time Ops choice (detected default or `ops_path` override; an existing
+empty folder qualifies at link time) is adopted exactly as it exists on disk
+(the Ops row flips to the chosen path, the durable marker
 completes with a `mode: "adopted"` manifest holding a top-level inventory, and
 nothing is moved, generated, or rewritten; no `container.md` is created - an
 existing one is simply read for the identity/summary projection); resuming a
 previously authorized in-flight move (a durable "moving" manifest); and
 otherwise **leaving the folder byte-identical** - the Ops row stays at `.`
 (fully readable through the legacy virtual mapping), with no marker and no
-Attention item. Linking therefore never moves top-level `wiki/`, `tasks/`, etc.,
+Attention item. The startup sweep re-validates persisted choices and
+auto-adopts a populated `ops/` only for detection-sourced legacy `.` rows;
+persisted non-`.` paths are first-class settled layouts, never "unsupported".
+Linking therefore never moves top-level `wiki/`, `tasks/`, etc.,
 never creates `ops/` or `container.md`, and never appends to `.git/info/exclude`
 - the onboarding promise "Nothing is moved or copied" is literally true.
-A symlinked, non-directory, or unreadable `ops/`, or one overlapping a repo
-Area, stays fail-closed with an Attention item (symlink softening is prune C7).
+A symlinked, non-directory, or unreadable adoption target, or one overlapping a
+repo Area, stays fail-closed with an Attention item (symlink softening is prune
+C7). The finer per-project layout map (where wiki/artifacts/scripts/uploads
+live inside the Ops root) is prune C4 - today those names remain fixed
+relative to the resolved Ops root.
 
 **The move-based migration is exclusively an explicit, previewed opt-in** on the
 Ops-migration surface (`.../ops-migration/retry`). Its inspection payload reports

@@ -181,7 +181,7 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
           <dl className="ops-migration-facts">
             <div><dt>Phase</dt><dd>{stateLabel(detail.phase)}</dd></div>
             <div><dt>Active Ops path</dt><dd><code>{detail.active_ops_path ?? 'unavailable'}</code></dd></div>
-            <div><dt>Physical ops/</dt><dd>{stateLabel(detail.physical_ops.state)}</dd></div>
+            <div><dt>Physical {detail.physical_ops.path}/</dt><dd>{stateLabel(detail.physical_ops.state)}</dd></div>
             <div><dt>Attention</dt><dd>{stateLabel(detail.attention.status)}</dd></div>
           </dl>
           {detail.physical_ops.entries.length > 0 && (
@@ -223,8 +223,8 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
             className="ghost-button"
             disabled={!!busy || !physicalRootKind}
             aria-describedby="ops-migration-physical-inspection"
-            onClick={() => { if (physicalRootKind) reveal('ops', physicalRootKind) }}
-          >Reveal physical ops/</button>
+            onClick={() => { if (physicalRootKind) reveal(detail.physical_ops.path, physicalRootKind) }}
+          >Reveal physical {detail.physical_ops.path}/</button>
           <button type="button" className="ghost-button" disabled={!!busy} onClick={() => void refreshValidation()}>
             {busy === 'validate' ? 'Refreshing...' : 'Refresh validation'}
           </button>

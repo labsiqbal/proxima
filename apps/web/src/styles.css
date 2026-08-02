@@ -8341,6 +8341,21 @@ div.result-media {
 .fl-optional {
 	font-size: var(--text-xs);
 }
+/* Per-project Ops path picker (prune C3): detected default + owner override */
+.fl-ops {
+	margin-bottom: var(--space-2);
+}
+.fl-ops select {
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-md);
+	background: var(--ui-surface);
+	color: var(--ui-text-primary);
+	padding: var(--space-2);
+	font-size: var(--text-base);
+}
+.fl-ops select[aria-invalid='true'] {
+	border-color: var(--ui-danger);
+}
 .fl-create .primary-button {
 	align-self: stretch;
 }

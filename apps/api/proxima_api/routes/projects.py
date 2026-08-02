@@ -182,12 +182,23 @@ def register(app, deps):
         (prune C2): no moves, no scaffold, no git-exclude appends. The
         project's path points at the real folder, so chat/terminal/files
         operate on it. Pass mkdir=true to create a brand-new empty directory
-        first (parent must already exist inside the link roots)."""
+        first (parent must already exist inside the link roots). The Ops
+        path is per project, picked here (prune C3): ops_path overrides the
+        detected default (an existing ops/ folder, else the root '.') and the
+        choice persists on the project's Ops Area."""
         created_dir: CreatedDirectory | None = None
         pid: int | None = None
         made_dir = False
         try:
             error_field = "parent" if payload.mkdir else "path"
+            if payload.mkdir and payload.ops_path not in (None, "."):
+                # mkdir creates one empty folder: nothing inside it exists
+                # yet, so only the root itself can be its Ops path.
+                raise _link_error(
+                    400,
+                    "a brand-new folder has no Ops subfolder yet - leave the Ops path on the project root",
+                    "ops_path",
+                )
             try:
                 allowed_roots = AllowedRoots.from_configured(_link_roots())
             except PathResolutionUnavailable as exc:
@@ -268,6 +279,21 @@ def register(app, deps):
                         400, "selected folder is not reachable", "path"
                     ) from exc
                 target = resolved_target.path
+            # The per-project Ops path (prune C3): validate an explicit owner
+            # choice against the real folder, else detect the default. The
+            # choice persists on the Ops Area row via the settle below.
+            if payload.ops_path is not None:
+                try:
+                    ops_choice = container_registry.validate_ops_path_choice(
+                        target,
+                        payload.ops_path,
+                    )
+                except container_registry.ContainerBoundaryError as exc:
+                    raise _link_error(400, str(exc), "ops_path") from exc
+                ops_source = "manual"
+            else:
+                ops_choice = container_registry.detect_ops_path(target)
+                ops_source = "auto"
             name = (payload.name or target.name).strip()
             # strip("-") AFTER the 63-char truncation too: [:63] can re-cut a collapsed
             # run mid-hyphen and leave a trailing '-', which validate_slug would reject.
@@ -330,13 +356,14 @@ def register(app, deps):
                     "parent" if made_dir else "path",
                 ) from exc
             # Container areas (T1): register the ops area + auto-detect code
-            # areas. Linking never writes into the folder (prune C2):
-            # settle adopts an existing populated ops/ as-is and otherwise
-            # keeps the legacy "." layout; the move-based migration is only
-            # the explicit, previewed opt-in on the ops-migration surface.
-            ensure_ops_area(db(), pid, rel_path=".")
+            # areas. Linking never writes into the folder (prune C2): settle
+            # adopts the chosen Ops folder as-is (the detected default or the
+            # owner's link-time override, prune C3) and otherwise keeps the
+            # "." layout; the move-based migration is only the explicit,
+            # previewed opt-in on the ops-migration surface.
+            ensure_ops_area(db(), pid, rel_path=".", source=ops_source)
             container_registry.container_root(registered)
-            container_registry.settle_container_ops(db(), pid)
+            container_registry.settle_container_ops(db(), pid, ops_path=ops_choice)
             container_registry.container_root(registered)
             summary = sync_code_areas(db(), pid, target)
             audit_action = "project.link.mkdir" if made_dir else "project.link"

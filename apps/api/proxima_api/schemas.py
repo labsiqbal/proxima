@@ -337,6 +337,11 @@ class ContainerLinkRequest(BaseModel):
     # When true, create `path` as a new empty directory under an existing parent
     # (inside link roots) and then register it. Never deletes or moves content.
     mkdir: bool = False
+    # The per-project Ops path chosen at link time (prune C3). None keeps the
+    # detected default: an existing `ops/` folder, else the project root `.`.
+    # An explicit value must name the root (`.`) or an existing directory
+    # inside the folder and persists as an owner override.
+    ops_path: str | None = Field(default=None, max_length=500)
 
 
 class ProjectLinkRequest(ContainerLinkRequest):

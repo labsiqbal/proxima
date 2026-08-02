@@ -378,6 +378,126 @@ describe('FolderLinker', () => {
     expect(linkProjectErrorField(missingParent)).toBe('path')
   })
 
+  it('offers the detected ops/ folder as the Ops path default without sending an override', async () => {
+    const user = userEvent.setup()
+    const onLinked = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(browseDirs).mockResolvedValue({
+      path: '/home/user/code/client',
+      parent: '/home/user/code',
+      dirs: [
+        { name: 'ops', path: '/home/user/code/client/ops' },
+        { name: 'site', path: '/home/user/code/client/site' },
+      ],
+      roots: ['/home/user'],
+      root_id: 'root-owner',
+    })
+    render(<FolderLinker token="tok" onLinked={onLinked} />)
+
+    await screen.findByText('/home/user/code/client')
+    const picker = screen.getByRole('combobox', { name: /Ops folder/ })
+    expect(picker).toHaveValue('ops')
+    await user.click(screen.getByRole('button', { name: /Link “client”/ }))
+
+    await waitFor(() => {
+      expect(linkProject).toHaveBeenCalledWith('tok', {
+        path: '/home/user/code/client',
+        root_id: 'root-owner',
+        name: undefined,
+      })
+    })
+    expect(onLinked).toHaveBeenCalledWith(project)
+  })
+
+  it('defaults the Ops path to the project root when no ops/ exists', async () => {
+    const user = userEvent.setup()
+    render(<FolderLinker token="tok" onLinked={vi.fn().mockResolvedValue(undefined)} />)
+
+    await screen.findByText('/home/user/code')
+    const picker = screen.getByRole('combobox', { name: /Ops folder/ })
+    expect(picker).toHaveValue('.')
+    await user.click(screen.getByRole('button', { name: /Link “code”/ }))
+
+    await waitFor(() => {
+      expect(linkProject).toHaveBeenCalledWith('tok', {
+        path: '/home/user/code',
+        root_id: 'root-owner',
+        name: undefined,
+      })
+    })
+  })
+
+  it('sends an explicit Ops path override and drops it back on the detected default', async () => {
+    const user = userEvent.setup()
+    const onLinked = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(browseDirs).mockResolvedValue({
+      path: '/home/user/code/client',
+      parent: '/home/user/code',
+      dirs: [
+        { name: 'ops', path: '/home/user/code/client/ops' },
+        { name: 'runbook', path: '/home/user/code/client/runbook' },
+      ],
+      roots: ['/home/user'],
+      root_id: 'root-owner',
+    })
+    render(<FolderLinker token="tok" onLinked={onLinked} />)
+
+    await screen.findByText('/home/user/code/client')
+    const picker = screen.getByRole('combobox', { name: /Ops folder/ })
+    await user.selectOptions(picker, 'runbook')
+    await user.click(screen.getByRole('button', { name: /Link “client”/ }))
+    await waitFor(() => {
+      expect(linkProject).toHaveBeenLastCalledWith('tok', {
+        path: '/home/user/code/client',
+        root_id: 'root-owner',
+        name: undefined,
+        ops_path: 'runbook',
+      })
+    })
+
+    // Re-selecting the detected default means "no override" again.
+    await user.selectOptions(picker, 'ops')
+    await user.click(screen.getByRole('button', { name: /Link “client”/ }))
+    await waitFor(() => {
+      expect(linkProject).toHaveBeenLastCalledWith('tok', {
+        path: '/home/user/code/client',
+        root_id: 'root-owner',
+        name: undefined,
+      })
+    })
+  })
+
+  it('returns a rejected Ops path to the picker', async () => {
+    const user = userEvent.setup()
+    const error = new ApiError(
+      400,
+      'POST /api/projects/link failed (400): the chosen Ops folder does not exist inside the project',
+      '/api/projects/link',
+      'POST',
+      'ops_path',
+      'the chosen Ops folder does not exist inside the project',
+    )
+    vi.mocked(browseDirs).mockResolvedValue({
+      path: '/home/user/code/client',
+      parent: '/home/user/code',
+      dirs: [{ name: 'runbook', path: '/home/user/code/client/runbook' }],
+      roots: ['/home/user'],
+      root_id: 'root-owner',
+    })
+    vi.mocked(linkProject).mockRejectedValue(error)
+    render(<FolderLinker token="tok" onLinked={vi.fn()} />)
+
+    await screen.findByText('/home/user/code/client')
+    const picker = screen.getByRole('combobox', { name: /Ops folder/ })
+    await user.selectOptions(picker, 'runbook')
+    await user.click(screen.getByRole('button', { name: /Link “client”/ }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('the chosen Ops folder does not exist inside the project')
+    expect(picker).toHaveFocus()
+    expect(picker).toHaveAttribute('aria-invalid', 'true')
+    expect(linkProjectErrorField(error)).toBe('ops')
+  })
+
   it('uses pressed buttons with ordinary keyboard traversal for folder choice', async () => {
     const user = userEvent.setup()
     render(<FolderLinker token="tok" onLinked={vi.fn()} />)

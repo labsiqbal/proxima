@@ -889,8 +889,8 @@ def test_link_mkdir_rolls_back_nonempty_tree_after_ops_failure(
     original = container_registry.settle_container_ops
     should_fail = {"value": True}
 
-    def fail_after_ops(conn, project_id):
-        result = original(conn, project_id)
+    def fail_after_ops(conn, project_id, **kwargs):
+        result = original(conn, project_id, **kwargs)
         assert target.is_dir()
         # Settle never writes into the folder (prune C2).
         assert not (target / "ops").exists()
@@ -940,8 +940,8 @@ def test_link_mkdir_post_ops_rollback_skips_replacement(
     moved = parent / "moved-owned-after-ops"
     replacement_marker = "replacement-keep"
 
-    def replace_owned_then_fail(conn, project_id):
-        original(conn, project_id)
+    def replace_owned_then_fail(conn, project_id, **kwargs):
+        original(conn, project_id, **kwargs)
         assert target.is_dir()
         target.rename(moved)
         target.mkdir()

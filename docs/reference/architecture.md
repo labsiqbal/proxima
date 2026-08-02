@@ -257,8 +257,15 @@ and `steps_state` cursor) or `graph` (ADR-0001) — graph jobs keep durable per-
 in `node_states` instead.
 A project row is the compatibility persistence record for a **Container**.
 `project_areas` records zero or more repo Areas (auto-detected from `.git` with manual
-override, where `.` means repo-at-root) and exactly one active Ops Area. Fresh
-Containers use the physical `ops/` folder and an Ops row with `rel_path='ops'`.
+override, where `.` means repo-at-root) and exactly one active Ops Area. The Ops
+row's `rel_path` **is the persisted per-project Ops path** (prune C3), picked at
+link time: the detected default (an existing `ops/` folder, else the root `.`)
+or an owner override (`ops_path` on the link request; recorded with
+`source='manual'` so the settle sweep never adopts it away). Every Ops feature
+resolves through this row via `ops_root` - nothing assumes a global `ops/`.
+Workspace-created Containers (Proxima's own data dir) still scaffold `ops/` and
+register `rel_path='ops'`. Code-area auto-detection skips the per-project Ops
+subtree, so a repo inside the chosen Ops folder is Ops content, not a code Area.
 `container_registry` stores a bounded projection of identity and summary from
 `ops/container.md`, its full source hash, the projection timestamp, and last known
 activity. Identity is free text, not a Container type enum. The file API refreshes
@@ -284,8 +291,10 @@ symlinks receive the target of their resolved authoritative Area, while broken o
 escaping symlinks are omitted. Merged tree entries switch to an Ops or Code target
 as traversal enters that Area, so cross-Area aliases are rejected.
 Display names never select a physical root. Path-only callers remain a compatibility
-input, with historical virtual Ops names and physical `ops/...` support; legacy
-Ops-at-dot keeps `ops/...` as an Area-relative literal instead of stripping it.
+input, with historical virtual Ops names plus paths prefixed by the Container's
+persisted Ops path (`ops/...` or the per-project folder chosen at link time)
+upgrading to the Ops Area; legacy Ops-at-dot keeps `ops/...` as an
+Area-relative literal instead of stripping it.
 `target_preview.py` owns targeted preview transport. The authenticated
 `/api/target-preview/{slug}/{kind}/{id}/{path}` entry validates the locator and asks
 `TargetPreviewManager` for an Area-only origin: a named local host, an apps-domain
@@ -363,18 +372,24 @@ stays fail-closed. The intentional repo-at-root plus `ops/` containment is permi
 the explicit migration (only) adds `/ops/` to the root repo's local git exclude
 when it creates `ops/`.
 
-Legacy Ops rows at `.` are a fully supported steady state (prune C2), readable
-through the reserved-name virtual mapping. **Link and the boot sweep never
-mutate the folder**: `settle_container_ops` / `migrate_legacy_ops_containers`
+Ops rows at `.` are a fully supported steady state (prune C2), readable
+through the reserved-name virtual mapping, and any persisted non-`.` Ops path is
+a first-class settled layout (prune C3) that the sweep validates and refreshes -
+never "unsupported". **Link and the boot sweep never mutate the folder**:
+`settle_container_ops` / `migrate_legacy_ops_containers`
 take only zero-write paths - adopt, resume an authorized in-flight move, or
 leave the layout byte-identical at `.` with no marker and no Attention. Before
-any manifest is considered, a populated pre-existing `ops/` directory is
-**adopted as-is** (prune C1): the Ops row flips to `ops`, the marker completes
-with a `mode: "adopted"` manifest carrying a top-level inventory of the existing
-content, and no file is moved, generated, or rewritten - `container.md` is
-optional and only read if present. Adoption is skipped while a durable `moving`
+any manifest is considered, the link-time Ops choice is **adopted as-is**
+(prune C1/C3): the Ops row flips to the chosen path (the detected `ops/`
+default or the owner's `ops_path` override, which also accepts an existing
+empty folder), the marker completes with a `mode: "adopted"` manifest carrying
+a top-level inventory of the existing content, and no file is moved, generated,
+or rewritten - `container.md` is optional and only read if present. The
+startup sweep passes no choice: it auto-adopts a populated `ops/` only for
+detection-sourced (`source='auto'`) legacy `.` rows, so an explicit owner root
+choice persists. Adoption is skipped while a durable `moving`
 manifest exists (mid-move content is migration-owned) and stays fail-closed for
-a symlinked, non-directory, or unreadable `ops/` or one overlapping a repo Area.
+a symlinked, non-directory, or unreadable target or one overlapping a repo Area.
 `inspect_ops_migration` mirrors the same predicate and reports `retry_action`
 (`adopt`/`migrate`/`revalidate`) plus - for a safe `migrate` - `planned_writes`
 (`container_doc: move|generate`, `git_exclude`), so the migration surface

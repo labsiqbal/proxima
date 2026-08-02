@@ -272,6 +272,15 @@ def register(app, deps):
                         context=context,
                     ),
                 }
+            # Hide the Ops folder itself from the container listing - its
+            # content is overlaid below. The name comes from the per-project
+            # Ops path (prune C3), not a fixed "ops" constant; a nested Ops
+            # path has no single top-level entry to hide.
+            try:
+                ops_rel = ops.root.relative_to(container_root).as_posix()
+            except ValueError:
+                ops_rel = "."
+            ops_entry_name = ops_rel if "/" not in ops_rel else None
             entries = {
                 entry["name"]: entry
                 for entry in file_targets.add_targets(
@@ -282,7 +291,7 @@ def register(app, deps):
                     root=container_root,
                     context=context,
                 )
-                if entry["name"] != "ops"
+                if entry["name"] != ops_entry_name
             }
             for entry in file_targets.add_targets(
                 db(),
@@ -328,10 +337,16 @@ def register(app, deps):
             container, limit=limit
         )
         ops_files, ops_truncated = fsapi.list_reference_files(ops, limit=limit)
+        # Deduplicate through the per-project Ops path (prune C3): container
+        # entries inside the Ops folder are re-listed Ops-relative above.
+        try:
+            ops_prefix = f"{ops.relative_to(container).as_posix()}/"
+        except ValueError:
+            ops_prefix = None
         merged = {
             item["path"]: item
             for item in container_files
-            if not item["path"].startswith("ops/")
+            if ops_prefix is None or not item["path"].startswith(ops_prefix)
         }
         merged.update({item["path"]: item for item in ops_files})
         files = sorted(merged.values(), key=lambda item: item["path"].casefold())

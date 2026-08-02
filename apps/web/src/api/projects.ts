@@ -26,16 +26,19 @@ export const browseDirs = (token: string, path = '', rootId = '') => {
   if (rootId) query.set('root_id', rootId)
   return api<DirectoryBrowse>(`/api/fs/dirs?${query}`, token)
 }
-export const linkProject = (token: string, body: { path: string; root_id: string; name?: string; slug?: string; mkdir?: boolean }) => api<Project>('/api/projects/link', token, { method: 'POST', body: JSON.stringify(body) })
+// ops_path is the per-project Ops folder chosen at link time (prune C3);
+// omit it to keep the server-detected default (existing ops/ -> "ops", else ".").
+export const linkProject = (token: string, body: { path: string; root_id: string; name?: string; slug?: string; mkdir?: boolean; ops_path?: string }) => api<Project>('/api/projects/link', token, { method: 'POST', body: JSON.stringify(body) })
 export const apiErrorDetail = (error: unknown): string => {
   if (error instanceof ApiError && error.detail) return error.detail
   if (error instanceof Error) return error.message
   return String(error)
 }
-export const linkProjectErrorField = (error: unknown): 'path' | 'folder' | 'name' | null => {
+export const linkProjectErrorField = (error: unknown): 'path' | 'folder' | 'name' | 'ops' | null => {
   if (!(error instanceof ApiError)) return null
   if (error.field === 'name' || error.field === 'slug') return 'name'
   if (error.field === 'folder') return 'folder'
+  if (error.field === 'ops_path') return 'ops'
   if (error.field === 'path' || error.field === 'parent' || error.field === 'mkdir') return 'path'
   return null
 }

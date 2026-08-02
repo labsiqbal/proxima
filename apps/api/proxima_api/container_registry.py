@@ -212,7 +212,7 @@ def validated_area_roots(
     for row in rows:
         rel = _safe_rel_path(row["rel_path"])
         candidate = root if rel.as_posix() == "." else root.joinpath(*rel.parts)
-        if row["kind"] == "ops" and rel.as_posix() == OPS_RELPATH:
+        if row["kind"] == "ops" and rel.as_posix() != ".":
             _reject_symlinks(candidate, deep=deep_ops_scan)
         target = candidate.resolve()
         if not target.is_dir():
@@ -314,6 +314,48 @@ def try_ops_root(
         return ops_root(conn, container, deep_ops_scan=deep_ops_scan)
     except ContainerBoundaryError:
         return None
+
+
+def detect_ops_path(root: Path) -> str:
+    """The link-time default for a Container's Ops path (prune C3).
+
+    A real ``ops/`` directory on disk is the detected default; anything else
+    (missing, file, symlink) falls back to the Container root ``.``. The
+    result is only a default - the owner may override it at link time, and
+    the chosen value persists on the Ops Area row.
+    """
+    candidate = Path(root) / OPS_RELPATH
+    try:
+        if candidate.is_dir() and not candidate.is_symlink():
+            return OPS_RELPATH
+    except OSError:
+        pass
+    return "."
+
+
+def validate_ops_path_choice(root: Path, raw: str) -> str:
+    """Validate an owner-chosen Ops path against the real folder.
+
+    Returns the normalized relative path (``.`` for the Container root).
+    Raises :class:`ContainerBoundaryError` when the choice cannot be an Ops
+    root: unsafe/escaping paths, missing or non-directory targets, or a
+    tree containing symlinks (same fail-closed policy as adoption; softening
+    reads is prune C7).
+    """
+    rel = _safe_rel_path(raw)
+    normalized = rel.as_posix()
+    if normalized == ".":
+        return "."
+    candidate = Path(root).joinpath(*rel.parts)
+    state = _path_state(candidate)
+    if state == "symlink":
+        raise ContainerBoundaryError("the chosen Ops folder cannot be a symlink")
+    if state != "directory":
+        raise ContainerBoundaryError(
+            "the chosen Ops folder does not exist inside the project"
+        )
+    _reject_symlinks(candidate)
+    return normalized
 
 
 def root_for_virtual_path(
@@ -1414,20 +1456,26 @@ def _build_manifest(
 def _adoption_inventory(
     conn: sqlite3.Connection,
     container: Mapping[str, Any],
+    *,
+    rel_path: str = OPS_RELPATH,
+    allow_empty: bool = False,
 ) -> list[dict[str, str]] | None:
-    """Inventory a pre-existing populated ``ops/`` that can be adopted as-is.
+    """Inventory a pre-existing Ops folder that can be adopted as-is.
 
     A project is the folder as it exists on disk: when the owner links a
-    folder whose ``ops/`` already has content, Proxima adopts that content
-    instead of demanding an empty directory (prune C1). Returns the top-level
-    inventory when ``root/ops`` is a real populated directory; returns None
-    when there is nothing to adopt (``ops/`` missing or empty - those layouts
-    stay with the planned move-based migration). Raises for layouts that stay
-    fail-closed: a symlinked or non-directory ``ops/``, unreadable content,
-    or overlap with an active repo Area.
+    folder whose Ops folder (the detected ``ops/`` default, or a per-project
+    path chosen at link time - prune C3) already exists, Proxima adopts that
+    content instead of demanding an empty directory (prune C1). Returns the
+    top-level inventory when ``root/<rel_path>`` is a real directory; returns
+    None when there is nothing to adopt (missing, or empty unless
+    ``allow_empty`` - the link-time flow adopts an empty chosen folder too,
+    while the legacy sweep keeps the move-based migration available for empty
+    ``ops/``). Raises for layouts that stay fail-closed: a symlinked or
+    non-directory target, unreadable content, or overlap with an active repo
+    Area.
     """
     root = container_root(container)
-    physical = root / OPS_RELPATH
+    physical = root.joinpath(*_safe_rel_path(rel_path).parts)
     state = _path_state(physical)
     if state == "missing":
         return None
@@ -1444,16 +1492,15 @@ def _adoption_inventory(
         ).fetchall()
     }
     if any(
-        path == OPS_RELPATH or path.startswith(f"{OPS_RELPATH}/")
-        for path in code_paths
+        path == rel_path or path.startswith(f"{rel_path}/") for path in code_paths
     ):
         raise OpsMigrationCollision(
             "the requested physical Ops root is an active repo Area"
         )
-    inventory = _physical_ops_state(physical)
-    if inventory["state"] == "empty":
+    inventory = _physical_ops_state(physical, rel_path=rel_path)
+    if inventory["state"] == "empty" and not allow_empty:
         return None
-    if inventory["state"] != "populated":
+    if inventory["state"] not in {"populated", "empty"}:
         raise OpsMigrationCollision("physical Ops root cannot be inspected")
     # The symlink policy is unchanged by adoption: any descendant symlink
     # stays fail-closed (softening reads is prune step C7, not C1).
@@ -1464,6 +1511,8 @@ def _adoption_inventory(
 def _adoption_manifest(
     container: Mapping[str, Any],
     inventory: list[dict[str, str]],
+    *,
+    rel_path: str = OPS_RELPATH,
 ) -> dict[str, Any]:
     """The durable record of an as-is adoption: what existed, nothing planned."""
     root = container_root(container)
@@ -1471,7 +1520,7 @@ def _adoption_manifest(
         "version": OPS_MIGRATION_VERSION,
         "mode": "adopted",
         "container_root": str(root),
-        "ops_root": str(root / OPS_RELPATH),
+        "ops_root": str(root.joinpath(*_safe_rel_path(rel_path).parts)),
         "entries": [],
         "inventory": inventory,
     }
@@ -1905,7 +1954,7 @@ area_inventory AS (
     SUM(CASE WHEN kind = 'code' THEN 1 ELSE 0 END) AS code_area_count,
     SUM(CASE WHEN kind = 'ops' THEN 1 ELSE 0 END) AS ops_area_count,
     SUM(
-      CASE WHEN kind = 'ops' AND rel_path = 'ops' THEN 1 ELSE 0 END
+      CASE WHEN kind = 'ops' AND rel_path != '.' THEN 1 ELSE 0 END
     ) AS physical_ops_area_count
   FROM project_areas
   WHERE source != 'excluded'
@@ -2180,6 +2229,8 @@ def _path_device(path: Path) -> int:
 def _physical_ops_state(
     path: Path,
     internal_files: Mapping[str, Mapping[str, Any]] | None = None,
+    *,
+    rel_path: str = OPS_RELPATH,
 ) -> dict[str, Any]:
     state = _path_state(path)
     entries: list[dict[str, str]] = []
@@ -2221,14 +2272,14 @@ def _physical_ops_state(
                     else:
                         kind = "other"
                     entries.append(
-                        {"path": f"{OPS_RELPATH}/{child.name}", "kind": kind}
+                        {"path": f"{rel_path}/{child.name}", "kind": kind}
                     )
         except OSError:
             state = "unavailable"
             entries = []
         else:
             state = "populated" if entries else "empty"
-    return {"path": OPS_RELPATH, "state": state, "entries": entries}
+    return {"path": rel_path, "state": state, "entries": entries}
 
 
 def _validate_manifest_area_ownership(
@@ -3155,7 +3206,7 @@ def inspect_ops_migration(
     data = get_container(conn, container)
     area_rows = conn.execute(
         """
-        SELECT id, rel_path
+        SELECT id, rel_path, source
         FROM project_areas
         WHERE project_id = ? AND kind = 'ops' AND source != 'excluded'
         ORDER BY id
@@ -3163,6 +3214,13 @@ def inspect_ops_migration(
         (data["id"],),
     ).fetchall()
     active_ops_path = str(area_rows[0]["rel_path"]) if len(area_rows) == 1 else None
+    active_ops_source = str(area_rows[0]["source"]) if len(area_rows) == 1 else None
+    # The Ops folder this view inspects: the persisted per-project path when
+    # one is active (prune C3), else the default ``ops/`` a legacy ``.``
+    # migration would target.
+    inspected_rel = (
+        active_ops_path if active_ops_path not in (None, ".") else OPS_RELPATH
+    )
     marker_row = conn.execute(
         """
         SELECT migration_version, status, manifest_json, manifest_hash, last_error,
@@ -3202,7 +3260,11 @@ def inspect_ops_migration(
     except ContainerBoundaryError as exc:
         root = None
         root_error = str(exc)
-    physical = root / OPS_RELPATH if root is not None else None
+    physical = (
+        root.joinpath(*_safe_rel_path(inspected_rel).parts)
+        if root is not None
+        else None
+    )
     manifest_names: set[str] = set()
     stored_manifest: dict[str, Any] | None = None
     if marker and marker.get("manifest_json"):
@@ -3246,9 +3308,9 @@ def inspect_ops_migration(
             if exact_recovery:
                 internal_files[recovery_temp["path"]] = recovery_temp
     physical_ops = (
-        _physical_ops_state(physical, internal_files)
+        _physical_ops_state(physical, internal_files, rel_path=inspected_rel)
         if physical is not None
-        else {"path": OPS_RELPATH, "state": "unavailable", "entries": []}
+        else {"path": inspected_rel, "state": "unavailable", "entries": []}
     )
     owned_paths: list[dict[str, Any]] = []
     conflicts: list[dict[str, str]] = []
@@ -3272,7 +3334,7 @@ def inspect_ops_migration(
             conflicts.append(
                 {
                     "path": name,
-                    "reason": f"Both {name} and {OPS_RELPATH}/{name} exist.",
+                    "reason": f"Both {name} and {inspected_rel}/{name} exist.",
                 }
             )
         elif source_state != "missing":
@@ -3295,7 +3357,7 @@ def inspect_ops_migration(
         owned_paths.append(
             {
                 "path": name,
-                "destination": f"{OPS_RELPATH}/{name}",
+                "destination": f"{inspected_rel}/{name}",
                 "expected_kind": expected,
                 "legacy_state": source_state,
                 "physical_state": destination_state,
@@ -3318,7 +3380,10 @@ def inspect_ops_migration(
         )
         adoption: list[dict[str, str]] | None = None
         adoption_error: str | None = None
-        if not resuming:
+        # An explicit root choice (a 'manual' '.' row, prune C3) is never
+        # adopted away from the owner; only detection-sourced legacy rows
+        # offer the adopt retry.
+        if not resuming and active_ops_source == "auto":
             try:
                 adoption = _adoption_inventory(conn, data)
             except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
@@ -3353,7 +3418,9 @@ def inspect_ops_migration(
                     # directory only; a gitfile checkout is left untouched.
                     "git_exclude": root is not None and (root / ".git").is_dir(),
                 }
-    elif active_ops_path == OPS_RELPATH:
+    elif active_ops_path is not None:
+        # Any persisted non-'.' Ops path is a settled, first-class layout
+        # (prune C3) - validate it, never call it unsupported.
         try:
             validated_area_roots(conn, data, deep_ops_scan=True)
         except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
@@ -3364,27 +3431,28 @@ def inspect_ops_migration(
                 retry_action = "revalidate"
             else:
                 validation_reason = "Migration is already complete; no retry is needed."
-    elif active_ops_path is None:
-        validation_reason = "Container must have exactly one active Ops Area."
     else:
-        validation_reason = f"unsupported legacy Ops Area path: {active_ops_path}"
+        validation_reason = "Container must have exactly one active Ops Area."
     if (
         validation_reason
-        and active_ops_path != OPS_RELPATH
+        and active_ops_path in (None, ".")
         and not any(item["reason"] == validation_reason for item in conflicts)
     ):
-        conflicts.append({"path": OPS_RELPATH, "reason": validation_reason})
+        conflicts.append({"path": inspected_rel, "reason": validation_reason})
 
     if marker is not None:
         phase = str(marker["status"])
-    elif active_ops_path == OPS_RELPATH:
+    elif active_ops_path not in (None, "."):
         phase = "not_required"
     else:
         phase = "unplanned"
     legacy_active = active_ops_path == "."
-    physical_active = active_ops_path == OPS_RELPATH
+    physical_active = active_ops_path is not None and active_ops_path != "."
     if physical_active:
-        usability_summary = "Physical ops/ is active and Ops features remain usable."
+        usability_summary = (
+            f"The Ops folder {active_ops_path}/ is active and Ops features "
+            "remain usable."
+        )
     elif legacy_active and not unavailable:
         usability_summary = (
             "The legacy Ops layout remains active. Existing Ops features continue "
@@ -3425,7 +3493,7 @@ def inspect_ops_migration(
                 "reason": (
                     None
                     if physical_ops["state"] in {"empty", "populated"}
-                    else f"Physical {OPS_RELPATH}/ is {physical_ops['state']}."
+                    else f"Physical {inspected_rel}/ is {physical_ops['state']}."
                 ),
             },
         },
@@ -3463,19 +3531,31 @@ def _migrate_container_ops_locked(
     container: int | sqlite3.Row | Mapping[str, Any],
     *,
     allow_moves: bool = True,
+    ops_path: str | None = None,
 ) -> bool:
-    """Migrate one legacy ``.`` Ops Area. Returns True only when complete.
+    """Settle or migrate one Container's Ops Area. Returns True when settled.
+
+    Any persisted non-``.`` Ops path is a first-class layout (prune C3): it is
+    validated and refreshed, never "unsupported". The remaining machinery
+    handles legacy ``.`` rows.
 
     With ``allow_moves=False`` (link and the startup settle sweep, prune C2)
-    only zero-write outcomes run: adopting a populated ``ops/`` and resuming
+    only zero-write outcomes run: adopting an existing Ops folder and resuming
     a previously authorized in-flight move (a durable ``moving`` manifest).
     A ``.`` layout with nothing to adopt is left exactly as it is - active,
     readable, no marker, no attention - until the owner opts into the
     previewed migration through the retry route.
+
+    ``ops_path`` is the link-time choice (prune C3): the detected default or
+    the owner's override. It targets adoption at that folder (accepting an
+    empty one) and ``.`` pins the Container root explicitly, skipping
+    adoption. ``None`` (the startup sweep) keeps the legacy behavior:
+    auto-adopt a populated ``ops/`` for detection-sourced rows only, so an
+    owner's explicit root choice is never adopted away.
     """
     data = get_container(conn, container)
     row = conn.execute(
-        "SELECT id, rel_path FROM project_areas "
+        "SELECT id, rel_path, source FROM project_areas "
         "WHERE project_id = ? AND kind = 'ops' AND source != 'excluded'",
         (data["id"],),
     ).fetchone()
@@ -3483,7 +3563,7 @@ def _migrate_container_ops_locked(
         reason = "Container has no active Ops Area"
         _attention(conn, data, reason)
         return False
-    if row["rel_path"] == OPS_RELPATH:
+    if row["rel_path"] != ".":
         try:
             validated_area_roots(conn, data, deep_ops_scan=True)
             refresh_registry_projection(conn, data)
@@ -3493,10 +3573,6 @@ def _migrate_container_ops_locked(
             return False
         _resolve_attention(conn, int(data["id"]))
         return True
-    if row["rel_path"] != ".":
-        reason = f"unsupported legacy Ops Area path: {row['rel_path']}"
-        _attention(conn, data, reason)
-        return False
 
     try:
         validated_area_roots(conn, data, deep_ops_scan=True)
@@ -3514,25 +3590,43 @@ def _migrate_container_ops_locked(
     manifest: dict[str, Any] | None = None
     resuming = bool(marker and marker["status"] == "moving" and marker["manifest_json"])
     if not resuming:
-        # Adopt-as-is comes first (prune C1): a populated ops/ that already
+        # Adopt-as-is comes first (prune C1): an Ops folder that already
         # exists on disk is registered exactly as it is - no moves, no
         # generated files - instead of colliding with the planned migration.
-        try:
-            adoption = _adoption_inventory(conn, data)
-        except (ContainerBoundaryError, OSError) as exc:
-            reason = str(exc)
-            _upsert_marker(conn, int(data["id"]), "attention", None, reason)
-            _attention(conn, data, reason)
-            return False
+        # The adoption target is per project (prune C3): the link-time choice
+        # when given, else the ``ops/`` default - and only for
+        # detection-sourced rows, so a persisted explicit root choice stays.
+        target_rel = ops_path if ops_path not in (None, ".") else OPS_RELPATH
+        attempt_adoption = ops_path not in (None, ".") or (
+            ops_path is None and row["source"] == "auto"
+        )
+        adoption: list[dict[str, str]] | None = None
+        if attempt_adoption:
+            try:
+                adoption = _adoption_inventory(
+                    conn,
+                    data,
+                    rel_path=target_rel,
+                    allow_empty=ops_path is not None,
+                )
+            except (ContainerBoundaryError, OSError) as exc:
+                reason = str(exc)
+                _upsert_marker(conn, int(data["id"]), "attention", None, reason)
+                _attention(conn, data, reason)
+                return False
         if adoption is not None:
             try:
-                adopted_manifest = _adoption_manifest(data, adoption)
+                adopted_manifest = _adoption_manifest(
+                    data,
+                    adoption,
+                    rel_path=target_rel,
+                )
                 conn.execute("BEGIN")
                 try:
                     conn.execute(
                         "UPDATE project_areas SET rel_path = ?, "
                         "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (OPS_RELPATH, row["id"]),
+                        (target_rel, row["id"]),
                     )
                     validated_area_roots(conn, data, deep_ops_scan=True)
                     _upsert_marker(
@@ -3670,6 +3764,7 @@ def migrate_container_ops(
     container: int | sqlite3.Row | Mapping[str, Any],
     *,
     allow_moves: bool = True,
+    ops_path: str | None = None,
 ) -> bool:
     """Migrate one legacy ``.`` Ops Area. Returns True only when complete."""
     with container_mutation_lock(conn, container):
@@ -3704,6 +3799,7 @@ def migrate_container_ops(
                     conn,
                     container,
                     allow_moves=allow_moves,
+                    ops_path=ops_path,
                 )
         except ContainerBoundaryError as exc:
             data = get_container(conn, container)
@@ -3715,15 +3811,26 @@ def migrate_container_ops(
 def settle_container_ops(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
+    *,
+    ops_path: str | None = None,
 ) -> bool:
     """Register one Container's Ops layout without ever moving its files.
 
     The zero-write companion to :func:`migrate_container_ops` used at link
-    time and by the startup sweep (prune C2): a populated ``ops/`` is adopted
-    as-is, an interrupted authorized move resumes from its durable manifest,
-    and every other layout is left byte-identical on disk.
+    time and by the startup sweep (prune C2): an existing Ops folder is
+    adopted as-is, an interrupted authorized move resumes from its durable
+    manifest, and every other layout is left byte-identical on disk.
+
+    ``ops_path`` carries the link-time per-project choice (prune C3): the
+    detected default or the owner's override. The startup sweep passes None
+    and only ever re-validates persisted choices.
     """
-    return migrate_container_ops(conn, container, allow_moves=False)
+    return migrate_container_ops(
+        conn,
+        container,
+        allow_moves=False,
+        ops_path=ops_path,
+    )
 
 
 def migrate_legacy_ops_containers(conn: sqlite3.Connection) -> dict[str, int]:

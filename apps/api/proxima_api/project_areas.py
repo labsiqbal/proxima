@@ -46,7 +46,7 @@ MAX_DEPTH = 2  # scan the root + two subfolder levels
 MAX_AREAS = 50
 
 
-def detect_code_areas(root: Path) -> list[str]:
+def detect_code_areas(root: Path, *, ops_rel_path: str | None = None) -> list[str]:
     """Scan a container root for git repos and return their relative paths.
 
     A dir counts as a repo when `.git` exists - as a directory (normal clone)
@@ -54,9 +54,16 @@ def detect_code_areas(root: Path) -> list[str]:
     (returned as `.`). The scan never descends *into* a detected repo: nested
     `.git`s under it are that repo's submodules/vendored checkouts, not
     separate code areas of the container.
+
+    ``ops_rel_path`` is the container's persisted Ops path (prune C3): its
+    subtree holds Ops content, never code areas, so the scan skips it - the
+    per-project counterpart of the fixed ``ops`` name in SKIP_DIRS.
     """
     root = Path(root)
     found: list[str] = []
+    skip_rel = (
+        ops_rel_path if ops_rel_path not in (None, ".", OPS_RELPATH) else None
+    )
 
     def scan(d: Path, depth: int) -> None:
         if depth > MAX_DEPTH or len(found) >= MAX_AREAS:
@@ -74,6 +81,10 @@ def detect_code_areas(root: Path) -> list[str]:
                     c.is_dir()
                     and c.name not in SKIP_DIRS
                     and not c.name.startswith(".")
+                    and (
+                        skip_rel is None
+                        or c.relative_to(root).as_posix() != skip_rel
+                    )
                 ):
                     scan(c, depth + 1)
             except OSError:
@@ -88,15 +99,19 @@ def ensure_ops_area(
     project_id: int,
     *,
     rel_path: str = OPS_RELPATH,
+    source: str = "auto",
 ) -> None:
     """Ensure the Container has one Ops Area.
 
-    New Containers use the physical ``ops/`` boundary. Historical schema
-    migrations may explicitly request ``.`` so the resumable filesystem
-    migration can move known content after the schema transaction commits.
+    Workspace-created Containers (Proxima's own data dir) use the physical
+    ``ops/`` boundary and scaffold it. Linked folders register at ``.`` and
+    settle to their per-project path without writes (prune C2/C3).
+    ``source`` records how the path was picked: ``'auto'`` for detection,
+    ``'manual'`` for an owner override chosen at link time - a manual row is
+    never adopted away by the settle sweep.
     """
     with container_mutation_lock(conn, project_id):
-        _ensure_ops_area_locked(conn, project_id, rel_path=rel_path)
+        _ensure_ops_area_locked(conn, project_id, rel_path=rel_path, source=source)
 
 
 def _ensure_ops_area_locked(
@@ -104,6 +119,7 @@ def _ensure_ops_area_locked(
     project_id: int,
     *,
     rel_path: str,
+    source: str,
 ) -> None:
     existing = conn.execute(
         "SELECT id FROM project_areas WHERE project_id = ? AND kind = 'ops'",
@@ -124,9 +140,9 @@ def _ensure_ops_area_locked(
         )
     conn.execute(
         "INSERT INTO project_areas(project_id, kind, rel_path, source) "
-        "SELECT ?, 'ops', ?, 'auto' "
+        "SELECT ?, 'ops', ?, ? "
         "WHERE NOT EXISTS (SELECT 1 FROM project_areas WHERE project_id = ? AND kind = 'ops')",
-        (project_id, rel_path, project_id),
+        (project_id, rel_path, source, project_id),
     )
 
 
@@ -165,7 +181,17 @@ def _sync_code_areas_locked(
     # keeps a created ops/ out of a root repo's status happens exclusively
     # inside the explicit, previewed Ops migration - never here.
     root = Path(root)
-    detected = set(detect_code_areas(root)) if root.is_dir() else set()
+    ops_row = conn.execute(
+        "SELECT rel_path FROM project_areas "
+        "WHERE project_id = ? AND kind = 'ops' AND source != 'excluded'",
+        (project_id,),
+    ).fetchone()
+    ops_rel_path = str(ops_row["rel_path"]) if ops_row is not None else None
+    detected = (
+        set(detect_code_areas(root, ops_rel_path=ops_rel_path))
+        if root.is_dir()
+        else set()
+    )
     rows = conn.execute(
         "SELECT id, rel_path, source FROM project_areas WHERE project_id = ? AND kind = 'code'",
         (project_id,),

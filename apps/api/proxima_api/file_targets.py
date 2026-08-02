@@ -391,21 +391,25 @@ def legacy_locator(
     """Upgrade a documented path-only request without guessing from a basename.
 
     Reserved virtual Ops roots retain their historical mapping. An explicit
-    ``ops/`` path upgrades to the Ops Area only for the physical ``ops`` layout.
-    When the active legacy Ops Area is ``.``, the prefix remains literal
+    path into the Container's persisted Ops folder (``ops/`` or the
+    per-project path chosen at link time, prune C3) upgrades to the Ops Area.
+    When the active Ops Area is ``.``, the prefix remains literal
     Area-relative input so it cannot be stripped to a same-name root file.
     """
     data = container_registry.get_container(conn, container)
     normalized = normalize_relative_path(path)
     first = next(iter(PurePosixPath(normalized).parts), "")
-    if first == container_registry.OPS_RELPATH:
-        row = conn.execute(
-            "SELECT id, rel_path FROM project_areas "
-            "WHERE project_id = ? AND kind = 'ops' AND source != 'excluded'",
-            (data["id"],),
-        ).fetchone()
-        if row is not None and row["rel_path"] == container_registry.OPS_RELPATH:
-            relative = "/".join(PurePosixPath(normalized).parts[1:])
+    row = conn.execute(
+        "SELECT id, rel_path FROM project_areas "
+        "WHERE project_id = ? AND kind = 'ops' AND source != 'excluded'",
+        (data["id"],),
+    ).fetchone()
+    ops_rel = str(row["rel_path"]) if row is not None else None
+    if row is not None and ops_rel not in (None, "."):
+        ops_parts = PurePosixPath(ops_rel).parts
+        parts = PurePosixPath(normalized).parts
+        if parts[: len(ops_parts)] == ops_parts:
+            relative = "/".join(parts[len(ops_parts):])
             return area_locator(conn, data, int(row["id"]), relative)
     if first in container_registry.OPS_VIRTUAL_NAMES:
         return ops_locator(conn, data, normalized)
