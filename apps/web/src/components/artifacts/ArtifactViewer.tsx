@@ -104,10 +104,21 @@ function reviewId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
 }
 
+// Identifies one mounted viewer so active-preview consent stays scoped to it.
+// Not a secret (the server binds consent to the owner session and the Area too),
+// so `getRandomValues` is enough - and unlike `randomUUID` it also exists on a
+// plain-HTTP tailnet origin, where an insecure context would otherwise leave
+// this empty and make "Enable active preview" permanently disabled.
 function previewSessionId(): string {
-  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : ''
+  const bytes = new Uint8Array(24)
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes)
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256)
+    }
+  }
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
 type ActivePreviewState = {
@@ -531,7 +542,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
                 {!review.annotations.length && !pendingPoint && <p className="muted av-review-empty">Choose Annotate, then click anywhere on the artifact to leave a precise note.</p>}
               </div>
               {review.whiteboardPaths.length > 0 && <div className="av-whiteboard-links"><strong>Edited whiteboard</strong>{review.whiteboardPaths.map(whiteboardPath => <span className="mono" key={whiteboardPath}>{whiteboardPath}</span>)}</div>}
-              <label className="av-general-note">General feedback<textarea value={review.generalNote} onChange={event => updateReview(current => ({ ...current, generalNote: event.target.value }))} placeholder="Overall direction, tone, or requested changes" /></label>
+              <label className="av-general-note">General feedback<textarea name="artifact-general-feedback" value={review.generalNote} onChange={event => updateReview(current => ({ ...current, generalNote: event.target.value }))} placeholder="Overall direction, tone, or requested changes" /></label>
               <div className="av-review-submit">
                 <button type="button" className="primary-button" disabled={!onSendFeedback || !hasArtifactReviewFeedback(review) || handoffPending} onClick={() => void addToChat()}>{handoffPending ? 'Opening chat...' : 'Add feedback to chat'}</button>
                 <p className="muted">Opens this artifact's Proxima chat with an editable feedback draft.</p>

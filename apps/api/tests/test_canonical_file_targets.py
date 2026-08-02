@@ -291,7 +291,7 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     assert "set-cookie" not in preview_entry.headers
     assert preview_entry.headers["cache-control"] == "private, no-store"
     assert preview_entry.headers["referrer-policy"] == "no-referrer"
-    assert preview_entry.headers["cross-origin-opener-policy"] == "same-origin"
+    assert "cross-origin-opener-policy" not in preview_entry.headers
     preview_policy = preview_entry.headers["content-security-policy"]
     assert "sandbox;" in preview_policy
     assert "allow-same-origin" not in preview_policy

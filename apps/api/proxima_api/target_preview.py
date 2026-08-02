@@ -113,12 +113,14 @@ def preview_headers(media_type: str, *, active: bool = False) -> dict[str, str]:
         policy = _INERT_ACTIVE_MEDIA_POLICY
     else:
         policy = ()
+    # No Cross-Origin-Opener-Policy: a sandboxed preview has an opaque origin
+    # and cannot hold an opener relationship, so the header only bought a
+    # console error on plain-HTTP (non-trustworthy) origins.
     return {
         "Cache-Control": "private, no-store",
         "Content-Security-Policy": "; ".join(
             (*policy, "frame-ancestors 'self'")
         ),
-        "Cross-Origin-Opener-Policy": "same-origin",
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
     }

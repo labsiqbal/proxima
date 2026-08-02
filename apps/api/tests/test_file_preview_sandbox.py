@@ -116,6 +116,9 @@ def test_passive_html_preview_is_sandboxed_without_same_origin(
     assert policy["frame-ancestors"] == "'self'"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["referrer-policy"] == "no-referrer"
+    # An opaque sandbox cannot hold an opener relationship, so COOP would only
+    # log a browser error on plain-HTTP origins.
+    assert "cross-origin-opener-policy" not in response.headers
     # No capability choreography: no dedicated origin, no minted cookie.
     assert "set-cookie" not in response.headers
     assert "x-frame-options" not in response.headers

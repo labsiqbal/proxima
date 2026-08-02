@@ -1,5 +1,5 @@
 import React from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
@@ -51,6 +51,10 @@ beforeEach(() => {
   fetchRawBlobMock.mockReset()
   fetchRawBlobMock.mockResolvedValue('blob:svg-preview')
   window.localStorage.clear()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe('ArtifactViewer v2 review flow', () => {
@@ -280,6 +284,30 @@ describe('ArtifactViewer v2 review flow', () => {
       .find(node => node.tagName === 'IFRAME')
     expect(frame).toHaveAttribute('sandbox', '')
     expect(screen.queryByRole('button', { name: 'Enable active preview' })).not.toBeInTheDocument()
+  })
+
+  it('offers active preview on an insecure origin, where crypto.randomUUID does not exist', async () => {
+    const target = {
+      project: 'master',
+      area: { kind: 'ops', id: 42 },
+      path: 'site/index.html',
+    }
+    const secure = globalThis.crypto
+    vi.stubGlobal('crypto', {
+      getRandomValues: (array: Uint8Array) => secure.getRandomValues(array),
+    })
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'page', title: 'Site', path: 'site/index.html', target }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    // A plain-HTTP tailnet origin is an insecure context: only randomUUID is
+    // missing, and the viewer id must not depend on it.
+    expect(screen.getByRole('button', { name: 'Enable active preview' })).toBeEnabled()
   })
 
   it('requires explicit trust consent and revokes active mode back to passive', async () => {
