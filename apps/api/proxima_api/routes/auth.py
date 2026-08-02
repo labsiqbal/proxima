@@ -15,7 +15,10 @@ from ..auth import hash_password, hash_token, iso_now, verify_password
 from ..runners import runner_readiness
 from ..schemas import ChangePasswordRequest, PasswordRequest
 
-_SESSION_MAX_AGE = 10 * 365 * 24 * 3600  # persistent cookie (DB session itself never expires)
+# Long-lived cookie: the DB session row is the real authority and expires after
+# auth_token_ttl_hours (14 days by default); an outliving cookie just fails
+# validation and lands on the login screen.
+_SESSION_MAX_AGE = 10 * 365 * 24 * 3600
 
 logger = logging.getLogger("proxima.api")
 
@@ -100,7 +103,8 @@ def register(app, deps):
 
     @app.post("/auth/login")
     def login_with_password(request: Request, payload: PasswordRequest):
-        """Verify the owner's password and start a session (no expiry until logout)."""
+        """Verify the owner's password and start a session (expires after the
+        14-day auth_token_ttl_hours default unless logged out earlier)."""
         user = ensure_single_user_owner()
         if not user.get("password_hash"):
             raise HTTPException(status_code=409, detail="no password set")
