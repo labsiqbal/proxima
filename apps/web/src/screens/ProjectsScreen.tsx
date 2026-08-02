@@ -119,6 +119,7 @@ export function ProjectsScreen({ token, projects, activeProject, opsMigrationSlu
       <input
         className="destination-search"
         type="search"
+        name="project-search"
         value={query}
         onChange={event => setQuery(event.target.value)}
         placeholder="Search projects"
