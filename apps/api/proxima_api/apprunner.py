@@ -61,6 +61,48 @@ class PortInUseError(RuntimeError):
         )
 
 
+def _ephemeral_floor() -> int:
+    """Lowest port the kernel hands out to *outgoing* connections."""
+    try:
+        with open("/proc/sys/net/ipv4/ip_local_port_range", encoding="ascii") as fh:
+            return int(fh.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 32768
+
+
+def _port_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def free_port(attempts: int = 40) -> int:
+    """Pick a free port an app can hold for as long as it runs.
+
+    Deliberately *not* bind(0): the kernel answers that from the ephemeral range,
+    which it also draws on for every outgoing connection on the host. A server
+    parked there can lose its port to an unrelated outbound socket the moment it
+    restarts. Allocating below that floor keeps a preview's port stable across
+    restarts, which matters because the owner may pin the one that worked.
+    """
+    floor = _ephemeral_floor()
+    low, high = 20000, max(20000, floor - 1)
+    if high > low:
+        for _ in range(attempts):
+            candidate = low + secrets.randbelow(high - low + 1)
+            if _port_free(candidate):
+                return candidate
+    # Exhausted, or the host left no room below the ephemeral floor.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def _listening_socket_inodes(port: int) -> set[str] | None:
     """Return Linux LISTEN socket inodes for ``port`` or None when unavailable."""
     hex_port = f"{int(port):04X}"
@@ -530,10 +572,17 @@ class AppManager:
         slug: str,
         cwd: str,
         command: str,
-        port: int,
+        port: int | None = None,
         *,
         effect_lease: EffectLease | None = None,
     ) -> None:
+        # A falsy port means the owner did not pin one, so take whatever the
+        # kernel reports free. That is the same allocation the preview relay
+        # uses, and it removes the old fixed 5180 default that made every
+        # unpinned project collide with the previous one. A pinned port that is
+        # taken still fails closed: Proxima never stops a foreign process.
+        pinned = bool(port)
+        port = int(port) if pinned else free_port()
         reservation: LaunchReservation | None = None
         try:
             async with self._lifecycle_lock(slug):
@@ -2208,18 +2257,31 @@ class AppManager:
         command: str,
         requested_port: int,
         log: list[str],
+        conflicting_port: int | None = None,
     ) -> dict[str, Any]:
+        # A command that ignores $PORT binds its own, and that is the port a
+        # foreign process can hold. Naming the requested port instead sends the
+        # owner hunting a port that is very often completely free.
+        blocked = conflicting_port if conflicting_port is not None else requested_port
+        message = (
+            f"Port {blocked} belongs to another process. "
+            "Proxima did not open, proxy, or stop it."
+        )
+        if blocked != requested_port:
+            message += (
+                f" The command bound {blocked} instead of the {requested_port} "
+                "Proxima assigned, so it ignores $PORT — pass the port through "
+                "(for example `--port $PORT`) or stop whatever holds it."
+            )
         return {
             "state": "port_conflict",
             "running": False,
             "ready": False,
             "requested_port": requested_port,
+            "conflicting_port": blocked,
             "command": command,
             "log": log[-40:],
-            "message": (
-                f"Port {requested_port} belongs to another process. "
-                "Proxima did not open, proxy, or stop it."
-            ),
+            "message": message,
         }
 
     @staticmethod
@@ -2262,6 +2324,7 @@ class AppManager:
                 command=app["command"],
                 requested_port=app["port"],
                 log=app["log"],
+                conflicting_port=candidate_port,
             )
         if ownership in (PortOwnership.UNKNOWN, PortOwnership.DETACHED):
             return self._ownership_unknown_status(app, ownership)
@@ -2461,6 +2524,7 @@ class AppManager:
                 command=app["command"],
                 requested_port=app["port"],
                 log=app["log"],
+                conflicting_port=app.get("detected_port") or app["port"],
             )
             return result
         candidate_port = app.get("detected_port") or app["port"]
@@ -2486,6 +2550,7 @@ class AppManager:
                 command=app["command"],
                 requested_port=app["port"],
                 log=app["log"],
+                conflicting_port=candidate_port,
             )
             return result
         if ownership in (PortOwnership.UNKNOWN, PortOwnership.DETACHED):

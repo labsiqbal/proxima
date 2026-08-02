@@ -25,7 +25,10 @@ class ChangePasswordRequest(BaseModel):
 
 class AppStartRequest(BaseModel):
     command: str = Field(min_length=1)
-    port: int = 5180
+    # 0/None means "any free port". The browser reaches a preview through its
+    # Proxima-owned relay origin, never this port, so pinning one is only needed
+    # when the app itself demands a fixed port (a registered OAuth callback, say).
+    port: int | None = None
     dir: str = ""
 
 
@@ -41,6 +44,9 @@ class AppStatusResponse(BaseModel):
     running: bool
     ready: bool
     requested_port: int | None = None
+    # The port a conflict is actually on. Differs from requested_port when the
+    # command ignores $PORT and binds its own.
+    conflicting_port: int | None = None
     port: int | None = None
     preview_port: int | None = None
     command: str | None = None

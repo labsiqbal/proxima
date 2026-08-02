@@ -13,10 +13,21 @@ type VKey = typeof VIEWPORTS[number]['key']
 
 // Run a project's dev server as a managed process and preview it live — docked
 // panel (not a popup), with viewport presets like a real preview tool.
+const PORT_PIN_KEY = 'proxima.appport.v2.'
+const LEGACY_PORT_PIN_KEY = 'proxima.appport.'
 export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: { token: string; slug: string; onClose: () => void; initialDir?: string; initialCommand?: string }) {
   const [command, setCommand] = React.useState(() => initialCommand || localStorage.getItem('proxima.appcmd.' + slug) || 'npm run dev')
   const [dir, setDir] = React.useState(() => initialDir || localStorage.getItem('proxima.appdir.' + slug) || '')
-  const [port, setPort] = React.useState(() => Number(localStorage.getItem('proxima.appport.' + slug)) || 5180)
+  // 0 = auto: let the server take any free port. Only a deliberate pin is stored.
+  // Pins live under a versioned key. The unversioned one cannot be trusted: it
+  // held the old hardcoded 5180 default, and later a build that echoed the
+  // server's own auto-assigned port back into the box — neither is an owner
+  // choice, and honouring them pins previews to ports nothing should hold.
+  // Read the versioned key only and drop the old one on sight.
+  const [port, setPort] = React.useState(() => {
+    localStorage.removeItem(LEGACY_PORT_PIN_KEY + slug)
+    return Number(localStorage.getItem(PORT_PIN_KEY + slug)) || 0
+  })
   const [appsDomain, setAppsDomain] = React.useState<string | null>(null)
   React.useEffect(() => {
     getPublicConfig(token).then(c => setAppsDomain(c.apps_domain)).catch(() => undefined)
@@ -65,8 +76,14 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
       const next = await appStatus(token, slug)
       if (mountedRef.current && seq === statusSeq.current) {
         setStatus(next)
+        // Mirror the port into the editable box only when the owner has to act
+        // on it — a conflict or unverified ownership, where "Change port" is the
+        // way out. On a healthy run it stays read-only: writing it back would
+        // silently turn "auto" into a pin that the next start must honour, and
+        // then fail closed the first time anything else held that port.
         const candidatePort = next.requested_port ?? next.port
-        if (next.state !== 'stopped' && candidatePort != null) setPort(candidatePort)
+        const needsOwnerChoice = next.state === 'port_conflict' || next.state === 'ownership_unknown'
+        if (candidatePort != null && needsOwnerChoice) setPort(candidatePort)
       }
     } catch { /* a stopped or booting app is represented by the last known status */ }
   }, [token, slug])
@@ -128,7 +145,10 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
       ownerPowerAck.current = true
     }
     setError(''); setBusy(true)
-    localStorage.setItem('proxima.appcmd.' + slug, cmd); localStorage.setItem('proxima.appport.' + slug, String(port)); localStorage.setItem('proxima.appdir.' + slug, dir)
+    localStorage.setItem('proxima.appcmd.' + slug, cmd); localStorage.setItem('proxima.appdir.' + slug, dir)
+    // Empty box = auto; do not persist a port the owner never chose.
+    if (port) localStorage.setItem(PORT_PIN_KEY + slug, String(port))
+    else localStorage.removeItem(PORT_PIN_KEY + slug)
     const seq = ++actionSeq.current
     try {
       await appStart(token, slug, cmd, port, dir)
@@ -244,7 +264,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
       <div className="app-runner-bar">
         <input className="ui-select app-dir" value={dir} onChange={e => setDir(e.target.value)} placeholder="folder (root)" disabled={busy || status.running} />
         <input className="ui-select" value={command} onChange={e => setCommand(e.target.value)} placeholder="npm run dev" disabled={busy || status.running} />
-        <input ref={portInputRef} className="ui-select app-port" type="number" value={port} onChange={e => setPort(Number(e.target.value) || 5180)} title="Port candidate (also $PORT); preview opens only after Proxima verifies ownership" disabled={busy || status.running} />
+        <input ref={portInputRef} className="ui-select app-port" type="number" value={port || ''} placeholder="auto" onChange={e => setPort(Number(e.target.value) || 0)} title="Leave empty to let Proxima pick a free port. Set one only when the app needs a fixed port; preview opens only after Proxima verifies ownership." disabled={busy || status.running} />
         <button className="primary-button" onClick={() => void run()} disabled={busy || !command.trim()}>▶ Run</button>
       </div>
       <p className="app-runner-cwd muted">Working dir: <code>{slug}/{dir || ''}</code> · command runs here</p>

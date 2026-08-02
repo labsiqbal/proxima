@@ -3513,3 +3513,92 @@ def test_app_status_stays_non_blocking_when_writer_tree_unproven(tmp_path):
         except ChildProcessError:
             pass
         record.unlink(missing_ok=True)
+
+
+def test_free_port_returns_a_currently_unbound_port():
+    port = apprunner.free_port()
+    assert 1024 <= port <= 65535
+    # Nothing is listening on it, so a launch pre-flight check would pass.
+    assert apprunner._port_open(port) is False
+
+
+def test_unpinned_start_takes_a_free_port_even_when_the_old_default_is_busy(
+    tmp_path,
+):
+    """No pinned port must never surface port_conflict.
+
+    The old default was a fixed 5180, so a second unpinned project — or anything
+    else already on that port — failed closed. An app's port sits behind its
+    Proxima relay and never reaches a browser, so it should just be any free one.
+    """
+    busy = 5180  # the exact port the old code fell back to
+    squatter = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    squatter.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        squatter.bind(("127.0.0.1", busy))
+    except OSError:
+        squatter.close()
+        pytest.skip(f"port {busy} is not available to squat in this environment")
+    squatter.listen(8)
+    async def run_case():
+        manager = apprunner.AppManager()
+        # Pinning the busy port still fails closed: Proxima never stops it.
+        with pytest.raises(apprunner.PortInUseError):
+            await manager.start("pinned", str(tmp_path), "sleep 60", busy)
+
+        # Unpinned: the manager picks its own free port and launches.
+        await manager.start("auto", str(tmp_path), "sleep 60", None)
+        try:
+            chosen = int(manager._apps["auto"]["port"])
+            assert chosen != busy
+            assert 1024 <= chosen <= 65535
+        finally:
+            await manager.stop("auto")
+
+    try:
+        asyncio.run(run_case())
+    finally:
+        squatter.close()
+
+
+def test_free_port_stays_clear_of_the_kernel_outbound_range():
+    """A preview port must not come from the ephemeral range.
+
+    bind(0) answers from the same pool the kernel uses for outgoing
+    connections, so a server parked there can lose its port to an unrelated
+    outbound socket between restarts — which then reads as "belongs to another
+    process" for a port the owner never chose.
+    """
+    floor = apprunner._ephemeral_floor()
+    assert floor > 1024
+    for _ in range(25):
+        port = apprunner.free_port()
+        assert port < floor, f"{port} is inside the outbound range (floor {floor})"
+        assert apprunner._port_open(port) is False
+
+
+def test_port_conflict_names_the_port_that_is_actually_blocked():
+    """A command that ignores $PORT binds its own — report that one.
+
+    Naming the assigned port instead points the owner at a port that is very
+    often completely free, which is worse than no message at all.
+    """
+    status = apprunner.AppManager._port_conflict_status(
+        command="python3 app.py",
+        requested_port=24599,
+        log=[],
+        conflicting_port=4600,
+    )
+    assert status["conflicting_port"] == 4600
+    assert status["requested_port"] == 24599
+    assert "Port 4600 belongs to another process" in status["message"]
+    assert "ignores $PORT" in status["message"]
+
+    same = apprunner.AppManager._port_conflict_status(
+        command="npm run dev",
+        requested_port=4600,
+        log=[],
+        conflicting_port=4600,
+    )
+    assert "Port 4600 belongs to another process" in same["message"]
+    assert "ignores $PORT" not in same["message"]

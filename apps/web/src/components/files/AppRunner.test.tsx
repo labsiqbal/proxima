@@ -23,6 +23,9 @@ describe('AppRunner collision feedback', () => {
   })
 
   beforeEach(() => {
+    // A pin persists per slug, so leaking one between cases silently changes
+    // what the next render sends.
+    localStorage.clear()
     vi.clearAllMocks()
     vi.mocked(getPublicConfig).mockResolvedValue({ apps_domain: null })
     vi.mocked(previewAuth).mockResolvedValue({ ok: true })
@@ -209,7 +212,10 @@ describe('AppRunner collision feedback', () => {
     expect(screen.getByRole('button', { name: 'Hide logs' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Change port' })).toBeInTheDocument()
-    expect(screen.getByRole('spinbutton')).toHaveValue(5180)
+    // A clean stop leaves the box on auto: the port was Proxima's choice, not the
+    // owner's, so Retry should be free to take a fresh one. Only a conflict or
+    // unverified ownership puts a number back in the box to edit.
+    expect(screen.getByRole('spinbutton')).toHaveValue(null)
   })
 
   it('uses the capability relay from a localhost origin', async () => {
@@ -271,5 +277,71 @@ describe('AppRunner collision feedback', () => {
     await screen.findByText('Command failed (exit 1)')
     await user.click(screen.getByRole('button', { name: 'View logs' }))
     expect(await screen.findByText('No command logs yet.')).toBeInTheDocument()
+  })
+})
+
+describe('AppRunner port pinning', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+    vi.mocked(getPublicConfig).mockResolvedValue({ apps_domain: null })
+    vi.mocked(previewAuth).mockResolvedValue({ ok: true })
+    vi.mocked(detectApps).mockResolvedValue({ apps: [] })
+    vi.mocked(appStart).mockResolvedValue({ ok: true })
+  })
+
+  it('never turns the server-chosen port into a pin', async () => {
+    // The status poll reports the port the app actually holds. Writing it into
+    // the box would make the next Run demand that exact port, and an ephemeral
+    // one is very likely gone by then — the "belongs to another process" trap.
+    const user = userEvent.setup()
+    vi.mocked(appStatus).mockResolvedValue({
+      state: 'ready',
+      running: true,
+      ready: true,
+      requested_port: 41405,
+      port: 41405,
+      command: 'python3 app.py',
+      log: [],
+    })
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+    const box = await screen.findByTitle(/Leave empty to let Proxima pick a free port/i)
+
+    // A healthy run leaves the box on auto and writes nothing to storage, so the
+    // next start is free to take a fresh port.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Stop/ })).toBeInTheDocument())
+    expect(box).toHaveValue(null)
+    expect(localStorage.getItem('proxima.appport.v2.demo')).toBeNull()
+  })
+
+  it('keeps a port the owner typed', async () => {
+    const user = userEvent.setup()
+    vi.mocked(appStatus).mockResolvedValue({ state: 'stopped', running: false, ready: false })
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+    const box = await screen.findByTitle(/Leave empty to let Proxima pick a free port/i)
+    await user.type(box, '4600')
+    await user.click(screen.getByRole('button', { name: /run/i }))
+    await waitFor(() => expect(appStart).toHaveBeenCalledWith('token', 'demo', 'npm run dev', 4600, ''))
+    expect(localStorage.getItem('proxima.appport.v2.demo')).toBe('4600')
+  })
+
+  it.each(['5180', '41405'])('ignores and clears the untrusted legacy pin %s', async (stale) => {
+    // The old key held the hardcoded 5180 default, and later whatever port the
+    // server auto-assigned (a build echoed it into the box). Neither is a choice
+    // the owner made, so both must start on auto — otherwise a preview stays
+    // pinned to a port nothing should be holding.
+    localStorage.setItem('proxima.appport.demo', stale)
+    vi.mocked(appStatus).mockResolvedValue({ state: 'stopped', running: false, ready: false })
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+    const box = await screen.findByTitle(/Leave empty to let Proxima pick a free port/i)
+    expect(box).toHaveValue(null)
+    expect(localStorage.getItem('proxima.appport.demo')).toBeNull()
+  })
+
+  it('still honours a pin the owner set under the current key', async () => {
+    localStorage.setItem('proxima.appport.v2.demo', '4600')
+    vi.mocked(appStatus).mockResolvedValue({ state: 'stopped', running: false, ready: false })
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+    expect(await screen.findByRole('spinbutton')).toHaveValue(4600)
   })
 })

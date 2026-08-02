@@ -1427,7 +1427,11 @@ proof on a fresh server-side socket before sending HTTP or WebSocket bytes. Star
 conflict, ownership-unknown, and exited states return a non-proxy response. An existing
 relay remains available to return that safe response until Stop releases it.
 
-If an unrelated process owns the candidate before start, start returns a structured
+The app's own port is chosen by the kernel unless the owner pins one. It sits behind
+the preview relay and never appears in a browser, so there is nothing to keep stable
+about it -- the same reason the relay allocates its listener the same way. Pinning is
+for apps that need a fixed port (a registered OAuth callback, say). If an unrelated
+process owns a *pinned* candidate before start, start returns a structured
 HTTP 409 conflict. If it claims the port after preflight but before the managed app
 binds, status becomes the sticky terminal `port_conflict` state and Proxima signals
 only its own managed process group. It never reaches, signals, or terminates the

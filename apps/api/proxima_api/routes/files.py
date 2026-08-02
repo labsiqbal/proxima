@@ -1100,7 +1100,7 @@ def register(app, deps):
                 slug,
                 str(cwd),
                 payload.command,
-                int(payload.port or 5180),
+                payload.port,
                 effect_lease=effect_lease,
             )
         except apprunner.PortInUseError as exc:

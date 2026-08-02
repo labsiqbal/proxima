@@ -293,8 +293,10 @@ export function appExitSummary(status: Pick<AppStatus, 'exit_code' | 'command'>)
     hint: 'No preview server came up. For live preview, run a long-lived server such as npm run dev or python3 -m http.server $PORT.',
   }
 }
-export const appStart = (token: string, slug: string, command: string, port: number, dir = '') =>
-  api<{ ok: boolean }>(`/api/projects/${slug}/app/start`, token, { method: 'POST', body: JSON.stringify({ command, port, dir }) })
+// port 0/omitted = let the server take any free port; the browser reaches the
+// preview through its relay origin, never this port.
+export const appStart = (token: string, slug: string, command: string, port = 0, dir = '') =>
+  api<{ ok: boolean }>(`/api/projects/${slug}/app/start`, token, { method: 'POST', body: JSON.stringify({ command, port: port || null, dir }) })
 export const appStop = (token: string, slug: string) =>
   api<{ ok: boolean }>(`/api/projects/${slug}/app/stop`, token, { method: 'POST' })
 export const appStatus = (token: string, slug: string) =>
