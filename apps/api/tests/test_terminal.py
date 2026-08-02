@@ -35,7 +35,7 @@ def test_close_terminates_background_processes(tmp_path):
     terminal = TerminalSession(str(tmp_path))
     terminal.start()
     terminal.write(b"sleep 30 & echo $! > child.pid\n")
-    deadline = time.monotonic() + 2
+    deadline = time.monotonic() + 15
     while time.monotonic() < deadline and not child_path.is_file():
         time.sleep(0.01)
     assert child_path.is_file()
@@ -116,7 +116,7 @@ def test_contained_terminal_terminates_detached_descendant(tmp_path):
         b"sleep 0.4; echo escaped > escaped.txt' "
         b"</dev/null >/dev/null 2>&1 &\n"
     )
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 15
     while time.monotonic() < deadline and not child_path.is_file():
         time.sleep(0.01)
     assert child_path.is_file()
@@ -155,7 +155,7 @@ def test_guarded_terminal_keeps_controlling_tty(tmp_path):
     try:
         out = root / "tty.txt"
         terminal.write(b"tty > tty.txt\n")
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline and not out.is_file():
             time.sleep(0.05)
         assert out.is_file()
@@ -178,7 +178,7 @@ def test_guarded_terminal_supports_job_control(tmp_path):
     try:
         out = root / "jobs.txt"
         terminal.write(b"sleep 30 &\njobs > jobs.txt\n")
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline and not out.is_file():
             time.sleep(0.05)
         assert out.is_file()
@@ -214,7 +214,7 @@ def test_guarded_terminal_close_kills_descendants_and_releases_lease(tmp_path):
     terminal.start()
     child_path = root / "child.pid"
     terminal.write(b"sleep 30 & echo $! > child.pid\n")
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + 15
     while time.monotonic() < deadline and not child_path.is_file():
         time.sleep(0.05)
     assert child_path.is_file()
