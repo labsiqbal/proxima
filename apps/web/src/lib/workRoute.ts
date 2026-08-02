@@ -6,9 +6,15 @@ const WORK_VIEWS = new Set<View>([
 	"activity",
 	"workflows",
 	"artifacts",
+	"files",
 	"design",
 ]);
-const DELEGATE_VIEWS = new Set<View>(["master", "activity", "artifacts"]);
+const DELEGATE_VIEWS = new Set<View>([
+	"master",
+	"activity",
+	"artifacts",
+	"files",
+]);
 
 export type WorkRoute = {
 	mode: ShellMode;

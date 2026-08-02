@@ -44,6 +44,8 @@ export function viewOriginLabel(view: View): string {
       return 'Workflows'
     case 'artifacts':
       return 'Archive'
+    case 'files':
+      return 'Files'
     case 'design':
       return 'Design'
     case 'settings':
@@ -115,6 +117,7 @@ export const KEEP_ALIVE_VIEWS: readonly View[] = [
   'activity',
   'workflows',
   'artifacts',
+  'files',
   'design',
 ] as const
 

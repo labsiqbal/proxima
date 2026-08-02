@@ -46,6 +46,21 @@ describe("Work URL state", () => {
 		).toMatchObject({ workflowJobId: null, designId: null });
 	});
 
+	it("keeps Files durable in both modes (ADR-0040)", () => {
+		expect(
+			parseWorkRoute({
+				search: "?mode=work&view=files&project=atlas",
+				hash: "",
+			}),
+		).toMatchObject({ mode: "work", view: "files", projectSlug: "atlas" });
+		expect(
+			parseWorkRoute({
+				search: "?mode=delegate&view=files",
+				hash: "",
+			}),
+		).toMatchObject({ mode: "delegate", view: "files", projectSlug: null });
+	});
+
 	it("drops Work context from Delegate and falls back stale views explicitly", () => {
 		expect(
 			parseWorkRoute({

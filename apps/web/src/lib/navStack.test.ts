@@ -23,7 +23,7 @@ const baseFlags = (over: Partial<DeepShellFlags> = {}): DeepShellFlags => ({
 
 describe('navStack deep detection', () => {
   it('treats top-level surfaces as not deep', () => {
-    for (const view of ['chat', 'master', 'activity', 'workflows', 'artifacts', 'design', 'settings'] as const) {
+    for (const view of ['chat', 'master', 'activity', 'workflows', 'artifacts', 'files', 'design', 'settings'] as const) {
       expect(isDeepShell(baseFlags({ view }))).toBe(false)
       expect(projectSwitcherLocked(baseFlags({ view }))).toBe(false)
     }
@@ -118,11 +118,13 @@ describe('viewOriginLabel + keep-alive', () => {
     expect(viewOriginLabel('activity')).toBe('Tasks')
     expect(viewOriginLabel('workflows')).toBe('Workflows')
     expect(viewOriginLabel('artifacts')).toBe('Archive')
+    expect(viewOriginLabel('files')).toBe('Files')
   })
 
   it('keeps primary multitask surfaces alive', () => {
     expect(shouldKeepAlive('chat')).toBe(true)
     expect(shouldKeepAlive('master')).toBe(true)
+    expect(shouldKeepAlive('files')).toBe(true)
     expect(shouldKeepAlive('settings')).toBe(false)
   })
 })
