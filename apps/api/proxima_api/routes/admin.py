@@ -1,7 +1,8 @@
 """Admin routes for the Proxima API.
 
 Single-user cockpit: user management, invite links, and roles are gone (one
-owner, no in-app accounts). What remains is the audit/activity log.
+owner, no in-app accounts), so these routes take the plain owner session. What
+remains is the audit/activity log plus service diagnostics.
 """
 from __future__ import annotations
 
@@ -17,10 +18,10 @@ from ..settings import systemd_user_unit
 
 def register(app, deps):
     db = deps["db"]
-    admin_user = deps["admin_user"]
+    current_user = deps["current_user"]
 
     @app.get("/api/audit")
-    def list_audit(limit: int = 300, user: dict[str, Any] = Depends(admin_user)):
+    def list_audit(limit: int = 300, user: dict[str, Any] = Depends(current_user)):
         rows = db().execute(
             "SELECT a.id, a.action, a.target_type, a.target_id, a.metadata, a.created_at, u.username AS actor "
             "FROM audit_log a LEFT JOIN users u ON u.id = a.actor_user_id ORDER BY a.id DESC LIMIT ?",
@@ -29,7 +30,7 @@ def register(app, deps):
         return {"entries": [dict(r) for r in rows]}
 
     @app.get("/api/debug/logs")
-    def debug_logs(limit: int = 240, user: dict[str, Any] = Depends(admin_user)):
+    def debug_logs(limit: int = 240, user: dict[str, Any] = Depends(current_user)):
         line_limit = max(20, min(int(limit or 240), 1000))
         log_text = ""
         log_error = ""
@@ -167,6 +168,6 @@ def register(app, deps):
         }
 
     @app.post("/api/debug/reap-orphaned-jobs")
-    def reap_orphaned_jobs(user: dict[str, Any] = Depends(admin_user)):
+    def reap_orphaned_jobs(user: dict[str, Any] = Depends(current_user)):
         count = app.state.worker.reap_orphaned_jobs()
         return {"ok": True, "count": count}

@@ -141,8 +141,7 @@ def register(app, deps):
     db = deps["db"]
     current_user = deps["current_user"]
     profile_for_user = deps["profile_for_user"]
-    _can_access = deps["_can_access"]
-    _member_project_id = deps["_member_project_id"]
+    resolve_project_id = deps["resolve_project_id"]
 
     def _process_task_projection(task_event: dict[str, int]) -> None:
         outbox_id = task_event.get("projection_outbox_id")
@@ -154,8 +153,6 @@ def register(app, deps):
         row = db().execute(
             "SELECT * FROM jobs WHERE id = ? AND engine = 'graph'", (job_id,)
         ).fetchone()
-        if row and not _can_access(row["created_by"], row["project_id"], user):
-            row = None
         if not row:
             raise HTTPException(status_code=404, detail="graph job not found")
         return row
@@ -216,10 +213,7 @@ def register(app, deps):
         row = db().execute(
             "SELECT * FROM workflows WHERE id = ?", (workflow_id,)
         ).fetchone()
-        if row and (
-            row["graph"] is None
-            or not _can_access(row["created_by"], row["project_id"], user)
-        ):
+        if row and row["graph"] is None:
             row = None
         if not row:
             raise HTTPException(status_code=404, detail="workflow not found")
@@ -343,7 +337,7 @@ def register(app, deps):
             graph = normalize_graph(payload.graph)
         except GraphValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        project_id = _member_project_id(payload.project_id, payload.project_slug, user)
+        project_id = resolve_project_id(payload.project_id, payload.project_slug, user)
         profile = profile_for_user(payload.profile_id, user)
         workflow_id = None
         if payload.workflow_id is not None:
@@ -409,7 +403,7 @@ def register(app, deps):
         user: dict[str, Any] = Depends(current_user),
     ):
         resolved_project_id = (
-            _member_project_id(project_id, project_slug, user)
+            resolve_project_id(project_id, project_slug, user)
             if project_id is not None or project_slug
             else None
         )
@@ -439,7 +433,7 @@ def register(app, deps):
         user: dict[str, Any] = Depends(current_user),
     ):
         resolved_project_id = (
-            _member_project_id(project_id, project_slug, user)
+            resolve_project_id(project_id, project_slug, user)
             if project_id is not None or project_slug
             else None
         )

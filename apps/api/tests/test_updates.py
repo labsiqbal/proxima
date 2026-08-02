@@ -382,12 +382,12 @@ def test_update_apply_route_guards(tmp_path):
     assert r.status_code == 400
 
 
-def test_update_routes_match_peer_admin_route_behavior(tmp_path, monkeypatch):
-    # Behavioral parity with peer admin_user routes (e.g. /api/audit): requests
+def test_update_routes_match_peer_owner_route_behavior(tmp_path, monkeypatch):
+    # Behavioral parity with peer owner-session routes (e.g. /api/audit): requests
     # with no bearer token resolve to the owner (single-user; the network layer
-    # is the access boundary — CLAUDE.md, docs/security-boundaries.md) instead
+    # is the access boundary - CLAUDE.md, docs/security-boundaries.md) instead
     # of 401/403. This guards against an accidental hard-auth regression on
-    # these routes; the admin_user wiring itself is visible in routes/update.py.
+    # these routes; the current_user wiring itself is visible in routes/update.py.
     app = make_app(tmp_path)
 
     async def fake_fetch():

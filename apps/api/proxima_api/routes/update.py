@@ -9,19 +9,19 @@ from ..updates import NoUpdateAvailable, UpdateInProgress, UpdateUnsupported
 
 
 def register(app, deps):
-    admin_user = deps["admin_user"]
+    current_user = deps["current_user"]
 
     @app.get("/api/update/status")
-    def update_status(user: dict[str, Any] = Depends(admin_user)):
+    def update_status(user: dict[str, Any] = Depends(current_user)):
         return app.state.updates.status()
 
     @app.post("/api/update/check")
-    async def update_check(user: dict[str, Any] = Depends(admin_user)):
+    async def update_check(user: dict[str, Any] = Depends(current_user)):
         await app.state.updates.check_now()
         return app.state.updates.status()
 
     @app.post("/api/update/apply")
-    def update_apply(user: dict[str, Any] = Depends(admin_user)):
+    def update_apply(user: dict[str, Any] = Depends(current_user)):
         try:
             return app.state.updates.apply()
         except UpdateInProgress as exc:

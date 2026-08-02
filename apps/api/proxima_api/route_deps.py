@@ -157,10 +157,6 @@ def build_route_deps(
             )
         return owner
 
-    def admin_user(user: dict[str, Any] = depends(current_user)) -> dict[str, Any]:
-        # Single-user: the sole owner is always the admin.
-        return user
-
     def public_user(user: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": user["id"],
@@ -617,14 +613,10 @@ def build_route_deps(
                     },
                 ) from exc
 
-    def _can_access(_created_by: Any, _project_id: Any, _user: dict[str, Any]) -> bool:
-        # Single-user: everything belongs to the owner.
-        return True
-
-    def _member_project_id(
+    def resolve_project_id(
         project_id: int | None, project_slug: str | None, user: dict[str, Any]
     ) -> int | None:
-        """Resolve a project ref (slug or raw id) to an id. Single-user: no membership check."""
+        """Resolve a project ref (slug or raw id) to an id, 404ing on an unknown slug."""
         if project_slug:
             return visible_project(project_slug, user)["id"]
         return project_id
@@ -669,7 +661,6 @@ def build_route_deps(
         "cfg": cfg,
         "current_user": current_user,
         "current_user_strict_token": current_user_strict_token,
-        "admin_user": admin_user,
         "visible_project": visible_project,
         "session_for_user": session_for_user,
         "require_generic_run_mode": require_generic_run_mode,
@@ -677,8 +668,7 @@ def build_route_deps(
         "project_payload": project_payload,
         "profile_payload": profile_payload,
         "session_payload": session_payload,
-        "_can_access": _can_access,
-        "_member_project_id": _member_project_id,
+        "resolve_project_id": resolve_project_id,
         "create_profile_for": create_profile_for,
         "ensure_default_profile": ensure_default_profile,
         "runner_source_dir": runner_source_dir,

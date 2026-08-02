@@ -2,7 +2,7 @@
 
 Extracted from main.py via the register() pattern: handler bodies move VERBATIM;
 register() rebinds the shared create_app closures from `deps` as locals. These
-three domains share helpers (_workflow_or_404, _member_project_id) so they live
+three domains share helpers (_workflow_or_404, resolve_project_id) so they live
 together. No behavior change.
 """
 from __future__ import annotations
@@ -57,8 +57,7 @@ def register(app, deps):
     current_user = deps["current_user"]
     profile_for_user = deps["profile_for_user"]
     session_payload = deps["session_payload"]
-    _can_access = deps["_can_access"]
-    _member_project_id = deps["_member_project_id"]
+    resolve_project_id = deps["resolve_project_id"]
 
     def _process_task_projection(task_event: dict[str, int]) -> None:
         outbox_id = task_event.get("projection_outbox_id")
@@ -77,11 +76,7 @@ def register(app, deps):
         graph-backed rows here is what stops a graph template being edited or run as
         if it were an ordered recipe."""
         row = db().execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
-        if (
-            not row
-            or row["graph"] is not None
-            or not _can_access(row["created_by"], row["project_id"], user)
-        ):
+        if not row or row["graph"] is not None:
             raise HTTPException(status_code=404, detail="workflow not found")
         return row
 
@@ -89,14 +84,14 @@ def register(app, deps):
         """Either engine — for operations that treat the workflows row as a whole
         (scheduling it, deleting it), where linear-vs-graph makes no difference."""
         row = db().execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
-        if not row or not _can_access(row["created_by"], row["project_id"], user):
+        if not row:
             raise HTTPException(status_code=404, detail="workflow not found")
         return row
 
     @app.post("/api/workflows")
     def create_workflow(payload: WorkflowCreateRequest, user: dict[str, Any] = Depends(current_user)):
         steps = wf.normalize_steps(payload.steps)
-        project_id = _member_project_id(payload.project_id, payload.project_slug, user)
+        project_id = resolve_project_id(payload.project_id, payload.project_slug, user)
         cur = db().execute(
             "INSERT INTO workflows(project_id, name, description, category, steps, inputs, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (project_id, payload.name, payload.description, payload.category, json.dumps(steps), json.dumps(payload.inputs or []), user["id"]),
@@ -106,7 +101,7 @@ def register(app, deps):
     @app.get("/api/workflows")
     def list_workflows(project_id: int | None = None, project_slug: str | None = None, user: dict[str, Any] = Depends(current_user)):
         # Single-user: scope to rows the owner created or that belong to a project they own.
-        project_filter_id = _member_project_id(project_id, project_slug, user) if (project_id is not None or project_slug) else None
+        project_filter_id = resolve_project_id(project_id, project_slug, user) if (project_id is not None or project_slug) else None
         if project_filter_id is None:
             rows = db().execute(
                 "SELECT * FROM workflows WHERE graph IS NULL AND status != 'archived' "
@@ -275,8 +270,6 @@ def register(app, deps):
 
     def _job_or_404(job_id: int, user: dict[str, Any]) -> sqlite3.Row:
         row = db().execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
-        if row and not _can_access(row["created_by"], row["project_id"], user):
-            row = None
         if not row:
             raise HTTPException(status_code=404, detail="job not found")
         return row
@@ -296,7 +289,7 @@ def register(app, deps):
         ),
     ):
         profile = profile_for_user(payload.profile_id, user)
-        req_project_id = _member_project_id(payload.project_id, payload.project_slug, user)
+        req_project_id = resolve_project_id(payload.project_id, payload.project_slug, user)
         if payload.workflow_id:
             wfrow = _workflow_or_404(payload.workflow_id, user)
             steps = _decode_json(wfrow["steps"] or "[]")
@@ -478,7 +471,7 @@ def register(app, deps):
     ):
         # Coexistence (ADR-0001): classic Activity is linear-only. Nullable
         # parameters keep this query static while retaining optional filters.
-        project_filter_id = _member_project_id(project_id, project_slug, user) if (project_id is not None or project_slug) else None
+        project_filter_id = resolve_project_id(project_id, project_slug, user) if (project_id is not None or project_slug) else None
         safe_limit = max(0, min(_as_int(limit), 200))
         safe_offset = max(0, _as_int(offset))
         status_filter = status or None
@@ -1068,8 +1061,6 @@ def register(app, deps):
 
     def _schedule_or_404(schedule_id: int, user: dict[str, Any]) -> sqlite3.Row:
         row = db().execute("SELECT * FROM schedules WHERE id = ?", (schedule_id,)).fetchone()
-        if row and not _can_access(row["created_by"], row["project_id"], user):
-            row = None
         if not row:
             raise HTTPException(status_code=404, detail="schedule not found")
         return row
