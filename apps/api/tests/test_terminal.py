@@ -155,11 +155,17 @@ def test_guarded_terminal_keeps_controlling_tty(tmp_path):
     try:
         out = root / "tty.txt"
         terminal.write(b"tty > tty.txt\n")
+        # The redirection creates the file before `tty` writes into it, so
+        # poll for CONTENT, not existence - reading the just-created empty
+        # file was a flake.
         deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and not out.is_file():
+        text = ""
+        while time.monotonic() < deadline:
+            if out.is_file():
+                text = out.read_text(encoding="utf-8").strip()
+                if text:
+                    break
             time.sleep(0.05)
-        assert out.is_file()
-        text = out.read_text(encoding="utf-8").strip()
         assert text.startswith("/dev/pts/") or text.startswith("/dev/tty"), text
     finally:
         result = terminal.close()
