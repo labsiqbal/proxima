@@ -84,6 +84,22 @@ CREATE TABLE IF NOT EXISTS project_areas (
 );
 CREATE INDEX IF NOT EXISTS idx_project_areas_project ON project_areas(project_id, kind);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_project_areas_one_ops ON project_areas(project_id) WHERE kind = 'ops';
+-- Per-project layout map (prune C4): where wiki/artifacts/scripts/uploads
+-- live, container-root-relative. Seeded by zero-write detection at link time
+-- (today's fixed names are the defaults when nothing is detected); features
+-- resolve these locations through the map. See layout_map.py.
+CREATE TABLE IF NOT EXISTS project_layout (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  area TEXT NOT NULL
+    CHECK(area IN ('wiki', 'artifacts', 'scripts', 'uploads')),
+  rel_path TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'default'
+    CHECK(source IN ('detected', 'default')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id, area)
+);
 CREATE TABLE IF NOT EXISTS container_registry (
   container_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
   identity_label TEXT,

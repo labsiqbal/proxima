@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import fsapi
+from . import layout_map
 from . import recommended_tools
 from . import wiki_memory
 
@@ -420,7 +421,7 @@ class RunPrompting:
         session_id: int,
         project_name: str | None,
         project_slug: str | None,
-        project_wiki: Path | None,
+        project_layout: layout_map.ProjectLayout | None,
         is_job: bool,
         is_build: bool,
         jrow: Any,
@@ -449,6 +450,15 @@ class RunPrompting:
             if routing:
                 prompt_text += "\n\n---\n\n# Proxima routing context\n\n" + routing
         moodboard_references: list[dict[str, Any]] = []
+        # The project's layout-map-resolved locations (prune C4): the wiki the
+        # preamble READS may differ from where the automatic memory writers may
+        # write (wiki_memory_write_root - the #137 seam).
+        project_wiki = (
+            project_layout.dir("wiki") if project_layout is not None else None
+        )
+        project_ops = (
+            project_layout.ops_root if project_layout is not None else None
+        )
         if is_fresh_session and run.get("kind", "chat") != "wiki_draft":
             try:
                 # Per-profile instructions (the profile's "soul"/AGENTS.md): prepend
@@ -463,23 +473,31 @@ class RunPrompting:
                         f"# Profile instructions\n\n{instr.strip()}\n\n---\n\n"
                         + prompt_text
                     )
-                # Generate the catalog on first sight so the preamble can point at it.
+                # Generate the catalog on first sight so the preamble can point
+                # at it. Automatic memory writes only target the wiki's DEFAULT
+                # location (layout_map's #137 seam) - a wiki detected elsewhere
+                # is read-only for the index writer.
+                memory_wiki = (
+                    project_layout.wiki_memory_write_root()
+                    if project_layout is not None
+                    else None
+                )
                 if (
-                    project_wiki is not None
-                    and project_wiki.is_dir()
-                    and not (project_wiki / "index.md").exists()
+                    memory_wiki is not None
+                    and memory_wiki.is_dir()
+                    and not (memory_wiki / "index.md").exists()
                 ):
-                    wiki_memory.rebuild_index(project_wiki)
-                # Brand guidelines live at <project>/design.md (a sibling of wiki/); read
-                # them so the design agent composes on-brand without a tool call.
+                    wiki_memory.rebuild_index(memory_wiki)
+                # Brand guidelines live at <ops>/design.md; read them so the
+                # design agent composes on-brand without a tool call.
                 design_guidelines = (
-                    wiki_memory.read_design_guidelines(project_wiki.parent)
-                    if project_wiki is not None
+                    wiki_memory.read_design_guidelines(project_ops)
+                    if project_ops is not None
                     else None
                 )
                 moodboard_references = (
-                    wiki_memory.read_moodboard_references(project_wiki.parent)
-                    if project_wiki is not None
+                    wiki_memory.read_moodboard_references(project_ops)
+                    if project_ops is not None
                     else []
                 )
                 preamble = wiki_memory.build_run_preamble(
@@ -493,6 +511,16 @@ class RunPrompting:
                     # are advertised to the agent. Missing ones stay silent here.
                     host_tools=recommended_tools.probe_recommended_tools(
                         cfg.get("bundled_skills_dir")
+                    ),
+                    scripts_root=(
+                        project_layout.dir("scripts")
+                        if project_layout is not None
+                        else None
+                    ),
+                    artifacts_root=(
+                        project_layout.dir("artifacts")
+                        if project_layout is not None
+                        else None
                     ),
                 )
                 if preamble:
@@ -551,10 +579,10 @@ class RunPrompting:
         # what the client sent — keeps the agent editing the scene, never launching
         # workflows or unrelated tasks.
         if session_mode == "design":
-            if not moodboard_references and project_wiki is not None:
+            if not moodboard_references and project_ops is not None:
                 try:
                     moodboard_references = wiki_memory.read_moodboard_references(
-                        project_wiki.parent
+                        project_ops
                     )
                 except Exception:
                     logger.exception("moodboard context read failed (non-fatal)")

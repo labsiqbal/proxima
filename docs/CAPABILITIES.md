@@ -1321,9 +1321,33 @@ never creates `ops/` or `container.md`, and never appends to `.git/info/exclude`
 - the onboarding promise "Nothing is moved or copied" is literally true.
 A symlinked, non-directory, or unreadable adoption target, or one overlapping a
 repo Area, stays fail-closed with an Attention item (symlink softening is prune
-C7). The finer per-project layout map (where wiki/artifacts/scripts/uploads
-live inside the Ops root) is prune C4 - today those names remain fixed
-relative to the resolved Ops root.
+C7).
+
+**Per-project layout map (prune C4).** Where a project keeps its **wiki,
+artifacts, scripts, and uploads** is per-project data, not a fixed name:
+`layout_map.py` seeds one `project_layout` row per area by **zero-write
+detection** from the real tree at link time (the boot sweep and lazy
+resolution backfill projects linked before the map existed). Detection looks
+for the standard name under the persisted Ops root first, then at the
+container root (`source='detected'`); when nothing exists, today's fixed name
+under the Ops root is recorded as `source='default'` - so behavior is
+unchanged until detection says otherwise. A `.` project keeping `wiki/` at its
+root (the BIP case) has that folder detected as its wiki location. Features
+resolve those locations through the map instead of hardcoding names: the
+wiki-note draft/commit surface, the run preamble's wiki catalog + script
+library + designs list, the script library (catalog, approval card, execution),
+the upload default folder, and the artifact/design scanners. The persisted map
+survives restarts even if a default-position folder disappears; an entry
+detected OUTSIDE the Ops root stays authoritative only while its folder exists
+and re-detects when it is gone (self-healing after the explicit migration moves
+content into Ops). `GET /api/projects/{slug}/layout` reports the map
+(`ops_path` + per-area `path`/`source`/`exists`). Deliberate seams: automatic
+memory writes (`log.md` append, `index.md` regeneration) only target the
+wiki's DEFAULT location - a wiki detected elsewhere is read-only for them
+until #137 ships adaptive memory writes; moodboard storage, chat-generated
+image saves, and the Knowledge-graph allowlist keep fixed Ops-relative names
+(they coincide with every detectable map today; the path-model cleanup is
+#138).
 
 **The move-based migration is exclusively an explicit, previewed opt-in** on the
 Ops-migration surface (`.../ops-migration/retry`). Its inspection payload reports

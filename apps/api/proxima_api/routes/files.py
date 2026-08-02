@@ -20,7 +20,7 @@ import httpx
 from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, Response
 
-from .. import apprunner, container_registry, file_targets, fsapi
+from .. import apprunner, container_registry, file_targets, fsapi, layout_map
 from .. import app_settings
 from .. import auth_health
 from .. import higgsfield
@@ -447,9 +447,22 @@ def register(app, deps):
                 staged.write(chunk)
             staged.seek(0)
             with _project_mutation(slug, user):
-                root = _virtual_root(slug, folder, user)
+                # The default uploads folder is the project's mapped uploads
+                # location (layout map, prune C4) - e.g. an adopted root-level
+                # uploads/. An explicit non-default dir keeps the historical
+                # virtual-path behavior (reserved-name removal is #138).
+                if folder == "uploads":
+                    project = visible_project(slug, user)
+                    try:
+                        root, rel_dir = layout_map.project_layout(
+                            db(), project
+                        ).anchored("uploads")
+                    except container_registry.ContainerBoundaryError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+                else:
+                    root, rel_dir = _virtual_root(slug, folder, user), folder
                 try:
-                    target = fsapi.resolve_in_project(root, f"{folder}/{name}")
+                    target = fsapi.resolve_in_project(root, f"{rel_dir}/{name}")
                 except fsapi.FsError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 try:
@@ -482,7 +495,7 @@ def register(app, deps):
                             status_code=400,
                             detail=f"cannot write upload: {exc.strerror}",
                         ) from exc
-                rel = f"{folder}/{target.name}"
+                rel = f"{rel_dir}/{target.name}"
                 _audit_fs(user, "file.upload", slug, rel)
         return {"path": rel, "name": target.name}
 
@@ -773,7 +786,15 @@ def register(app, deps):
         if not p.get("path"):
             return {"artifacts": []}
         start = time.time() - max(1, since_minutes) * 60
-        items = scan_project_artifacts(_ops_root(slug, user), start)
+        try:
+            layout = layout_map.project_layout(db(), p)
+        except container_registry.ContainerBoundaryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        items = scan_project_artifacts(
+            layout.ops_root,
+            start,
+            artifacts_rel=layout.ops_rel_path("artifacts") or "artifacts",
+        )
         return {
             "artifacts": file_targets.add_artifact_targets(
                 db(),

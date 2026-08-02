@@ -4163,7 +4163,7 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
     script = root / "ops" / "scripts" / "report.sh"
     script.parent.mkdir()
     script.write_text("# Description: build the report\n", encoding="utf-8")
-    assert scripts_library.scan_catalog(root / "ops") == [
+    assert scripts_library.scan_catalog(root / "ops" / "scripts") == [
         {"rel_path": "report.sh", "description": "build the report"}
     ]
 
@@ -4404,7 +4404,7 @@ def test_fail_closed_container_keeps_legacy_ops_features_available(tmp_path: Pat
     ).json()
     assert archive["total"] >= 1
     assert all(item["file_missing"] is False for item in archive["items"])
-    assert scripts_library.scan_catalog(root) == [
+    assert scripts_library.scan_catalog(root / "scripts") == [
         {"rel_path": "keep.sh", "description": "legacy script"}
     ]
 

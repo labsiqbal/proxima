@@ -4,6 +4,12 @@ Moodboard items live under ``artifacts/moodboard`` in the project so they move
 with the project and remain inspectable outside Proxima. Link previews cache the
 page's OG image locally, which makes the gallery reliable and lets design runs
 attach the same image as vision without fetching it again.
+
+The ``artifacts/moodboard`` base is a deliberately FIXED Ops-relative path
+rather than a layout-map lookup (prune C4): stored ``imagePath`` values and the
+vision hand-off to design runs are Ops-root-relative strings, so the base moves
+with the path-model cleanup (#138), not before. It coincides with the layout
+map's artifacts location for every project detectable today.
 """
 from __future__ import annotations
 

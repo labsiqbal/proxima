@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
-from .. import container_registry, fsapi, repo_remote
+from .. import container_registry, fsapi, layout_map, repo_remote
 from ..directory_handles import directory_identity_for_path
 from ..project_browse import (
     AllowedRoots,
@@ -366,6 +366,10 @@ def register(app, deps):
             container_registry.settle_container_ops(db(), pid, ops_path=ops_choice)
             container_registry.container_root(registered)
             summary = sync_code_areas(db(), pid, target)
+            # Seed the per-project layout map from the settled Ops path
+            # (prune C4): zero-write detection of where this folder actually
+            # keeps its wiki/artifacts/scripts/uploads.
+            layout_map.seed_project_layout(db(), pid)
             audit_action = "project.link.mkdir" if made_dir else "project.link"
             db().execute(
                 "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, 'project', ?, ?)",
@@ -467,6 +471,28 @@ def register(app, deps):
     def get_project(slug: str, user: dict[str, Any] = Depends(current_user)):
         """Return one owner-visible Project compatibility payload."""
         return project_payload(visible_project(slug, user))
+
+    @app.get("/api/projects/{slug}/layout")
+    def get_project_layout(slug: str, user: dict[str, Any] = Depends(current_user)):
+        """The per-project layout map (prune C4): where this project keeps its
+        wiki, artifacts, scripts, and uploads - detected from the real tree,
+        today's fixed names as the defaults when nothing was detected."""
+        project = visible_project(slug, user)
+        try:
+            layout = layout_map.project_layout(db(), project)
+        except container_registry.ContainerBoundaryError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "ops_path": layout.ops_rel,
+            "areas": {
+                area: {
+                    "path": layout.rel_paths[area],
+                    "source": layout.sources[area],
+                    "exists": layout.dir(area).is_dir(),
+                }
+                for area in layout_map.LAYOUT_AREAS
+            },
+        }
 
     @app.get("/api/projects/{slug}/ops-migration")
     def get_ops_migration(slug: str, user: dict[str, Any] = Depends(current_user)):

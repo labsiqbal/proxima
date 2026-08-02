@@ -223,14 +223,16 @@ def test_build_run_preamble_injects_design_guidelines(tmp_path: Path):
 
 def test_preamble_injects_the_script_library_catalog(tmp_path: Path):
     # The T6 reuse-awareness surface: alongside the wiki catalog, a project
-    # session's preamble inlines the scripts/ catalog + the prefer-reuse rule.
+    # session's preamble inlines the script library catalog + the prefer-reuse
+    # rule. The library folder is layout-map-resolved (prune C4) and passed
+    # explicitly - never derived from the wiki location.
     root = tmp_path / "wiki"
     root.mkdir()
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     (scripts / "fetch.sh").write_text("# Description: fetch the sitemap\n", encoding="utf-8")
 
-    p = wiki_memory.build_run_preamble("P", "p", root)
+    p = wiki_memory.build_run_preamble("P", "p", root, scripts_root=scripts)
     assert "## Script library (scripts/)" in p
     assert "scripts/fetch.sh — fetch the sitemap" in p
     assert "REUSING" in p
@@ -239,7 +241,9 @@ def test_preamble_injects_the_script_library_catalog(tmp_path: Path):
 def test_preamble_teaches_the_script_convention_when_library_is_empty(tmp_path: Path):
     root = tmp_path / "wiki"
     root.mkdir()
-    p = wiki_memory.build_run_preamble("P", "p", root)
+    p = wiki_memory.build_run_preamble(
+        "P", "p", root, scripts_root=tmp_path / "scripts"
+    )
     assert "## Script library (scripts/)" in p
     assert "none yet" in p
     # No project -> no scripts block at all.

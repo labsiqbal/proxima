@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from proxima_api import moodboard, run_prompting, wiki_memory
+from proxima_api import layout_map, moodboard, run_prompting, wiki_memory
 from proxima_api.main import create_app
 
 
@@ -170,12 +170,21 @@ def test_selected_moodboard_reference_uses_preamble_and_vision_path(tmp_path):
         config={},
         worker_db=None,
     )))
+    # build_prompt_text takes the project's layout map (prune C4); this
+    # project keeps every area at its default '.'-relative location.
+    layout = layout_map.ProjectLayout(
+        container_root=project,
+        ops_root=project,
+        ops_rel=".",
+        rel_paths={area: area for area in layout_map.LAYOUT_AREAS},
+        sources={area: layout_map.SOURCE_DEFAULT for area in layout_map.LAYOUT_AREAS},
+    )
     prompt = prompting.build_prompt_text(
         {"prompt": "Update the hero\n\n⟦VISION:assets/logo.png⟧", "kind": "chat"},
         1,
         "Demo",
         "demo",
-        wiki,
+        layout,
         False,
         False,
         None,

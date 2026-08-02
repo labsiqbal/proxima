@@ -5,8 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import wiki_memory
-from .container_registry import ops_root
+from . import layout_map, wiki_memory
 
 
 class RunSummaries:
@@ -23,8 +22,11 @@ class RunSummaries:
         return row["name"] if row and row["name"] else None
 
     def wiki_root_for_run(self, run: dict[str, Any]) -> Path | None:
-        """The project's wiki. Wiki is project-scoped — a project-less (ad-hoc)
-        chat has no wiki and is not logged."""
+        """Where this run's automatic log entry may be written. Wiki is
+        project-scoped — a project-less (ad-hoc) chat has no wiki and is not
+        logged. The automatic memory writer only targets the wiki's DEFAULT
+        location per the layout map (a wiki detected elsewhere is read-only
+        until #137 enables adaptive memory writes)."""
         if not run["project_id"]:
             return None
         db = self.app.state.worker_db
@@ -33,7 +35,7 @@ class RunSummaries:
             (run["project_id"],),
         ).fetchone()
         if row and row["path"]:
-            return ops_root(db, row) / "wiki"
+            return layout_map.wiki_memory_write_root(db, row)
         return None
 
     def autolog_enabled(self, project_id: int | None) -> bool:

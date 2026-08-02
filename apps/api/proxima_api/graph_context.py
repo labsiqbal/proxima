@@ -52,6 +52,12 @@ SEMANTIC_BACKEND_DISABLED = "disabled"
 GraphStateRow: TypeAlias = Mapping[str, Any] | sqlite3.Row
 
 # Knowledge graph reads ONLY these durable Ops paths (under the Ops root).
+# Deliberately fixed Ops-relative names rather than the per-project layout map
+# (prune C4): every detectable map entry inside the Ops root carries exactly
+# these names today, so the allowlist coincides with the map; an area detected
+# OUTSIDE the Ops root is out of the Knowledge scope by design (repo/Container
+# files must not enter Knowledge). Revisit with the reserved-name/path-model
+# cleanup (#138) if map entries ever diverge inside the Ops root.
 KNOWLEDGE_ROOT_FILES = frozenset({"container.md", "design.md"})
 KNOWLEDGE_DIR_EXTENSIONS: dict[str, frozenset[str]] = {
     # Curated notes and decisions (living logs / generated catalogs stay out).

@@ -30,6 +30,7 @@ from .commands import MASTERPLAN_RUN_KIND, MASTERPLAN_SKILL_ID
 from . import wiki_memory
 from . import app_settings
 from . import file_targets
+from . import layout_map
 from . import master_runtime
 from . import state
 from . import turn_restore
@@ -1493,7 +1494,7 @@ class RunWorker:
                 )
             project_name: str | None = None
             project_slug: str | None = None
-            project_wiki: Path | None = None
+            project_layout: layout_map.ProjectLayout | None = None
             project_container: Path | None = None
             project_ops: Path | None = None
             row = None
@@ -1512,7 +1513,9 @@ class RunWorker:
                         cwd = str(project_container)
                         project_name, project_slug = row["name"], row["slug"]
                         project_ops = ops_root(db, row)
-                        project_wiki = project_ops / "wiki"
+                        # Where this project keeps wiki/artifacts/scripts/
+                        # uploads (per-project layout map, prune C4).
+                        project_layout = layout_map.project_layout(db, row)
             # Ops-owned work runs in the physical Ops Area. General chat keeps its
             # Container cwd for compatibility. A project-less job gets scratch.
             jrow = db.execute(
@@ -2046,7 +2049,7 @@ class RunWorker:
                     session_id,
                     project_name,
                     project_slug,
-                    project_wiki,
+                    project_layout,
                     is_job,
                     is_build,
                     jrow,
@@ -2118,7 +2121,7 @@ class RunWorker:
                         session_id,
                         project_name,
                         project_slug,
-                        project_wiki,
+                        project_layout,
                         is_job,
                         is_build,
                         jrow,
@@ -2278,10 +2281,17 @@ class RunWorker:
                         "auto-title failed (non-fatal)"
                     )
                 # Re-catalog the wiki in case the agent wrote/updated notes this run, so
-                # the next session's preamble reflects the new knowledge.
+                # the next session's preamble reflects the new knowledge. Automatic
+                # memory writes only target the wiki's DEFAULT location - a wiki
+                # detected elsewhere stays read-only until #137 (layout_map seam).
                 try:
-                    if project_wiki is not None and project_wiki.is_dir():
-                        wiki_memory.rebuild_index(project_wiki)
+                    memory_wiki = (
+                        project_layout.wiki_memory_write_root()
+                        if project_layout is not None
+                        else None
+                    )
+                    if memory_wiki is not None and memory_wiki.is_dir():
+                        wiki_memory.rebuild_index(memory_wiki)
                 except Exception:
                     logging.getLogger("proxima.worker").exception(
                         "wiki index rebuild failed (non-fatal)"

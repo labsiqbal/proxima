@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
-from .. import fsapi
+from .. import container_registry, fsapi, layout_map
 from ..settings import validate_slug
 from ..schemas import FileWriteRequest, FsPathRequest, FsRenameRequest
 
@@ -19,12 +19,19 @@ def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
     current_user = deps["current_user"]
-    _ops_root = deps["_ops_root"]
+    visible_project = deps["visible_project"]
 
     @app.get("/api/projects/{slug}/wiki/all")
     def project_wiki_all(slug: str, user: dict[str, Any] = Depends(current_user)):
-        root = _ops_root(slug, user)
-        return {"notes": fsapi.walk_files(root, "wiki")}
+        """All notes in the project's wiki - resolved through the per-project
+        layout map (prune C4), e.g. a '.' project's root wiki/."""
+        project = visible_project(slug, user)
+        try:
+            layout = layout_map.project_layout(db(), project)
+        except container_registry.ContainerBoundaryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        root, rel = layout.anchored("wiki")
+        return {"notes": fsapi.walk_files(root, rel)}
 
     # ── Personal per-user wiki (workspace_root/users/<username>/wiki) ──
     def _wiki_root(user: dict[str, Any], *, create: bool) -> Path:

@@ -7,8 +7,8 @@ from collections.abc import Callable
 from typing import Any
 
 from . import artifact_registry, file_targets
+from . import layout_map
 from . import master_focus
-from .container_registry import ops_root
 from .artifacts import artifacts_for_output_links, scan_project_artifacts, update_produced_artifacts
 from .prompt_collaborations import strip_runner_preamble
 
@@ -31,7 +31,12 @@ class RunOutputs:
             ).fetchone()
             if not prow:
                 return []
-            fresh = scan_project_artifacts(ops_root(db, prow), run_start_ts - 5)
+            layout = layout_map.project_layout(db, prow)
+            fresh = scan_project_artifacts(
+                layout.ops_root,
+                run_start_ts - 5,
+                artifacts_rel=layout.ops_rel_path("artifacts") or "artifacts",
+            )
             links = artifacts_for_output_links(fresh, prow["slug"])
             return file_targets.add_artifact_targets(db, prow, links)
         except Exception:

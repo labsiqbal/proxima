@@ -29,26 +29,28 @@ def test_rel_path_rejects_escapes(bad):
 
 
 def test_resolve_script_requires_a_real_file_inside_scripts(tmp_path: Path):
-    root = tmp_path / "project"
-    (root / "scripts").mkdir(parents=True)
-    (root / "scripts" / "hello.sh").write_text("echo hi\n", encoding="utf-8")
-    (root / "secret.txt").write_text("nope", encoding="utf-8")
+    # resolve_script takes the layout-map-resolved script library folder
+    # (prune C4) - <ops>/scripts by default.
+    scripts = tmp_path / "project" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "hello.sh").write_text("echo hi\n", encoding="utf-8")
+    (scripts.parent / "secret.txt").write_text("nope", encoding="utf-8")
 
-    assert scripts_library.resolve_script(root, "hello.sh").name == "hello.sh"
+    assert scripts_library.resolve_script(scripts, "hello.sh").name == "hello.sh"
     with pytest.raises(scripts_library.ScriptResolutionError):
-        scripts_library.resolve_script(root, "missing.sh")
+        scripts_library.resolve_script(scripts, "missing.sh")
     with pytest.raises(scripts_library.ScriptResolutionError):
-        scripts_library.resolve_script(root, "../secret.txt")
+        scripts_library.resolve_script(scripts, "../secret.txt")
 
 
 def test_resolve_script_refuses_a_symlink_escape(tmp_path: Path):
-    root = tmp_path / "project"
-    (root / "scripts").mkdir(parents=True)
+    scripts = tmp_path / "project" / "scripts"
+    scripts.mkdir(parents=True)
     outside = tmp_path / "outside.sh"
     outside.write_text("echo out\n", encoding="utf-8")
-    (root / "scripts" / "link.sh").symlink_to(outside)
+    (scripts / "link.sh").symlink_to(outside)
     with pytest.raises(scripts_library.ScriptResolutionError):
-        scripts_library.resolve_script(root, "link.sh")
+        scripts_library.resolve_script(scripts, "link.sh")
 
 
 # ── header parsing + catalog ─────────────────────────────────────────────
@@ -83,7 +85,7 @@ def test_scan_catalog_lists_scripts_with_descriptions(tmp_path: Path):
     (scripts / "seo" / "crawl.py").write_text("# crawls the site\n", encoding="utf-8")
     (scripts / ".hidden.sh").write_text("# Description: nope\n", encoding="utf-8")
 
-    catalog = scripts_library.scan_catalog(root)
+    catalog = scripts_library.scan_catalog(scripts)
     assert [entry["rel_path"] for entry in catalog] == ["b-fetch.sh", "seo/crawl.py"]
     assert catalog[0]["description"] == "fetch stuff"
     assert catalog[1]["description"] == "crawls the site"

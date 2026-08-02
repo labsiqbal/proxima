@@ -266,6 +266,24 @@ resolves through this row via `ops_root` - nothing assumes a global `ops/`.
 Workspace-created Containers (Proxima's own data dir) still scaffold `ops/` and
 register `rel_path='ops'`. Code-area auto-detection skips the per-project Ops
 subtree, so a repo inside the chosen Ops folder is Ops content, not a code Area.
+`project_layout` is the finer **per-project layout map** (prune C4): one row per
+well-known area (`wiki`, `artifacts`, `scripts`, `uploads`) holding its
+container-root-relative location. `layout_map.py` seeds rows by zero-write
+detection from the real tree (standard name under the Ops root first, then the
+container root; `source='detected'`), falling back to today's fixed name under
+the Ops root (`source='default'`) - at link time, in the boot sweep for
+projects linked before the map existed, and lazily on first resolution. The
+map is persisted state, not a per-boot scan: a default-position entry survives
+its folder's deletion, while an entry outside the Ops root re-detects once its
+folder is gone (self-healing after the explicit move migration). Consumers
+resolve through `layout_map.project_layout(...)`: wiki read surfaces (chat
+note draft/commit, run preamble catalog), the script library (catalog,
+approval card, `script_runner` execution), the upload default folder, the
+artifact/design scanners, and the preamble's designs list. The automatic
+memory writers (`log.md` append via `run_summaries`, `index.md` regeneration)
+go through `wiki_memory_write_root()`, which only returns the wiki while the
+map agrees with its default location - the deliberate #137 seam for adaptive
+memory writes. `GET /api/projects/{slug}/layout` exposes the resolved map.
 `container_registry` stores a bounded projection of identity and summary from
 `ops/container.md`, its full source hash, the projection timestamp, and last known
 activity. Identity is free text, not a Container type enum. The file API refreshes

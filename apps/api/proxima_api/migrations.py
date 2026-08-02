@@ -1997,6 +1997,30 @@ def _drop_self_update_runs(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS self_update_runs")
 
 
+def _add_project_layout(conn: sqlite3.Connection) -> None:
+    # Per-project layout map (prune C4, #136): where wiki/artifacts/scripts/
+    # uploads live, container-root-relative. Seeded by zero-write detection at
+    # link time; the startup settle sweep and lazy resolution backfill projects
+    # linked before the map existed. See layout_map.py for the resolution and
+    # self-heal rules.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS project_layout (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          area TEXT NOT NULL
+            CHECK(area IN ('wiki', 'artifacts', 'scripts', 'uploads')),
+          rel_path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'default'
+            CHECK(source IN ('detected', 'default')),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(project_id, area)
+        )
+        """
+    )
+
+
 def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
     tables = {
         str(row[0])
@@ -6486,6 +6510,11 @@ MIGRATIONS: list[Migration] = [
         57,
         "drop the retired safe-update owner projection",
         _drop_self_update_runs,
+    ),
+    (
+        58,
+        "add project_layout: per-project map of wiki/artifacts/scripts/uploads (prune C4)",
+        _add_project_layout,
     ),
 ]
 

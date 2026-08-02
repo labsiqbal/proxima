@@ -2,8 +2,9 @@
 
 A ``wf_script_node`` run is claimed from the ordinary runs queue like any
 other, but instead of a runner/ACP session the worker hands it here: the frozen
-node names a library script (``scripts/<command>``, resolved under the Container's
-physical ``ops/`` root), and this module executes it as a subprocess - exec array,
+node names a library script (``scripts/<command>``, resolved in the Container's
+script library folder via the per-project layout map, prune C4 -
+``<ops>/scripts`` by default), and this module executes it as a subprocess - exec array,
 never a shell string - with the physical Ops Area as cwd. stdin carries the graph
 engine's typed hand-off (the same
 ``{"job_input": …, "upstream": […]}`` payload an agent node gets in its
@@ -40,7 +41,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import app_settings, scripts_library
+from . import app_settings, layout_map, scripts_library
 from .container_registry import ops_root
 from .graph import normalize_graph
 from .container_activity import GuardedWriterTree, retain_activity_lease
@@ -163,7 +164,10 @@ class ScriptRunner:
         if not project or not project["path"]:
             self._fail(run, "script step's project path is unavailable")
             return
+        # cwd stays the physical Ops Area; the script library folder itself is
+        # per-project (layout map, prune C4) - <ops>/scripts by default.
         project_root = ops_root(db, project)
+        scripts_dir = layout_map.project_layout(db, project).dir("scripts")
 
         try:
             graph = normalize_graph(attempt["job_graph"] or "")
@@ -184,7 +188,7 @@ class ScriptRunner:
         # the trust check and exec cannot run unapproved content (audit F4).
         try:
             script_path = scripts_library.resolve_script(
-                project_root, str(node["command"])
+                scripts_dir, str(node["command"])
             )
             script_mode = script_path.stat().st_mode
             script_bytes = script_path.read_bytes()

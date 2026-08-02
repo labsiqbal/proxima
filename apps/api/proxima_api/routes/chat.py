@@ -35,6 +35,7 @@ from .. import container_registry
 from .. import design_scenes
 from .. import file_targets
 from .. import kinds
+from .. import layout_map
 from .. import scripts_library
 from .. import state
 from .. import image_providers
@@ -972,8 +973,9 @@ def register(app, deps):
     def _session_wiki_root(
         session: dict[str, Any], user: dict[str, Any]
     ) -> Path | None:
-        """The session's project wiki. Wiki is project-scoped — a project-less chat
-        has no wiki target."""
+        """The session's project wiki, resolved through the per-project layout
+        map (prune C4) - e.g. a '.' project's root wiki/. Wiki is
+        project-scoped — a project-less chat has no wiki target."""
         if not session["project_id"]:
             return None
         prow = (
@@ -981,7 +983,13 @@ def register(app, deps):
             .execute("SELECT slug FROM projects WHERE id = ?", (session["project_id"],))
             .fetchone()
         )
-        return _ops_root(prow["slug"], user) / "wiki" if prow else None
+        if not prow:
+            return None
+        project = visible_project(prow["slug"], user)
+        try:
+            return layout_map.project_layout(db(), project).dir("wiki")
+        except container_registry.ContainerBoundaryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/sessions/{session_id}/wiki-note/draft", status_code=202)
     def wiki_note_draft(
@@ -1073,8 +1081,9 @@ def register(app, deps):
                 .fetchone()
             )
             if prow and prow["path"]:
+                # The script library folder is per-project (layout map, C4).
                 scripts_catalog = scripts_library.scan_catalog(
-                    container_registry.ops_root(db(), prow)
+                    layout_map.project_layout(db(), prow).dir("scripts")
                 )
         prompt = (
             wf.architect_system(
@@ -1151,8 +1160,15 @@ def register(app, deps):
                     json.dumps({"mode": payload.mode, "session_id": session_id}),
                 ),
             )
+            # Automatic index regeneration only targets the wiki's DEFAULT
+            # location (the layout map's #137 seam); a wiki detected elsewhere
+            # keeps its index untouched until adaptive memory writes land.
             try:
-                wiki_memory.rebuild_index(root)
+                memory_root = layout_map.wiki_memory_write_root(
+                    db(), int(session["project_id"])
+                )
+                if memory_root is not None and memory_root == Path(root):
+                    wiki_memory.rebuild_index(memory_root)
             except Exception:
                 logging.getLogger("proxima.api").exception(
                     "wiki index rebuild failed (non-fatal)"
@@ -1924,18 +1940,25 @@ def register(app, deps):
 
         recent_artifacts: list[dict[str, Any]] = []
         for p in projects[:12]:
-            root = container_registry.try_ops_root(d, p)
-            if root is None or not root.is_dir():
+            layout = layout_map.try_project_layout(d, p)
+            if layout is None or not layout.ops_root.is_dir():
                 continue
+            root = layout.ops_root
+            artifacts_rel = layout.ops_rel_path("artifacts") or "artifacts"
             # Reuse the bounded/pruned artifact scanner used by run results. The
             # old dashboard rglob walked every descendant on every Home poll and
             # had a second, drifting type classifier.
-            for artifact in scan_project_artifacts(root, 0.0):
+            for artifact in scan_project_artifacts(
+                root, 0.0, artifacts_rel=artifacts_rel
+            ):
                 rel = str(artifact.get("path") or "")
                 parts = Path(rel).parts
                 if (
                     not parts
-                    or parts[0] not in {"artifacts", "reports", "exports"}
+                    or not (
+                        rel.startswith(f"{artifacts_rel}/")
+                        or parts[0] in {"reports", "exports"}
+                    )
                     or "renders" in parts
                 ):
                     continue

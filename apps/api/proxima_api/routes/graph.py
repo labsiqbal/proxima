@@ -12,7 +12,7 @@ from fastapi import Depends, HTTPException, status
 from .. import (
     artifact_registry,
     master_decisions,
-    container_registry,
+    layout_map,
     repo_remote,
     schedule_policy,
     satpam,
@@ -971,8 +971,9 @@ def register(app, deps):
             raise HTTPException(status_code=409, detail="this plan's project path is unavailable")
         try:
             rel = scripts_library.normalize_script_rel_path(str(node["command"]))
+            # The script library folder is per-project (layout map, prune C4).
             script_path = scripts_library.resolve_script(
-                container_registry.ops_root(db(), project), rel
+                layout_map.project_layout(db(), project).dir("scripts"), rel
             )
             return rel, script_path.read_bytes()
         except (scripts_library.ScriptResolutionError, OSError) as exc:

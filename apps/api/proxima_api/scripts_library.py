@@ -1,7 +1,8 @@
 """The project container's agent-managed script library (T6).
 
-Scripts are ordinary files under ``<project>/scripts/``, written by agents as
-normal job output. Each starts with a header comment block (Description /
+Scripts are ordinary files in the project's script library folder - resolved
+per project through the layout map (prune C4, ``<ops>/scripts`` by default) -
+written by agents as normal job output. Each starts with a header comment block (Description /
 Inputs / Outputs) — there is no separate manifest. This module owns everything
 that is pure about them: path jailing, the content hash the trust model binds
 approvals to, header parsing, the catalog scan the run preamble injects, and
@@ -57,14 +58,13 @@ def normalize_script_rel_path(raw: str) -> str:
     return path.as_posix()
 
 
-def scripts_root(project_root: Path) -> Path:
-    return Path(project_root) / SCRIPTS_DIRNAME
-
-
-def resolve_script(project_root: Path, rel_path: str) -> Path:
-    """Resolve one library script to a real file, jailed inside scripts/."""
+def resolve_script(scripts_root: Path, rel_path: str) -> Path:
+    """Resolve one library script to a real file, jailed inside the script
+    library folder. ``scripts_root`` is the project's script library location
+    resolved through the per-project layout map (prune C4) - ``<ops>/scripts``
+    by default."""
     rel = normalize_script_rel_path(rel_path)
-    root = scripts_root(project_root).resolve()
+    root = Path(scripts_root).resolve()
     target = (root / Path(*PurePosixPath(rel).parts)).resolve()
     try:
         target.relative_to(root)
@@ -126,13 +126,14 @@ def parse_header(text: str) -> dict[str, str]:
     return fields
 
 
-def scan_catalog(project_root: Path) -> list[dict[str, str]]:
+def scan_catalog(scripts_root: Path) -> list[dict[str, str]]:
     """The library catalog: every script's rel_path + one-line description.
 
+    ``scripts_root`` is the layout-map-resolved script library folder.
     Best-effort and cheap by design — it runs on every preamble build. Sorted
     for a stable prompt; capped so a runaway folder cannot flood the context.
     """
-    root = scripts_root(project_root)
+    root = Path(scripts_root)
     if not root.is_dir():
         return []
     entries: list[dict[str, str]] = []

@@ -21,7 +21,7 @@ from .container_registry import (
     migrate_legacy_ops_containers,
     refresh_registry_projections,
 )
-from . import cf_hostnames
+from . import cf_hostnames, layout_map
 from .acp import AcpManager
 from .apprunner import AppManager
 from .preview_proxy import (
@@ -318,6 +318,14 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     assert_master_projection_ledger(app.state.db)
     assert_task_projection_outbox(app.state.db)
     migrate_legacy_ops_containers(app.state.db)
+    # Seed the per-project layout map for projects linked before the map
+    # existed (prune C4). Zero-write toward the tree; unavailable containers
+    # are skipped and backfill lazily on first resolution instead.
+    for _project_row in app.state.db.execute(
+        "SELECT id, slug, path, path_identity FROM projects "
+        "WHERE archived_at IS NULL ORDER BY id"
+    ).fetchall():
+        layout_map.try_seed_project_layout(app.state.db, _project_row)
     app.state.worker_db = connect(
         cfg["database_path"]
     )  # dedicated connection for the async run worker

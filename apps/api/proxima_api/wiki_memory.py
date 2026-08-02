@@ -340,12 +340,13 @@ DESIGN_GUIDE = (
     "Design Studio directly."
 )
 
-def list_project_designs(project_root: Path) -> list[dict[str, Any]]:
-    """Scan the project's Design Studio designs (artifacts/design/*/scene.json) so the
-    MAIN chat can be made aware of visuals created/edited in the separate design chat.
-    Best-effort + cheap; newest first, capped."""
+def list_project_designs(artifacts_root: Path) -> list[dict[str, Any]]:
+    """Scan the project's Design Studio designs (``<artifacts>/design/*/scene.json``)
+    so the MAIN chat can be made aware of visuals created/edited in the separate
+    design chat. ``artifacts_root`` is the layout-map-resolved artifacts folder
+    (prune C4). Best-effort + cheap; newest first, capped."""
     out: list[dict[str, Any]] = []
-    ddir = project_root / "artifacts" / "design"
+    ddir = Path(artifacts_root) / "design"
     if not ddir.is_dir():
         return out
     try:
@@ -445,12 +446,18 @@ def build_run_preamble(
     design_guidelines: str | None = None,
     moodboard_references: list[dict[str, Any]] | None = None,
     host_tools: list[dict[str, Any]] | None = None,
+    scripts_root: Path | None = None,
+    artifacts_root: Path | None = None,
 ) -> str | None:
     """Context block prepended to the FIRST prompt of an agent's ACP session,
     telling it it runs inside Proxima, how to ask interactive questions, and how to
     consult the project's wiki memory. Runner-agnostic plain text. `host_tools` is
     the probed recommended-tools list (T8 detect-and-advertise): present tools get
-    a one-liner so the agent knows they exist without a PATH hunt."""
+    a one-liner so the agent knows they exist without a PATH hunt.
+
+    ``wiki_root`` / ``scripts_root`` / ``artifacts_root`` are the project's
+    layout-map-resolved locations (prune C4) - the caller resolves them, this
+    builder never derives one location from another."""
     general_guide = _general_guide()
     tools_block = recommended_tools.tools_preamble_block(
         [t for t in (host_tools or []) if t.get("present")])
@@ -518,17 +525,17 @@ def build_run_preamble(
     # The script library catalog (T6): the same inline-the-catalog move the wiki
     # block makes, for the same reason — an agent only reuses (or extends) a
     # script it can SEE. This is the reuse-awareness half of deterministic steps.
-    if root is not None:
+    if scripts_root is not None:
         try:
-            catalog = scripts_library.scan_catalog(root.parent)
+            catalog = scripts_library.scan_catalog(scripts_root)
         except Exception:
             catalog = []
         lines += ["", scripts_library.catalog_preamble_block(catalog)]
     # Bridge the (separate) Design Studio chat → the main chat: list the project's
     # existing designs so the agent is aware of visuals built/edited there, and knows
     # to read the current layout before restyling or building pages from them.
-    if root is not None:
-        designs = list_project_designs(root.parent)
+    if artifacts_root is not None:
+        designs = list_project_designs(artifacts_root)
         if designs:
             lines += ["", "## Designs in this project (Design Studio)",
                       "Visual designs already exist here. Read artifacts/design/<id>/scene.json for the "

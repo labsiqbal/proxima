@@ -25,14 +25,33 @@ _ARTIFACT_SKIP_NAMES = {
 }
 
 
-def scan_project_artifacts(root: "Path", start_ts: float, *, cap: int = 40) -> list[dict[str, Any]]:
+def scan_project_artifacts(
+    root: "Path",
+    start_ts: float,
+    *,
+    cap: int = 40,
+    artifacts_rel: str = "artifacts",
+) -> list[dict[str, Any]]:
     """Typed list of artifacts under `root` modified at/after `start_ts`, so the UI can
     preview each: design / app (runnable package.json) / page (.html) / doc (.md) / file.
     Prunes heavy dirs and absorbs files inside a produced app dir. Pure + best-effort.
     `cap` bounds the result (default 40 for live scan surfaces; the registry seed
-    passes a higher cap because durable records are paginated, not capped)."""
+    passes a higher cap because durable records are paginated, not capped).
+    `artifacts_rel` is the project's artifacts location relative to `root`
+    (per-project layout map, prune C4) - `artifacts` by default; `reports/` and
+    `exports/` keep their fixed names."""
     if not root.is_dir():
         return []
+    design_prefix = f"{artifacts_rel}/design/"
+    video_prefix = f"{artifacts_rel}/video/"
+
+    def in_deliverable_dir(rel_parts: tuple[str, ...], rel_text: str) -> bool:
+        if not rel_parts:
+            return False
+        return (
+            rel_text.startswith(f"{artifacts_rel}/")
+            or rel_parts[0] in ("reports", "exports")
+        )
 
     def mtime(p: "Path") -> float:
         try:
@@ -54,11 +73,11 @@ def scan_project_artifacts(root: "Path", start_ts: float, *, cap: int = 40) -> l
         for fn in filenames:
             f = dp / fn
             rel = str(f.relative_to(root))
-            if fn == "scene.json" and rel.startswith("artifacts/design/"):
+            if fn == "scene.json" and rel.startswith(design_prefix):
                 if mtime(f) >= start_ts:
                     try:
                         s = json.loads(f.read_text())
-                        designs.append({"type": "design", "id": str(s.get("id") or dp.name), "title": str(s.get("title") or dp.name), "path": f"artifacts/design/{dp.name}", "_m": mtime(f)})
+                        designs.append({"type": "design", "id": str(s.get("id") or dp.name), "title": str(s.get("title") or dp.name), "path": f"{design_prefix}{dp.name}", "_m": mtime(f)})
                     except Exception:
                         pass
                 continue
@@ -73,26 +92,27 @@ def scan_project_artifacts(root: "Path", start_ts: float, *, cap: int = 40) -> l
                 except Exception:
                     pass
                 continue
-            if mtime(f) < start_ts or rel.startswith("artifacts/design/") or fn in _ARTIFACT_SKIP_NAMES:
+            if mtime(f) < start_ts or rel.startswith(design_prefix) or fn in _ARTIFACT_SKIP_NAMES:
                 continue
             ext = f.suffix.lower()
             # Video Studio used to persist an editable shell (index.html, brief.json,
             # thumbnails, etc.) below artifacts/video/.  The studio is no longer a
             # product surface, so those legacy support files are not standalone
             # artifacts.  Keep rendered video files discoverable for playback.
-            if rel.startswith("artifacts/video/") and ext not in (".mp4", ".webm", ".mov"):
+            if rel.startswith(video_prefix) and ext not in (".mp4", ".webm", ".mov"):
                 continue
+            deliverable = in_deliverable_dir(parts, rel)
             if ext in (".html", ".htm"):
                 misc.append({"type": "page", "title": fn, "path": rel, "_m": mtime(f)})
-            elif ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif") and parts and parts[0] in ("artifacts", "reports", "exports"):
+            elif ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif") and deliverable:
                 misc.append({"type": "image", "title": fn, "path": rel, "_m": mtime(f)})
-            elif ext in (".pdf", ".doc", ".docx", ".txt", ".rtf") and parts and parts[0] in ("artifacts", "reports", "exports"):
+            elif ext in (".pdf", ".doc", ".docx", ".txt", ".rtf") and deliverable:
                 misc.append({"type": "doc", "title": fn, "path": rel, "_m": mtime(f)})
             elif ext == ".md":
                 misc.append({"type": "doc", "title": fn, "path": rel, "_m": mtime(f)})
-            elif ext in (".mp4", ".webm", ".mov") and parts and parts[0] in ("artifacts", "reports", "exports"):
+            elif ext in (".mp4", ".webm", ".mov") and deliverable:
                 misc.append({"type": "video-file", "title": fn, "path": rel, "_m": mtime(f)})
-            elif parts and parts[0] in ("artifacts", "reports", "exports"):
+            elif deliverable:
                 misc.append({"type": "file", "title": fn, "path": rel, "_m": mtime(f)})
     misc = [m for m in misc if not any(d != "." and (m["path"] == d or m["path"].startswith(d + "/")) for d in app_dirs)]
     # Sort newest-first BEFORE the cap so the result is deterministic + most-relevant
