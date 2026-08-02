@@ -74,6 +74,24 @@ credential leakage but does not prevent the process reading files available to i
 Tool permission requests ask the owner by default. Auto-approve remains available as
 an explicit trusted-owner setting and is recorded in run events.
 
+### Source, secrets, and runtime data stay out of runner reach
+
+Even with one owner, treat a prompt-injected **agent run** as untrusted - it must
+not read the app's source, secrets, or runtime data just because a prompt asked:
+
+- Keep project workspace roots under the configured workspace; don't set a project
+  root to a source/runtime directory.
+- Don't add UI/API routes that browse arbitrary server paths.
+- Keep `~/.config/proxima/` (env/secrets) and `~/.local/share/proxima/`
+  (db, hermes-profiles, backups) out of runner/file-API reach.
+- Prompt text can never grant access - authorization comes from the resolved run
+  context. See [prompt-injection-hardening.md](prompt-injection-hardening.md).
+
+(This absorbs the former `docs/locked-repo-policy.md`; its speculative
+multi-tenant "locked repo" grant machinery belongs only to the hypothetical
+secure mode at the end of this document and was never part of the single-user
+code path.)
+
 ## Task delegation boundary
 
 Scoped Task creation is a server-owned operation. Work, Home quick Task, Master, and
@@ -504,6 +522,7 @@ runner sandboxing
 resource limits
 secret redaction
 audited break-glass workflows
+locked-repo grants (source/runtime paths hidden per user unless granted)
 ```
 
 Those controls are intentionally out of scope for the normal single-owner self-hosted

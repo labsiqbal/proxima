@@ -49,7 +49,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 
 **Operations & contributing:** [installation.md](installation.md) ·
 [backup.md](backup.md) · [development-tools.md](development-tools.md) ·
-[locked-repo-policy.md](locked-repo-policy.md) · [RELEASING.md](RELEASING.md) ·
+[RELEASING.md](RELEASING.md) ·
 [../CONTRIBUTING.md](../CONTRIBUTING.md)
 
 **Root-level intros (audience-facing):** [../README.md](../README.md) (users) ·

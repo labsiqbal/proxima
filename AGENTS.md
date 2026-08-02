@@ -39,7 +39,6 @@ If a change makes a doc wrong and you leave it, you've shipped a bug.
 - `docs/reference/api.md`, `docs/reference/database.md` — **generated** from code; do not hand-edit
 - `docs/development-tools.md` — commands, runtime paths, and coding-agent workflow
 - `docs/security-boundaries.md` — server/admin vs app-user boundaries
-- `docs/locked-repo-policy.md` — source/repo visibility and future locked-repo grants
 - `docs/prompt-injection-hardening.md` — prompt/tool/path policy for agents
 - `docs/installation.md` — package/install flow
 
