@@ -1339,7 +1339,7 @@ button:disabled {
 	align-items: center;
 	gap: var(--space-2);
 	width: 100%;
-	border: 1px solid var(--ui-border);
+	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-sm, 6px);
 	background: var(--ui-surface-2, rgba(127,127,127,0.04));
 	padding: var(--space-2);
@@ -1465,7 +1465,7 @@ button:disabled {
 	gap: 1px;
 	max-height: 300px;
 	overflow-y: auto;
-	border: 1px solid var(--ui-border);
+	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-sm, 6px);
 	background: var(--ui-surface-2, rgba(127,127,127,0.04));
 	padding: var(--space-1);
@@ -1525,7 +1525,7 @@ button:disabled {
 	font-size: 0.85em;
 	color: var(--ui-text-tertiary);
 	padding: 1px 6px;
-	border: 1px solid var(--ui-border);
+	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: 999px;
 	white-space: nowrap;
 }
@@ -4288,6 +4288,28 @@ button:disabled {
 .tree-read-only {
 	color: var(--ui-text-secondary);
 	font-size: var(--text-xs);
+}
+/* A symlink Proxima shows but never follows (prune C7): visible so the tree
+   matches the real folder, inert so nothing can be opened through it. */
+.tree-row.skipped {
+	display: flex;
+	align-items: center;
+	gap: var(--space-1);
+	color: var(--ui-text-tertiary);
+	cursor: default;
+}
+.tree-row.skipped:hover {
+	background: transparent;
+}
+.tree-skip-badge {
+	flex: 0 0 auto;
+	margin-left: auto;
+	padding: 0 var(--space-1);
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-sm);
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
+	white-space: nowrap;
 }
 .tree-row.inline {
 	padding-top: 2px;
@@ -10527,7 +10549,7 @@ button.moodboard-add-method:hover {
 	display: inline-block;
 	margin: 0 0 10px;
 	padding: 3px 10px;
-	border: 1px solid var(--ui-border);
+	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: 999px;
 }
 .design-studio.is-mobile .ds-toolbar .ds-project-tag {

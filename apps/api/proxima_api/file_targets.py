@@ -382,6 +382,13 @@ def add_targets(
         raise FileTargetError("tree directory is outside its active root") from exc
     enriched: list[dict[str, Any]] = []
     for entry in entries:
+        if entry.get("skipped"):
+            # Warn-and-skip entries (symlinks, prune C7) are acknowledged in
+            # the listing but never resolved: with no target they cannot be
+            # opened, and one stray link no longer removes itself silently
+            # from the owner's view of their own folder.
+            enriched.append(dict(entry))
+            continue
         try:
             relative_path = normalize_relative_path(
                 "/".join(

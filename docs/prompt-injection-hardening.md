@@ -96,7 +96,9 @@ Runner/file APIs must enforce:
 - selected Area or Container-root confinement
 - no absolute path from prompt text
 - no `..` traversal
-- no symlinked physical Ops content
+- no symlink is ever followed: a link is refused on writes and skipped (with a
+  reason, siblings intact) on reads; a symlinked Container or Ops root is refused
+  outright, and content moves still scan the whole Ops tree for links (prune C7)
 - no duplicate or unsafe overlapping Area roots
 - no raw secret paths
 

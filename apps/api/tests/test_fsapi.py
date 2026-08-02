@@ -168,17 +168,27 @@ def test_rename_parent_collision_maps_to_fserror(tmp_path):
     assert (root / "a.txt").read_text(encoding="utf-8") == "hello"
 
 
-def test_list_tree_handles_broken_symlink(tmp_path):
+def test_list_tree_marks_symlinks_skipped_and_keeps_siblings(tmp_path):
+    """Warn-and-skip (prune C7): links are acknowledged, never followed, and
+    a broken or escaping one never fails the listing."""
     root = tmp_path / "proj"
     root.mkdir()
     (root / "real.txt").write_text("content", encoding="utf-8")
     os.symlink("/nonexistent/target", root / "broken")
+    os.symlink("/etc", root / "escape")
     entries = fsapi.list_tree(root, "")
-    names = [e["name"] for e in entries]
-    assert "broken" in names
-    broken_entry = next(e for e in entries if e["name"] == "broken")
-    assert broken_entry["type"] == "file"
-    assert broken_entry["size"] == 0
+    by_name = {e["name"]: e for e in entries}
+    assert by_name["real.txt"]["type"] == "file"
+    for name in ("broken", "escape"):
+        assert by_name[name] == {
+            "name": name,
+            "type": "symlink",
+            "size": 0,
+            "skipped": True,
+            "reason": fsapi.SYMLINK_SKIP_REASON,
+        }
+    with pytest.raises(fsapi.FsError, match="symlink"):
+        fsapi.list_tree(root, "escape")
 
 
 def test_resolve_rejects_null_byte(tmp_path):

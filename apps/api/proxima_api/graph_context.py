@@ -1704,7 +1704,11 @@ class GraphContextService:
         kind: str,
         area_id: int | None = None,
         create_output: bool = False,
-        deep_ops_scan: bool = True,
+        # Graph builds read the Ops tree and write only into Proxima's own
+        # runtime dir, so they take no deep descendant-symlink walk (prune
+        # C7): the Knowledge walk is already no-follow per entry, and a stray
+        # link in the owner's tree must not fail the whole build.
+        deep_ops_scan: bool = False,
     ) -> GraphScope:
         if kind not in GRAPH_KINDS:
             raise GraphScopeError("unknown graph kind")

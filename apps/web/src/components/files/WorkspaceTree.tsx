@@ -2,7 +2,7 @@ import React from 'react'
 import type { FileEntry, FileTarget } from '../../types'
 import type { FsAdapter, ReadOnlyFsAdapter } from '../../api/fsAdapter'
 import { retargetFile, type FileRef } from '../../api/files'
-import { IconFile, IconFolder, IconChevronRight, IconFilePlus, IconFolderPlus } from '../shell/icons'
+import { IconFile, IconFolder, IconChevronRight, IconFilePlus, IconFolderPlus, IconLink } from '../shell/icons'
 import { confirmDialog } from '../ui/Dialog'
 
 // Lazy-load the CodeMirror editor so its chunk only loads when a file is opened.
@@ -106,6 +106,22 @@ function Level({ dir, target, depth, t }: { dir: string; target?: FileTarget; de
             onCancel={t.cancelRename}
           />
         )
+      }
+      if (entry.skipped) {
+        // Warn-and-skip (prune C7): the entry is acknowledged so the tree
+        // still reads as the real folder, but it is inert - no click target,
+        // no context menu, nothing to follow.
+        return <div
+          key={path}
+          data-path={path}
+          className="tree-row skipped"
+          style={{ paddingLeft: 8 + depth * 12 }}
+          title={entry.reason || 'skipped'}
+        >
+          <span className="tree-ico"><IconLink size={15} /></span>
+          <span className="tree-name">{entry.name}</span>
+          <span className="tree-skip-badge">{entry.reason || 'skipped'}</span>
+        </div>
       }
       if (entry.type === 'dir') {
         const open = t.expanded.has(path)

@@ -273,15 +273,11 @@ cannot execute in the API process; auth stays the host's ambient ssh.
 Container file APIs resolve paths through the database-selected Container or Ops
 Area. Client input must be relative and normalized. Every active Area is realpath
 checked to remain inside its Container, and every actual file access is realpath
-jailed, so a symlink under `ops/` can never read or write outside the Container.
-Duplicate roots, unsafe overlaps, path escape, and a symlinked Container or Ops
-root fail closed on every resolution. The full recursive scan that rejects every
-symlink beneath physical `ops/` runs at the fail-closed boundaries - Ops creation,
-legacy migration, Area mutation, and Area-sensitive execution - rather than on hot
-read paths (project lists, Home, file resolution), which stay O(1). Path-only
-requests resolve literally from the Container root (prune #138) with the
-authoritative Area assigned by physical ownership; the active Ops row may
-temporarily be legacy `.` while a collision awaits owner attention.
+jailed. Duplicate roots, unsafe overlaps, path escape, and a symlinked Container
+or Ops root fail closed on every resolution. Path-only requests resolve literally
+from the Container root (prune #138) with the authoritative Area assigned by
+physical ownership; the active Ops row may temporarily be legacy `.` while a
+collision awaits owner attention.
 Migration creation and rename use stable no-follow directory handles with identity
 revalidation, and one cross-process Container lock covers migration, Area changes,
 Files mutations, and Project purge before any Area root is selected. Generated
@@ -290,6 +286,36 @@ removed. Destination directories are filled only after their platform identities
 are durable in the migration manifest. Process guardians bind both their live API
 owner and guardian identities; retry reports live work as a conflict and can recover
 only a proven orphan through its Linux sentinel or exact named Windows Job.
+
+### Symlink policy (prune C7)
+
+**Proxima never follows a symlink.** `fsapi.resolve_in_project` refuses any path
+whose components include a link, so the lexically resolved path *is* the real
+path and no access - read or write - can leave the jail through a link. The
+policy differs only in what a refusal costs:
+
+- **Reads warn and skip.** A link met while listing is reported as
+  `type: "symlink"`, `skipped: true`, with a reason. It appears in the tree so
+  the folder still reads as it really is, carries no file target so nothing can
+  open it, and every sibling keeps listing. Opening the link itself, or any path
+  beneath it, is a 400 naming the symlink. `walk_files`, the `@`-reference index,
+  and the Knowledge walk skip links the same way. One stray link can no longer
+  brick a whole listing (audit #120).
+- **Writes and migration stay fail-closed**, unchanged. No write follows a link:
+  write, mkdir, rename, and delete take the same refusal, which fails the whole
+  operation. The full recursive scan that rejects *every* symlink beneath
+  physical `ops/` now means exactly one thing - "content is about to be moved or
+  created here" - and runs only at those content boundaries: physical Ops root
+  creation, and the move-based legacy migration (its manifest, its retry
+  manifest, and its commit). Everything that moves nothing skips the walk -
+  link-time Ops choice, as-is adoption, the boot settle sweep, inspection of a
+  settled layout, Area add, relocate rebind, graph scope, and every read path -
+  because they cannot follow a link anyway. A symlinked Container or Ops **root**
+  remains refused everywhere: it is the jail anchor.
+
+The boundary therefore did not move when the failure mode softened: before C7 an
+in-jail symlink was followed after realpath validation; now nothing is followed
+at all.
 
 Never allow:
 

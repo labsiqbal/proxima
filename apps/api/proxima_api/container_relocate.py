@@ -23,8 +23,9 @@ Rebinding re-pins the record to the folder's real location:
   layout map, and the memory-writes toggle are all untouched by construction.
   Only entries whose *paths* broke are re-detected at the new location.
 - **Metadata only**: not one byte is written into either the old or the new
-  folder. Validation is read-only; the realpath jail and the fail-closed
-  symlink policy are unchanged (softening reads is #142).
+  folder. Validation is read-only and the realpath jail is unchanged; because
+  rebinding moves no content it takes no deep symlink walk (prune C7, #142) -
+  a symlinked Container or Ops root is still refused.
 """
 
 from __future__ import annotations
@@ -256,7 +257,10 @@ def rebind_container(
                 )
             rebased = layout_map.rebase_project_layout(conn, row)
             refresh_registry_projection(conn, row)
-            validated_area_roots(conn, row, deep_ops_scan=True)
+            # Rebinding moves no content, so it does not take the deep
+            # descendant-symlink walk (prune C7); the layout checks and the
+            # symlinked-Ops-root refusal still apply.
+            validated_area_roots(conn, row)
             conn.execute("COMMIT")
         except BaseException:
             if conn.in_transaction:

@@ -59,11 +59,48 @@ class FsError(Exception):
     """Raised for any disallowed or invalid filesystem operation."""
 
 
+class SymlinkRefused(FsError):
+    """A path component is a symlink, so the access is refused, not followed.
+
+    Reads catch this per entry and keep going (prune C7): the entry shows up
+    as a skipped symlink and its siblings still resolve. Writes let it fail
+    the operation, exactly as any other jail refusal.
+    """
+
+
+SYMLINK_SKIP_REASON = "symlink - not followed"
+_SYMLINK_REFUSAL = "path crosses a symlink, which Proxima never follows"
+
+
+def _reject_symlink_components(root: Path, target: Path) -> None:
+    """Refuse traversal through any symlink between ``root`` and ``target``.
+
+    ``root`` is already fully resolved and is the jail anchor, so only the
+    components *below* it matter. Because no component may be a link, the
+    lexical path returned by :func:`resolve_in_project` is also the real one -
+    which is what makes "a read can never leave the jail" provable rather than
+    dependent on re-resolving after the fact.
+    """
+    if target == root:
+        return
+    relative = target.relative_to(root)
+    current = root
+    for part in relative.parts:
+        current = current / part
+        try:
+            if current.is_symlink():
+                raise SymlinkRefused(_SYMLINK_REFUSAL)
+        except OSError as exc:
+            raise FsError("cannot resolve project path") from exc
+
+
 def resolve_in_project(root: Path, rel: str) -> Path:
     """Resolve rel against the project root, jailed inside it.
 
-    Rejects absolute paths and any path that escapes the project root
-    (including via .. or symlinks).
+    Rejects absolute paths, any path that escapes the project root, and any
+    path that would traverse a symlink. ``..`` is folded lexically: with no
+    symlink allowed on the way down, the lexical answer is the real one and
+    there is no resolve-then-recheck window.
     """
     try:
         root = Path(root).resolve()
@@ -77,11 +114,12 @@ def resolve_in_project(root: Path, rel: str) -> Path:
         raise FsError("path escapes project root")
     rel = rel.lstrip("/")
     try:
-        target = (root / rel).resolve()
-    except (OSError, RuntimeError) as exc:
+        target = Path(os.path.normpath(os.path.join(str(root), rel)))
+    except (OSError, RuntimeError, ValueError) as exc:
         raise FsError("cannot resolve project path") from exc
     if target != root and root not in target.parents:
         raise FsError("path escapes project root")
+    _reject_symlink_components(root, target)
     return target
 
 
@@ -91,6 +129,11 @@ def list_tree(root: Path, rel: str) -> list[dict]:
     Missing paths return an empty listing (callers often probe optional folders
     like design versions/assets). A path that exists but is not a directory is
     still an error.
+
+    Symlinked entries are warn-and-skip (prune C7): they are reported with
+    ``type: "symlink"`` and ``skipped: True`` so the owner can see the entry
+    exists, while nothing follows them and every sibling keeps listing. One
+    stray link can no longer brick a whole directory view.
     """
     target = resolve_in_project(root, rel)
     if not target.exists():
@@ -98,11 +141,25 @@ def list_tree(root: Path, rel: str) -> list[dict]:
     if not target.is_dir():
         raise FsError("not a directory")
     entries: list[dict] = []
-    for child in target.iterdir():
-        is_dir = child.is_dir()
+    try:
+        children = list(os.scandir(target))
+    except OSError as exc:
+        raise FsError(f"cannot list directory: {exc.strerror}") from exc
+    for child in children:
         try:
-            size = 0 if is_dir else child.stat().st_size
+            if child.is_symlink():
+                entries.append({
+                    "name": child.name,
+                    "type": "symlink",
+                    "size": 0,
+                    "skipped": True,
+                    "reason": SYMLINK_SKIP_REASON,
+                })
+                continue
+            is_dir = child.is_dir(follow_symlinks=False)
+            size = 0 if is_dir else child.stat(follow_symlinks=False).st_size
         except OSError:
+            is_dir = False
             size = 0
         entries.append({
             "name": child.name,
@@ -204,22 +261,31 @@ def walk_files(root: Path, rel: str = "", limit: int = MAX_READ_BYTES) -> list[d
     """Return all readable text files (path relative to base, content) under rel.
 
     Recursive; skips symlinks, oversized files, and non-UTF-8 files. Used to
-    bulk-load a wiki for graph/search/backlink building.
+    bulk-load a wiki for graph/search/backlink building. Traversal is
+    explicitly no-follow (``os.walk(followlinks=False)`` plus a per-entry
+    link check), so a linked subtree is skipped rather than pulled in.
     """
     base = resolve_in_project(root, rel)
     out: list[dict] = []
     if not base.is_dir():
         return out
-    for p in sorted(base.rglob("*")):
-        if p.is_symlink() or not p.is_file():
-            continue
-        try:
-            if p.stat().st_size > limit:
+    for directory, dirnames, filenames in os.walk(base, followlinks=False):
+        current = Path(directory)
+        dirnames[:] = sorted(
+            name for name in dirnames if not (current / name).is_symlink()
+        )
+        for name in sorted(filenames):
+            p = current / name
+            if p.is_symlink() or not p.is_file():
                 continue
-            text = p.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        out.append({"path": str(p.relative_to(base)), "content": text})
+            try:
+                if p.stat().st_size > limit:
+                    continue
+                text = p.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            out.append({"path": str(p.relative_to(base)), "content": text})
+    out.sort(key=lambda item: Path(item["path"]).parts)
     return out
 
 

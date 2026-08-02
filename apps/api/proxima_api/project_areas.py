@@ -212,7 +212,10 @@ def _sync_code_areas_locked(
         elif row["source"] == "excluded":
             conn.execute("DELETE FROM project_areas WHERE id = ?", (row["id"],))
     if validate:
-        validated_area_roots(conn, project_id, deep_ops_scan=True)
+        # Registration only - no content is moved or created here, so the deep
+        # descendant-symlink walk does not apply (prune C7). Overlap, escape,
+        # and the symlinked-Ops-root check still run.
+        validated_area_roots(conn, project_id)
     return {"detected": sorted(detected), "added": added, "removed": sorted(removed)}
 
 

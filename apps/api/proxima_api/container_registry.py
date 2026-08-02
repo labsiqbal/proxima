@@ -174,6 +174,18 @@ def _contains(root: Path, target: Path) -> bool:
 
 
 def _reject_symlinks(root: Path, *, deep: bool = True) -> None:
+    """Fail closed on a symlinked Ops root, and optionally on any descendant.
+
+    After prune C7 the DEEP walk means one thing only: "Proxima is about to
+    move or create content here, and a move must never traverse a link."  It
+    therefore runs at exactly two boundaries - physical Ops root creation and
+    the move-based legacy migration (manifest, retry manifest, commit) - and
+    nowhere else.  Linking, as-is adoption, the boot settle sweep, layout
+    inspection, Area registration, and every read path skip it: they move
+    nothing, and ``fsapi`` resolves no-follow on each access anyway, so a
+    stray link in the owner's real tree no longer refuses a whole link,
+    listing, adoption, or Area change.
+    """
     if root.is_symlink():
         raise ContainerBoundaryError("physical Ops root cannot be a symlink")
     if not deep:
@@ -346,9 +358,10 @@ def validate_ops_path_choice(root: Path, raw: str) -> str:
 
     Returns the normalized relative path (``.`` for the Container root).
     Raises :class:`ContainerBoundaryError` when the choice cannot be an Ops
-    root: unsafe/escaping paths, missing or non-directory targets, or a
-    tree containing symlinks (same fail-closed policy as adoption; softening
-    reads is prune C7).
+    root: unsafe/escaping paths, or a missing/non-directory/symlinked target.
+    A symlink *inside* the chosen folder no longer refuses the link (prune
+    C7): linking writes nothing, and every later access is no-follow, so the
+    stray link is skipped in listings instead of bricking adoption (#131).
     """
     rel = _safe_rel_path(raw)
     normalized = rel.as_posix()
@@ -362,7 +375,7 @@ def validate_ops_path_choice(root: Path, raw: str) -> str:
         raise ContainerBoundaryError(
             "the chosen Ops folder does not exist inside the project"
         )
-    _reject_symlinks(candidate)
+    _reject_symlinks(candidate, deep=False)
     return normalized
 
 
@@ -1431,7 +1444,9 @@ def _adoption_inventory(
     while the legacy sweep keeps the move-based migration available for empty
     ``ops/``). Raises for layouts that stay fail-closed: a symlinked or
     non-directory target, unreadable content, or overlap with an active repo
-    Area.
+    Area. A *descendant* symlink no longer refuses adoption (prune C7):
+    adoption writes nothing, so the link is simply skipped when the folder is
+    later read - which is what unblocks the owner's real client folders (#131).
     """
     root = container_root(container)
     physical = root.joinpath(*_safe_rel_path(rel_path).parts)
@@ -1461,9 +1476,6 @@ def _adoption_inventory(
         return None
     if inventory["state"] not in {"populated", "empty"}:
         raise OpsMigrationCollision("physical Ops root cannot be inspected")
-    # The symlink policy is unchanged by adoption: any descendant symlink
-    # stays fail-closed (softening reads is prune step C7, not C1).
-    _reject_symlinks(physical)
     return list(inventory["entries"])
 
 
@@ -3571,9 +3583,10 @@ def inspect_ops_migration(
                 }
     elif active_ops_path is not None:
         # Any persisted non-'.' Ops path is a settled, first-class layout
-        # (prune C3) - validate it, never call it unsupported.
+        # (prune C3) - validate it, never call it unsupported. Read-only
+        # inspection, so no deep symlink walk (prune C7).
         try:
-            validated_area_roots(conn, data, deep_ops_scan=True)
+            validated_area_roots(conn, data)
         except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
             validation_reason = str(exc)
         else:
@@ -3715,8 +3728,12 @@ def _migrate_container_ops_locked(
         _attention(conn, data, reason)
         return False
     if row["rel_path"] != ".":
+        # A settled layout is only re-validated here (this runs on every boot
+        # sweep) - nothing moves, so no deep symlink walk (prune C7). Walking
+        # it would re-raise the same attention item forever for any real
+        # folder that happens to contain a link (audit #120 path 2).
         try:
-            validated_area_roots(conn, data, deep_ops_scan=True)
+            validated_area_roots(conn, data)
             refresh_registry_projection(conn, data)
         except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
             reason = str(exc)
@@ -3726,7 +3743,8 @@ def _migrate_container_ops_locked(
         return True
 
     try:
-        validated_area_roots(conn, data, deep_ops_scan=True)
+        # Only a real move needs the fail-closed descendant walk (prune C7).
+        validated_area_roots(conn, data, deep_ops_scan=allow_moves)
     except (ContainerBoundaryError, OSError) as exc:
         reason = str(exc)
         _upsert_marker(conn, int(data["id"]), "attention", None, reason)
@@ -3779,7 +3797,9 @@ def _migrate_container_ops_locked(
                         "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                         (target_rel, row["id"]),
                     )
-                    validated_area_roots(conn, data, deep_ops_scan=True)
+                    # Adoption is zero-write: register the folder as it is,
+                    # links included (prune C7) - they are skipped on read.
+                    validated_area_roots(conn, data)
                     _upsert_marker(
                         conn,
                         int(data["id"]),

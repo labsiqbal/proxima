@@ -205,6 +205,15 @@ export const IconLock = ({ size }: IconProps) => (
 	</Svg>
 );
 
+// A chain link - marks a filesystem symlink, which Proxima shows but never
+// follows (prune C7).
+export const IconLink = ({ size }: IconProps) => (
+	<Svg size={size}>
+		<path d="M10 13.5a4 4 0 0 0 5.7.3l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.5 1.5" />
+		<path d="M14 10.5a4 4 0 0 0-5.7-.3l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.5-1.5" />
+	</Svg>
+);
+
 export const IconChevronRight = ({ size }: IconProps) => (
 	<Svg size={size}>
 		<path d="M9.5 6l6 6-6 6" />

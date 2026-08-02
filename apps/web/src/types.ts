@@ -685,7 +685,11 @@ export type View =
 	| "settings";
 export type FileEntry = {
 	name: string;
-	type: "dir" | "file";
+	/** "symlink" entries are warn-and-skip (prune C7): shown so the folder
+	 * reads honestly, never followed, and never openable. */
+	type: "dir" | "file" | "symlink";
 	size: number;
 	target?: FileTarget;
+	skipped?: boolean;
+	reason?: string;
 };

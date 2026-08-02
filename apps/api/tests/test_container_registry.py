@@ -4433,8 +4433,10 @@ def test_archive_list_survives_unavailable_container(tmp_path: Path):
 
 
 def test_fail_closed_container_keeps_legacy_ops_features_available(tmp_path: Path):
-    """A container whose ops/ stays fail-closed (symlink inside - C7 scope,
-    not adopted by C1) keeps every legacy Ops feature usable at `.`."""
+    """A container whose ops/ stays fail-closed keeps every legacy Ops feature
+    usable at `.`. After prune C7 the fail-closed case is a symlinked Ops
+    *root* - the jail anchor, still refused; a link merely sitting inside the
+    folder is adopted and skipped on read."""
     db_path = tmp_path / "legacy.db"
     conn = connect(db_path)
     init_db(conn, [])
@@ -4454,11 +4456,10 @@ def test_fail_closed_container_keeps_legacy_ops_features_available(tmp_path: Pat
     (root / "scripts" / "keep.sh").write_text(
         "# Description: legacy script\n", encoding="utf-8"
     )
-    (root / "ops" / "wiki").mkdir(parents=True)
-    (root / "ops" / "wiki" / "collision.md").write_text("# Collision", encoding="utf-8")
     outside = tmp_path / "outside-legacy-api"
-    outside.mkdir()
-    (root / "ops" / "linked").symlink_to(outside, target_is_directory=True)
+    (outside / "wiki").mkdir(parents=True)
+    (outside / "wiki" / "collision.md").write_text("# Collision", encoding="utf-8")
+    (root / "ops").symlink_to(outside, target_is_directory=True)
     conn.close()
 
     api, headers = _api(tmp_path, db_path)

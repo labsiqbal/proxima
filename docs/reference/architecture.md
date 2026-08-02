@@ -334,10 +334,11 @@ the project/Area relationship before applying `fsapi` realpath jailing. The reso
 then requires the target Area to be the authoritative owner of the resolved path:
 the most specific active Area wins, Ops wins a legacy same-root tie with Code, and a
 Container target is valid only outside active Areas. Each merged tree child crosses
-the active-root realpath jail before ownership is assigned. Safe in-Container
-symlinks receive the target of their resolved authoritative Area, while broken or
-escaping symlinks are omitted. Merged tree entries switch to an Ops or Code target
-as traversal enters that Area, so cross-Area aliases are rejected.
+the active-root realpath jail before ownership is assigned. **Symlinks are never
+resolved into a target** (prune C7): a linked entry passes through the enricher as
+`type: "symlink"`/`skipped: true` with a reason and no target, so it is visible in
+the tree, unopenable, and harmless to its siblings. Merged tree entries switch to an
+Ops or Code target as traversal enters that Area, so cross-Area aliases are rejected.
 Display names never select a physical root. A path-only request means exactly
 what it says on disk (prune #138, decision #121): it resolves from the Container
 root and the authoritative Area is assigned by physical ownership - a path
@@ -411,10 +412,12 @@ push outcome lands on the `job_worktrees` row (`push_status/push_error/...`).
 resolve inside its Container after realpath resolution. Duplicate roots, unsafe
 overlap, escape, and Container-or-Ops-root symlinks are rejected on every
 resolution; the full recursive scan that rejects any symlink inside physical Ops is
-opt-in (`deep_ops_scan`) and runs at the fail-closed boundaries - Ops creation,
-legacy migration, Area mutation, and Area-sensitive execution - so hot read paths
-(project lists, Home, file resolution) stay O(1) and lean on per-access realpath
-jailing instead. Best-effort cross-Container aggregations (Home dashboard, deliverable
+opt-in (`deep_ops_scan`) and, since prune C7, runs only where content is moved or
+created - physical Ops root creation and the move-based legacy migration. Adoption,
+the boot settle sweep, settled-layout inspection, link-time Ops choice, Area add,
+relocate rebind, graph scope, and every read path skip it: they write nothing, and
+`fsapi` refuses to traverse a link on each access anyway, so a stray link in the
+owner's real tree is skipped rather than fatal. Best-effort cross-Container aggregations (Home dashboard, deliverable
 list) resolve through `try_ops_root`, which returns None for an unavailable or
 boundary-invalid Container so one missing folder skips that Container instead of
 failing the whole read; direct single-Container access still uses `ops_root` and

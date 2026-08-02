@@ -570,3 +570,47 @@ describe('WorkspaceTree create / rename inline input', () => {
     expect(onOpenFile).toHaveBeenCalledWith('gnhf-e2e-tree-note.md')
   })
 })
+
+describe('WorkspaceTree skipped symlinks (prune C7)', () => {
+  const symlinkTree: Record<string, FileEntry[]> = {
+    '': [
+      { name: 'sub', type: 'dir', size: 0 },
+      { name: 'real.md', type: 'file', size: 10 },
+      {
+        name: 'escape-dir',
+        type: 'symlink',
+        size: 0,
+        skipped: true,
+        reason: 'symlink - not followed',
+      },
+    ],
+    sub: entries(['nested.md', 'file']),
+  }
+
+  it('shows the symlink, keeps siblings usable, and offers nothing to open', async () => {
+    const fs = mockFs(symlinkTree)
+    const onOpenFile = vi.fn()
+    render(<WorkspaceTree fs={fs} title="Demo" onOpenFile={onOpenFile} />)
+
+    const row = await screen.findByText('escape-dir')
+    // Not a button: a skipped entry has no click target at all, so no click
+    // can ever ask the server to follow it.
+    expect(screen.queryByRole('button', { name: /escape-dir/ })).toBeNull()
+    expect(row.closest('.tree-row')).toHaveClass('skipped')
+    // and the reason is visible, not hidden in a tooltip only
+    expect(screen.getByText('symlink - not followed')).toBeInTheDocument()
+
+    // siblings still work - one stray link bricks nothing
+    await userEvent.click(screen.getByRole('button', { name: 'sub' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'nested.md' }))
+    expect(onOpenFile).toHaveBeenCalledWith('sub/nested.md')
+  })
+
+  it('styles the skipped row from tokens, with no hover affordance', () => {
+    const block = stylesSource.match(/\.tree-row\.skipped\s*\{([^}]*)\}/)?.[1] || ''
+    expect(block).toMatch(/color:\s*var\(--ui-text-tertiary\)/)
+    expect(block).toMatch(/cursor:\s*default/)
+    expect(block).not.toMatch(/#[0-9a-f]{3,}/i)
+    expect(stylesSource).toMatch(/\.tree-row\.skipped:hover\s*\{[^}]*background:\s*transparent/s)
+  })
+})

@@ -1294,9 +1294,11 @@ is the canonical
 resolver for Container, Area, and Ops roots. It validates realpath containment and
 rejects path traversal, duplicate roots, unsafe overlaps, and Container-or-Ops-root
 symlinks on every resolution; the recursive scan that rejects every symlink under the
-physical Ops root is opt-in (`deep_ops_scan`) and enforced fail-closed at Ops
-creation, migration, Area mutation, and Area-sensitive execution, keeping project
-lists and Home O(1) while per-access realpath jailing still blocks symlink escapes.
+physical Ops root is opt-in (`deep_ops_scan`) and, since prune C7, enforced
+fail-closed only where content moves - physical Ops root creation and the move-based
+legacy migration. Adoption, the boot settle sweep, registration, and every read skip
+it and rely on per-access no-follow resolution instead, so project lists and Home stay
+O(1) and a stray link never escapes.
 A repo at `.` is the one intentional containment case; the explicit migration
 (only) adds `/ops/` to that repo's local git exclude when it creates `ops/`.
 
@@ -1323,8 +1325,11 @@ Linking therefore never moves top-level `wiki/`, `tasks/`, etc.,
 never creates `ops/` or `container.md`, and never appends to `.git/info/exclude`
 - the onboarding promise "Nothing is moved or copied" is literally true.
 A symlinked, non-directory, or unreadable adoption target, or one overlapping a
-repo Area, stays fail-closed with an Attention item (symlink softening is prune
-C7).
+repo Area, stays fail-closed with an Attention item. A symlink *inside* the
+adopted folder no longer refuses adoption (prune C7, #142): the folder is adopted
+as it is and the link shows up as a skipped entry, so a real client folder with a
+shared-asset or `node_modules` link no longer lands in the permanent attention
+loop (audit #120, verified symlink-free in #131 only because of the old policy).
 
 **Per-project layout map (prune C4).** Where a project keeps its **wiki,
 artifacts, scripts, and uploads** is per-project data, not a fixed name:
@@ -1575,6 +1580,13 @@ authoritative Ops or Code identity when it enters an Area, so direct physical Op
 stay distinct from same-name Container files. Broken, escaping, or otherwise invalid
 tree and artifact entries are omitted individually instead of weakening the jail or
 discarding the rest of the response.
+**Symlinks are warn-and-skip on reads** (prune C7, #142): Proxima never follows a
+link, but a link no longer errors the view it appears in. A listed symlink comes
+back as `type: "symlink"` with `skipped: true` and a reason, and no file target -
+the tree shows it (greyed, with a "symlink - not followed" badge, no click target),
+its siblings list normally, and opening it or anything beneath it is a 400 that
+names the symlink. Writes, mkdir, rename, delete, and Ops migration keep the same
+no-follow refusal as a hard failure.
 **Paths mean exactly what they say on disk** (prune #138, decision #121):
 reserved-name virtual rerouting is gone. A path-only request resolves literally
 from the Container root - a real folder named `wiki/`, `scripts/`, or `tasks/`

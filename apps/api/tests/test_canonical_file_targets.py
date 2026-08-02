@@ -763,9 +763,12 @@ def test_session_artifact_reads_and_deletion_keep_ops_target(
     assert json.loads(stored["output_links"]) == []
 
 
-def test_tree_symlinks_use_resolved_ownership_and_omit_unsafe_entries(
+def test_tree_symlinks_are_shown_as_skipped_and_never_resolved(
     tmp_path: Path,
 ):
+    """Prune C7: a symlink is acknowledged, not followed and not silently
+    dropped. It carries no target, so it cannot be opened at all - which is
+    what keeps the jail boundary provable for reads."""
     api, headers, root = _api(tmp_path)
     other = api.post(
         "/api/projects",
@@ -791,24 +794,34 @@ def test_tree_symlinks_use_resolved_ownership_and_omit_unsafe_entries(
     (root / "ops" / "escape.md").symlink_to(outside)
 
     entries = _by_name(api, headers)
-    ops_area_id = api.app.state.db.execute(
-        "SELECT id FROM project_areas "
-        "WHERE project_id = (SELECT id FROM projects WHERE slug = 'identity') "
-        "AND kind = 'ops'"
-    ).fetchone()["id"]
-    assert entries["alias.md"]["target"] == {
-        "project": "identity",
-        "area": {"kind": "ops", "id": ops_area_id},
-        "path": "brief.md",
+    assert entries["alias.md"]["type"] == "symlink"
+    assert entries["alias.md"]["skipped"] is True
+    assert "target" not in entries["alias.md"]
+    # siblings still resolve normally - one stray link bricks nothing
+    assert entries["ops"]["type"] == "dir"
+    assert "target" in entries["ops"]
+
+    ops_entries = {
+        entry["name"]: entry
+        for entry in api.get(
+            "/api/projects/identity/tree",
+            headers=headers,
+            params={"path": "ops"},
+        ).json()["entries"]
     }
-    assert "escape.md" not in entries
-    aliased = api.get(
-        "/api/projects/identity/file",
-        headers=headers,
-        params=_target_params(entries["alias.md"]["target"]),
-    )
-    assert aliased.status_code == 200
-    assert aliased.json()["content"] == "# Ops through alias"
+    assert ops_entries["escape.md"]["skipped"] is True
+    assert "target" not in ops_entries["escape.md"]
+    assert ops_entries["brief.md"]["type"] == "file"
+
+    for name in ("alias.md", "ops/escape.md"):
+        refused = api.get(
+            "/api/projects/identity/file",
+            headers=headers,
+            params={"path": name},
+        )
+        assert refused.status_code == 400, refused.text
+        assert "symlink" in refused.json()["detail"].lower()
+        assert "secret" not in refused.text
 
 
 def test_artifact_enrichment_skips_only_unsafe_entries(tmp_path: Path):
