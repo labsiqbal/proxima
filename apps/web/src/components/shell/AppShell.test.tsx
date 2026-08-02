@@ -194,7 +194,9 @@ describe('AppShell mobile drawer + search', () => {
     expect(within(document.querySelector('.sidebar') as HTMLElement).getByRole('button', { name: 'Archive' })).toBeInTheDocument()
     expect(screen.queryByLabelText('Tools')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Active project:/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Account actions' })).not.toBeInTheDocument()
+    // The account menu stays: it is the only route to Projects, Agents,
+    // Settings, and Log out, and Delegate must not strand the owner.
+    expect(screen.getByRole('button', { name: 'Account actions' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Toggle sidebar' })).not.toBeInTheDocument()
     expect(screen.queryByRole('separator', { name: 'Resize sidebar' })).not.toBeInTheDocument()
     await user.click(screen.getAllByRole('button', { name: 'Work' })[0])
@@ -215,5 +217,58 @@ describe('AppShell mobile drawer + search', () => {
   it('does not expose Delegate while Master is disabled', () => {
     render(<AppShell {...base} features={{ ...base.features, masterOrchestrator: false }}><div>main</div></AppShell>)
     expect(screen.queryByRole('button', { name: 'Delegate' })).not.toBeInTheDocument()
+  })
+})
+
+describe('AppShell delegate header status cluster', () => {
+  const delegateBase = {
+    ...base,
+    features: { designStudio: true, workflowGraph: true, masterOrchestrator: true },
+    mode: 'delegate' as const,
+    currentView: 'master' as const,
+  }
+
+  it('keeps the status cluster and the account menu in Delegate', () => {
+    const { container } = render(<AppShell {...delegateBase} />)
+    expect(container.querySelector('.header-status-cluster')).toBeTruthy()
+    // Projects, Agents, Settings, and Log out live only here, so Delegate needs it.
+    expect(screen.getByLabelText('Account actions')).toBeInTheDocument()
+    // Search and the sidebar toggle stay Work-only.
+    expect(screen.queryByLabelText('Search')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Toggle sidebar')).not.toBeInTheDocument()
+  })
+
+  it('returns to Work before opening Settings from the Delegate account menu', async () => {
+    const onModeChange = vi.fn()
+    const onSelectView = vi.fn()
+    const user = userEvent.setup()
+    render(<AppShell {...delegateBase} onModeChange={onModeChange} onSelectView={onSelectView} />)
+    await user.click(screen.getByLabelText('Account actions'))
+    await user.click(screen.getByRole('button', { name: /Settings/ }))
+    expect(onModeChange).toHaveBeenCalledWith('work')
+    expect(onSelectView).toHaveBeenCalledWith('settings')
+  })
+
+  it('returns to Work before opening a Work-only target from Delegate', async () => {
+    const onModeChange = vi.fn()
+    const onOpenAttentionTarget = vi.fn()
+    vi.doMock('./AttentionInbox', () => ({
+      AttentionInbox: (props: { onOpenTarget: (t: unknown) => void }) => (
+        <button type="button" onClick={() => props.onOpenTarget({ view: 'projects' })}>open target</button>
+      ),
+    }))
+    vi.resetModules()
+    const { AppShell: Fresh } = await import('./AppShell')
+    const user = userEvent.setup()
+    render(
+      <Fresh
+        {...delegateBase}
+        onModeChange={onModeChange}
+        onOpenAttentionTarget={onOpenAttentionTarget}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'open target' }))
+    expect(onModeChange).toHaveBeenCalledWith('work')
+    expect(onOpenAttentionTarget).toHaveBeenCalledWith({ view: 'projects' })
   })
 })

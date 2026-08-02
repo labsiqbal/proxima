@@ -92,6 +92,16 @@ export function AppShell(props: {
   const drawerWasOpen = React.useRef(false)
 
   const delegateMode = props.mode === 'delegate' && props.features.masterOrchestrator
+  // Delegate keeps the global status cluster, but its targets are Work surfaces
+  // (a chat thread, a workflow editor, an Ops migration screen) that Delegate
+  // navigation cannot render. Switch back first, then open — mode change runs in
+  // the same tick, so the opener's own setView still wins.
+  const openInWork = React.useCallback(<A extends unknown[]>(open?: (...args: A) => void) => (
+    (...args: A) => {
+      if (delegateMode) props.onModeChange?.('work')
+      open?.(...args)
+    }
+  ), [delegateMode, props.onModeChange])
   const openSearch = React.useCallback(() => {
     if (delegateMode) return
     setDrawerOpen(false)
@@ -233,32 +243,40 @@ export function AppShell(props: {
         <button className="tool-btn" onClick={openSearch} aria-label="Search" title="Search"><IconSearch size={17} /></button>
         </>}
         <span className="top-bar-spacer" />
-        {!delegateMode && <div className="user-menu-wrap">
+        {/* The account menu is the only way to reach Projects, Agents, Settings,
+            and Log out, so Delegate keeps it too — hiding it stranded owners in a
+            mode with no way out to their own settings. Its entries are Work
+            surfaces, so each switches back first. */}
+        <div className="user-menu-wrap">
           <button className={`tool-btn user-avatar-btn ${menuOpen ? 'active' : ''}`} onClick={() => setMenuOpen(open => !open)} aria-label="Account actions" aria-expanded={menuOpen} aria-controls="account-actions" title={props.user.username}><span className="avatar xs">{props.user.username[0]?.toUpperCase()}</span></button>
           {menuOpen && <>
             <button className="menu-scrim" aria-label="Close account actions" onClick={() => setMenuOpen(false)} />
             <div className="user-menu" id="account-actions">
               <div className="user-menu-head"><span className="avatar">{props.user.username[0]?.toUpperCase()}</span><div><strong>{props.user.username}</strong><small>{props.activeProfile?.name || ''}</small></div></div>
-              <button className="user-menu-item" onClick={openProjectsManage}><IconProjects size={15} /> Projects</button>
-              <button className={`user-menu-item ${props.currentView === 'profiles' ? 'active' : ''}`} onClick={() => { props.onSelectView('profiles'); setMenuOpen(false) }}><IconAgents size={15} /> Agents</button>
+              <button className="user-menu-item" onClick={openInWork(openProjectsManage)}><IconProjects size={15} /> Projects</button>
+              <button className={`user-menu-item ${props.currentView === 'profiles' ? 'active' : ''}`} onClick={openInWork(() => { props.onSelectView('profiles'); setMenuOpen(false) })}><IconAgents size={15} /> Agents</button>
               <div className="user-menu-sep" />
-              <button className={`user-menu-item ${props.currentView === 'settings' ? 'active' : ''}`} onClick={() => { props.onSelectView('settings'); setMenuOpen(false) }}><IconGear size={15} /> Settings</button>
+              <button className={`user-menu-item ${props.currentView === 'settings' ? 'active' : ''}`} onClick={openInWork(() => { props.onSelectView('settings'); setMenuOpen(false) })}><IconGear size={15} /> Settings</button>
               <div className="user-menu-sep" />
               <button className="user-menu-item" onClick={() => { setMenuOpen(false); props.onLogout() }}><IconLogout size={15} /> Log out</button>
             </div>
           </>}
-        </div>}
+        </div>
       </header>
-      {!delegateMode && <div className="header-status-cluster">
+      {/* Shown in both modes: watching delegated work is what Delegate is for, and
+          "N tasks running" plus Needs-you is the pair that answers it. Account,
+          search, and tool surfaces stay Work-only. Tasks is `activity` in both
+          navigations, so that one target needs no mode switch. */}
+      <div className="header-status-cluster">
         <RunningTasks
           token={props.token}
           sessions={props.sessions}
-          onOpenJob={props.onOpenRunningJob}
-          onOpenSession={props.onOpenRunningSession}
+          onOpenJob={openInWork(props.onOpenRunningJob)}
+          onOpenSession={openInWork(props.onOpenRunningSession)}
           onOpenTasks={() => props.onSelectView('activity')}
         />
-        <AttentionInbox token={props.token} onOpenTarget={target => props.onOpenAttentionTarget?.(target)} />
-      </div>}
+        <AttentionInbox token={props.token} onOpenTarget={openInWork(props.onOpenAttentionTarget)} />
+      </div>
       {!delegateMode ? <MobileTopbar
         activeProject={props.activeProject}
         projects={props.projects}
