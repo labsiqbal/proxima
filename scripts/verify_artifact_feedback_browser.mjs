@@ -322,7 +322,6 @@ async function main() {
     PROXIMA_WEB_DIST: webDist,
     PROXIMA_HOST: '127.0.0.1',
     PROXIMA_PORT: String(apiPort),
-    PROXIMA_SINGLE_USER: '1',
     PROXIMA_SINGLE_USER_NAME: 'artifact-owner',
     PROXIMA_LINK_ROOTS: fixtureRoot,
     PROXIMA_START_WORKER: '0',

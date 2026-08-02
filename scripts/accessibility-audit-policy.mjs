@@ -185,9 +185,6 @@ function bootstrapResponse(method, pathname) {
     return {
       status: 200,
       body: {
-        bootstrap_required: false,
-        single_user: true,
-        mode: 'single',
         password_set: true,
         hermes_profiles_root: '',
         runners: [],

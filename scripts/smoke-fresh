@@ -83,7 +83,6 @@ mkdir -p "$HOME_DIR" "$(dirname "$CONFIG_FILE")" "$DATA_DIR" "$WORKSPACE_ROOT"
   printf 'PROXIMA_SOURCE_HERMES_HOME=%q\n' "$HOME_DIR/.hermes"
   printf 'PROXIMA_WEB_DIST=%q\n' "$ROOT/apps/web/dist"
   printf 'PROXIMA_HOST=%q\n' '127.0.0.1'
-  printf 'PROXIMA_SINGLE_USER=%q\n' '1'
   printf 'PROXIMA_SINGLE_USER_NAME=%q\n' 'fresh-owner'
   printf 'PROXIMA_LINK_ROOTS=%q\n' "$HOME_DIR"
   printf 'PROXIMA_REFRESH_CREDENTIALS=%q\n' '0'
@@ -197,7 +196,9 @@ with TestClient(app) as client:
     auth_response.raise_for_status()
     auth = auth_response.json()
     assert auth["user"]["username"] == "fresh-owner"
-    assert auth["user"]["role"] == "environment_admin"
+    # Single-user: one principal, so the owner payload carries no role
+    # (prune A4 - users.role was dropped by migration v62).
+    assert set(auth["user"]) == {"id", "username", "os_user"}
     assert isinstance(auth["token"], str) and len(auth["token"]) > 20
     print("auth: first-boot owner and token created")
 
@@ -318,7 +319,9 @@ async function main() {
 
   const auth = await request('/auth/auto', { method: 'POST', body: {} })
   assert.equal(auth.user?.username, 'fresh-owner')
-  assert.equal(auth.user?.role, 'environment_admin')
+  // Single-user: one principal, so the owner payload carries no role
+  // (prune A4 - users.role was dropped by migration v62).
+  assert.deepEqual(Object.keys(auth.user).sort(), ['id', 'os_user', 'username'])
   assert.equal(typeof auth.token, 'string')
   assert.ok(auth.token.length > 20)
   console.log('auth: first-boot owner and token created')

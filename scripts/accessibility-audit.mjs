@@ -98,7 +98,6 @@ function disposableApiEnvironment({ fixtureRoot, fixtureHome, dataRoot, workspac
     PROXIMA_WEB_DIST: webDist,
     PROXIMA_HOST: '127.0.0.1',
     PROXIMA_PORT: String(apiPort),
-    PROXIMA_SINGLE_USER: '1',
     PROXIMA_SINGLE_USER_NAME: 'accessibility-owner',
     PROXIMA_LINK_ROOTS: fixtureHome,
     PROXIMA_START_WORKER: '0',

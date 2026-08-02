@@ -117,7 +117,6 @@ def main() -> None:
             "PROXIMA_PORT": str(port),
             "PROXIMA_PROJECTCTL_COMMAND": "/usr/bin/true",
             "PROXIMA_REFRESH_CREDENTIALS": "0",
-            "PROXIMA_SINGLE_USER": "1",
             "PROXIMA_SINGLE_USER_NAME": "candidate",
             "PROXIMA_UPDATE_CHECK": "0",
             "PROXIMA_WEB_DIST": str(WEB_DIR / "dist"),
