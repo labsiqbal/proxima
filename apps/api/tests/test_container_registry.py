@@ -3573,11 +3573,30 @@ def test_delete_recovers_verified_orphan_guardian(tmp_path: Path):
     ):
         time.sleep(0.01)
 
-    response = api.delete(
-        "/api/projects/delete-orphan-recovery",
-        headers=headers,
-    )
-    assert response.status_code == 200, response.text
+    # The sentinel may still be completing its first member observation, in
+    # which case fail-closed delete reports the record as unresolved (409)
+    # until identity is proven. Real owners retry exactly as the 409 asks;
+    # poll the delete to the settled outcome instead of racing the
+    # observation (same deflake as the owner-retry sibling test).
+    deadline = time.monotonic() + 10
+    while True:
+        response = api.delete(
+            "/api/projects/delete-orphan-recovery",
+            headers=headers,
+        )
+        if response.status_code == 200:
+            break
+        detail = response.json().get("detail")
+        unresolved = (
+            detail.get("unresolved_processes") if isinstance(detail, dict) else None
+        )
+        if (
+            response.status_code != 409
+            or not unresolved
+            or time.monotonic() >= deadline
+        ):
+            raise AssertionError(response.text)
+        time.sleep(0.05)
     assert response.json() == {"ok": True, "slug": "delete-orphan-recovery"}
     assert (
         api.app.state.db.execute(

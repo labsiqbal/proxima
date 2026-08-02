@@ -168,7 +168,12 @@ if spec is None or spec.loader is None:
 serve = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(serve)
 
-with TestClient(serve.app) as client:
+# serve.py is side-effect free at import (spawn-child safety): importing it
+# only assembles the config dict. Build the app here, exactly as its
+# __main__ path does.
+app = serve.create_app(serve.config)
+
+with TestClient(app) as client:
     health_response = client.get("/api/health")
     health_response.raise_for_status()
     health = health_response.json()
