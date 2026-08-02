@@ -494,8 +494,8 @@ function AuditPanel({ token }: { token: string }) {
   const ql = q.trim().toLowerCase()
   const rows = ql ? entries.filter(e => `${e.actor} ${e.action} ${e.target_type} ${e.target_id} ${e.metadata}`.toLowerCase().includes(ql)) : entries
 
-  return <div className="panel"><div className="panel-head"><h3>Audit log</h3><span>admin</span></div>
-    <p className="muted">Every run, file change, settings test and admin action across the environment.</p>
+  return <div className="panel"><div className="panel-head"><h3>Audit log</h3><span>owner</span></div>
+    <p className="muted">Every run, file change, settings test and owner action in this workspace.</p>
     <button className="ghost-button" onClick={() => setOpen(true)}>Open audit log</button>
     {open && <div className="modal-scrim" onClick={() => setOpen(false)}><div className="modal-card audit-modal" onClick={e => e.stopPropagation()}>
       <div className="audit-modal-head"><h3>Audit log <span className="muted">({entries.length})</span></h3><button className="icon-button" aria-label="Close" onClick={() => setOpen(false)}>✕</button></div>
