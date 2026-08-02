@@ -173,16 +173,18 @@ export function ProjectsScreen({ token, projects, activeProject, opsMigrationSlu
                 {lost && <span className="pill pill-warn">{LOST_LABEL[project.location.state]}</span>}
               </span>
             </button>
-            {lost && <p className="project-lost-note">{project.location.message}</p>}
-            <div className="wf-card-foot">
-              {lost && <button
+            {lost && <div className="project-lost">
+              <p className="project-lost-note">{project.location.message}</p>
+              <button
                 className="ghost-button project-lost-action"
                 disabled={!!busy}
                 aria-label={`Find the folder for ${project.name}`}
                 onClick={() => setRelocating(project)}
               >
                 Find folder
-              </button>}
+              </button>
+            </div>}
+            <div className="wf-card-foot">
               <button
                 className="ghost-button"
                 disabled={!!busy}
