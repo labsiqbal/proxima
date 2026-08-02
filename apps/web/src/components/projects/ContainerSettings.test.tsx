@@ -17,7 +17,7 @@ vi.mock('../../api/projects', () => ({
 
 const project: Project = {
   slug: 'demo', name: 'Demo', path: '/home/user/demo',
-  owner: 'user', role: 'owner', visibility: 'private',
+  owner: 'user', visibility: 'private',
 }
 
 const areas = {

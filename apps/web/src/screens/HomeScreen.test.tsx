@@ -22,7 +22,6 @@ const project = {
 	name: "Master",
 	path: "/tmp/master",
 	owner: "owner",
-	role: "owner",
 	visibility: "private" as const,
 };
 const profile = {

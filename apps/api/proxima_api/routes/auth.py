@@ -47,9 +47,6 @@ def register(app, deps):
             create_shim=False,
         )
         return {
-            "bootstrap_required": False,
-            "single_user": True,
-            "mode": "single",
             "password_set": bool(owner.get("password_hash")),
             "hermes_profiles_root": cfg["hermes_profiles_root"],
             "runners": [{"id": r["id"], "displayName": r["displayName"], "installed": r["installed"]} for r in readiness.values()],

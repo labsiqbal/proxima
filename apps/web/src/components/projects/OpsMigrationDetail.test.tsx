@@ -19,7 +19,6 @@ const project: Project = {
   name: 'Legacy collision',
   path: '/owner/legacy-collision',
   owner: 'owner',
-  role: 'owner',
   visibility: 'private',
 }
 

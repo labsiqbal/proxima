@@ -16,6 +16,14 @@ Runner guardrails: filtered child env, selected profile home, project cwd, appro
 Any authenticated Proxima session has full owner authority. Do not expose the app
 directly to the public internet or treat its password gate as tenant isolation.
 
+There is no role machinery to misconfigure, and that is deliberate: no accounts,
+no invites, no membership, no per-request role check (prune A4, #128 removed the
+last inert remnants - the `admin_user` dependency, an always-true `_can_access`
+helper, and the `users.role` column, dropped by migration v62). An authorization
+layer that always answers "yes" reads like protection and provides none, so the
+codebase states the boundary plainly instead: authentication is the whole app
+boundary, and the network gate in front of it is the real one.
+
 ## Password gate (defense-in-depth)
 
 On first run the owner sets a password (`POST /auth/set-password`). Once set,

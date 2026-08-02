@@ -333,7 +333,7 @@ def build_route_deps(
         row = (
             db()
             .execute(
-                "SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p "
+                "SELECT p.*, u.username AS owner FROM projects p "
                 "JOIN users u ON u.id = p.owner_user_id WHERE p.slug = ? AND p.archived_at IS NULL",
                 (slug,),
             )

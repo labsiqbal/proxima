@@ -24,7 +24,6 @@ const alpha = {
   name: 'Alpha',
   path: '/owner/alpha',
   owner: 'owner',
-  role: 'owner',
   visibility: 'private',
   location: { state: 'bound', path: '/owner/alpha', message: '' },
 } as Project

@@ -2113,8 +2113,8 @@ def register(app, deps):
         or workspace."""
         # Require a valid session (cookie or ?token=) — same stance as ws_events + the
         # SSE stream. The FE always holds a proxima_session cookie (from /auth/auto or
-        # login), so no owner fallback is needed. (The old cfg["single_user"] fallback
-        # could have opened the terminal without the password once that flag was set.)
+        # login), so no owner fallback is needed. (A historical config-flag fallback
+        # could have opened the terminal without the password; it is gone.)
         user = _websocket_user(websocket, token)
         if not user:
             await websocket.close(code=4401)

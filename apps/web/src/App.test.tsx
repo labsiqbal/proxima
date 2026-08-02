@@ -1130,13 +1130,11 @@ describe("Shell project selection", () => {
 			slug: "master",
 			name: "Master",
 			visibility: "private",
-			role: "owner",
 		} as Project;
 		const betaProject = {
 			slug: "beta",
 			name: "Beta",
 			visibility: "private",
-			role: "owner",
 		} as Project;
 		// In-flight submit refresh completing after Work→Delegate must not wipe session A.
 		expect(

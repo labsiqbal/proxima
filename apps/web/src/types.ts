@@ -53,7 +53,6 @@ export type ProjectIdentityComparison = {
 };
 // One-release compatibility name for the current /api/projects readers and UI.
 export type Project = ContainerIdentity & {
-	role: string;
 	location: ProjectLocation;
 };
 export type ProjectRebindResult = {

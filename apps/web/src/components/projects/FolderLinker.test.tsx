@@ -21,7 +21,6 @@ const project: Project = {
   name: 'Fresh App',
   path: '/home/user/code/fresh-app',
   owner: 'user',
-  role: 'owner',
   visibility: 'private',
 }
 

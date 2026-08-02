@@ -110,8 +110,8 @@ describe('AppShell mobile drawer + search', () => {
     const onSelectProject = vi.fn()
     const onOpenProject = vi.fn()
     const projects = [
-      { slug: 'demo', name: 'Demo', path: '/tmp/demo', owner: 'o', role: 'owner', visibility: 'private' as const },
-      { slug: 'other', name: 'Other', path: '/tmp/other', owner: 'o', role: 'owner', visibility: 'private' as const },
+      { slug: 'demo', name: 'Demo', path: '/tmp/demo', owner: 'o', visibility: 'private' as const },
+      { slug: 'other', name: 'Other', path: '/tmp/other', owner: 'o', visibility: 'private' as const },
     ]
     render(
       <AppShell

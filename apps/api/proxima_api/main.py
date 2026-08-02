@@ -628,7 +628,6 @@ def _config_from_env() -> dict[str, Any]:
         ),
         # Proxima is single-user by design: one owner and no team management. The
         # network gate remains primary; the owner password/session is defense-in-depth.
-        "single_user": True,
         "single_user_name": os.environ.get("PROXIMA_SINGLE_USER_NAME", "admin"),
         # Point the claude-code runner at the live ~/.claude (full skills/plugins/
         # rules/memory) instead of an isolated seeded profile home.

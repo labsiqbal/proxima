@@ -127,8 +127,7 @@ config = (
         ),
         "seed_users": [],
         # Single-user owner identity. The password/session gate is established by
-        # first-run setup; this flag is retained for config compatibility.
-        "single_user": env_bool("PROXIMA_SINGLE_USER", False),
+        # first-run setup.
         "single_user_name": os.environ.get("PROXIMA_SINGLE_USER_NAME") or "owner",
         # Point claude-code runner at live ~/.claude (full skills/plugins/rules/memory).
         "claude_live_home": env_bool("PROXIMA_CLAUDE_LIVE_HOME", False),

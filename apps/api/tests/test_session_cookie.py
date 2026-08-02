@@ -53,7 +53,7 @@ def test_ws_events_auths_via_cookie_without_token_query(tmp_path):
 
 def test_terminal_ws_requires_session_even_passwordless(tmp_path):
     """No owner-fallback bypass: the terminal WS rejects without a valid session — even
-    in passwordless mode — mirroring ws_events + SSE. Guards the closed cfg[single_user]
+    in passwordless mode — mirroring ws_events + SSE. Guards the closed owner-fallback
     hole that could have opened a shell without the password."""
     c = TestClient(_app(tmp_path))
     c.post("/auth/auto")   # a passwordless owner now exists

@@ -9,7 +9,6 @@ const atlas = {
   name: 'Atlas private ops',
   path: '/tmp/atlas',
   owner: 'owner',
-  role: 'owner',
   visibility: 'private' as const,
 }
 const beacon = {
@@ -17,7 +16,6 @@ const beacon = {
   name: 'Beacon release',
   path: '/tmp/beacon',
   owner: 'owner',
-  role: 'owner',
   visibility: 'private' as const,
 }
 

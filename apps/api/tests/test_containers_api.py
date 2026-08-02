@@ -85,7 +85,6 @@ def test_container_routes_are_authenticated_and_keep_project_reader_identity(
         "name",
         "path",
         "owner",
-        "role",
         "visibility",
         "code_areas",
         "ops_area",

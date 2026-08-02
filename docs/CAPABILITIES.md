@@ -2040,8 +2040,12 @@ Nothing of that surface is left behind (prune A4, #128): the `invites` and
 v62, and the role indirection in the API - the `admin_user` dependency, the
 always-true `_can_access` check, and the `_member_project_id` resolver - is
 gone. The owner payload (`GET /api/me`, the login/set-password responses)
-carries `id`, `username`, and `os_user` only. Auth itself is unchanged: owner
-password, bearer token or the HttpOnly `proxima_session` cookie.
+carries `id`, `username`, and `os_user` only; the project payload no longer
+carries a constant `role: "owner"`; and `GET /api/setup/status` returns
+`password_set`, `hermes_profiles_root`, and `runners` without the old
+`bootstrap_required` / `single_user` / `mode` mode-selector fields (there is no
+other mode to select). Auth itself is unchanged: owner password, bearer token
+or the HttpOnly `proxima_session` cookie.
 
 ## Single-workspace shell ("Deck", T3)
 

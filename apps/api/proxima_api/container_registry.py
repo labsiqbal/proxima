@@ -2265,7 +2265,6 @@ def compatibility_project_payload(
         "name": data["name"],
         "path": data["path"],
         "owner": data.get("owner"),
-        "role": data.get("role") or "owner",
         "visibility": data.get("visibility") or "private",
         "code_areas": list(areas.get("code_areas") or []),
         "ops_area": areas.get("ops_area"),

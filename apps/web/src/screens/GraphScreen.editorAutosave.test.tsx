@@ -64,7 +64,6 @@ const project = {
   name: 'owner',
   path: '/tmp/owner',
   owner: 'owner',
-  role: 'owner',
   visibility: 'private' as const,
 }
 

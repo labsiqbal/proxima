@@ -17,7 +17,6 @@ const project: Project = {
   name: 'Client',
   path: '/home/user/work/client',
   owner: 'user',
-  role: 'owner',
   visibility: 'private',
   location: {
     state: 'missing',
