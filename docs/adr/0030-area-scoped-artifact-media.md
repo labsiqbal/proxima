@@ -1,6 +1,7 @@
 # ADR-0030: Area-scoped artifact media and preview routing
 
-- Status: Accepted
+- Status: Superseded by ADR-0042 (Area-scoped media and the targeted
+  preview namespace stay in force and are restated there)
 - Date: 2026-07-31
 
 ## Context

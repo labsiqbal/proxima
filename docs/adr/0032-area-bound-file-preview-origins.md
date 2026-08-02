@@ -1,6 +1,6 @@
 # ADR-0032: Canonical file previews use Area-bound capability origins
 
-- Status: Superseded by ADR-0033
+- Status: Superseded by ADR-0042
 - Date: 2026-07-31
 
 ## Context

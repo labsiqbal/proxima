@@ -1,6 +1,6 @@
 # ADR-0034: Active file previews require distinct TLS Area origins
 
-- Status: Accepted
+- Status: Superseded by ADR-0042
 - Date: 2026-07-31
 
 ## Context

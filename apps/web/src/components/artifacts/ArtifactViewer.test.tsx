@@ -289,8 +289,8 @@ describe('ArtifactViewer v2 review flow', () => {
       path: 'site/index.html',
     }
     setTargetPreviewMode
-      .mockResolvedValueOnce({ active: true, generation: 'g'.repeat(43) })
-      .mockResolvedValueOnce({ active: false, generation: null })
+      .mockResolvedValueOnce({ active: true })
+      .mockResolvedValueOnce({ active: false })
     render(<ArtifactViewer
       token="token"
       slug="master"
@@ -305,11 +305,13 @@ describe('ArtifactViewer v2 review flow', () => {
     expect(consent).toHaveTextContent('run scripts and module workers')
     expect(consent).toHaveTextContent('send any data from this Area to external services')
     expect(consent).toHaveTextContent('cannot guarantee Area confidentiality')
+    expect(consent).toHaveTextContent('sandbox with no access to Proxima itself')
     expect(setTargetPreviewMode).not.toHaveBeenCalled()
 
     await userEvent.click(screen.getByRole('button', { name: 'Enable trusted active mode' }))
     await waitFor(() => expect(screen.getByText('Active preview')).toBeInTheDocument())
-    expect(screen.getByTitle('index.html')).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin')
+    // Scripts, never the Proxima origin: the sandbox stays opaque in both modes.
+    expect(screen.getByTitle('index.html')).toHaveAttribute('sandbox', 'allow-scripts')
     expect(setTargetPreviewMode).toHaveBeenNthCalledWith(
       1,
       'token',
@@ -322,7 +324,9 @@ describe('ArtifactViewer v2 review flow', () => {
       'master',
       'site/index.html',
       target,
-      expect.objectContaining({ generation: 'g'.repeat(43) }),
+      expect.objectContaining({
+        previewSession: expect.stringMatching(/^[A-Za-z0-9_-]{32,128}$/),
+      }),
     )
 
     await userEvent.click(screen.getByRole('button', { name: 'Disable active preview' }))
@@ -335,7 +339,6 @@ describe('ArtifactViewer v2 review flow', () => {
       target,
       expect.stringMatching(/^[A-Za-z0-9_-]{32,128}$/),
       false,
-      'g'.repeat(43),
     )
   })
 

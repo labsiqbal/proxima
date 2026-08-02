@@ -1,6 +1,6 @@
 # ADR-0033: File previews use capability-scoped execution boundaries
 
-- Status: Superseded by ADR-0034
+- Status: Superseded by ADR-0042
 - Date: 2026-07-31
 
 ## Context

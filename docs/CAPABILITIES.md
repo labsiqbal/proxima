@@ -1545,23 +1545,24 @@ targets, but agent replies cannot create or replace that trusted metadata. Artif
 lists and chat messages omit links that cannot be assigned a validated target.
 Workspace discovery alone does not create deliverable records.
 
-HTML previews run passively and script-free by default on an Area-only origin selected
-from a named local host, an apps-domain host, or a plain HTTP relay. Artifact Review
-labels that state and requires an explicit owner confirmation before enabling trusted
-active content for one owner session, Area, and viewer. The warning states that
-scripts, dedicated module workers, network access, and navigation can send selected
-Area data externally, so Proxima provides no Area-confidentiality guarantee in active
-mode. Active content remains origin-isolated from Proxima and every other Area.
-Disabling, closing, changing Areas, or restarting revokes the active generation and
-reloads passive content; stale cookies and URLs cannot restore it. Service Workers and
-Shared Workers remain unavailable. An HTTPS remote install without a distinct TLS
-Area origin returns 503 for HTML preview entry in both passive and trusted active
-mode; non-HTML passive media remains available through the authenticated route.
-The security contract and deployment
-matrix are owned by [Security boundaries](security-boundaries.md#canonical-file-preview);
-the locator and request flow are detailed in [Architecture](reference/architecture.md),
-[ADR-0029](adr/0029-canonical-file-targets.md), and
-[ADR-0036](adr/0036-active-file-preview-is-explicit-trusted-mode.md).
+HTML previews render inside a sandboxed iframe on Proxima's own origin - the sandbox
+never includes `allow-same-origin`, so the document sits in an opaque origin and cannot
+touch the owner's session, the app, or any other Area. Passive (default) means no
+scripts at all. Artifact Review labels the mode and requires an explicit owner
+confirmation, bearer-authenticated and scoped to one owner session, Area, and viewer,
+before scripts run. The warning states that active content can run scripts and workers,
+use the network, and send selected Area data externally, so Proxima provides no
+Area-confidentiality guarantee in active mode; the sandbox still holds. Disabling,
+closing, changing Areas, logging out, or restarting returns everything to passive, and
+a stale active URL fails closed. Executable non-HTML media (SVG, XHTML, XML) downloads
+instead of rendering. Because the sandbox is opaque, previews render self-contained
+documents - a multi-file site belongs in Run & Preview (§12). Every deployment shape
+(loopback, tailnet HTTP, apps domain) behaves identically; no DNS, TLS, or relay
+provisioning is involved.
+The security contract is owned by
+[Security boundaries](security-boundaries.md#canonical-file-preview);
+the locator and request flow are detailed in [Architecture](reference/architecture.md)
+and [ADR-0042](adr/0042-file-preview-is-a-sandboxed-iframe.md).
 These APIs power the **Files destination** (the project tree in the left
 navigation, ADR-0040; files open in the ArtifactViewer, whose edit action
 reaches the inline editor - and, since #139, the Deliverables/History lenses
@@ -1792,8 +1793,8 @@ Chat result cards and the iterate Result view keep using the live scan
 
 **Native rich review (ArtifactViewer v2):** opening an ordinary artifact keeps the
 existing image, video, PDF, Markdown, HTML, JSON, CSV, and text renderers, but wraps
-them in one review workspace. HTML uses the passive Area preview from §11 until the
-owner enables trusted active mode for that viewer. The owner can pin numbered notes directly onto the
+them in one review workspace. HTML uses the passive sandboxed preview from §11 until
+the owner enables trusted active mode for that viewer. The owner can pin numbered notes directly onto the
 rendered artifact, add overall feedback, and choose **Add feedback to chat**. Review
 notes are browser-local until that action; Proxima then opens the artifact's producing
 chat session and places an editable, path-linked review brief in the normal composer.

@@ -331,23 +331,21 @@ meaning, so a repo's own `scripts/` or a root-level `wiki/` is never shadowed.
 Rows written under the reroute era (turn-journal entry paths, markdown file
 references in chat text) were frozen to their historical Ops-prefixed meaning
 once, idempotently, by migration v60.
-`target_preview.py` owns targeted preview transport. The authenticated
-`/api/target-preview/{slug}/{kind}/{id}/{path}` entry validates the locator and asks
-`TargetPreviewManager` for an Area-only origin: a named local host, an apps-domain
-host, or a plain HTTP relay. HTTPS remote HTML entry fails with 503 when no distinct
-TLS Area origin is configured, in both passive and trusted active mode.
-`TargetPreviewMiddleware` routes Area hosts before the
-application and applies one capability and Fetch Metadata admission gate to every
-transport. Each admitted resource is resolved again through `file_targets.py`.
-HTML enters that origin with a passive, script-free capability by default. Artifact
-Review can create an active generation only after a bearer-authenticated owner
-confirmation that is scoped to one owner session, canonical Area, and mounted viewer.
-The server revalidates that generation and owner session on every active resource.
-Disabling, closing the viewer, changing Areas, or restarting the server revokes or
-forgets the generation and reloads passive content; a stale cookie or URL cannot
-restore it. Active responses allow dedicated module workers and outbound network
-requests after the trust warning, while Service Workers and Shared Workers remain
-unavailable.
+`target_preview.py` owns preview policy - roughly a hundred lines since prune #140
+(ADR-0042). The authenticated `/api/target-preview/{slug}/{kind}/{id}/{path}` entry
+validates the locator and answers with the file bytes on Proxima's own origin: no
+redirect, no capability token, no preview cookie, no Area hostname. Isolation comes
+from the sandbox instead - Artifact Review frames the response with `sandbox=""`
+(passive) or `sandbox="allow-scripts"` (active, never `allow-same-origin`), and the
+response repeats it as a CSP `sandbox` directive so the document is opaque-origin
+either way. Passive HTML additionally carries `default-src 'none'`; SVG/XHTML/XML
+download rather than render. `ActivePreviewConsent` holds the in-memory grant for
+active mode, keyed by owner session, Area, and viewer session, written only by the
+bearer-authenticated `POST /api/projects/{slug}/preview-mode`; anything unknown or
+stale is passive or 403. `PreviewIsolationMiddleware` guards the reverse direction:
+framed, non-document requests to Proxima (`Sec-Fetch-Site: same-site`/`cross-site`,
+or `Origin: null`) are refused, and app HTML without its own framing policy gets
+`frame-ancestors 'none'` plus `X-Frame-Options: DENY`.
 `cf_hostnames.py` serializes and verifies apps-domain ingress updates, while
 `logging_config.py` redacts preview capabilities before access logging. The complete
 admission, cookie, framing, worker, and response-policy contract lives in

@@ -86,16 +86,17 @@ Supersedes / superseded-by / links to feature docs.
 | [0026](0026-preview-supervision-upgrades-require-a-drained-legacy-generation.md) | Preview supervision upgrades require a drained legacy generation | Accepted |
 | [0027](0027-durable-task-reconciliation-protocol.md) | Durable Task reconciliation protocol | Accepted |
 | [0028](0028-linux-first-daily-driver-support.md) | Linux-first daily-driver support | Accepted |
-| [0029](0029-canonical-file-targets.md) | Canonical file targets preserve Area identity | Accepted |
-| [0030](0030-area-scoped-artifact-media.md) | Area-scoped artifact media and preview routing | Accepted |
-| [0031](0031-sandboxed-target-preview-resources.md) | Targeted HTML previews use a sandboxed resource scope | Superseded by ADR-0032 |
-| [0032](0032-area-bound-file-preview-origins.md) | Canonical file previews use Area-bound capability origins | Superseded by ADR-0033 |
-| [0033](0033-capability-scoped-file-preview-gateways.md) | File previews use capability-scoped execution boundaries | Superseded by ADR-0034 |
-| [0034](0034-distinct-tls-area-preview-origins.md) | Active file previews require distinct TLS Area origins | Accepted |
-| [0035](0035-frame-bound-area-preview-admission.md) | Area preview admission is frame-bound | Accepted |
-| [0036](0036-active-file-preview-is-explicit-trusted-mode.md) | Active file preview is an explicit trusted mode | Accepted |
+| [0029](0029-canonical-file-targets.md) | Canonical file targets preserve Area identity | Superseded by ADR-0042 |
+| [0030](0030-area-scoped-artifact-media.md) | Area-scoped artifact media and preview routing | Superseded by ADR-0042 |
+| [0031](0031-sandboxed-target-preview-resources.md) | Targeted HTML previews use a sandboxed resource scope | Superseded by ADR-0042 |
+| [0032](0032-area-bound-file-preview-origins.md) | Canonical file previews use Area-bound capability origins | Superseded by ADR-0042 |
+| [0033](0033-capability-scoped-file-preview-gateways.md) | File previews use capability-scoped execution boundaries | Superseded by ADR-0042 |
+| [0034](0034-distinct-tls-area-preview-origins.md) | Active file previews require distinct TLS Area origins | Superseded by ADR-0042 |
+| [0035](0035-frame-bound-area-preview-admission.md) | Area preview admission is frame-bound | Superseded by ADR-0042 |
+| [0036](0036-active-file-preview-is-explicit-trusted-mode.md) | Active file preview is an explicit trusted mode | Superseded by ADR-0042 |
 | [0037](0037-container-activity-and-migration-publication.md) | Container activity and migration publication | Superseded by ADR-0038 |
 | [0038](0038-owner-safe-container-activity-boundaries.md) | Owner-safe Container activity boundaries | Accepted |
 | [0039](0039-master-orchestrator-ships-enabled.md) | Master orchestrator ships enabled | Accepted |
 | [0040](0040-files-is-a-destination.md) | Files is a destination, not a right-rail tool | Accepted |
 | [0041](0041-updates-are-a-manual-git-pull.md) | Updates are a manual git pull; the safe-updater stack is removed | Accepted |
+| [0042](0042-file-preview-is-a-sandboxed-iframe.md) | File preview is one sandboxed iframe on Proxima's origin | Accepted |

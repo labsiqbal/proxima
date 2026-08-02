@@ -1,6 +1,6 @@
 # ADR-0035: Area preview admission is frame-bound
 
-- Status: Accepted
+- Status: Superseded by ADR-0042
 - Date: 2026-07-31
 
 ## Context

@@ -48,18 +48,6 @@ def hostname_for(cfg: dict[str, Any], slug: str) -> str:
     return f"preview-{slug}.{cfg['apps_domain']}"
 
 
-def file_preview_hostname_for(
-    cfg: dict[str, Any],
-    project_id: int,
-    area_kind: str,
-    area_id: int | None,
-) -> str:
-    return (
-        f"file-{project_id}-{area_kind}-{area_id or 0}."
-        f"{cfg['apps_domain']}"
-    )
-
-
 def _headers(cfg: dict[str, Any]) -> dict[str, str]:
     return {"Authorization": f"Bearer {cfg['cf_api_token']}", "Content-Type": "application/json"}
 
@@ -334,23 +322,6 @@ async def _ensure_hostname(cfg: dict[str, Any], host: str) -> None:
 
 async def ensure_preview_hostname(cfg: dict[str, Any], slug: str) -> None:
     await _ensure_hostname(cfg, hostname_for(cfg, slug))
-
-
-async def ensure_file_preview_hostname(
-    cfg: dict[str, Any],
-    project_id: int,
-    area_kind: str,
-    area_id: int | None,
-) -> None:
-    await _ensure_hostname(
-        cfg,
-        file_preview_hostname_for(
-            cfg,
-            project_id,
-            area_kind,
-            area_id,
-        ),
-    )
 
 
 async def provision(cfg: dict[str, Any], slug: str) -> None:

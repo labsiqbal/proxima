@@ -113,7 +113,6 @@ function previewSessionId(): string {
 type ActivePreviewState = {
   areaKey: string
   target: FileTarget
-  generation: string
 }
 
 export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, onEditSource, reviewSessionId = null, onSendFeedback }: {
@@ -253,7 +252,6 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
       authority.target,
       previewSessionRef.current,
       false,
-      authority.generation,
       true,
     )
   }, [currentAreaKey, slug, token])
@@ -267,7 +265,6 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
       authority.target,
       previewSessionRef.current,
       false,
-      authority.generation,
       true,
     )
   }, [slug, token])
@@ -296,17 +293,16 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     if (kind === 'pdf') return <iframe className="av-frame" title={name} src={previewUrl(slug, path, item.target)} />
     if (kind === 'html') {
       const authority = activeForCurrentArea
-        ? {
-            previewSession: previewSessionRef.current,
-            generation: activeForCurrentArea.generation,
-          }
+        ? { previewSession: previewSessionRef.current }
         : undefined
+      // `allow-same-origin` is never granted: the preview shares Proxima's
+      // origin, so an opaque sandbox is what keeps it away from the session.
       return <iframe
         className="av-frame"
-        key={authority?.generation || 'passive'}
+        key={authority ? 'active' : 'passive'}
         title={name}
         src={previewUrl(slug, path, item.target, authority)}
-        sandbox={authority ? 'allow-scripts allow-same-origin' : ''}
+        sandbox={authority ? 'allow-scripts' : ''}
       />
     }
     if (kind === 'binary') return <div className="av-msg muted">Can't preview this file type. <a href={rawUrl(slug, path, item.target)} download={name}>Download</a> to open it.</div>
@@ -390,13 +386,12 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
         previewSessionRef.current,
         true,
       )
-      if (!result.active || !result.generation) {
-        throw new Error('Active preview authority was not granted.')
+      if (!result.active) {
+        throw new Error('Active preview consent was not granted.')
       }
       const next = {
         areaKey: currentAreaKey,
         target: item.target,
-        generation: result.generation,
       }
       activePreviewRef.current = next
       setActivePreview(next)
@@ -420,7 +415,6 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
         authority.target,
         previewSessionRef.current,
         false,
-        authority.generation,
       )
       activePreviewRef.current = null
       setActivePreview(null)
@@ -552,7 +546,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
               <p className="eyebrow">Trust boundary</p>
               <h3 id={consentTitleId}>Enable trusted active content?</h3>
               <p>Active content can run scripts and module workers, use network access, navigate within the preview, and send any data from this Area to external services.</p>
-              <p><strong>Proxima cannot guarantee Area confidentiality while active mode is enabled.</strong> The preview remains isolated from Proxima and every other Area.</p>
+              <p><strong>Proxima cannot guarantee Area confidentiality while active mode is enabled.</strong> The preview keeps running in a sandbox with no access to Proxima itself: it cannot read your session, this app, or any other Area.</p>
               <div className="av-preview-consent-actions">
                 <button ref={consentCancelRef} type="button" className="ghost-button" disabled={previewModePending} onClick={() => setPreviewConsentOpen(false)}>Keep passive</button>
                 <button type="button" className="primary-button" disabled={previewModePending} onClick={() => void enableActivePreview()}>{previewModePending ? 'Enabling...' : 'Enable trusted active mode'}</button>

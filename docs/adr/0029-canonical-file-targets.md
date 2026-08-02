@@ -1,9 +1,10 @@
 # ADR-0029: Canonical file targets preserve Area identity
 
-- Status: Accepted (amended 2026-08-02: the reserved-name virtual-path
-  compatibility clause was removed by prune #138 / decision #121 - path-only
-  requests now resolve literally from the Container root; locators are
-  unchanged)
+- Status: Superseded by ADR-0042 (the locator model it defines stays in
+  force and is restated there; only its preview-transport clause is retired.
+  Amended 2026-08-02: the reserved-name virtual-path compatibility clause was
+  removed by prune #138 / decision #121 - path-only requests now resolve
+  literally from the Container root)
 - Date: 2026-07-31
 
 ## Context

@@ -29,12 +29,12 @@ async function responseError(res: Response, fallback: string): Promise<Error> {
   return new Error(`${fallback} (${res.status}${res.statusText ? ` ${res.statusText}` : ''})${detail ? `: ${detail}` : ''}`)
 }
 
-// Raw-file URL usable directly as <img>/<video> src. Path-only previews use the
-// owner session. Canonical previews enter through the API and redirect to an
-// Area-bound capability origin.
+// Raw-file URL usable directly as <img>/<video> src. Previews are served from
+// Proxima's own origin and rendered in a sandboxed iframe (never
+// allow-same-origin); scripts additionally need recorded owner consent, which
+// the viewer identifies with its preview session (ADR-0042).
 export type ActivePreviewAuthority = {
   previewSession: string
-  generation: string
 }
 
 export const previewUrl = (
@@ -50,23 +50,22 @@ export const previewUrl = (
   const query = new URLSearchParams({
     __proxima_mode: 'active',
     __proxima_preview_session: active.previewSession,
-    __proxima_preview_generation: active.generation,
   })
   return `${base}?${query.toString()}`
 }
 
 export type PreviewModeResponse = {
   active: boolean
-  generation: string | null
 }
 
+// Owner consent for script-enabled preview. Bearer-authenticated on purpose:
+// an ambient cookie or a cross-site form must never be able to self-enable it.
 export const setTargetPreviewMode = (
   token: string,
   slug: string,
   target: FileTarget,
   previewSession: string,
   active: boolean,
-  generation?: string | null,
   keepalive = false,
 ) => api<PreviewModeResponse>(
   `/api/projects/${q(slug)}/preview-mode?target=${targetParam(target)}`,
@@ -77,7 +76,6 @@ export const setTargetPreviewMode = (
     body: JSON.stringify({
       active,
       preview_session: previewSession,
-      ...(generation ? { generation } : {}),
     }),
   },
 )

@@ -11,7 +11,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 
@@ -738,20 +738,12 @@ def _popup_response_step(
         raise BrowserProbeError("browser popup final URL is invalid")
     final = urlsplit(final_url)
     final_origin = f"{final.scheme}://{final.netloc}"
-    has_capability = any(
-        key == "__proxima_cap"
-        for key, _value in parse_qsl(
-            final.query,
-            keep_blank_values=True,
-        )
-    )
     summary = {
         "ok": True,
         "name": step.get("name", "popup response"),
         "status": result.get("status"),
         "final_origin": final_origin,
         "final_path": final.path,
-        "capability_query": has_capability,
         "executed": result.get("executed"),
     }
     if network_summary is not None:
@@ -762,10 +754,6 @@ def _popup_response_step(
         and final.path == expected_path
         and result.get("executed") is step.get("expected_executed", False)
     )
-    if "expected_capability_query" in step:
-        expected = expected and (
-            has_capability is step["expected_capability_query"]
-        )
     expected_body = step.get("expected_body")
     if expected_body is not None:
         expected = (

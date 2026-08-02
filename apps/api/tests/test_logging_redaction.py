@@ -40,30 +40,22 @@ def test_query_token_filter_redacts_websocket_error_log() -> None:
     assert "/api/ws/terminal?token=[REDACTED]&project=iqbal" in rendered
 
 
-def test_query_token_filter_redacts_every_file_preview_capability_form() -> None:
+def test_query_token_filter_redacts_app_preview_capability_forms() -> None:
     record = _record(
         "uvicorn.access",
-        "%s %s %s",
+        "%s %s",
         (
-            "/site?__proxima_cap=query-secret&preview_capability=alias-secret",
-            "/_proxima/file-preview/path-secret/index.html",
-            "proxima_file_preview_1_ops_2=cookie-secret; theme=dark",
+            "/site?preview_capability=alias-secret",
+            "proxima_preview=cookie-secret; theme=dark",
         ),
     )
 
     assert CredentialRedactionFilter().filter(record)
     rendered = record.getMessage()
-    for secret in (
-        "query-secret",
-        "alias-secret",
-        "path-secret",
-        "cookie-secret",
-    ):
+    for secret in ("alias-secret", "cookie-secret"):
         assert secret not in rendered
-    assert "__proxima_cap=[REDACTED]" in rendered
     assert "preview_capability=[REDACTED]" in rendered
-    assert "/_proxima/file-preview/[REDACTED]/index.html" in rendered
-    assert "proxima_file_preview_1_ops_2=[REDACTED]" in rendered
+    assert "proxima_preview=[REDACTED]" in rendered
 
 
 def test_uvicorn_config_filters_access_and_error_handlers() -> None:
@@ -88,7 +80,7 @@ def test_plain_uvicorn_entrypoint_installs_live_capability_redaction() -> None:
 
         importlib.reload(main_module)
         logger.info(
-            "GET /site?__proxima_cap=plain-entry-secret HTTP/1.1"
+            "GET /site?preview_capability=plain-entry-secret HTTP/1.1"
         )
     finally:
         logger.handlers = original_handlers
@@ -96,4 +88,4 @@ def test_plain_uvicorn_entrypoint_installs_live_capability_redaction() -> None:
         logger.propagate = original_propagate
 
     assert "plain-entry-secret" not in output.getvalue()
-    assert "__proxima_cap=[REDACTED]" in output.getvalue()
+    assert "preview_capability=[REDACTED]" in output.getvalue()

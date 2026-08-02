@@ -43,14 +43,12 @@ describe('canonical file URLs', () => {
   it('adds scoped active authority only when explicitly supplied', () => {
     const active = previewUrl('identity', 'display/brief.md', target, {
       previewSession: 's'.repeat(32),
-      generation: 'g'.repeat(43),
     })
     const [path, rawQuery] = active.split('?')
     expect(path).toBe('/api/target-preview/identity/ops/42/reports/brief.md')
     expect(Object.fromEntries(new URLSearchParams(rawQuery))).toEqual({
       __proxima_mode: 'active',
       __proxima_preview_session: 's'.repeat(32),
-      __proxima_preview_generation: 'g'.repeat(43),
     })
   })
 
@@ -61,7 +59,6 @@ describe('canonical file URLs', () => {
       target,
       's'.repeat(32),
       false,
-      'g'.repeat(43),
     )
 
     const [url, token, init] = apiMock.mock.calls[0]
@@ -72,7 +69,6 @@ describe('canonical file URLs', () => {
       body: JSON.stringify({
         active: false,
         preview_session: 's'.repeat(32),
-        generation: 'g'.repeat(43),
       }),
     })
     const query = new URLSearchParams(String(url).split('?')[1])

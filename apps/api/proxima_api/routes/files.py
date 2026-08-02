@@ -16,9 +16,8 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-import httpx
 from fastapi import Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, Response
 
 from .. import apprunner, container_registry, file_targets, fsapi, layout_map
 from .. import app_settings
@@ -43,8 +42,10 @@ from ..schemas import (
     PreviewModeRequest,
 )
 from ..target_preview import (
+    PreviewArea,
     is_active_preview_media_type,
-    passive_preview_headers,
+    is_html_preview_media_type,
+    preview_headers,
     preview_media_type,
 )
 
@@ -1351,7 +1352,7 @@ def register(app, deps):
         return FileResponse(str(resolved.path), filename=resolved.path.name)
 
     @app.get("/api/target-preview/{slug}/{area_kind}/{area_id}/{file_path:path}")
-    async def project_target_preview(
+    def project_target_preview(
         slug: str,
         area_kind: str,
         area_id: str,
@@ -1391,28 +1392,50 @@ def register(app, deps):
         if not resolved.path.is_file():
             raise HTTPException(status_code=404, detail="not a file")
         media_type = preview_media_type(resolved.path)
-        if not is_active_preview_media_type(media_type):
+        active = False
+        if request.query_params.get("__proxima_mode") == "active":
+            # Scripts only run where the owner accepted the consent screen for
+            # exactly this Area and this viewer. Unknown state means passive,
+            # and a stale URL fails closed instead of silently downgrading.
+            if not is_html_preview_media_type(media_type):
+                raise HTTPException(
+                    status_code=400,
+                    detail="active mode is available only for HTML previews",
+                )
+            active = app.state.file_preview_consent.granted(
+                owner_session=_owner_session(request),
+                area=PreviewArea.from_locator(
+                    int(project["id"]),
+                    resolved.locator,
+                ),
+                preview_session=request.query_params.get(
+                    "__proxima_preview_session",
+                    "",
+                ),
+            )
+            if not active:
+                raise HTTPException(
+                    status_code=403,
+                    detail="active file preview consent is unavailable",
+                )
+        headers = preview_headers(media_type, active=active)
+        if is_active_preview_media_type(media_type) and not (
+            is_html_preview_media_type(media_type)
+        ):
+            # SVG/XML can script when a browser renders them: hand them over as
+            # a download instead of an inline document.
             return FileResponse(
                 str(resolved.path),
+                filename=resolved.path.name,
+                content_disposition_type="attachment",
                 media_type=media_type,
-                headers=passive_preview_headers(request),
+                headers=headers,
             )
-        try:
-            preview_url = await app.state.target_previews.issue_url(
-                request,
-                int(project["id"]),
-                resolved.locator,
-                owner_session=_owner_session(request),
-            )
-        except (OSError, RuntimeError, httpx.HTTPError) as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="dedicated file preview origin is unavailable",
-            ) from exc
-        response = RedirectResponse(preview_url, status_code=307)
-        response.headers["Cache-Control"] = "private, no-store"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        return response
+        return FileResponse(
+            str(resolved.path),
+            media_type=media_type,
+            headers=headers,
+        )
 
     @app.post("/api/projects/{slug}/preview-mode")
     def project_preview_mode(
@@ -1432,27 +1455,25 @@ def register(app, deps):
         )
         if not resolved.path.is_file():
             raise HTTPException(status_code=404, detail="not a file")
-        if preview_media_type(resolved.path) not in {"text/html"}:
+        if not is_html_preview_media_type(preview_media_type(resolved.path)):
             raise HTTPException(
                 status_code=400,
                 detail="active mode is available only for HTML previews",
             )
-        area = app.state.target_previews.area_for_locator(
+        area = PreviewArea.from_locator(
             int(project["id"]),
             resolved.locator,
         )
-        generation = app.state.target_previews.set_active_mode(
-            owner_session=owner_session,
-            area=area,
-            preview_session=payload.preview_session,
-            active=payload.active,
-            expected_generation=payload.generation,
-        )
-        if not payload.active and generation is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="active preview generation changed; reload before disabling",
-            )
+        consent = app.state.file_preview_consent
+        scope = {
+            "owner_session": owner_session,
+            "area": area,
+            "preview_session": payload.preview_session,
+        }
+        if payload.active:
+            consent.grant(**scope)
+        else:
+            consent.revoke(**scope)
         _audit(
             user,
             (
@@ -1467,13 +1488,10 @@ def register(app, deps):
                 "area_id": area.area_id,
             },
         )
-        return {
-            "active": payload.active and generation is not None,
-            "generation": generation if payload.active else None,
-        }
+        return {"active": payload.active}
 
     @app.get("/api/preview/{slug}/{file_path:path}")
-    async def project_preview(
+    def project_preview(
         slug: str,
         file_path: str,
         request: Request,
@@ -1486,7 +1504,8 @@ def register(app, deps):
             )
         # Serve a project file inline for live preview (rendering a built site in an
         # <iframe>). Auth via the HttpOnly proxima_session cookie, sent same-origin on
-        # the iframe AND its relative asset requests — no token in the URL. Path-jailed.
+        # the iframe navigation - no token in the URL. Path-jailed. Path-only previews
+        # are always passive; active mode needs a canonical target (/api/target-preview).
         resolved = _resolved_file(
             slug,
             user,
@@ -1495,30 +1514,19 @@ def register(app, deps):
         if not resolved.path.is_file():
             raise HTTPException(status_code=404, detail="not a file")
         media_type = preview_media_type(resolved.path)
-        if is_active_preview_media_type(media_type):
-            project = visible_project(slug, user)
-            try:
-                preview_url = await app.state.target_previews.issue_url(
-                    request,
-                    int(project["id"]),
-                    resolved.locator,
-                    owner_session=(
-                        _owner_session(request)
-                        if request.query_params.get("__proxima_mode") == "active"
-                        else None
-                    ),
-                )
-            except (OSError, RuntimeError, httpx.HTTPError) as exc:
-                raise HTTPException(
-                    status_code=503,
-                    detail="dedicated file preview origin is unavailable",
-                ) from exc
-            response = RedirectResponse(preview_url, status_code=307)
-            response.headers["Cache-Control"] = "private, no-store"
-            response.headers["Referrer-Policy"] = "no-referrer"
-            return response
+        headers = preview_headers(media_type)
+        if is_active_preview_media_type(media_type) and not (
+            is_html_preview_media_type(media_type)
+        ):
+            return FileResponse(
+                str(resolved.path),
+                filename=resolved.path.name,
+                content_disposition_type="attachment",
+                media_type=media_type,
+                headers=headers,
+            )
         return FileResponse(
             str(resolved.path),
             media_type=media_type,
-            headers=passive_preview_headers(request),
+            headers=headers,
         )

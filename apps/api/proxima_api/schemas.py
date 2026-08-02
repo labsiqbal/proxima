@@ -66,12 +66,6 @@ class PreviewModeRequest(BaseModel):
         max_length=128,
         pattern=r"^[A-Za-z0-9_-]+$",
     )
-    generation: str | None = Field(
-        default=None,
-        min_length=32,
-        max_length=128,
-        pattern=r"^[A-Za-z0-9_-]+$",
-    )
 
 
 class PermissionResponse(BaseModel):

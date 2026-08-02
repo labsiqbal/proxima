@@ -1,6 +1,6 @@
 # ADR-0031: Targeted HTML previews use a sandboxed resource scope
 
-- Status: Superseded by ADR-0032
+- Status: Superseded by ADR-0042
 - Date: 2026-07-31
 
 ## Context
