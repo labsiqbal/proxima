@@ -367,7 +367,7 @@ export function projectForShellScope(args: {
 
 /** Delegate owns only its global desk and its cross-project review destinations. */
 export function isDelegateDestination(view: View): boolean {
-  return view === 'master' || view === 'activity' || view === 'artifacts' || view === 'task'
+  return view === 'master' || view === 'activity' || view === 'artifacts' || view === 'files' || view === 'task'
 }
 
 /** Plan Work-mode Open Master conversation: always enter Delegate, then focus. */

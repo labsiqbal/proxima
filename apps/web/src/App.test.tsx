@@ -109,6 +109,9 @@ describe("Shell project selection", () => {
 		expect(isDelegateDestination("master")).toBe(true);
 		expect(isDelegateDestination("activity")).toBe(true);
 		expect(isDelegateDestination("artifacts")).toBe(true);
+		// Files is a Delegate destination too (ADR-0040): global trees behind
+		// a head filter, like Tasks and Archive.
+		expect(isDelegateDestination("files")).toBe(true);
 		expect(isDelegateDestination("task")).toBe(true);
 		expect(isDelegateDestination("chat")).toBe(false);
 		expect(isDelegateDestination("workflows")).toBe(false);
