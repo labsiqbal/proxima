@@ -1,5 +1,5 @@
 import React from 'react'
-import type { AppFeatures, GraphJob, Job, JobStatus, JobStep, Profile, Project } from '../types'
+import type { GraphJob, Job, JobStatus, JobStep, Profile, Project } from '../types'
 import { listJobs } from '../api/jobs'
 import { approveGraphJob, listGraphJobs, saveGraphTemplate } from '../api/graph'
 import { GraphCanvas } from '../components/workflows/GraphCanvas'
@@ -144,12 +144,11 @@ function PlanJobs({ plan, profiles, onOpenPlan }: {
   </div>
 }
 
-export function ActivityScreen({ token, activeProject, projects = [], globalScope = false, features, profiles, onOpenTask, onOpenPlan, onNewTask }: {
+export function ActivityScreen({ token, activeProject, projects = [], globalScope = false, profiles, onOpenTask, onOpenPlan, onNewTask }: {
   token: string
   activeProject: Project | null
   projects?: Project[]
   globalScope?: boolean
-  features: AppFeatures
   profiles: Profile[]
   onOpenTask: (jobId: number) => void
   /** Opens a plan where it can be acted on — the Workflows canvas. */
@@ -190,7 +189,7 @@ export function ActivityScreen({ token, activeProject, projects = [], globalScop
         listJobs(token, { status: effectiveStatus, project_slug: activeProject?.slug, include_archived: mode === 'list' ? includeArchived : false, limit, offset: nextOffset }),
         // Plans live on the graph engine; with the feature off the endpoint is
         // gated, so this screen simply shows classic tasks — exactly as before.
-        features.workflowGraph ? listGraphJobs(token, activeProject?.slug) : Promise.resolve({ items: [] as GraphJob[] }),
+        listGraphJobs(token, activeProject?.slug),
       ])
       if (!mountedRef.current || seq !== loadSeq.current) return
       setError('')
@@ -204,7 +203,7 @@ export function ActivityScreen({ token, activeProject, projects = [], globalScop
     } catch (reason) {
       if (mountedRef.current && seq === loadSeq.current) setError(String(reason))
     }
-  }, [token, effectiveStatus, activeProject?.slug, includeArchived, mode, features.workflowGraph])
+  }, [token, effectiveStatus, activeProject?.slug, includeArchived, mode])
 
   React.useEffect(() => { loadedCountRef.current = 0; void load(0, false) }, [load])
   usePolling(() => load(0, false), 2500, { enabled: true, immediate: false })

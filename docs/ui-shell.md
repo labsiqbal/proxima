@@ -17,7 +17,7 @@ The header-level **Work / Delegate** control is URL durable (`?mode=work` or
 `?mode=delegate`) and uses pressed-button semantics. Work navigation is flow-ordered:
 **Chat** (hands-on), **Tasks** (watch it run), **Workflows** (keep what worked), then
 **Archive** (where deliverables live) and **Files** (what is actually in the
-Container), plus feature-gated **Design**. The active-project
+Container), plus **Design**. The active-project
 switcher belongs to the Work sidebar, not global chrome or Master. Project management
 (list / link / create / remove / container settings) lives under **Settings → Projects**,
 not primary nav. Agents and Settings stay in the Work account menu. The default landing
@@ -53,13 +53,10 @@ project adds a warning. The journal belongs to that chat session and disappears 
 
 ## Master
 
-Master navigation, settings, tours, and deep links are omitted unless the
-server-owned `feature_master_orchestrator` flag is enabled. The header status
-cluster (Running tasks + Attention) renders in both modes; its Work-only targets
-switch the shell back to Work before opening. The flag defaults on now
-that the
-[documented product and installation-specific runner gates](master-integrated-acceptance.md#activation-decision)
-have passed. Stale local view state cannot bypass this gate.
+Master navigation, settings, tours, and deep links are always present (the
+feature-flag system was removed in prune A2, #129). The header status cluster
+(Running tasks + Attention) renders in both modes; its Work-only targets switch
+the shell back to Work before opening.
 
 Delegate presents Master as a first-class desk, not a Chat tab or Tasks filter. It keeps
 the shared, persisted sidebar panel but replaces Work navigation with **Master**,
@@ -158,7 +155,7 @@ behind a dedicated loading state, then atomically selects and locks that Project
 The shell does not expose Terminal or Preview until Task ownership and the
 active Project are synchronized. The Task banner always names the Project and Area.
 
-The **New task** launcher lives behind the Tasks screen's `+ New task` button (it is no longer a nav destination of its own). It is a focused launcher with no destination dashboard grid. Its integrated Task Composer splits into two rows by kind. The prompt row carries only *actions*: the Add menu for attachments/image/design, and the start action. A context bar underneath groups the three controls that describe a task's **execution context** — a searchable Project/folder picker (where it runs), Agent (who runs it), and Guarded or Autonomous execution policy (how it is governed). Each context control carries a leading icon inside its own click target and all three share one type scale, so the bar reads as one row of peers rather than three unrelated widgets. `/image` and feature-gated `/design` create real media runs that are linked back to the durable task lifecycle. A created task opens `#task/<id>` with live progress, review, approval, and deliverables. Ordinary start failures clean up the queued task; media link failures preserve and identify the task for inspection.
+The **New task** launcher lives behind the Tasks screen's `+ New task` button (it is no longer a nav destination of its own). It is a focused launcher with no destination dashboard grid. Its integrated Task Composer splits into two rows by kind. The prompt row carries only *actions*: the Add menu for attachments/image/design, and the start action. A context bar underneath groups the three controls that describe a task's **execution context** — a searchable Project/folder picker (where it runs), Agent (who runs it), and Guarded or Autonomous execution policy (how it is governed). Each context control carries a leading icon inside its own click target and all three share one type scale, so the bar reads as one row of peers rather than three unrelated widgets. `/image` and `/design` create real media runs that are linked back to the durable task lifecycle. A created task opens `#task/<id>` with live progress, review, approval, and deliverables. Ordinary start failures clean up the queued task; media link failures preserve and identify the task for inspection.
 
 ## Workflows
 
@@ -171,9 +168,7 @@ Workflows is the template library for repeatable work. One workflow owns one pro
   availability pause/resume, and archive. The per-row Schedules action opens the complete
   schedule form in a dialog, including create, durable bindings, enable, overlap, Run now,
   configure, and delete. There is no standalone Scheduled navigation mode.
-- **Editor** is the plan/graph canvas. `PROXIMA_FEATURE_WORKFLOW_GRAPH` defaults on;
-  with the recovery switch off the mode explains that the editor is off (the env var
-  itself stays out of the UI copy — it is documented here and in installation docs).
+- **Editor** is the plan/graph canvas.
   It has an **authoring chat** on the left under the standing rule — typing drives the
   plan on screen, never the database — which hands back a `<workflow-graph>` (nodes +
   edges), so the agent can propose branches rather than a straight line. The chat is
@@ -355,17 +350,11 @@ use live regions, errors use alerts, and retry exposes its safety rule through
 
 ## Archive and Design
 
-Archive is the durable deliverable registry (T4): every agent output lands as a record with lineage, ONE approval status (synced with the job-review approve), and a version chain; the combo detail is an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address - no right panel, no popup. Records survive file moves and deletion. Design is a separate canvas destination whose internals are not part of the shell. Design links are enabled only when the Design Studio feature gate is on; otherwise source artifacts remain available.
+Archive is the durable deliverable registry (T4): every agent output lands as a record with lineage, ONE approval status (synced with the job-review approve), and a version chain; the combo detail is an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address - no right panel, no popup. Records survive file moves and deletion. Design is a separate canvas destination whose internals are not part of the shell.
 
 ## De-jargon rule for primary surfaces
 
 Primary screens (Chat, Tasks, Workflows, Archive, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Master has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses a server-qualified runner for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome. The qualification contract is owned by [Runner conformance](runner-conformance.md).
-
-## Feature gates
-
-Routes, sidebar destinations, session eligibility, search, and deep links must all honor the server feature configuration. A hidden destination must not become reachable through stale state. Gating must not reorder the remaining navigation.
-The Master gate suppresses the Delegate control, its settings section, help chapter, and
-delegation step in the general core tour. A stale `?mode=delegate` URL falls back to Work.
 
 ## Responsive and accessibility behavior
 

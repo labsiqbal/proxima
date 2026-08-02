@@ -6,7 +6,7 @@ import {
 	profileAgentOption,
 	type RunnerReadinessMap,
 } from "../shell/runnerReadiness";
-import type { AppFeatures, Profile, Project } from "../../types";
+import type { Profile, Project } from "../../types";
 
 export type OpsExecutionPolicy = "guarded" | "autonomous";
 export type OpsTaskRequest = {
@@ -126,7 +126,6 @@ function ProjectPicker({
 
 export function TaskComposer({
 	token,
-	features,
 	projects,
 	activeProject,
 	activeProfile,
@@ -139,7 +138,6 @@ export function TaskComposer({
 	onCreated,
 }: {
 	token: string;
-	features: AppFeatures;
 	projects: Project[];
 	activeProject: Project | null;
 	activeProfile: Profile | null;
@@ -210,7 +208,6 @@ export function TaskComposer({
 				<Composer
 					token={token}
 					slug={activeProject?.slug}
-					features={features}
 					disabled={!activeProject || !activeProfile}
 					placeholder="Describe the outcome you want…"
 					textareaLabel="Task brief"

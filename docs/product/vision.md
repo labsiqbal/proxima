@@ -11,7 +11,7 @@ Proxima is an opinionated agent harness and workspace OS. It gives AI agents ful
 > with worktree isolation + local diff review and merge, deterministic script
 > nodes, turn-timeout auto-continuation, the durable Archive registry, the
 > bundled capability pack, chat, schedules, wiki, image generation, and
-> **Design Studio** (active, feature-flagged). Planned only - marked *(planned)*
+> **Design Studio** (active). Planned only - marked *(planned)*
 > on their sections: **Main Project**, **Integrations** (global connections +
 > project bindings), **Workflow versioning**, **artifact/app Publish**, and
 > per-agent `AGENT.md` memory files. Video Studio was removed and is not planned.
@@ -260,7 +260,7 @@ Tasks
 Recipes
 Projects
 Archive
-Design (feature-gated)
+Design
 ```
 
 Tool rail (overlay panels, any context):

@@ -3,7 +3,6 @@ import type {
 	ChatMessage,
 	RunEvent,
 	ActivityItem,
-	AppFeatures,
 	OutputLink,
 	Profile,
 } from "../../types";
@@ -18,7 +17,6 @@ import { ApiError } from "../../api/client";
 import { IconArrowDown } from "../shell/icons";
 import { MessageReviewSidecar } from "./MessageReviewSidecar";
 import { formatRunError } from "./runError";
-import { DEFAULT_FEATURES, studioBridgeAvailability } from "../../features";
 import { confirmDialog } from "../ui/Dialog";
 import { ChatEmpty } from "./ChatEmpty";
 import {
@@ -426,9 +424,9 @@ const outputTypeLabel = (t: string) =>
 								? "Image"
 								: "File";
 
-const outputHint = (o: OutputLink, features: AppFeatures) =>
+const outputHint = (o: OutputLink) =>
 	o.type === "design"
-		? features.designStudio ? "Editable layered design" : "Layered design artifact"
+		? "Editable layered design"
 		: o.type === "video-file"
 				? "Rendered video file"
 				: o.type === "app"
@@ -477,13 +475,11 @@ function ResultCards({
 	onOpen,
 	token,
 	slug,
-	features = DEFAULT_FEATURES,
 }: {
 	links: OutputLink[];
 	onOpen?: (link: OutputLink) => void;
 	token?: string;
 	slug?: string;
-	features?: AppFeatures;
 }) {
 	const [busy, setBusy] = React.useState("");
 	const [actionError, setActionError] = React.useState("");
@@ -521,8 +517,7 @@ function ResultCards({
 			<div className="result-cards-title">Created outputs</div>
 				{links.map((link, i) => {
 					const src = mediaSrc(link);
-					const bridges = studioBridgeAvailability(link.type, features);
-					const canEditDesign = bridges.design;
+					const canEditDesign = link.type === "image";
 				return (
 					<div className="result-item" key={`${link.type}:${link.path}:${i}`}>
 						{link.type === "image" && token && projectOf(link) && (src || isSvgPath(link.path)) && (
@@ -560,7 +555,7 @@ function ResultCards({
 							</span>
 							<span className="result-main" aria-hidden="true">
 								<strong>{link.title || link.path}</strong>
-									<small>{outputHint(link, features)}</small>
+									<small>{outputHint(link)}</small>
 							</span>
 							<span className="result-open" aria-hidden="true">Open</span>
 						</button>
@@ -893,7 +888,6 @@ export function ChatThread({
 	onScrollAnchorChange,
 	scrollRestoreKey,
 	surfaceActive = true,
-	features = DEFAULT_FEATURES,
 }: {
 	messages: ChatMessage[];
 	events: RunEvent[];
@@ -912,7 +906,6 @@ export function ChatThread({
 	scrollRestoreKey?: string | null;
 	/** False while the keep-alive Chat pane is hidden behind another surface. */
 	surfaceActive?: boolean;
-	features?: AppFeatures;
 }) {
 	// Label = recorded author (username for people, profile/agent name for the
 	// agent); falls back to the live agent name or the generic role label.
@@ -1226,7 +1219,6 @@ export function ChatThread({
 										onOpen={onOpenOutput}
 										token={token}
 										slug={slug}
-										features={features}
 									/>
 								)}
 							{message.role === "assistant" &&

@@ -1,5 +1,5 @@
 import { useState, type ComponentType } from 'react'
-import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../../types'
+import type { ChatSession, Profile, Project, User, View } from '../../types'
 import { IconChat, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconFile, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout, IconSparkle } from './icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
@@ -26,14 +26,9 @@ const delegatePrimary: Destination[] = [
   { id: 'artifacts', label: 'Archive', icon: IconArtifacts },
   { id: 'files', label: 'Files', icon: IconFile },
 ]
-const enabled = (item: Destination, features: AppFeatures) =>
-  (item.id !== 'design' || features.designStudio)
-  && (item.id !== 'graph' || features.workflowGraph)
-  && (item.id !== 'master' || features.masterOrchestrator)
-
 export function Sidebar(props: {
   activeProfile: Profile | null; activeProject: Project | null; activeSession: ChatSession | null; currentView: View
-  features: AppFeatures; onClose: () => void; onLogout: () => void
+  onClose: () => void; onLogout: () => void
   onRenameSession: (id: number, title: string) => void; onDeleteSession: (id: number) => void
   onSelectProject: (project: Project) => void; onSelectSession: (session: ChatSession) => void
   onOpenDesign: (session: ChatSession) => void; onSelectView: (view: View) => void
@@ -67,7 +62,7 @@ export function Sidebar(props: {
     return <button className={`nav-item ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} key={item.id} onClick={() => go(item.id)}><span className="nav-icon"><Icon /></span><strong>{item.label}</strong></button>
   }
 
-  const destinations = props.delegate ? delegatePrimary : primary.filter(item => enabled(item, props.features))
+  const destinations = props.delegate ? delegatePrimary : primary
 
   return <div className={`sidebar-inner${props.delegate ? ' delegate-sidebar' : ''}`}>
     <div className="sidebar-head"><div className="brand-row"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div><button className="icon-button mobile-only" onClick={props.onClose} aria-label="Close menu"><IconClose size={18} /></button></div>
@@ -96,7 +91,7 @@ export function Sidebar(props: {
 type GroupProps = {
   sessions: ChatSession[]; activeSession: ChatSession | null; onClose: () => void; currentView: View; activeProject: Project | null
   onSelectSession: (session: ChatSession) => void; onRenameSession: (id: number, title: string) => void; onDeleteSession: (id: number) => void
-  onOpenDesign: (session: ChatSession) => void; features: AppFeatures; seen: Record<number, string>; busySessions?: number[]
+  onOpenDesign: (session: ChatSession) => void; seen: Record<number, string>; busySessions?: number[]
 }
 const isUnread = (session: ChatSession, seen: Record<number, string>) => (seen[session.id] ?? '') < (session.updated_at ?? '')
 function usePersistedToggle(key: string, fallback: boolean) {
@@ -118,6 +113,6 @@ function SessionGroups(props: GroupProps) {
   </div>)
   return <div className="recent-groups">
     {chats.length > 0 && <section className="nav-group"><button className="group-toggle" onClick={toggleChats} aria-expanded={openChats}><span><span className={`chevron ${openChats ? 'open' : ''}`}><IconChevronRight size={13} /></span>Recent chats</span><span>{chats.length}</span></button>{openChats && rows(chats, false)}</section>}
-    {props.features.designStudio && designs.length > 0 && <section className="nav-group"><button className="group-toggle" onClick={toggleDesigns} aria-expanded={openDesigns}><span><span className={`chevron ${openDesigns ? 'open' : ''}`}><IconChevronRight size={13} /></span>Design sessions</span><span>{designs.length}</span></button>{openDesigns && rows(designs, true)}</section>}
+    {designs.length > 0 && <section className="nav-group"><button className="group-toggle" onClick={toggleDesigns} aria-expanded={openDesigns}><span><span className={`chevron ${openDesigns ? 'open' : ''}`}><IconChevronRight size={13} /></span>Design sessions</span><span>{designs.length}</span></button>{openDesigns && rows(designs, true)}</section>}
   </div>
 }

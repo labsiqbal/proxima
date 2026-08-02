@@ -6,9 +6,7 @@ import { listSessions, getSession, renameSession, deleteSession } from './api/se
 import { activeRuns, createRun } from './api/runs'
 import { createJob, deleteJob, getJob, linkJobRun, startJob } from './api/jobs'
 import { api } from './api/client'
-import { getAppFeatures } from './api/config'
-import { DEFAULT_FEATURES, isFeatureSessionEnabled, isFeatureViewEnabled } from './features'
-import type { AppFeatures, ChatSession, FileTarget, GraphWorkflowDraft, OutputLink, Profile, Project, Runner, User, View } from './types'
+import type { ChatSession, FileTarget, GraphWorkflowDraft, OutputLink, Profile, Project, Runner, User, View } from './types'
 import type { ArtifactReviewFeedback } from './components/artifacts/ArtifactViewer'
 import { AppShell } from './components/shell/AppShell'
 import { AuthGate } from './screens/AuthGate'
@@ -143,15 +141,14 @@ export async function createAndStartOpsTask(token: string, request: OpsTaskReque
   return job.id
 }
 
-/** Most recent feature-enabled chat for a project, or null when none / no project. */
+/** Most recent chat for a project, or null when none / no project. */
 export function recentSessionForProject(
   sessions: ChatSession[],
   projectSlug: string | null | undefined,
-  sessionEnabled: (session: ChatSession) => boolean,
 ): ChatSession | null {
   if (!projectSlug) return null
   return sessions
-    .filter(session => session.project_slug === projectSlug && sessionEnabled(session))
+    .filter(session => session.project_slug === projectSlug)
     .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0] || null
 }
 
@@ -159,21 +156,15 @@ export function resolveRoutedWorkSession(args: {
   sessions: ChatSession[]
   projectSlug: string | null | undefined
   sessionId: number | null
-  sessionEnabled: (session: ChatSession) => boolean
 }): ChatSession | null {
   if (args.sessionId == null) return null
   const matched = args.sessions.find(
     session =>
       session.id === args.sessionId &&
-      args.sessionEnabled(session) &&
       session.project_slug === args.projectSlug,
   )
   if (matched) return matched
-  return recentSessionForProject(
-    args.sessions,
-    args.projectSlug,
-    args.sessionEnabled,
-  )
+  return recentSessionForProject(args.sessions, args.projectSlug)
 }
 
 export function workRouteSessionId(args: {
@@ -279,7 +270,6 @@ export function resolvePreservedWorkSelection(args: {
   sessions: ChatSession[]
   activeProject: Project | null
   activeSession: ChatSession | null
-  sessionEnabled: (session: ChatSession) => boolean
 }): { project: Project | null; session: ChatSession | null } {
   const project =
     (args.activeProject
@@ -291,7 +281,6 @@ export function resolvePreservedWorkSelection(args: {
   const matched = args.sessions.find(
     session =>
       session.id === args.activeSession!.id
-      && args.sessionEnabled(session)
       && args.projects.some(p => p.slug === session.project_slug),
   )
   if (matched) {
@@ -309,11 +298,7 @@ export function resolvePreservedWorkSelection(args: {
       (sessionProjectSlug
         ? args.projects.find(p => p.slug === sessionProjectSlug) || null
         : null) || project,
-    session: recentSessionForProject(
-      args.sessions,
-      sessionProjectSlug,
-      args.sessionEnabled,
-    ),
+    session: recentSessionForProject(args.sessions, sessionProjectSlug),
   }
 }
 
@@ -373,9 +358,7 @@ export function isDelegateDestination(view: View): boolean {
 /** Plan Work-mode Open Master conversation: always enter Delegate, then focus. */
 export function planOpenMasterConversation(
   originMessageId?: number | null,
-  masterOrchestrator = true,
-): { enterDelegate: true; pendingMasterMessageId: number | null } | null {
-  if (!masterOrchestrator) return null
+): { enterDelegate: true; pendingMasterMessageId: number | null } {
   const pendingMasterMessageId =
     typeof originMessageId === 'number' &&
     Number.isSafeInteger(originMessageId) &&
@@ -472,7 +455,6 @@ export function App() {
     setActiveProjectState(update)
   }, [])
   const [projectFallbackNotice, setProjectFallbackNotice] = React.useState('')
-  const [features, setFeatures] = React.useState<AppFeatures>(DEFAULT_FEATURES)
   React.useEffect(() => { if (view === 'settings') void updates.refresh() }, [view, updates.refresh])
   const [activeTaskId, setActiveTaskId] = React.useState<number | null>(null)
   const initialTaskPermalink = React.useMemo(
@@ -718,7 +700,6 @@ export function App() {
       )
     }
   }, [])
-  const viewEnabled = React.useCallback((v: View) => isFeatureViewEnabled(v, features), [features])
   // When GraphScreen reports stage=editor from an in-surface open (library → plan),
   // ensure chrome Back + project lock know about the deep frame.
   // Mount home/start and editor/studio+null loading must not erase a seeded deep id.
@@ -808,7 +789,7 @@ export function App() {
     }
   }, [pushWorkHistory])
   const changeShellMode = React.useCallback((next: ShellMode, options?: { fromUrl?: boolean }) => {
-    const mode = next === 'delegate' && features.masterOrchestrator ? 'delegate' : 'work'
+    const mode = next === 'delegate' ? 'delegate' : 'work'
     if (mode === 'delegate') {
       if (view !== 'master') lastWorkView.current = view
       clearPendingNavigation()
@@ -819,15 +800,14 @@ export function App() {
     }
     setShellMode(mode)
     if (!options?.fromUrl) pushWorkHistory()
-  }, [clearDeepStack, clearPendingNavigation, features.masterOrchestrator, pushWorkHistory, view])
+  }, [clearDeepStack, clearPendingNavigation, pushWorkHistory, view])
   const openMasterConversation = React.useCallback((originMessageId?: number | null) => {
-    const plan = planOpenMasterConversation(originMessageId, features.masterOrchestrator)
-    if (!plan) return
+    const plan = planOpenMasterConversation(originMessageId)
     // Shared Delegate transition clears pending navigation; install the focus
     // target afterward so Work-mode Attention/Task cross-links still land.
     changeShellMode('delegate')
     setPendingMasterMessageId(plan.pendingMasterMessageId)
-  }, [changeShellMode, features.masterOrchestrator])
+  }, [changeShellMode])
   const openAttentionTarget = React.useCallback((target: { view?: string; job_id?: number; engine?: string; origin_message_id?: number; container_slug?: unknown }) => {
     if (target.job_id != null) {
       openJobByEngine(target.job_id, target.engine, view)
@@ -880,7 +860,7 @@ export function App() {
     if (v === 'chat' && activeSession?.workflow_id) {
       setActiveSession(sessions.find(session => !session.workflow_id && !session.job_id && session.mode !== 'design') || null)
     }
-    setView(viewEnabled(v) ? v : 'chat')
+    setView(v)
   }
   /** Chrome Back: pop deep stack and restore origin surface. */
   const handleChromeBack = React.useCallback(() => {
@@ -945,7 +925,6 @@ export function App() {
   const markSeen = React.useCallback((id: number, updated?: string) => {
     setSeen(prev => { const u = updated || prev[id] || ''; if (prev[id] === u) return prev; const n = { ...prev, [id]: u }; localStorage.setItem('proxima.seen', JSON.stringify(n)); return n })
   }, [])
-  const sessionEnabled = React.useCallback((session: ChatSession) => isFeatureSessionEnabled(session, features), [features])
   const [profiles, setProfiles] = React.useState<Profile[]>([])
   const [sessions, setSessions] = React.useState<ChatSession[]>([])
   const [runners, setRunners] = React.useState<Runner[]>([])
@@ -960,10 +939,7 @@ export function App() {
     if (booting || !user) return
     const syncWorkRoute = (event?: Event, initial = false) => {
       const route = parseWorkRoute(window.location)
-      const nextMode =
-        route.mode === 'delegate' && features.masterOrchestrator
-          ? 'delegate'
-          : 'work'
+      const nextMode = route.mode === 'delegate' ? 'delegate' : 'work'
       setShellMode(nextMode)
       // Session Design open is request-scoped, not URL state — cancel it on every
       // route application while still applying a stable route designId below.
@@ -1014,11 +990,7 @@ export function App() {
             setProjects(projectBody.projects)
             setProjectFallbackNotice('')
             setActiveProject(owningProject)
-            setActiveSession(recentSessionForProject(
-              sessions,
-              owningProject.slug,
-              session => isFeatureSessionEnabled(session, features),
-            ))
+            setActiveSession(recentSessionForProject(sessions, owningProject.slug))
             setTaskProjectContext({
               jobId,
               projectSlug: owningProject.slug,
@@ -1091,10 +1063,9 @@ export function App() {
           sessions,
           projectSlug: fallbackProject?.slug,
           sessionId: route.sessionId,
-          sessionEnabled,
         }),
       )
-      const nextView = viewEnabled(route.view) ? route.view : 'chat'
+      const nextView = route.view
       if (
         graphStage === 'editor' &&
         (nextView !== 'workflows' || route.workflowJobId == null)
@@ -1133,16 +1104,12 @@ export function App() {
     booting,
     clearTaskHash,
     designStage,
-    features,
-    features.masterOrchestrator,
     graphStage,
     projects,
-    sessionEnabled,
     sessions,
     setActiveProject,
     token,
     user?.id,
-    viewEnabled,
   ])
   React.useEffect(() => {
     if (booting || !user || !workCatalogReady) return
@@ -1232,7 +1199,6 @@ export function App() {
         sessions: sessionBody.sessions,
         activeProject: activeProjectRef.current,
         activeSession: activeSessionRef.current,
-        sessionEnabled,
       })
       // Session restore is owned by refreshAll (refreshSeq), not the sessions list
       // poll. The poll may bump sessionsSeq while this request is in flight so the
@@ -1256,7 +1222,6 @@ export function App() {
       ? sessionBody.sessions.find(
           s =>
             s.id === route.sessionId &&
-            sessionEnabled(s) &&
             (!requestedProject || s.project_slug === requestedProject.slug),
         ) || null
       : null
@@ -1277,12 +1242,7 @@ export function App() {
       sessions: sessionBody.sessions,
       projectSlug: nextProject?.slug,
       sessionId: route.sessionId,
-      sessionEnabled,
-    }) || recentSessionForProject(
-      sessionBody.sessions,
-      nextProject?.slug,
-      sessionEnabled,
-    )
+    }) || recentSessionForProject(sessionBody.sessions, nextProject?.slug)
     setActiveSession(nextSession)
     // Ops migration hash locks shell scope onto that Project; otherwise keep the
     // Work URL / preference resolution above.
@@ -1292,7 +1252,7 @@ export function App() {
       currentProject: nextProject,
     }))
     setWorkCatalogReady(true)
-  }, [opsMigrationSlug, token, sessionEnabled, user?.id, setActiveProject])
+  }, [opsMigrationSlug, token, user?.id, setActiveProject])
 
   React.useEffect(() => {
     if (!user || !activeProject) return
@@ -1383,7 +1343,6 @@ export function App() {
 
   React.useEffect(() => {
     async function boot() {
-      const configPromise = getAppFeatures()
       // Password gate: first run forces a password; after that, a valid stored
       // session enters the app, otherwise show the login screen.
       try {
@@ -1407,9 +1366,7 @@ export function App() {
       } catch (err) {
         if (mountedRef.current) setError(String(err))
       } finally {
-        const nextFeatures = await configPromise
         if (mountedRef.current) {
-          setFeatures(nextFeatures)
           setBooting(false)
         }
       }
@@ -1420,19 +1377,13 @@ export function App() {
   }, [])
 
   React.useEffect(() => {
-    if (!booting && !viewEnabled(view)) setView('chat')
-  }, [booting, view, viewEnabled])
-  React.useEffect(() => {
-    if (!booting && !features.masterOrchestrator && shellMode === 'delegate') changeShellMode('work', { fromUrl: true })
-  }, [booting, changeShellMode, features.masterOrchestrator, shellMode])
-  React.useEffect(() => {
     // A durable ?mode=delegate URL opens its desk on first load. Once inside
     // Delegate, its global destinations remain addressable without falling back
     // to a hidden Work chat.
-    if (!booting && shellMode === 'delegate' && features.masterOrchestrator && !isDelegateDestination(view)) {
+    if (!booting && shellMode === 'delegate' && !isDelegateDestination(view)) {
       setView('master')
     }
-  }, [booting, features.masterOrchestrator, shellMode, view])
+  }, [booting, shellMode, view])
   React.useEffect(() => {
     if (shellMode === 'work' && view !== 'master') lastWorkView.current = view
   }, [shellMode, view])
@@ -1458,7 +1409,7 @@ export function App() {
     setProjectFallbackNotice('')
     setActiveProject(p)
     if (!p) { setActiveSession(null); return }
-    setActiveSession(recentSessionForProject(sessions, p.slug, sessionEnabled))
+    setActiveSession(recentSessionForProject(sessions, p.slug))
   }
 
   // Intentional "open this project's chat" (Search, etc.): same shell filter, then Chat.
@@ -1489,7 +1440,7 @@ export function App() {
     const targetProject = targetSlug ? projects.find(p => p.slug === targetSlug) : null
     if (targetProject) setActiveProject(targetProject)
     if (origin) setReturnToChat(origin)
-    if (link.type === 'design' && features.designStudio) {
+    if (link.type === 'design') {
       setDesignProjectSlug(null)
       const designId = link.id || link.path.split('/').filter(Boolean).slice(-1)[0] || null
       if (designId) openDesignById(designId, 'chat', 'Chat')
@@ -1621,7 +1572,7 @@ export function App() {
   )
   const keep = (id: View) => aliveViews.has(id) || view === id
   const chatActive = view === 'chat'
-  const delegateActive = shellMode === 'delegate' && features.masterOrchestrator
+  const delegateActive = shellMode === 'delegate'
   const masterActive = delegateActive && view === 'master'
   const masterHomeActive = masterActive
   const activityActive = view === 'activity'
@@ -1642,7 +1593,7 @@ export function App() {
     <MasterStateProvider
       token={token}
       ownerId={user.id}
-      enabled={features.masterOrchestrator && !updates.applying}
+      enabled={!updates.applying}
     >
     <WorkChatStateProvider
       ownerId={user.id}
@@ -1657,7 +1608,6 @@ export function App() {
       mode={shellMode}
       onModeChange={changeShellMode}
       onLogout={() => void handleLogout()}
-      features={features}
       onNewChat={() => void startNewSession()}
       onRenameSession={(id, title) => void handleRenameSession(id, title)}
       onDeleteSession={id => void handleDeleteSession(id)}
@@ -1669,7 +1619,6 @@ export function App() {
       onOpenProject={selectProject}
       onSelectSession={session => { pushWorkHistory(); clearPendingNavigation(); clearDeepStack(); setActiveSession(session); const sp = projects.find(p => p.slug === session.project_slug); if (sp) setActiveProject(sp); markSeen(session.id, session.updated_at); setView('chat') }}
       onOpenDesign={session => {
-        if (!features.designStudio) return
         pushWorkHistory()
         designOpenHistoryOwnedRef.current = true
         const sp = projects.find(p => p.slug === session.project_slug)
@@ -1716,29 +1665,29 @@ export function App() {
         </div>
       )}
       {!delegateActive && <HermesBanner token={token} runnerId={activeProfile?.runner_id} />}
-      {!delegateActive && view === 'home' && !features.masterOrchestrator && <HomeScreen token={token} ownerName={user?.username} features={features} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
+      {!delegateActive && view === 'home' && <HomeScreen token={token} ownerName={user?.username} projects={projects} activeProject={activeProject} activeProfile={activeProfile} profiles={profiles} runnerReadiness={runnerReadiness}
         onActiveProject={setActiveProject} onActiveProfile={setActiveProfile} onCreateTask={createTask} onOpenJob={openJobByEngine} onSelectView={goView} />}
-      {features.masterOrchestrator && pane('master', masterHomeActive, <React.Suspense fallback={<ViewFallback label="Loading Master home..." />}><MasterScreen active={masterHomeActive} token={token} runners={runners} activeProject={null} onOpenJob={(id, engine) => openJobByEngine(id, engine, masterActive ? 'master' : 'home')} focusMessageId={pendingMasterMessageId} onFocusMessageConsumed={() => setPendingMasterMessageId(null)} /></React.Suspense>)}
+      {pane('master', masterHomeActive, <React.Suspense fallback={<ViewFallback label="Loading Master home..." />}><MasterScreen active={masterHomeActive} token={token} runners={runners} activeProject={null} onOpenJob={(id, engine) => openJobByEngine(id, engine, masterActive ? 'master' : 'home')} focusMessageId={pendingMasterMessageId} onFocusMessageConsumed={() => setPendingMasterMessageId(null)} /></React.Suspense>)}
       {(() => {
         // Keep Chat mounted (hidden when inactive) so draft text + busy run re-attach after leave/return.
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
-        const chat = <ChatScreen active={chatActive} activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} features={features} onActiveProfile={setActiveProfile} onActiveProject={setActiveProjectOnly} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} draftSeed={reviewDraft?.text} draftSeedNonce={reviewDraft?.nonce} onDraftSeedConsumed={clearReviewDraft} />
+        const chat = <ChatScreen active={chatActive} activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} onActiveProfile={setActiveProfile} onActiveProject={setActiveProjectOnly} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} draftSeed={reviewDraft?.text} draftSeedNonce={reviewDraft?.nonce} onDraftSeedConsumed={clearReviewDraft} />
         const body = activeSession?.workflow_id
-          ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled={features.designStudio} onOpenDesign={features.designStudio ? id => { openDesignById(id, 'chat', 'Chat') } : undefined} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
+          ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled onOpenDesign={id => { openDesignById(id, 'chat', 'Chat') }} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
           : chat
         return pane('chat', chatActive, body)
       })()}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
-      {keep('artifacts') && pane('artifacts', artifactsActive, <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={delegateActive ? undefined : setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={delegateActive ? undefined : openSessionById} designStudioEnabled={delegateActive ? false : features.designStudio} onOpenDesign={delegateActive ? undefined : features.designStudio ? id => { const origin = archiveRecord ? 'artifacts' : view; openDesignById(id, origin) } : undefined} reviewSessionId={delegateActive ? null : returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={delegateActive ? undefined : continueArtifactReview} /></React.Suspense>)}
+      {keep('artifacts') && pane('artifacts', artifactsActive, <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={delegateActive ? undefined : setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={delegateActive ? undefined : openSessionById} designStudioEnabled={!delegateActive} onOpenDesign={delegateActive ? undefined : id => { const origin = archiveRecord ? 'artifacts' : view; openDesignById(id, origin) }} reviewSessionId={delegateActive ? null : returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={delegateActive ? undefined : continueArtifactReview} /></React.Suspense>)}
       {keep('files') && pane('files', filesActive, <React.Suspense fallback={<ViewFallback label="Loading files..." />}><FilesScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} revealPath={revealFile} onRevealConsumed={() => setRevealFile(null)} /></React.Suspense>)}
-      {keep('workflows') && pane('workflows', workflowsActive, <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} backNonce={graphBackNonce} /> : undefined} /></React.Suspense>)}
-      {keep('activity') && pane('activity', activityActive, <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={delegateActive ? null : activeProject} projects={projects} globalScope={delegateActive} features={features} profiles={profiles} onOpenTask={jobId => openTask(jobId, 'activity')} onOpenPlan={jobId => {
+      {keep('workflows') && pane('workflows', workflowsActive, <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen graphContent={<GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} backNonce={graphBackNonce} />} /></React.Suspense>)}
+      {keep('activity') && pane('activity', activityActive, <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={delegateActive ? null : activeProject} projects={projects} globalScope={delegateActive} profiles={profiles} onOpenTask={jobId => openTask(jobId, 'activity')} onOpenPlan={jobId => {
         // A graph plan editor is a Work surface. Opening it is an explicit
         // mode change, never an accidental Workflows route inside Delegate.
         if (delegateActive) changeShellMode('work')
         openJobByEngine(jobId, 'graph', 'activity')
       }} onNewTask={delegateActive ? undefined : () => goView('home')} /></React.Suspense>)}
-      {view === 'task' && activeTaskId != null && <React.Suspense fallback={<ViewFallback label="Loading task..." />}><section className="tasks-view task-workspace-view"><ContextualTaskWorkspace token={token} jobId={activeTaskId} initialJob={taskProjectContext?.jobId === activeTaskId ? taskProjectContext.initialJob : null} onResolved={handleTaskResolved} onBack={closeTask} projects={projects} selectedWorkProject={delegateActive ? null : activeProject} designStudioEnabled={delegateActive ? false : features.designStudio} onOpenDesign={delegateActive ? undefined : features.designStudio ? (id, projectSlug) => {
+      {view === 'task' && activeTaskId != null && <React.Suspense fallback={<ViewFallback label="Loading task..." />}><section className="tasks-view task-workspace-view"><ContextualTaskWorkspace token={token} jobId={activeTaskId} initialJob={taskProjectContext?.jobId === activeTaskId ? taskProjectContext.initialJob : null} onResolved={handleTaskResolved} onBack={closeTask} projects={projects} selectedWorkProject={delegateActive ? null : activeProject} designStudioEnabled={!delegateActive} onOpenDesign={delegateActive ? undefined : (id, projectSlug) => {
           clearTaskHash()
           setDesignProjectSlug(taskLinkedDesignProjectSlug(
             projectSlug,
@@ -1748,22 +1697,12 @@ export function App() {
           setDesignItemId(id)
           setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'task', originLabel: 'Task' }))
           setView('design')
-        } : undefined} onOpenFile={(slug, path, target) => { setPendingFile({ slug, path, target }); setView('artifacts') }} onOpenJob={(id, engine) => openJobByEngine(id, engine, 'task')} onOpenMaster={originMessageId => openMasterConversation(originMessageId)} /></section></React.Suspense>}
-      {features.workflowGraph && view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} /></React.Suspense>}
-      {features.designStudio && keep('design') && pane('design', designActive, <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={resolveDesignStudioProject(projects, designProjectSlug, activeProject)} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onStageChange={handleDesignStageChange} exitNonce={designExitNonce} /></React.Suspense>)}
-      {!features.designStudio && designActive && (
-        <section className="placeholder-view teaching-empty" data-testid="teaching-empty">
-          <h3 className="teaching-empty-title">Design Studio is off</h3>
-          <p className="teaching-empty-lead">This install does not enable Design Studio. Visual scenes and the canvas are unavailable until the feature is turned on for this Proxima.</p>
-          <ul className="teaching-empty-caps" aria-label="What you can do here">
-            <li>Use Chat for hands-on work and file deliverables</li>
-            <li>Use Archive to review docs, images, and other outputs</li>
-          </ul>
-        </section>
-      )}
+        }} onOpenFile={(slug, path, target) => { setPendingFile({ slug, path, target }); setView('artifacts') }} onOpenJob={(id, engine) => openJobByEngine(id, engine, 'task')} onOpenMaster={originMessageId => openMasterConversation(originMessageId)} /></section></React.Suspense>}
+      {view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} /></React.Suspense>}
+      {keep('design') && pane('design', designActive, <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={resolveDesignStudioProject(projects, designProjectSlug, activeProject)} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onStageChange={handleDesignStageChange} exitNonce={designExitNonce} /></React.Suspense>)}
       {view === 'profiles' && <React.Suspense fallback={<ViewFallback label="Loading agents..." />}><ProfilesScreen token={token} profiles={profiles} onActiveProfile={setActiveProfile} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading..." />}><RunnersScreen runners={runners} runnerReadiness={runnerReadiness} token={token} onRefresh={refreshAll} /></React.Suspense>}
-      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} opsMigrationSlug={opsMigrationSlug} onActiveProject={setActiveProject} onOpenOpsMigration={project => openOpsMigration(project.slug)} onCloseOpsMigration={closeOpsMigration} runners={runners} runnerReadiness={runnerReadiness} features={features} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} initialSection={settingsSection} /></React.Suspense>}
+      {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} opsMigrationSlug={opsMigrationSlug} onActiveProject={setActiveProject} onOpenOpsMigration={project => openOpsMigration(project.slug)} onCloseOpsMigration={closeOpsMigration} runners={runners} runnerReadiness={runnerReadiness} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} initialSection={settingsSection} /></React.Suspense>}
       {updates.modalOpen && updates.status?.latest && <UpdateModal status={updates.status} onApply={updates.apply} onClose={updates.closeModal} />}
       {updates.applying && <UpdateOverlay applying={updates.applying} onDismiss={updates.dismissApplying} />}
       <DialogHost />

@@ -11,8 +11,6 @@ import {
 } from "../ui/MentionTextarea";
 import { uploadFile } from "../../api/files";
 import type { PromptMode } from "../../api/runs";
-import type { AppFeatures } from "../../types";
-import { DEFAULT_FEATURES, isFeatureCommandEnabled } from "../../features";
 import { useProjectMentionItems } from "../../hooks/useProjectMentionItems";
 import {
 	IconPlus,
@@ -44,10 +42,9 @@ type SlashMatchable = { name: string };
 export function matchSlashCommands<T extends SlashMatchable>(
 	commands: readonly T[],
 	draft: string,
-	enabled: (command: T) => boolean = () => true,
 ): T[] {
 	const q = draft.toLowerCase();
-	const matched = commands.filter(enabled).filter((c) => c.name.startsWith(q));
+	const matched = commands.filter((c) => c.name.startsWith(q));
 	return matched
 		.map((c, index) => ({ c, index }))
 		.sort((a, b) => {
@@ -107,7 +104,6 @@ export function Composer({
 	token,
 	slug,
 	profileId,
-	features = DEFAULT_FEATURES,
 	placeholder = "Message your agent in this project…",
 	attachIconOnly = false,
 	promptModes = true,
@@ -139,7 +135,6 @@ export function Composer({
 	slug?: string;
 	/** Active profile — skill slash catalog is per profile/runner selection. */
 	profileId?: number | null;
-	features?: AppFeatures;
 	placeholder?: string;
 	attachIconOnly?: boolean;
 	// Show the Normal/Brainstorm/Debate mode chips and the Generate dropdown.
@@ -458,11 +453,8 @@ export function Composer({
 
 	const showPopover =
 		draft.startsWith("/") && !draft.startsWith("//") && !draft.includes(" ");
-	const commandEnabled = (command: CatalogCommand) => {
-		return isFeatureCommandEnabled(command, features);
-	};
 	const commandMatches = showPopover
-		? matchSlashCommands(commands, draft, commandEnabled)
+		? matchSlashCommands(commands, draft)
 		: [];
 
 	React.useEffect(() => {
@@ -783,7 +775,7 @@ export function Composer({
 								<IconSparkle size={15} /> Image
 								<span className="composer-gen-hint">/image</span>
 							</button>}
-								{mediaKinds.includes("design") && features.designStudio && <button type="button" role="menuitem" onClick={() => pickGenerate("/design")}>
+								{mediaKinds.includes("design") && <button type="button" role="menuitem" onClick={() => pickGenerate("/design")}>
 									<IconDesign size={15} /> Design draft
 									<span className="composer-gen-hint">/design</span>
 								</button>}

@@ -54,8 +54,7 @@ what an owner sees and how the surfaces connect.
 
 The shell keeps primary destinations on the left, the current surface in the
 center, and technical tools on the right. Left nav is **destinations only**:
-Chat, Tasks, Workflows, Archive, and feature-gated Design. Master appears between
-Chat and Tasks only when its server gate is enabled. There
+Chat, Tasks, Workflows, Archive, and Design. There
 is no primary-nav **New chat** row - a blank session starts from the Chat header
 control, the mobile topbar icon, or `/new`.
 
@@ -194,7 +193,7 @@ Global search covers user-facing chats, messages, projects, and designs.
 
 ## 9. Design Studio
 
-Design is present only when its server-owned feature flag is on. The home is
+The home is
 sparse by default (title, short lead, tooltip chips, **How it works**) and
 accepts a brief, format, brand guide, or size template without printing the
 project display name (shell switcher).

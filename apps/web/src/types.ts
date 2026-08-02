@@ -156,11 +156,6 @@ export type Runner = {
 	masterUnavailableReason?: string | null;
 	notes?: string;
 };
-export type AppFeatures = {
-	designStudio: boolean;
-	workflowGraph: boolean;
-	masterOrchestrator: boolean;
-};
 export type ChatSession = {
 	id: number;
 	title: string;

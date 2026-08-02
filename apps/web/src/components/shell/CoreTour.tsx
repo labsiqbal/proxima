@@ -11,49 +11,42 @@ const STEPS = [
 
 export const LOCAL_CORE_TOUR_DONE = 'proxima.tour.coreDone'
 
-export function CoreTour({ token, masterEnabled }: { token: string; masterEnabled: boolean }) {
+export function CoreTour({ token }: { token: string }) {
   const [open, setOpen] = React.useState(false)
   const dialogRef = React.useRef<HTMLElement>(null)
   const previousFocus = React.useRef<HTMLElement | null>(null)
   const [step, setStep] = React.useState(0)
   const [busy, setBusy] = React.useState(false)
-  const steps = React.useMemo(
-    () => masterEnabled ? STEPS : STEPS.filter(item => item.eyebrow !== 'Delegate'),
-    [masterEnabled],
-  )
+  const steps = STEPS
   React.useEffect(() => {
     let alive = true
     const replay = () => { setStep(0); setOpen(true) }
-    if (masterEnabled) {
-      getMasterSettings(token).then(settings => {
-        if (!alive) return
-        if (localStorage.getItem(LOCAL_CORE_TOUR_DONE) === '1') {
-          if (!settings.tour_core_done) {
-            void saveMasterSettings(token, { tour_core_done: true }).catch(() => undefined)
-          }
-        } else if (settings.tour_core_done) {
-          localStorage.setItem(LOCAL_CORE_TOUR_DONE, '1')
-        } else {
-          setOpen(true)
+    getMasterSettings(token).then(settings => {
+      if (!alive) return
+      if (localStorage.getItem(LOCAL_CORE_TOUR_DONE) === '1') {
+        if (!settings.tour_core_done) {
+          void saveMasterSettings(token, { tour_core_done: true }).catch(() => undefined)
         }
-      }).catch(() => undefined)
-    } else if (localStorage.getItem(LOCAL_CORE_TOUR_DONE) !== '1') {
-      setOpen(true)
-    }
+      } else if (settings.tour_core_done) {
+        localStorage.setItem(LOCAL_CORE_TOUR_DONE, '1')
+      } else {
+        setOpen(true)
+      }
+    }).catch(() => undefined)
     window.addEventListener('proxima:tour-core', replay)
     return () => { alive = false; window.removeEventListener('proxima:tour-core', replay) }
-  }, [masterEnabled, token])
+  }, [token])
   const finish = React.useCallback(async () => {
     if (busy) return
     setBusy(true)
     setOpen(false)
     localStorage.setItem(LOCAL_CORE_TOUR_DONE, '1')
     try {
-      if (masterEnabled) await saveMasterSettings(token, { tour_core_done: true })
+      await saveMasterSettings(token, { tour_core_done: true })
     }
-    catch { /* Local completion prevents a replay; the next enabled load retries server reconciliation. */ }
+    catch { /* Local completion prevents a replay; the next load retries server reconciliation. */ }
     finally { setBusy(false) }
-  }, [busy, masterEnabled, token])
+  }, [busy, token])
   React.useEffect(() => {
     if (!open) return
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null

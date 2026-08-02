@@ -3,7 +3,7 @@ import React from 'react'
 // Workflows owns a tabbed library home and a focused graph editor. Schedule
 // management lives in each workflow row, so there is no second destination or mode.
 export function WorkflowsScreen({ graphContent }: {
-  /** The feature-gated graph canvas. Absent when the graph engine is disabled. */
+  /** The graph canvas. */
   graphContent?: React.ReactNode
 }) {
   return <section className="workflow-advanced-view">

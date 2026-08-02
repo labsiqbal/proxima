@@ -44,7 +44,6 @@ import { useEventStream } from '../hooks/useEventStream'
 import { usePolling } from '../hooks/usePolling'
 import { useProjectMentionItems } from '../hooks/useProjectMentionItems'
 import type {
-  AppFeatures,
   GraphJob,
   GraphNodeDefinition,
   GraphNodeState,
@@ -195,7 +194,6 @@ export function GraphScreen({
   onActiveProject,
   profiles,
   profileId,
-  features,
   activeProfile,
   pendingDraft,
   onDraftConsumed,
@@ -210,7 +208,6 @@ export function GraphScreen({
   onActiveProject?: (project: Project) => void
   profiles: Profile[]
   profileId?: number | null
-  features: AppFeatures
   activeProfile: Profile | null
   pendingDraft?: GraphWorkflowDraft | null
   onDraftConsumed?: () => void
@@ -1931,7 +1928,6 @@ export function GraphScreen({
         <AuthoringChat
           ref={chatRef}
           token={token}
-          features={features}
           profiles={profiles}
           activeProfile={activeProfile}
           projectSlug={resolveOwnedProjectSlug(job, activeProject?.slug)}

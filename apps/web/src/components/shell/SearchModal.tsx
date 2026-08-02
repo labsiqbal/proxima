@@ -1,7 +1,6 @@
 import React from 'react'
-import type { AppFeatures, ChatSession, Project } from '../../types'
+import type { ChatSession, Project } from '../../types'
 import { search, type SearchChatHit, type SearchMessageHit, type SearchResults } from '../../api/search'
-import { isFeatureSessionEnabled } from '../../features'
 
 const EMPTY: SearchResults = { projects: [], chats: [], messages: [] }
 
@@ -56,7 +55,6 @@ export function SearchModal(props: {
   token: string
   sessions: ChatSession[]
   projects: Project[]
-  features: AppFeatures
   onClose: () => void
   onSelectSession: (s: ChatSession) => void
   onOpenDesign: (s: ChatSession) => void
@@ -91,20 +89,10 @@ export function SearchModal(props: {
     return () => clearTimeout(h)
   }, [q, props.token])
 
-  const sessionEnabled = React.useCallback((hit: { id?: number; title?: string; mode?: string | null }) => {
-    const session = (hit.id != null ? props.sessions.find(x => x.id === hit.id) : undefined)
-      || { title: hit.title, mode: hit.mode }
-    return isFeatureSessionEnabled(session, props.features)
-  }, [props.features, props.sessions])
-
   const openSession = (hit: SearchChatHit | (SearchMessageHit & { id: number; title: string })) => {
-    if (!sessionEnabled(hit)) return
     const session = sessionFromSearchHit(hit, props.sessions)
-    if (props.features.designStudio && isDesignSearchHit(session)) {
+    if (isDesignSearchHit(session)) {
       props.onOpenDesign(session)
-    } else if (isDesignSearchHit(session)) {
-      // Design Studio off — do not silently dismiss as if it opened.
-      return
     } else {
       props.onSelectSession(session)
       props.onSelectView('chat')
@@ -114,8 +102,8 @@ export function SearchModal(props: {
 
   const openProject = (slug: string) => { const p = props.projects.find(x => x.slug === slug); if (p) props.onSelectProject(p); props.onClose() }
 
-  const chats = res.chats.filter(c => sessionEnabled(c))
-  const messages = res.messages.filter(m => sessionEnabled({ id: m.session_id, title: m.session_title, mode: m.mode }))
+  const chats = res.chats
+  const messages = res.messages
   const total = res.projects.length + chats.length + messages.length
   return <div className="modal-scrim" onClick={props.onClose}><div className="modal-card search-modal" role="dialog" aria-modal="true" aria-label="Search" onClick={e => e.stopPropagation()}>
     <input

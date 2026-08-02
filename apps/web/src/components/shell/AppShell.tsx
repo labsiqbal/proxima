@@ -1,5 +1,5 @@
 import React from 'react'
-import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../../types'
+import type { ChatSession, Profile, Project, User, View } from '../../types'
 import { Sidebar } from './Sidebar'
 import { MobileTopbar } from './MobileTopbar'
 import { SearchModal } from './SearchModal'
@@ -40,7 +40,6 @@ export function AppShell(props: {
   activeProject: Project | null
   activeSession: ChatSession | null
   currentView: View
-  features: AppFeatures
   onNewChat: () => void
   onRenameSession: (id: number, title: string) => void
   onDeleteSession: (id: number) => void
@@ -91,7 +90,7 @@ export function AppShell(props: {
   const menuBtnRef = React.useRef<HTMLButtonElement>(null)
   const drawerWasOpen = React.useRef(false)
 
-  const delegateMode = props.mode === 'delegate' && props.features.masterOrchestrator
+  const delegateMode = props.mode === 'delegate'
   // Delegate keeps the global status cluster, but its targets are Work surfaces
   // (a chat thread, a workflow editor, an Ops migration screen) that Delegate
   // navigation cannot render. Switch back first, then open — mode change runs in
@@ -221,7 +220,7 @@ export function AppShell(props: {
             takes away who you are (the mark). The drawer keeps its own copy for
             mobile, where this bar hides. */}
         <div className="top-bar-brand"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div>
-        <ShellModeSwitch mode={delegateMode ? 'delegate' : 'work'} delegateEnabled={props.features.masterOrchestrator} onChange={mode => props.onModeChange?.(mode)} />
+        <ShellModeSwitch mode={delegateMode ? 'delegate' : 'work'} delegateEnabled onChange={mode => props.onModeChange?.(mode)} />
         {!delegateMode && <>
         <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
         {/* Global chrome Back — always visible; disabled without a deep stack (Chrome-like). */}
@@ -294,7 +293,7 @@ export function AppShell(props: {
         onNewChat={props.onNewChat}
         menuButtonRef={menuBtnRef}
         mode="work"
-        delegateEnabled={props.features.masterOrchestrator}
+        delegateEnabled
         onModeChange={props.onModeChange}
       /> : <header className="mobile-topbar delegate-mobile-topbar">
         <button ref={menuBtnRef} className="icon-button" onClick={() => setDrawerOpen(true)} aria-label="Menu" aria-expanded={drawerOpen} aria-controls="mobile-nav-drawer"><IconPanelLeft size={18} /></button>
@@ -306,7 +305,7 @@ export function AppShell(props: {
       {!delegateMode && <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />}
       {drawerOpen && <button aria-label="Close menu" className="drawer-scrim" onClick={() => setDrawerOpen(false)} />}
       <main className="main-pane">{props.children}</main>
-      {props.features.masterOrchestrator && !delegateMode && (
+      {!delegateMode && (
         <>
           <MasterPopup
             token={props.token}
@@ -333,8 +332,8 @@ export function AppShell(props: {
         onOpenSettings={() => props.onSelectView('settings')}
         onOpenChange={setToolOpen}
       />}
-      {!delegateMode && searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} features={props.features} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onOpenDesign={props.onOpenDesign} onSelectProject={props.onOpenProject ?? props.onSelectProject} onSelectView={props.onSelectView} />}
-      {!delegateMode && <CoreTour token={props.token} masterEnabled={props.features.masterOrchestrator} />}
+      {!delegateMode && searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onOpenDesign={props.onOpenDesign} onSelectProject={props.onOpenProject ?? props.onSelectProject} onSelectView={props.onSelectView} />}
+      {!delegateMode && <CoreTour token={props.token} />}
     </div>
   )
 }

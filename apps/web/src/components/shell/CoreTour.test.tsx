@@ -17,7 +17,7 @@ describe('CoreTour', () => {
 
   it('traps keyboard focus and advances the core chapters', async () => {
     const user = userEvent.setup()
-    render(<><button type="button">Behind tour</button><CoreTour token="token" masterEnabled /></>)
+    render(<><button type="button">Behind tour</button><CoreTour token="token" /></>)
     const dialog = await screen.findByRole('dialog', { name: 'Welcome to Proxima' })
     await waitFor(() => expect(dialog).toHaveFocus())
 
@@ -33,23 +33,10 @@ describe('CoreTour', () => {
     expect(screen.getByRole('heading', { name: 'Chat keeps you close' })).toBeInTheDocument()
   })
 
-  it('keeps the general tour but removes the Master chapter while disabled', async () => {
-    const user = userEvent.setup()
-    render(<CoreTour token="token" masterEnabled={false} />)
-    expect(await screen.findByRole('dialog', { name: 'Welcome to Proxima' })).toBeInTheDocument()
-    expect(getMasterSettings).not.toHaveBeenCalled()
-
-    await user.click(screen.getByRole('button', { name: 'Next' }))
-    expect(screen.getByRole('heading', { name: 'Chat keeps you close' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Next' }))
-    expect(screen.getByRole('heading', { name: 'Tasks and Workflows' })).toBeInTheDocument()
-    expect(screen.queryByText('Master is the side path')).not.toBeInTheDocument()
-  })
-
-  it('preserves feature-off completion when Master is enabled later', async () => {
+  it('reconciles a locally completed tour to the server', async () => {
     localStorage.setItem('proxima.tour.coreDone', '1')
 
-    render(<CoreTour token="token" masterEnabled />)
+    render(<CoreTour token="token" />)
 
     await waitFor(() => expect(getMasterSettings).toHaveBeenCalledWith('token'))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -61,7 +48,7 @@ describe('CoreTour', () => {
   it('normalizes migrated server completion into local storage', async () => {
     vi.mocked(getMasterSettings).mockResolvedValue({ tour_core_done: true } as never)
 
-    render(<CoreTour token="token" masterEnabled />)
+    render(<CoreTour token="token" />)
 
     await waitFor(() => {
       expect(localStorage.getItem('proxima.tour.coreDone')).toBe('1')
@@ -72,7 +59,7 @@ describe('CoreTour', () => {
 
   it('persists completion locally and to Master settings', async () => {
     const user = userEvent.setup()
-    render(<CoreTour token="token" masterEnabled />)
+    render(<CoreTour token="token" />)
 
     await user.click(await screen.findByRole('button', { name: 'Skip tour' }))
 

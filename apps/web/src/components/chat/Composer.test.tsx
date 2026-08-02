@@ -276,15 +276,6 @@ describe("matchSlashCommands", () => {
 		);
 		expect(matched[0]?.name).toBe("/help");
 	});
-
-	it("respects the enabled filter before ranking", () => {
-		const matched = matchSlashCommands(
-			many,
-			"/",
-			(c) => c.name === "/project" || c.name === "/grill-me",
-		);
-		expect(matched.map((c) => c.name)).toEqual(["/project", "/grill-me"]);
-	});
 });
 
 describe("Composer slash commands", () => {

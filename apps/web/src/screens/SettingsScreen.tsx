@@ -27,7 +27,7 @@ import {
 } from '../api/settings'
 import type { UpdateStatus } from '../api/updates'
 import remoteAccessGuide from '../content/remote-access-guide.md?raw'
-import type { AppFeatures, Profile, Project, Runner, User } from '../types'
+import type { Profile, Project, Runner, User } from '../types'
 import { getMasterSettings, saveMasterSettings, type MasterSettings } from '../api/master'
 import type { RunnerReadinessMap } from '../components/shell/runnerReadiness'
 import { LOCAL_CORE_TOUR_DONE } from '../components/shell/CoreTour'
@@ -714,32 +714,29 @@ const HELP_CHAPTERS = [
   { id: 'settings', title: 'Settings', summary: 'Appearance, budgets, media providers, diagnostics, and update controls.' },
 ] as const
 
-function HelpToursPanel({ token, features }: { token: string; features: AppFeatures }) {
+function HelpToursPanel({ token }: { token: string }) {
   const [chapter, setChapter] = React.useState<(typeof HELP_CHAPTERS)[number] | null>(null)
   const [busy, setBusy] = React.useState(false)
   const replayCore = async () => {
     setBusy(true)
     localStorage.removeItem(LOCAL_CORE_TOUR_DONE)
     try {
-      if (features.masterOrchestrator) {
-        await saveMasterSettings(token, { tour_core_done: false } as Partial<MasterSettings>)
-      }
+      await saveMasterSettings(token, { tour_core_done: false } as Partial<MasterSettings>)
     } catch { /* Replay still opens now; completion can be persisted when the tour closes. */ }
     finally { window.dispatchEvent(new CustomEvent('proxima:tour-core')); setBusy(false) }
   }
-  const chapters = HELP_CHAPTERS.filter(item => item.id !== 'master' || features.masterOrchestrator)
+  const chapters = HELP_CHAPTERS
   return <div className="panel"><div className="panel-head"><h3>Product tours</h3><span>{chapters.length} chapters</span></div>
     <p className="muted">Start with the short core tour, then open any chapter when you need the full product map.</p>
     <button type="button" className="primary-button" disabled={busy} onClick={() => void replayCore()}>{busy ? 'Opening…' : 'Replay core tour'}</button>
     <div className="help-chapters">{chapters.map(item => {
-      const unavailable = item.id === 'design' && !features.designStudio
-      return <button type="button" key={item.id} className={chapter?.id === item.id ? 'active' : ''} disabled={unavailable} onClick={() => setChapter(item)}><strong>{item.title}</strong><span>{unavailable ? 'Unavailable in this install' : item.summary}</span></button>
+      return <button type="button" key={item.id} className={chapter?.id === item.id ? 'active' : ''} onClick={() => setChapter(item)}><strong>{item.title}</strong><span>{item.summary}</span></button>
     })}</div>
     {chapter && <article className="help-chapter" aria-live="polite"><span className="eyebrow">Chapter</span><h3>{chapter.title}</h3><p>{chapter.summary}</p><p className="muted">Use the left navigation for primary destinations. Files, Terminal, and Preview stay in the tools rail so the current workspace remains visible. Review or permission decisions always return to their owning surface through Attention.</p></article>}
   </div>
 }
 
-export function SettingsScreen({ token, user, profiles, projects, activeProject, opsMigrationSlug, onActiveProject, onOpenOpsMigration, onCloseOpsMigration, runners, runnerReadiness, features, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate, initialSection = 'account' }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; opsMigrationSlug?: string | null; onActiveProject: (project: Project) => void; onOpenOpsMigration?: (project: Project) => void; onCloseOpsMigration?: () => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; features: AppFeatures; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void; initialSection?: SettingsSectionKey }) {
+export function SettingsScreen({ token, user, profiles, projects, activeProject, opsMigrationSlug, onActiveProject, onOpenOpsMigration, onCloseOpsMigration, runners, runnerReadiness, onRefresh, onTokenChange, updateStatus, updateChecking, onCheckUpdates, onOpenUpdate, initialSection = 'account' }: { token: string; user: User; profiles: Profile[]; projects: Project[]; activeProject: Project | null; opsMigrationSlug?: string | null; onActiveProject: (project: Project) => void; onOpenOpsMigration?: (project: Project) => void; onCloseOpsMigration?: () => void; runners: Runner[]; runnerReadiness?: RunnerReadinessMap | null; onRefresh: () => Promise<void>; onTokenChange: (t: string) => void; updateStatus?: UpdateStatus | null; updateChecking?: boolean; onCheckUpdates?: () => void | Promise<void>; onOpenUpdate?: () => void; initialSection?: SettingsSectionKey }) {
   const [activeSection, setActiveSection] = React.useState<SettingsSectionKey>(initialSection)
   React.useEffect(() => { setActiveSection(initialSection) }, [initialSection])
   const [theme, setTheme] = React.useState<ThemeKey>(getTheme())
@@ -789,9 +786,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
   }
 
   const goalOptions = [3, 5, 8, 12, 20]
-  const settingsSections = SETTINGS_SECTIONS.filter(
-    section => section.key !== 'master' || features.masterOrchestrator,
-  )
+  const settingsSections = SETTINGS_SECTIONS
   const effectiveSection = settingsSections.some(section => section.key === activeSection)
     ? activeSection
     : 'account'
@@ -848,7 +843,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
         : effectiveSection === 'remote'
           ? <RemoteAccessGuide />
           : effectiveSection === 'help'
-            ? <HelpToursPanel token={token} features={features} />
+            ? <HelpToursPanel token={token} />
             : <><PlatformSupportPanel />{updatesPanel}<DebugLogsPanel token={token} /><AuditPanel token={token} /></>
 
   return <section className="settings-view">

@@ -7,12 +7,11 @@ import {
 import { IconActivity } from "../components/shell/icons";
 import type { RunnerReadinessMap } from "../components/shell/runnerReadiness";
 import { usePolling } from "../hooks/usePolling";
-import type { AppFeatures, Profile, Project, View } from "../types";
+import type { Profile, Project, View } from "../types";
 
 export function HomeScreen({
 	token,
 	ownerName,
-	features,
 	projects,
 	activeProject,
 	activeProfile,
@@ -26,7 +25,6 @@ export function HomeScreen({
 }: {
 	token: string;
 	ownerName?: string;
-	features: AppFeatures;
 	projects: Project[];
 	activeProject: Project | null;
 	activeProfile: Profile | null;
@@ -93,7 +91,6 @@ export function HomeScreen({
 					</p>
 					<TaskComposer
 						token={token}
-						features={features}
 						projects={projects}
 						activeProject={activeProject}
 						activeProfile={activeProfile}

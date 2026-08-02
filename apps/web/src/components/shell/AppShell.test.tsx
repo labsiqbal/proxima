@@ -6,6 +6,8 @@ import { AppShell } from './AppShell'
 
 vi.mock('./ToolDock', () => ({ ToolDock: () => <div data-testid="tool-dock" /> }))
 vi.mock('./AttentionInbox', () => ({ AttentionInbox: () => null }))
+vi.mock('../master/MasterPopup', () => ({ MasterPopup: () => null }))
+vi.mock('../master/MasterToastRegion', () => ({ MasterToastRegion: () => null }))
 vi.mock('./RunningTasks', () => ({ RunningTasks: () => null }))
 vi.mock('./SearchModal', () => ({
   SearchModal: (props: { onClose: () => void }) => (
@@ -20,7 +22,6 @@ const base = {
   activeProject: { id: 1, name: 'Demo', slug: 'demo' } as never,
   activeSession: null,
   currentView: 'chat' as const,
-  features: { designStudio: true, workflowGraph: true, masterOrchestrator: false },
   onNewChat: vi.fn(),
   onRenameSession: vi.fn(),
   onDeleteSession: vi.fn(),
@@ -186,7 +187,7 @@ describe('AppShell mobile drawer + search', () => {
   it('keeps Delegate global while retaining the accessible shell sidebar', async () => {
     const user = userEvent.setup()
     const onModeChange = vi.fn()
-    render(<AppShell {...base} mode="delegate" onModeChange={onModeChange} features={{ ...base.features, masterOrchestrator: true }}><div>Master desk</div></AppShell>)
+    render(<AppShell {...base} mode="delegate" onModeChange={onModeChange}><div>Master desk</div></AppShell>)
     expect(screen.getAllByRole('button', { name: 'Delegate' })[0]).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('navigation', { name: 'Delegate navigation' })).toBeInTheDocument()
     expect(within(document.querySelector('.sidebar') as HTMLElement).getByRole('button', { name: 'Master' })).toBeInTheDocument()
@@ -205,7 +206,7 @@ describe('AppShell mobile drawer + search', () => {
 
   it('opens the same focus-managed drawer for Delegate on small screens', async () => {
     const user = userEvent.setup()
-    render(<AppShell {...base} mode="delegate" features={{ ...base.features, masterOrchestrator: true }}><div>Master desk</div></AppShell>)
+    render(<AppShell {...base} mode="delegate"><div>Master desk</div></AppShell>)
     const mobile = document.querySelector('.delegate-mobile-topbar') as HTMLElement
     await user.click(within(mobile).getByRole('button', { name: 'Menu' }))
     await waitFor(() => expect(document.activeElement).toHaveAttribute('aria-label', 'Close menu'))
@@ -213,17 +214,11 @@ describe('AppShell mobile drawer + search', () => {
     await user.keyboard('{Escape}')
     await waitFor(() => expect(document.activeElement).toBe(within(mobile).getByRole('button', { name: 'Menu' })))
   })
-
-  it('does not expose Delegate while Master is disabled', () => {
-    render(<AppShell {...base} features={{ ...base.features, masterOrchestrator: false }}><div>main</div></AppShell>)
-    expect(screen.queryByRole('button', { name: 'Delegate' })).not.toBeInTheDocument()
-  })
 })
 
 describe('AppShell delegate header status cluster', () => {
   const delegateBase = {
     ...base,
-    features: { designStudio: true, workflowGraph: true, masterOrchestrator: true },
     mode: 'delegate' as const,
     currentView: 'master' as const,
   }

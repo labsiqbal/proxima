@@ -1,5 +1,5 @@
 import React from 'react'
-import type { AppFeatures, ChatMessage, Profile } from '../../types'
+import type { ChatMessage, Profile } from '../../types'
 import { listMessages } from '../../api/sessions'
 import { createRun } from '../../api/runs'
 import { useRunStream } from '../../hooks/useRunStream'
@@ -85,7 +85,6 @@ function writeAppliedRun(sessionId: number, runId: number) {
  */
 export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
   token: string
-  features: AppFeatures
   profiles: Profile[]
   activeProfile: Profile | null
   projectSlug: string | null
@@ -114,7 +113,7 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
   /** When true (graph Plan Chat), open the pinned session immediately so leave/reopen
    *  mid-run resumes Running without an extra "Start chat" click. */
   autoOpen?: boolean
-}>(function AuthoringChat({ token, features, profiles, activeProfile, projectSlug, ensureSession: ensure, buildPrompt, applyReply, stripBlock, buildTestPrompt, idleHint, placeholder, mentionItems, initialMessage, onInitialConsumed, autoOpen = false }, ref) {
+}>(function AuthoringChat({ token, profiles, activeProfile, projectSlug, ensureSession: ensure, buildPrompt, applyReply, stripBlock, buildTestPrompt, idleHint, placeholder, mentionItems, initialMessage, onInitialConsumed, autoOpen = false }, ref) {
   const [session, setSession] = React.useState<number | null>(null)
   const sessionRef = React.useRef<number | null>(null)
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
@@ -343,7 +342,6 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
         slug={projectSlug || undefined}
         agentName={activeProfile?.name}
         profiles={profiles}
-        features={features}
         emptyContent={<WorkflowAuthoringEmpty />}
         onQuickReply={text => void author(text)}
         onMessageUpdated={() => { if (session != null) void reload(session) }}
@@ -353,7 +351,6 @@ export const AuthoringChat = React.forwardRef<WorkflowChatHandle, {
       token={token}
       mentionItems={mentionItems}
       slug={projectSlug || undefined}
-      features={features}
       placeholder={placeholder}
       textareaLabel="Author the plan"
       promptModes={false}

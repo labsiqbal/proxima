@@ -54,7 +54,6 @@ const chatSession = (id: number, title: string): ChatSession => ({
 });
 
 describe("Shell project selection", () => {
-	const enabled = () => true;
 	const master: ChatSession = {
 		id: 1,
 		title: "Master chat",
@@ -78,20 +77,15 @@ describe("Shell project selection", () => {
 		updated_at: "2026-01-03T10:00:00Z",
 	};
 
-	it("picks the most recent enabled session for the project", () => {
-		expect(recentSessionForProject([master, masterNewer, beta], "master", enabled)).toEqual(masterNewer);
-		expect(recentSessionForProject([master, beta], "beta", enabled)?.id).toBe(3);
+	it("picks the most recent session for the project", () => {
+		expect(recentSessionForProject([master, masterNewer, beta], "master")).toEqual(masterNewer);
+		expect(recentSessionForProject([master, beta], "beta")?.id).toBe(3);
 	});
 
 	it("returns null when the project has no sessions or slug is empty", () => {
-		expect(recentSessionForProject([master], "missing", enabled)).toBeNull();
-		expect(recentSessionForProject([master], null, enabled)).toBeNull();
-		expect(recentSessionForProject([master], undefined, enabled)).toBeNull();
-	});
-
-	it("respects sessionEnabled so disabled kinds do not become active chat", () => {
-		const design = { ...masterNewer, mode: "design" };
-		expect(recentSessionForProject([master, design], "master", s => s.mode !== "design")).toEqual(master);
+		expect(recentSessionForProject([master], "missing")).toBeNull();
+		expect(recentSessionForProject([master], null)).toBeNull();
+		expect(recentSessionForProject([master], undefined)).toBeNull();
 	});
 
 	it("header shell-only mode does not navigate to chat; open-chat mode does", () => {
@@ -126,7 +120,6 @@ describe("Shell project selection", () => {
 				sessions: [sessionA, sessionB, beta],
 				projectSlug: "master",
 				sessionId: sessionB.id,
-				sessionEnabled: enabled,
 			}),
 		).toEqual(sessionB);
 		expect(
@@ -155,7 +148,6 @@ describe("Shell project selection", () => {
 				sessions: [sessionA, sessionB, beta],
 				projectSlug: "master",
 				sessionId: null,
-				sessionEnabled: enabled,
 			}),
 		).toBeNull();
 	});
@@ -166,7 +158,6 @@ describe("Shell project selection", () => {
 				sessions: [master, masterNewer, beta],
 				projectSlug: "master",
 				sessionId: 404,
-				sessionEnabled: enabled,
 			}),
 		).toEqual(masterNewer);
 		expect(
@@ -174,7 +165,6 @@ describe("Shell project selection", () => {
 				sessions: [master, beta],
 				projectSlug: "master",
 				sessionId: beta.id,
-				sessionEnabled: enabled,
 			}),
 		).toEqual(master);
 	});
@@ -1155,7 +1145,6 @@ describe("Shell project selection", () => {
 				sessions: [master, masterNewer, beta],
 				activeProject: masterProject,
 				activeSession: master,
-				sessionEnabled: enabled,
 			}),
 		).toEqual({ project: masterProject, session: master });
 		// Explicit New chat (null session) stays blank while the project remains.
@@ -1165,7 +1154,6 @@ describe("Shell project selection", () => {
 				sessions: [master, masterNewer, beta],
 				activeProject: masterProject,
 				activeSession: null,
-				sessionEnabled: enabled,
 			}),
 		).toEqual({ project: masterProject, session: null });
 		// Deleted session falls back inside the same project.
@@ -1175,7 +1163,6 @@ describe("Shell project selection", () => {
 				sessions: [masterNewer, beta],
 				activeProject: masterProject,
 				activeSession: master,
-				sessionEnabled: enabled,
 			}),
 		).toEqual({ project: masterProject, session: masterNewer });
 		// Deleted project falls back to another available project + its recent session.
@@ -1185,7 +1172,6 @@ describe("Shell project selection", () => {
 				sessions: [beta],
 				activeProject: masterProject,
 				activeSession: master,
-				sessionEnabled: enabled,
 			}),
 		).toEqual({ project: betaProject, session: beta });
 	});
@@ -1203,7 +1189,6 @@ describe("Shell project selection", () => {
 			enterDelegate: true,
 			pendingMasterMessageId: null,
 		});
-		expect(planOpenMasterConversation(21, false)).toBeNull();
 	});
 
 	it("restores the exact Project Ops migration route after reload", () => {

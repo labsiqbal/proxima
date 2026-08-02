@@ -4,9 +4,8 @@
 > not all of them exist yet. Sections marked *(planned)* (**Main Project**,
 > **Workflow versioning**, **Integrations**, **artifact/app Publish**, per-agent
 > `AGENT.md` memory) are design targets with **no code behind them today**; other
-> inline notes mark where the shipped product diverged. Design Studio is an
-> active, feature-flagged surface; image generation is active; Video Studio was
-> removed. The shipped single-workspace flow (Chat → Tasks → Recipes, run-first
+> inline notes mark where the shipped product diverged. Design Studio and image
+> generation are active; Video Studio was removed. The shipped single-workspace flow (Chat → Tasks → Recipes, run-first
 > plans, repo-job diff review + local merge, script nodes, the Archive) is
 > documented in [../ui-shell.md](../ui-shell.md) and
 > [../CAPABILITIES.md](../CAPABILITIES.md).

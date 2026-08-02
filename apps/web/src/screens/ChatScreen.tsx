@@ -20,7 +20,6 @@ import type {
 	ChatMessage,
 	ChatSession,
 	GraphWorkflowDraft,
-	AppFeatures,
 	OutputLink,
 	Profile,
 	Project,
@@ -99,14 +98,10 @@ function localCommandReply(
 	}
 }
 
-const defaultRunRecipePrompt = (features: AppFeatures) => {
-	const artifactKinds = features.designStudio ? "a design or file" : "an image or file";
-	return `Run this entire workflow from step 1 through the final step now as a dry-test. Execute each step in order and produce the real output. If a step asks for ${artifactKinds}, create it instead of only describing it. Finish with a concise summary of each step result.`;
-};
+const DEFAULT_RUN_RECIPE_PROMPT = "Run this entire workflow from step 1 through the final step now as a dry-test. Execute each step in order and produce the real output. If a step asks for a design or file, create it instead of only describing it. Finish with a concise summary of each step result.";
 
 export function ChatScreen(props: {
 	token: string;
-	features: AppFeatures;
 	/** False while the keep-alive Chat pane is hidden behind another Work surface. */
 	active?: boolean;
 	activeProfile: Profile | null;
@@ -380,8 +375,7 @@ export function ChatScreen(props: {
 			const trimmed = text.trim();
 			// Media commands are real prompts — the backend routes them to the selected
 			// generation provider (create_run interception), so they must reach it.
-			const mediaCommand = /^\/(image|gambar)\b/i.test(trimmed)
-				|| (props.features.designStudio && /^\/(design|image-studio|design-studio)\b/i.test(trimmed));
+			const mediaCommand = /^\/(image|gambar|design|image-studio|design-studio)\b/i.test(trimmed);
 			const agentCommand = isAgentTurnSlashCommand(trimmed, skillSlashNames);
 			if (trimmed.startsWith("/") && !trimmed.startsWith("//") && !mediaCommand && !agentCommand) {
 				const name = trimmed.split(/\s+/)[0].toLowerCase();
@@ -606,7 +600,7 @@ export function ChatScreen(props: {
 		if (n > 0 && n !== lastRunNonce.current) {
 			lastRunNonce.current = n;
 			void runFromStage(
-					props.runRecipePrompt || defaultRunRecipePrompt(props.features),
+					props.runRecipePrompt || DEFAULT_RUN_RECIPE_PROMPT,
 				props.runRecipeLabel || "Run workflow",
 				props.runRecipeInstantResult,
 			);
@@ -775,7 +769,7 @@ export function ChatScreen(props: {
 					token={props.token}
 					sessionId={activeSession.id}
 					profileId={props.activeProfile?.id ?? null}
-					engine={props.features.workflowGraph ? "graph" : "linear"}
+					engine="graph"
 					label="Slice into plan"
 					busyLabel="Slicing into plan…"
 					onDraft={draft => {
@@ -821,7 +815,6 @@ export function ChatScreen(props: {
 				}
 				scrollRestoreKey={workChat.key}
 				surfaceActive={props.active !== false}
-				features={props.features}
 			/>
 			{error && <div className="error-bar">{error}</div>}
 			<div className="chat-dock">
@@ -831,7 +824,6 @@ export function ChatScreen(props: {
 					token={props.token}
 						slug={projSlug}
 						profileId={props.activeProfile?.id ?? null}
-						features={props.features}
 					draftSeed={props.draftSeed}
 					draftSeedNonce={props.draftSeedNonce}
 					onDraftSeedConsumed={props.onDraftSeedConsumed}
