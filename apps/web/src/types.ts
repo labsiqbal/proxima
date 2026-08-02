@@ -54,6 +54,10 @@ export type Container = ContainerIdentity & {
 	id: number;
 	identity_label: string | null;
 	summary: string | null;
+	// Which existing doc identified the container (prune C5): container-root
+	// relative, e.g. "AGENTS.md" or "ops/container.md"; null = folder-name
+	// fallback. No Proxima frontmatter is required anywhere.
+	identity_source: string | null;
 	source_hash: string | null;
 	indexed_at: string | null;
 	last_activity_at: string | null;
@@ -108,7 +112,9 @@ export type OpsMigrationDetail = {
 	retry_safe: boolean;
 	retry_action: "adopt" | "migrate" | "revalidate" | null;
 	/** Every write a safe "migrate" would perform beyond the planned moves;
-	 * null unless retry_action is "migrate" (prune C2 preview contract). */
+	 * null unless retry_action is "migrate" (prune C2 preview contract).
+	 * container_doc "generate" only appears for stored pre-C5 migration
+	 * manifests; new plans never generate an identity document (prune C5). */
 	planned_writes: {
 		container_doc: "move" | "generate" | null;
 		git_exclude: boolean;
@@ -131,6 +137,25 @@ export type OpsMigrationDetail = {
 		completed_at: string | null;
 		updated_at: string | null;
 	};
+};
+// The per-project layout map (prune C4) + memory-writes toggle (prune C5):
+// where this project keeps its wiki/artifacts/scripts/uploads (detected from
+// the real tree, fixed names as defaults) and whether Proxima's automatic
+// memory writers (log.md append + wiki index) are enabled for it.
+export type ProjectLayoutArea = {
+	path: string;
+	source: "detected" | "default";
+	exists: boolean;
+};
+export type ProjectLayout = {
+	ops_path: string;
+	areas: {
+		wiki: ProjectLayoutArea;
+		artifacts: ProjectLayoutArea;
+		scripts: ProjectLayoutArea;
+		uploads: ProjectLayoutArea;
+	};
+	memory_writes: { enabled: boolean };
 };
 export type ContainerArea = {
 	id: number;

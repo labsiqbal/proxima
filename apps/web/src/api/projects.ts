@@ -1,5 +1,5 @@
 import { api, ApiError } from './client'
-import type { AreaRemote, OpsMigrationDetail, Project, ProjectAreas } from '../types'
+import type { AreaRemote, OpsMigrationDetail, Project, ProjectAreas, ProjectLayout } from '../types'
 
 export const listProjects = (token: string) => api<{ projects: Project[] }>('/api/projects', token)
 export const listProjectAreas = (token: string, slug: string) => api<ProjectAreas>(`/api/projects/${slug}/areas`, token)
@@ -44,6 +44,13 @@ export const linkProjectErrorField = (error: unknown): 'path' | 'folder' | 'name
 }
 export const renameProject = (token: string, slug: string, name: string) => api<Project>(`/api/projects/${slug}`, token, { method: 'PATCH', body: JSON.stringify({ name }) })
 export const deleteProject = (token: string, slug: string) => api<{ ok: boolean }>(`/api/projects/${slug}`, token, { method: 'DELETE' })
+// The per-project layout map + memory-writes toggle (prune C4/C5).
+export const getProjectLayout = (token: string, slug: string) =>
+  api<ProjectLayout>(`/api/projects/${encodeURIComponent(slug)}/layout`, token)
+// Adaptive memory writes (prune C5): default ON; OFF fully disables the
+// automatic log.md append + wiki index regeneration for this project.
+export const setMemoryWrites = (token: string, slug: string, enabled: boolean) =>
+  api<{ enabled: boolean }>(`/api/projects/${encodeURIComponent(slug)}/memory-writes`, token, { method: 'PUT', body: JSON.stringify({ enabled }) })
 export const getOpsMigration = (token: string, slug: string) =>
   api<OpsMigrationDetail>(`/api/projects/${encodeURIComponent(slug)}/ops-migration`, token)
 export const validateOpsMigration = (token: string, slug: string) =>

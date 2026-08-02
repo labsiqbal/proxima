@@ -941,6 +941,11 @@ button:disabled {
 	margin: 0 0 var(--space-3);
 	font-size: var(--text-sm);
 }
+/* The Memory section (prune C5): separates the per-project memory-writes
+   toggle from the code-area list above it. */
+.container-memory-eyebrow {
+	margin-top: var(--space-4);
+}
 .container-empty {
 	display: flex;
 	flex-direction: column;

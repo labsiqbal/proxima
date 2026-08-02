@@ -170,10 +170,10 @@ export function ProjectsScreen({ token, projects, activeProject, opsMigrationSlu
               <button
                 className="ghost-button"
                 disabled={!!busy}
-                aria-label={`Code areas for ${project.name}`}
+                aria-label={`Project settings for ${project.name}`}
                 onClick={() => setSettingsFor(project)}
               >
-                Code areas
+                Settings
               </button>
               <button
                 className="ghost-button"
