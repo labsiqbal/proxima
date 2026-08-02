@@ -45,7 +45,7 @@ def test_skill_slash_naming_reserved_and_collisions():
 
 
 def test_execute_skill_slash_agent_turn():
-    user = {"username": "bob", "role": "member"}
+    user = {"username": "bob"}
     skill_map = {"/grill-with-docs": "grill-with-docs"}
     turn = execute_command(
         "/grill-with-docs tighten the brief",
@@ -63,7 +63,7 @@ def test_execute_skill_slash_agent_turn():
 
 
 def test_execute_command_surfaces():
-    user = {"username": "bob", "role": "member"}
+    user = {"username": "bob"}
     assert execute_command("/help", user=user)["message"].startswith("Proxima commands")
     assert "Command router: ready" in execute_command("/status", user=user, project_slug="demo", runner_id="hermes")["message"]
     masterplan = execute_command("/masterplan build a durable CLI", user=user)
@@ -89,7 +89,7 @@ def test_command_endpoints_catalog_and_execute(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "bundled_skills_dir": str(bundle),
             "start_worker": False,
         }

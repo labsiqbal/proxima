@@ -11,7 +11,7 @@ describe('AuthGate', () => {
 
   it('setup: rejects a short password (no API call), then submits a valid one', async () => {
     const onAuthed = vi.fn()
-    vi.mocked(setPassword).mockResolvedValue({ token: 't', user: { id: 1, username: 'owner', role: 'environment_admin', os_user: 'owner' } })
+    vi.mocked(setPassword).mockResolvedValue({ token: 't', user: { id: 1, username: 'owner', os_user: 'owner' } })
     render(<AuthGate mode="setup" onAuthed={onAuthed} />)
     const user = userEvent.setup()
     expect(screen.getByPlaceholderText('Password')).toHaveAttribute('name', 'password')

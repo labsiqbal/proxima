@@ -25,7 +25,7 @@ def _app(tmp_path, *, concurrency: int | None = None):
         "workspace_root": str(tmp_path / "ws"),
         "projectctl_path": "/usr/bin/true",
         "seed_users": [
-            {"username": "bob", "role": "member", "os_user": "bob"}
+            {"username": "bob", "os_user": "bob"}
         ],
         "start_worker": False,
     }

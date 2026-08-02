@@ -76,7 +76,7 @@ def build_route_deps(
                 ensure_default_profile(user)
                 return user
             cur = db().execute(
-                "INSERT INTO users(username, os_user, role, password_hash, password_set_at) VALUES (?, ?, 'environment_admin', NULL, ?)",
+                "INSERT INTO users(username, os_user, password_hash, password_set_at) VALUES (?, ?, NULL, ?)",
                 (name, name, iso_now()),
             )
             user = dict(
@@ -158,10 +158,10 @@ def build_route_deps(
         return owner
 
     def public_user(user: dict[str, Any]) -> dict[str, Any]:
+        # The owner, as the frontend sees them. No role: there is one principal.
         return {
             "id": user["id"],
             "username": user["username"],
-            "role": user["role"],
             "os_user": user["os_user"],
         }
 

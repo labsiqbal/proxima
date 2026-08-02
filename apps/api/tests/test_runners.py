@@ -240,7 +240,7 @@ def test_detect_endpoint_includes_hermes_status(tmp_path):
     app = create_app({
         "database_path": str(tmp_path / "h.db"),
         "workspace_root": str(tmp_path / "rt"),
-        "seed_users": [{"username": "alice", "os_user": "alice", "role": "environment_admin"}],
+        "seed_users": [{"username": "alice", "os_user": "alice"}],
     })
     api = TestClient(app)
     tok = api.post("/auth/auto").json()["token"]
@@ -284,7 +284,7 @@ def test_runner_readiness_shape_for_uninstalled(monkeypatch):
 def test_detect_endpoint_includes_runner_readiness(tmp_path):
     from fastapi.testclient import TestClient
     from proxima_api.main import create_app
-    app = create_app({"database_path": str(tmp_path / "h.db"), "workspace_root": str(tmp_path / "rt"), "seed_users": [{"username": "alice", "os_user": "alice", "role": "environment_admin"}]})
+    app = create_app({"database_path": str(tmp_path / "h.db"), "workspace_root": str(tmp_path / "rt"), "seed_users": [{"username": "alice", "os_user": "alice"}]})
     api = TestClient(app)
     tok = api.post("/auth/auto").json()["token"]
     body = api.get("/api/runners/detect", headers={"Authorization": f"Bearer {tok}"}).json()
@@ -298,7 +298,7 @@ def test_runners_detect_endpoint_lists_runners(tmp_path: Path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
         }
     )
     client = TestClient(app)

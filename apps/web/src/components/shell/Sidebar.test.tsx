@@ -6,7 +6,7 @@ import { Sidebar } from './Sidebar'
 
 const base = {
   activeProfile: null, activeProject: null, activeSession: null, currentView: 'chat' as const,
-  onClose: vi.fn(), onLogout: vi.fn(), onRenameSession: vi.fn(), onDeleteSession: vi.fn(), onSelectProject: vi.fn(), onSelectSession: vi.fn(), onOpenDesign: vi.fn(), onSelectView: vi.fn(), profiles: [], projects: [], sessions: [], seen: {}, user: { id: 1, username: 'owner', role: 'owner', os_user: 'owner' },
+  onClose: vi.fn(), onLogout: vi.fn(), onRenameSession: vi.fn(), onDeleteSession: vi.fn(), onSelectProject: vi.fn(), onSelectSession: vi.fn(), onOpenDesign: vi.fn(), onSelectView: vi.fn(), profiles: [], projects: [], sessions: [], seen: {}, user: { id: 1, username: 'owner', os_user: 'owner' },
 }
 
 describe('Sidebar single-workspace IA', () => {

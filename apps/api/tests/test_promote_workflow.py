@@ -56,7 +56,7 @@ def _client(tmp_path, **overrides):
         "database_path": str(tmp_path / "proxima.db"),
         "workspace_root": str(tmp_path / "ws"),
         "projectctl_path": "/usr/bin/true",
-        "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+        "seed_users": [{"username": "bob", "os_user": "bob"}],
         "start_worker": False,
     }
     config.update(overrides)

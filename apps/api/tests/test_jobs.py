@@ -15,7 +15,7 @@ def _app(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "ws"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -423,7 +423,7 @@ def test_startup_reaps_orphaned_running_job(tmp_path):
             "database_path": str(db_path),
             "workspace_root": str(tmp_path / "ws"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )

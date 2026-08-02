@@ -127,8 +127,8 @@ def _add_sessions_manual_title(conn: sqlite3.Connection) -> None:
 
 def _drop_invites_table(conn: sqlite3.Connection) -> None:
     # The invites table was the multi-user account-creation surface. Single-user
-    # mode closed those routes (they 404) and nothing reads/writes the table, so
-    # it is dead weight. DROP IF EXISTS is a no-op on fresh installs.
+    # has no invite routes at all and nothing reads/writes the table, so it is
+    # dead weight. DROP IF EXISTS is a no-op on fresh installs.
     conn.execute("DROP TABLE IF EXISTS invites")
 
 
@@ -136,6 +136,17 @@ def _drop_project_members_table(conn: sqlite3.Connection) -> None:
     # project_members was legacy multi-user sharing plumbing. Single-user access
     # is now owner_user_id-scoped and nothing reads/writes membership rows.
     conn.execute("DROP TABLE IF EXISTS project_members")
+
+
+def _drop_users_role(conn: sqlite3.Connection) -> None:
+    # users.role held the multi-user 'environment_admin' vs 'member' distinction.
+    # Single-user has exactly one principal, so no code branches on it and a stale
+    # value would read as authoritative to a future maintainer. Same reasoning and
+    # same mechanism as _drop_sessions_acp_session_id (SQLite >= 3.35 DROP COLUMN);
+    # the guard makes it a no-op on fresh installs, which never had the column.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "role" in cols:
+        conn.execute("ALTER TABLE users DROP COLUMN role")
 
 
 def _add_message_reviews_table(conn: sqlite3.Connection) -> None:
@@ -6871,6 +6882,11 @@ MIGRATIONS: list[Migration] = [
         61,
         "rework artifact-record paths to container-relative real paths (#139)",
         _rework_artifact_record_paths,
+    ),
+    (
+        62,
+        "drop dead users.role column (single-user: one principal, no roles)",
+        _drop_users_role,
     ),
 ]
 

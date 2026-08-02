@@ -108,7 +108,7 @@ def test_seed_users_seeds_credential_file(tmp_path):
         "source_hermes_home": str(source),
         "start_worker": False,
         "seed_users": [
-            {"username": "alice", "password": "password123", "role": "member"},
+            {"username": "alice", "password": "password123"},
         ],
     })
     # Instantiate the app (which calls init_db with seed_users and hermes_home_factory).

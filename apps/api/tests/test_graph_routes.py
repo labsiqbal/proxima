@@ -17,7 +17,7 @@ def _app(tmp_path, **overrides):
         "projectctl_path": "/usr/bin/true",
         "link_roots": [str(tmp_path)],
         "seed_users": [
-            {"username": "bob", "role": "member", "os_user": "bob"}
+            {"username": "bob", "os_user": "bob"}
         ],
         "start_worker": False,
     }

@@ -810,8 +810,8 @@ def test_exact_container_area_and_owner_validation(tmp_path: Path):
     assert cross_area.value.code == "area_not_in_container"
 
     other_user_id = app.state.db.execute(
-        "INSERT INTO users(username, os_user, role) VALUES "
-        "('other-owner', 'other-owner', 'member')"
+        "INSERT INTO users(username, os_user) VALUES "
+        "('other-owner', 'other-owner')"
     ).lastrowid
     other_container_id = app.state.db.execute(
         "INSERT INTO projects(slug, name, path, owner_user_id) VALUES (?, ?, ?, ?)",

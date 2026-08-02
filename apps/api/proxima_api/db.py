@@ -15,11 +15,11 @@ from .runner_specs import FALLBACK_RUNNER
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
+-- Single-user: this table holds exactly one row, the owner. No roles.
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL UNIQUE,
   os_user TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'member',
   password_hash TEXT,
   password_set_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -2073,13 +2073,12 @@ def init_db(
         )
         conn.execute(
             """
-            INSERT OR IGNORE INTO users(username, os_user, role, password_hash, password_set_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO users(username, os_user, password_hash, password_set_at)
+            VALUES (?, ?, ?, ?)
             """,
             (
                 user["username"],
                 user.get("os_user") or user["username"],
-                user.get("role") or "member",
                 password_hash,
                 iso_now() if password_hash else None,
             ),

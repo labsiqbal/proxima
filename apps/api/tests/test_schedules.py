@@ -16,7 +16,7 @@ def _app(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "ws"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -246,7 +246,7 @@ def test_dashboard_active_runs_ignores_stale_runs(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "ws"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
             "run_stale_seconds": 60,
         }
@@ -487,7 +487,7 @@ def _graph_app(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "ws"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -612,7 +612,7 @@ def test_scheduled_repo_graph_binds_worktree_like_manual_start(tmp_path):
             "workspace_root": str(tmp_path / "ws"),
             "projectctl_path": "/usr/bin/true",
             "link_roots": [str(tmp_path)],
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -674,7 +674,7 @@ def test_scheduled_repo_graph_fails_visibly_when_worktree_cut_refused(tmp_path):
             "workspace_root": str(tmp_path / "ws"),
             "projectctl_path": "/usr/bin/true",
             "link_roots": [str(tmp_path)],
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )

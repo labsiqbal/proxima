@@ -19,10 +19,10 @@ def make_cfg(tmp_path):
     }
 
 
-def add_user(conn, username, role="member"):
+def add_user(conn, username):
     cur = conn.execute(
-        "INSERT INTO users(username, os_user, role, password_hash, password_set_at) VALUES (?, ?, ?, ?, ?)",
-        (username, username, role, hash_password("password1"), iso_now()),
+        "INSERT INTO users(username, os_user, password_hash, password_set_at) VALUES (?, ?, ?, ?)",
+        (username, username, hash_password("password1"), iso_now()),
     )
     return dict(conn.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone())
 
@@ -100,7 +100,7 @@ def test_provision_private_idempotent(tmp_path):
 def test_provision_private_slug_collision_uses_home_suffix(tmp_path):
     conn = make_db()
     cfg = make_cfg(tmp_path)
-    admin = add_user(conn, "admin", role="environment_admin")
+    admin = add_user(conn, "admin")
     conn.execute(
         "INSERT INTO projects(slug, name, path, owner_user_id, visibility) VALUES ('team', 'Team', '/x', ?, 'shared')",
         (admin["id"],),
@@ -136,7 +136,7 @@ def test_auto_provision_disabled_is_noop(tmp_path):
 def test_backfill_all_users(tmp_path):
     conn = make_db()
     cfg = make_cfg(tmp_path)
-    add_user(conn, "admin", role="environment_admin")
+    add_user(conn, "admin")
     add_user(conn, "bob")
     add_user(conn, "carol")
     summary = provisioning.backfill(conn, cfg)
@@ -192,7 +192,7 @@ def test_private_project_never_joins_another_users_project(tmp_path):
     assert proj_a["slug"] == "team-home"
 
     # A shared project occupies the slug "team" so user B can't use it directly.
-    admin = add_user(conn, "admin", role="environment_admin")
+    admin = add_user(conn, "admin")
     conn.execute(
         "INSERT INTO projects(slug, name, path, owner_user_id, visibility) VALUES ('team', 'Team', '/x', ?, 'shared')",
         (admin["id"],),

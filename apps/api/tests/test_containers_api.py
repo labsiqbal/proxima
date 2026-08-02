@@ -259,9 +259,8 @@ def test_container_detail_and_areas_are_owner_scoped_and_boundary_checked(
     other_id = conn.execute(
         """
         INSERT INTO users(
-          username, os_user, role, password_hash, password_set_at
-        ) VALUES ('other-owner', 'other-owner', 'environment_admin', NULL,
-                  CURRENT_TIMESTAMP)
+          username, os_user, password_hash, password_set_at
+        ) VALUES ('other-owner', 'other-owner', NULL, CURRENT_TIMESTAMP)
         """
     ).lastrowid
     conn.execute(

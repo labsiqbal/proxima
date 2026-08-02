@@ -42,7 +42,7 @@ def test_chat_send_accepts_non_hermes_runner(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -62,7 +62,7 @@ def test_masterplan_command_enqueues_skill_directed_agent_turn(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -93,7 +93,7 @@ def test_masterplan_supersedes_blocked_goal_so_followups_stay_masterplan(tmp_pat
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -160,7 +160,7 @@ def test_chat_send_hermes_enqueues_async_run(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -191,7 +191,7 @@ def test_main_chat_image_request_creates_artifact_first_result(tmp_path, monkeyp
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -328,7 +328,7 @@ def test_run_can_store_display_message_separate_from_prompt(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -365,7 +365,7 @@ def test_collaboration_settings_roundtrip_and_validation(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -400,7 +400,7 @@ def test_run_prompt_mode_starts_brainstorm_collaboration(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -453,7 +453,7 @@ def test_brainstorm_uses_configured_agent_count(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -502,7 +502,7 @@ def test_debate_uses_configured_round_count(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -598,7 +598,7 @@ def test_brainstorm_collaboration_synthesizes_single_visible_message(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -696,7 +696,7 @@ def test_brainstorm_child_failure_fails_parent_not_cancelled(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -760,7 +760,7 @@ def test_cancel_brainstorm_parent_emits_child_cancelled_card(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -811,7 +811,7 @@ def test_workflow_iterate_instant_result_completes_without_worker(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -874,7 +874,7 @@ def test_delete_completed_run_removes_result_messages_and_events(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -922,7 +922,7 @@ def test_delete_session_artifact_scrubs_stale_message_and_event_links(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -989,7 +989,7 @@ def test_cancel_completed_run_is_idempotent_without_cancel_event(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -1026,7 +1026,7 @@ def test_cancel_completed_run_does_not_cancel_new_queued_run(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -1066,7 +1066,7 @@ def test_permission_response_rejected_for_terminal_run(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -1103,7 +1103,7 @@ def test_permission_response_routes_to_matching_active_run(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )
@@ -1148,7 +1148,7 @@ def _media_app(tmp_path):
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
             "start_worker": False,
         }
     )

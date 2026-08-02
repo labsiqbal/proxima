@@ -2033,7 +2033,15 @@ In-app user accounts, roles (`environment_admin`/`member`), multi-user login,
 team bootstrap, invite links, project membership/sharing, project
 visibility (private/shared), team name. Collaboration model is instead: **everyone
 self-hosts their own instance + shares folders/repos.** The runtime model is one
-owner with one password/session gate; legacy invite/member tables have been dropped.
+owner with one password/session gate.
+
+Nothing of that surface is left behind (prune A4, #128): the `invites` and
+`project_members` tables were dropped by migrations v57/v61, `users.role` by
+v62, and the role indirection in the API - the `admin_user` dependency, the
+always-true `_can_access` check, and the `_member_project_id` resolver - is
+gone. The owner payload (`GET /api/me`, the login/set-password responses)
+carries `id`, `username`, and `os_user` only. Auth itself is unchanged: owner
+password, bearer token or the HttpOnly `proxima_session` cookie.
 
 ## Single-workspace shell ("Deck", T3)
 

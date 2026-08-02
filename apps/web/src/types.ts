@@ -1,7 +1,7 @@
+// The single owner. No role: Proxima has exactly one principal.
 export type User = {
 	id: number;
 	username: string;
-	role: string;
 	os_user: string;
 };
 export type Profile = {

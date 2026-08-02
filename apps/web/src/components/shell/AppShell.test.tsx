@@ -35,7 +35,7 @@ const base = {
   projects: [],
   sessions: [],
   token: 't',
-  user: { id: 1, username: 'owner', role: 'owner', os_user: 'owner' },
+  user: { id: 1, username: 'owner', os_user: 'owner' },
 }
 
 describe('AppShell mobile drawer + search', () => {

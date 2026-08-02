@@ -375,7 +375,7 @@ def execute_command(
         return {
             "kind": "system_message",
             "surface": "proxima",
-            "message": f"User: {user['username']} ({user['role']}). Project: {project_slug or 'none'}. Runner: {runner_id or default_runner()}. Command router: ready.",
+            "message": f"Owner: {user['username']}. Project: {project_slug or 'none'}. Runner: {runner_id or default_runner()}. Command router: ready.",
         }
 
     if name == "/new":
