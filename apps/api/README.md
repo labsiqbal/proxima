@@ -8,7 +8,7 @@ FastAPI backend for Proxima.
 - Current owner (`GET /api/me`)
 - Project create/list/detail/link
 - Chat sessions, runs, events, files, wiki, workflows, jobs, schedules
-- SQLite tables keep some legacy user/member/invite plumbing internally, but runtime behavior is one owner
+- One owner end to end: no accounts, roles, invites, or membership (the legacy `invites` / `project_members` tables were dropped by migration)
 
 ## Test
 
