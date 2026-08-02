@@ -62,15 +62,15 @@ export function ArchiveRecordPage({ token, project, slug, onOpenRecord, onOpenSe
   }
 
   // Chrome Back owns return-to-origin; breadcrumb is wayfinding only (not a second Back).
-  if (error) return <div className="archive-record-page"><div className="archive-record-topbar"><span className="muted">Archive</span></div><div className="error-bar">Could not load this record: {error}</div></div>
-  if (!record) return <div className="archive-record-page"><div className="archive-record-topbar"><span className="muted">Archive</span></div><p className="muted archive-record-loading">Loading record…</p></div>
+  if (error) return <div className="archive-record-page"><div className="archive-record-topbar"><span className="muted">Deliverables</span></div><div className="error-bar">Could not load this record: {error}</div></div>
+  if (!record) return <div className="archive-record-page"><div className="archive-record-topbar"><span className="muted">Deliverables</span></div><p className="muted archive-record-loading">Loading record…</p></div>
 
   const meta = typeMeta(record.type)
   const canApprove = record.status === 'draft' || record.status === 'review'
   return <div className="archive-record-page">
     <div className="archive-record-topbar">
       <nav className="archive-crumbs" aria-label="Breadcrumb">
-        <span className="archive-crumb-here muted">Archive</span>
+        <span className="archive-crumb-here muted">Deliverables</span>
         <span className="archive-crumb-sep" aria-hidden="true">›</span>
         <span className="archive-crumb-here" title={record.name}>{record.name}</span>
       </nav>
