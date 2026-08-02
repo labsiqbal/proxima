@@ -1064,7 +1064,12 @@ reaper fail hung runs, and a per-turn quota cancels stragglers. The quota
 `app_settings` (Settings → Agents → Turn quota), read per run so it applies on both
 entrypoints (`scripts/serve.py` and `uvicorn proxima_api.main:app`) without a
 restart; config/env (`PROXIMA_RUN_TIMEOUT_SECONDS`, mirrored on both entrypoints) is
-the fallback default. Completion updates are guarded by the current run state, so
+the fallback default. Both entrypoints are side-effect free at import time -
+`serve.py` only assembles config at module level and builds the app inside its
+`__main__` guard, because multiprocessing "spawn" workers (graph builds)
+re-import the `__main__` module; a module-level `create_app()` would re-run
+migrations and boot sweeps against the live database from every spawn child
+(pinned by `tests/test_serve_entrypoint.py`). Completion updates are guarded by the current run state, so
 cancel wins over late media, review, collaboration, draft, or graph finalizers. Failures
 during pre-ACP setup are finalized immediately rather than waiting for the reaper.
 

@@ -52,7 +52,17 @@ projectctl = Path(
     env_path("PROXIMA_PROJECTCTL", REPO_ROOT / "infra/scripts/projectctl")
 )
 
-app = create_app(
+
+# Only pure config assembly may run at import time. The app itself is built
+# inside the __main__ guard, NEVER at module level: the server spawns
+# multiprocessing workers with the "spawn" start method (graph builds), and a
+# spawn child re-imports this __main__ module - a module-level create_app()
+# made every such child re-run the whole boot sequence (DB migrations, settle
+# sweeps, provisioning) against the LIVE database with whatever code is
+# currently on disk, i.e. version-skewed against the running parent. Found
+# while shipping prune C4: a graph build applied a pending migration
+# mid-session, hours before the actual deploy.
+config = (
     {
         "database_path": env_path("PROXIMA_DB_PATH", workspace_root / "proxima.db"),
         "workspace_root": str(workspace_root),
@@ -171,6 +181,7 @@ app = create_app(
 
 
 if __name__ == "__main__":
+    app = create_app(config)
     uvicorn.run(
         app,
         host=os.environ.get("PROXIMA_HOST", "127.0.0.1"),
