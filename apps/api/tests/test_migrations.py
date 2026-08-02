@@ -96,6 +96,9 @@ def test_init_db_marks_unreachable_legacy_project_identity_unavailable(
 
 
 def test_v43_adds_safe_update_projection_once_to_pre_v43_schema(tmp_path: Path):
+    # v43 stays in the append-only migration history even though v57 drops the
+    # table again (the safe-updater stack was deleted, prune A1): recorded
+    # upgrade chains must replay unchanged on databases that lived through v43.
     db_path = tmp_path / "schema-42.db"
     conn = connect(db_path)
     init_db(conn)
@@ -144,6 +147,32 @@ def test_v43_adds_safe_update_projection_once_to_pre_v43_schema(tmp_path: Path):
     assert [
         row[2] for row in conn.execute("PRAGMA index_info(idx_self_update_runs_status)")
     ] == ["status", "created_at"]
+
+
+def test_v57_drops_the_dead_safe_update_projection(tmp_path: Path):
+    db_path = tmp_path / "schema-56.db"
+    conn = connect(db_path)
+    init_db(conn)
+    through_v56 = [migration for migration in MIGRATIONS if migration[0] <= 56]
+    run_migrations(conn, str(db_path), migrations=through_v56)
+    # A database that lived through v43 carries the projection table; seed a row
+    # to prove the drop is unconditional (the pre-migration backup snapshot is
+    # the recovery path for historical rows).
+    conn.execute(
+        "INSERT INTO self_update_runs ("
+        "id, base_commit, candidate_commit, phase, status, created_at, updated_at"
+        ") VALUES ('run-1', 'aaa', 'bbb', 'completed', 'succeeded', 't0', 't0')"
+    )
+    conn.commit()
+
+    assert 57 in run_migrations(conn, str(db_path))
+    tables = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert "self_update_runs" not in tables
+    assert run_migrations(conn, str(db_path)) == []
+    assert current_version(conn) >= 57
 
 
 def test_v45_adds_task_projection_outbox_and_lifecycle_history(
@@ -495,9 +524,10 @@ def test_v48_retains_published_successor_ordering_gap(tmp_path: Path):
         54,
         55,
         56,
+        57,
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 56
+    assert current_version(conn) == 57
     gap = dict(
         conn.execute(
             "SELECT id, task_event_id, recovery_json, state, "
@@ -649,6 +679,7 @@ def test_v48_keeps_unpublished_recoveries_strictly_orderable(
         54,
         55,
         56,
+        57,
     ]
     assert [
         tuple(row)
@@ -761,9 +792,10 @@ def test_v50_schema_separates_markers_and_recovery_coverage(
         54,
         55,
         56,
+        57,
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 56
+    assert current_version(conn) == 57
     assert {
         row[1] for row in conn.execute("PRAGMA table_info(task_recovery_outbox)")
     } == {
@@ -938,6 +970,7 @@ def test_v49_detects_reversals_and_aggregates_corrections_per_task(
         54,
         55,
         56,
+        57,
     ]
     assert run_migrations(conn, str(db_path)) == []
     assert [
@@ -1113,7 +1146,7 @@ def test_v50_preserves_multiple_delivered_v47_markers_before_v48(
     conn.commit()
 
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54, 55, 56, 57]
     assert run_migrations(conn, str(db_path)) == []
     after_corrections = [
         tuple(row)
@@ -1218,7 +1251,7 @@ def test_v50_recovers_multiple_delivered_markers_from_v48_history(
         ).fetchall()
     ] == sorted(correction_ids)
 
-    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53, 54, 55, 56, 57]
     assert [
         int(row["id"])
         for row in conn.execute(
@@ -1287,7 +1320,7 @@ def test_v50_records_pre_staging_identity_loss_without_inventing_markers(
     conn.execute("DROP TABLE task_recovery_delivered_marker_staging_gaps")
     conn.execute("DROP TABLE task_recovery_delivered_marker_staging")
 
-    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [50, 51, 52, 53, 54, 55, 56, 57]
     assert (
         conn.execute("SELECT COUNT(*) FROM task_recovery_corrections").fetchone()[0]
         == 0
@@ -1333,7 +1366,7 @@ def test_recovery_audit_identity_survives_task_source_deletion(
         for index, correction_id in enumerate(correction_ids, start=1)
     ]
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54, 55, 56, 57]
     source_before = [
         (int(row["id"]), int(row["task_event_id"]))
         for row in conn.execute(
@@ -1470,7 +1503,7 @@ def test_recovery_source_identity_survives_event_and_later_cascades(
         "recovery-source-event-cascade.db",
     )
     init_db(conn)
-    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [49, 50, 51, 52, 53, 54, 55, 56, 57]
     source_before = [
         (int(row["id"]), int(row["task_event_id"]))
         for row in conn.execute(
@@ -1602,7 +1635,7 @@ def test_v52_completes_partial_recovery_tombstone_atomically(
         == 0
     )
 
-    assert run_migrations(conn, str(db_path)) == [52, 53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [52, 53, 54, 55, 56, 57]
     assert run_migrations(conn, str(db_path)) == []
     tombstone = dict(
         conn.execute(
@@ -1708,7 +1741,7 @@ def test_v53_repairs_v51_node_session_guess_from_event_provenance(
         == node_session_id
     )
 
-    assert run_migrations(conn, str(db_path)) == [53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [53, 54, 55, 56, 57]
     assert run_migrations(conn, str(db_path)) == []
     assert (
         conn.execute(
@@ -1794,7 +1827,7 @@ def test_v53_never_promotes_mixed_graph_sessions_to_task_identity(
         == node_session_ids[0]
     )
 
-    assert run_migrations(conn, str(db_path)) == [53, 54, 55, 56]
+    assert run_migrations(conn, str(db_path)) == [53, 54, 55, 56, 57]
     assert (
         conn.execute(
             "SELECT task_session_id FROM task_recovery_history_tombstones "
@@ -2242,9 +2275,10 @@ def test_schema_31_to_35_is_idempotent_and_preserves_replay_contract(
         54,
         55,
         56,
+        57,
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 56
+    assert current_version(conn) == 57
     assert {row[1] for row in conn.execute("PRAGMA table_info(master_tool_calls)")} == {
         "id",
         "master_session_id",
@@ -2868,8 +2902,9 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         54,
         55,
         56,
+        57,
     ]
-    assert current_version(conn) == 56
+    assert current_version(conn) == 57
     assert (
         conn.execute(
             "SELECT path_identity FROM projects WHERE id = ?",
@@ -2963,8 +2998,9 @@ def test_v29_and_v30_add_safe_task_dependency_contracts_to_schema_28(
         54,
         55,
         56,
+        57,
     ]
-    assert current_version(conn) == 56
+    assert current_version(conn) == 57
     assert "blocked_reason" in {
         row[1] for row in conn.execute("PRAGMA table_info(jobs)")
     }
@@ -3196,9 +3232,10 @@ def test_v36_and_v37_graph_lifecycle_upgrade_and_idempotent(tmp_path: Path):
         54,
         55,
         56,
+        57,
     ]
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 56
+    assert current_version(conn) == 57
 
     columns = {row[1] for row in conn.execute("PRAGMA table_info(graph_states)")}
     assert {
@@ -3310,8 +3347,9 @@ def test_v39_preserves_epoch_identity_and_recovers_pending_fleet(
         54,
         55,
         56,
+        57,
     ]
-    assert current_version(conn) == 56
+    assert current_version(conn) == 57
     state = conn.execute(
         "SELECT pending_focus, pending_container_id "
         "FROM master_focus_state WHERE master_session_id = 3"
@@ -3426,6 +3464,7 @@ def test_v40_persists_task_focus_after_origin_message_deletion(
         54,
         55,
         56,
+        57,
     ]
     captured = conn.execute(
         "SELECT origin_focus_epoch_id, origin_focus_captured "
@@ -3568,6 +3607,7 @@ def test_v42_preserves_historical_master_scope_after_container_deletion(
         54,
         55,
         56,
+        57,
     ]
     conn.execute("DELETE FROM projects WHERE id = 7")
     context = conn.execute(
@@ -3736,7 +3776,7 @@ def test_v56_versions_turn_journal_root_semantics(tmp_path: Path):
         row[1] for row in conn.execute("PRAGMA table_info(turn_file_journals)")
     }
     assert run_migrations(conn, str(db_path)) == []
-    assert current_version(conn) == 56
+    assert current_version(conn) == 57
 
 
 def _reshape_runs_and_restore_focus_column(conn):

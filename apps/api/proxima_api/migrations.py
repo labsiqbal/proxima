@@ -1987,6 +1987,16 @@ def _add_self_update_runs(conn: sqlite3.Connection) -> None:
     )
 
 
+def _drop_self_update_runs(conn: sqlite3.Connection) -> None:
+    # self_update_runs was the owner-visible projection of the external safe
+    # updater's journal (added by v43). The safe-updater stack was unhooked from
+    # the live app (#126) and deleted (#127, prune A1); the projection was never
+    # authoritative and nothing reads or writes it, so the table is dead weight.
+    # v43 stays in history so recorded upgrade chains replay unchanged, and the
+    # pre-migration VACUUM INTO backup keeps any historical rows recoverable.
+    conn.execute("DROP TABLE IF EXISTS self_update_runs")
+
+
 def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
     tables = {
         str(row[0])
@@ -6471,6 +6481,11 @@ MIGRATIONS: list[Migration] = [
         56,
         "version turn-journal filesystem root semantics",
         _add_turn_journal_root_semantics,
+    ),
+    (
+        57,
+        "drop the retired safe-update owner projection",
+        _drop_self_update_runs,
     ),
 ]
 
