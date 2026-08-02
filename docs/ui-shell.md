@@ -265,6 +265,17 @@ Agents and Settings live in the Work profile/account menu rather than the naviga
 
 Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Files, and ordinary Design entry) keep that contract. Opening Design from a Task binds the studio to that Task's owning Project without adopting it as the Work selection, and returning to the Task restamps the in-app preserve-work policy. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Deliverable records and Designs remain owned by their Project. Delegate has no project selector or project filter: its Tasks and Files indices are global, while Master Focus and explicit target controls remain its own bounded context.
 
+A **global error surface** sits below every destination. Uncaught errors, unhandled
+promise rejections, failed dynamic imports, and API calls that got no response (or a
+5xx) raise a dismissible bottom-centre toast with a short human message and a `Details`
+disclosure carrying the message plus a stack snippet. It uses the same toast card as the
+Master notifications column but its own anchor, so the two never collide. A stale-chunk
+failure after a redeploy offers **Reload Proxima**. Repeats collapse into one toast with
+a `×N` count and at most three are visible at once; 4xx refusals stay with the flow that
+raised them, so a screen with its own error state never gets a duplicate toast. The
+surface is mounted outside the render error boundary, so it also works on the auth gate,
+in Delegate, and after a render crash.
+
 The Work selection persists per owner across a full browser refresh. Boot validates
 the saved Project before applying it. A missing saved Project falls back to an
 existing private Project and raises a dismissible notice that names the missing and

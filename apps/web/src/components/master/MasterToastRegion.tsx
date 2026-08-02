@@ -1,6 +1,6 @@
 import React from 'react'
 import { useMasterState } from '../../master/MasterStateProvider'
-import { IconClose } from '../shell/icons'
+import { ToastCard } from '../ui/Toast'
 
 const TOAST_DURATION_MS = 7000
 
@@ -19,28 +19,17 @@ export function MasterToastRegion({ available = true }: { available?: boolean })
   if (!available || popup.open || !toasts.length) return null
 
   return (
-    <section className="master-toast-region" aria-label="Master notifications">
+    <section className="toast-region at-top-right" aria-label="Master notifications">
       {toasts.map(toast => (
-        <div
-          className={`master-toast ${toast.tone}`}
+        <ToastCard
           key={toast.id}
-          role={toast.priority === 'assertive' ? 'alert' : 'status'}
-          aria-live={toast.priority}
-          aria-atomic="true"
-        >
-          <span>
-            <strong>{toast.title}</strong>
-            <small>{toast.body}</small>
-          </span>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={`Dismiss ${toast.title}`}
-            onClick={() => dismissToast(toast.id)}
-          >
-            <IconClose size={15} />
-          </button>
-        </div>
+          tone={toast.tone}
+          priority={toast.priority}
+          title={toast.title}
+          body={toast.body}
+          dismissLabel={`Dismiss ${toast.title}`}
+          onDismiss={() => dismissToast(toast.id)}
+        />
       ))}
     </section>
   )

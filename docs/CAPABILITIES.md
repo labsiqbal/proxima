@@ -2000,6 +2000,36 @@ auto-continuation for job runs, and daily DB backup (`proxima-backup` timer with
 reaper. Run completion is status-guarded: cancellation cannot be overwritten by a late
 media result, message-review result, collaboration synthesis, draft, or graph update.
 
+### Global web error surface (prune B4)
+
+**Why:** The web app's worst failure was silent. A throw inside an event handler, a
+promise nobody awaited, a hashed chunk that 404s after a redeploy, or a fetch swallowed
+by an empty `catch` all looked identical to the owner: the click did nothing, with no
+message to read or report (evidence issue #115).
+
+**How:** `apps/web/src/lib/errorSurface.ts` is a framework-free store fed from three
+places — window `error`, window `unhandledrejection` (both installed in `main.tsx`
+before the first render, so boot-time throws still report), and the API client. It
+renders through `AppErrorToasts`, mounted beside the app root and **outside** the render
+error boundary, so it works on the auth gate, in Delegate mode, and after a crash of the
+tree it reports on. Toasts are `alert`-live, dismissible, and carry a `Details`
+disclosure with the message plus a bounded stack snippet for pasting into a bug report.
+
+- **Stale chunks:** a failed dynamic import is recognised by message and reported as
+  "Proxima was updated" with a **Reload Proxima** button — reloading is the actual fix
+  when the tab holds an index pointing at chunks the new build no longer serves.
+- **API failures:** `api()` reports only transport failures (no response) and 5xx. 4xx —
+  validation, governance refusals, not-found — stays owned by the flow that made the
+  call, which already renders its own error state, so the global surface never
+  duplicates a visible message. Deliberate `AbortError` cancellations are never reported.
+- **Storms:** repeats collapse by identity (kind + message, or method+path+status for
+  API failures) into one toast with a `×N` repeat count, and at most three toasts are
+  ever visible — a render loop cannot bury the app. Known browser noise
+  (`ResizeObserver loop`, opaque cross-origin `Script error.`, aborts) is filtered out so
+  the surface stays trustworthy.
+
+Backend-side visibility is separate: journald captures server logs (#123/#125).
+
 Linux daily-driver reliability is release-gated by
 `scripts/linux-daily-driver-acceptance`. The executable matrix covers install,
 service status/restart/stop, POSIX PTY behavior, online backup and isolated restore,

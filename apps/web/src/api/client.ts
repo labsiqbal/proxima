@@ -1,3 +1,5 @@
+import { reportApiFailure } from '../lib/errorSurface'
+
 export class ApiError extends Error {
   status: number
   path?: string
@@ -26,7 +28,14 @@ export async function api<T>(path: string, token?: string, options: RequestInit 
   try {
     res = await fetch(path, { ...options, headers })
   } catch (err) {
-    throw new ApiError(0, `${method} ${path} failed: ${err instanceof Error ? err.message : String(err)}`, path, method)
+    const failure = new ApiError(0, `${method} ${path} failed: ${err instanceof Error ? err.message : String(err)}`, path, method)
+    // The server being unreachable is never a screen's fault and is the classic
+    // silent "click does nothing": surface it globally. Deliberate aborts are
+    // filtered out inside the error surface.
+    if (!(err instanceof Error && err.name === 'AbortError')) {
+      reportApiFailure({ status: 0, method, path, message: failure.message })
+    }
+    throw failure
   }
   if (!res.ok) {
     const text = await res.text()
@@ -80,6 +89,9 @@ export async function api<T>(path: string, token?: string, options: RequestInit 
     }
     const error = new ApiError(res.status, `${method} ${path} failed (${res.status}): ${message}`, path, method, field, message)
     error.body = body
+    // 5xx means the server broke, which no screen can explain; 4xx (validation,
+    // governance refusals, not-found) stays owned by the flow that asked.
+    reportApiFailure({ status: res.status, method, path, message: error.message })
     throw error
   }
   if (res.status === 204) return undefined as T

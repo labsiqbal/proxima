@@ -96,11 +96,12 @@
 	--master-popup-edge: var(--space-4);
 	--master-popup-tool-clearance: calc(var(--toolrail-w) + var(--space-4));
 	--master-popup-bottom: calc(var(--space-5) + env(safe-area-inset-bottom));
-	--master-toast-width: 24rem;
-	--master-toast-top: calc(var(--topbar-h) + var(--space-4) + env(safe-area-inset-top));
+	--toast-width: 24rem;
+	--toast-detail-max-height: 9rem;
+	--toast-top: calc(var(--topbar-h) + var(--space-4) + env(safe-area-inset-top));
 	--z-master-popup-scrim: 58;
 	--z-master-popup: 59;
-	--z-master-toast: 60;
+	--z-toast: 60;
 	--attention-width: 24rem;
 	--attention-max-height: 38rem;
 	--attention-trigger-size: 2rem;
@@ -15200,7 +15201,7 @@ button.moodboard-add-method:hover {
 .master-popup-trigger:hover { transform: translateY(calc(var(--space-1) * -1)); }
 .master-popup-trigger:focus-visible,
 .master-popup button:focus-visible,
-.master-toast button:focus-visible {
+.toast button:focus-visible {
 	outline: var(--focus-ring-width) solid var(--ui-focus-ring);
 	outline-offset: var(--ui-spinner-stroke);
 }
@@ -15324,17 +15325,27 @@ button.moodboard-add-method:hover {
 	color: var(--ui-text-secondary);
 	font-size: var(--text-sm);
 }
-.master-toast-region {
+/* Toasts: one card language for shell notices (Master run events, top-right)
+   and the global error surface (AppErrorToasts, bottom-centre). */
+.toast-region {
 	position: fixed;
-	top: var(--master-toast-top);
-	right: var(--master-popup-tool-clearance);
-	z-index: var(--z-master-toast);
+	z-index: var(--z-toast);
 	display: grid;
 	gap: var(--space-2);
-	width: min(var(--master-toast-width), calc(100vw - var(--left-w) - var(--toolrail-w) - var(--space-8)));
 	pointer-events: none;
 }
-.master-toast {
+.toast-region.at-top-right {
+	top: var(--toast-top);
+	right: var(--master-popup-tool-clearance);
+	width: min(var(--toast-width), calc(100vw - var(--left-w) - var(--toolrail-w) - var(--space-8)));
+}
+.toast-region.at-bottom-center {
+	bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+	left: 50%;
+	transform: translateX(-50%);
+	width: min(var(--toast-width), calc(100vw - var(--space-8)));
+}
+.toast {
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
@@ -15346,24 +15357,61 @@ button.moodboard-add-method:hover {
 	background: var(--ui-surface);
 	box-shadow: var(--shadow-lg);
 	pointer-events: auto;
-	animation: master-toast-in var(--t) var(--ease);
+	animation: toast-in var(--t) var(--ease);
 }
-@keyframes master-toast-in {
+@keyframes toast-in {
 	from { opacity: 0; transform: translateY(calc(var(--space-2) * -1)); }
 }
-.master-toast.success { border-left-color: var(--ui-success); }
-.master-toast.warning { border-left-color: var(--ui-warning); }
-.master-toast.danger { border-left-color: var(--ui-danger); }
-.master-toast > span { min-width: 0; }
-.master-toast strong,
-.master-toast small { display: block; }
-.master-toast strong { font-size: var(--text-sm); }
-.master-toast small {
-	margin-top: var(--space-1);
+@keyframes toast-in-up {
+	from { opacity: 0; transform: translateY(var(--space-2)); }
+}
+.toast-region.at-bottom-center .toast { animation-name: toast-in-up; }
+.toast.success { border-left-color: var(--ui-success); }
+.toast.warning { border-left-color: var(--ui-warning); }
+.toast.danger { border-left-color: var(--ui-danger); }
+.toast-content { display: grid; gap: var(--space-1); min-width: 0; }
+.toast strong,
+.toast small { display: block; }
+.toast strong { font-size: var(--text-sm); }
+.toast small {
 	color: var(--ui-text-secondary);
 	font-size: var(--text-xs);
 	line-height: 1.45;
 }
+/* Error-surface extras: repeat count, the copy-pasteable detail, reload action. */
+.toast-count {
+	justify-self: start;
+	border-radius: var(--radius-full);
+	padding: 0 var(--space-2);
+	background: var(--ui-danger-bg);
+	color: var(--ui-danger-text);
+	font-size: var(--text-2xs);
+	font-weight: 650;
+}
+.toast-detail > summary {
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-2xs);
+	cursor: pointer;
+}
+.toast-detail > summary:focus-visible {
+	outline: var(--focus-ring-width) solid var(--ui-focus-ring);
+	outline-offset: var(--ui-spinner-stroke);
+}
+.toast-detail > pre {
+	max-height: var(--toast-detail-max-height);
+	margin: var(--space-1) 0 0;
+	overflow: auto;
+	border-radius: var(--radius-sm);
+	padding: var(--space-2);
+	background: var(--ui-surface-subtle);
+	color: var(--ui-text-secondary);
+	font-family: var(--font-mono);
+	font-size: var(--text-2xs);
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+.toast-actions { display: flex; gap: var(--space-2); margin-top: var(--space-1); }
 
 /* Shell top-right cluster: Running + Attention, beside account menu. */
 .header-status-cluster {
@@ -15528,7 +15576,7 @@ button.moodboard-add-method:hover {
 		right: auto;
 		left: var(--master-popup-edge);
 	}
-	.master-toast-region {
+	.toast-region.at-top-right {
 		top: calc(var(--mobile-topbar-h) + var(--space-2) + env(safe-area-inset-top));
 		right: var(--master-popup-tool-clearance);
 		width: calc(100vw - var(--toolrail-w) - var(--space-8));
@@ -15633,7 +15681,7 @@ button.moodboard-add-method:hover {
 	.attention-popover,
 	.core-tour,
 	.master-popup,
-	.master-toast { animation: none; }
+	.toast { animation: none; }
 	.running-pill:not(.active) { animation: none; }
 	.text-button,
 	.master-view button,
