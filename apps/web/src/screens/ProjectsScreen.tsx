@@ -3,8 +3,16 @@ import { createProject, renameProject, deleteProject } from '../api/projects'
 import { ContainerSettingsModal } from '../components/projects/ContainerSettings'
 import { FolderLinker } from '../components/projects/FolderLinker'
 import { OpsMigrationDetail } from '../components/projects/OpsMigrationDetail'
+import { RelocateProjectModal } from '../components/projects/RelocateProject'
 import { confirmDialog, promptDialog } from '../components/ui/Dialog'
 import type { Project } from '../types'
+
+// What the card says when a project's folder is not where its record says it is.
+const LOST_LABEL: Record<string, string> = {
+  missing: 'Folder missing',
+  moved: 'Folder changed',
+  unavailable: 'Folder unavailable',
+}
 
 // Removing a project is not one behaviour, and the copy has to say so: the API only
 // deletes the folder when it lives inside the workspace root, so a *linked* folder is
@@ -29,6 +37,8 @@ export function ProjectsScreen({ token, projects, activeProject, opsMigrationSlu
   const [adding, setAdding] = React.useState(false)
   // The project whose container settings (code areas + push-after-merge) are open.
   const [settingsFor, setSettingsFor] = React.useState<Project | null>(null)
+  // The project being re-pinned to its folder's real location (prune C6).
+  const [relocating, setRelocating] = React.useState<Project | null>(null)
   const [error, setError] = React.useState('')
   // The slug being acted on, so one card's spinner never freezes the whole grid.
   const [busy, setBusy] = React.useState<string | null>(null)
@@ -140,6 +150,9 @@ export function ProjectsScreen({ token, projects, activeProject, opsMigrationSlu
       : <div className="wf-grid">{filtered.map((project, index) => {
           const active = activeProject?.slug === project.slug
           const working = busy === project.slug
+          // A folder that moved, was renamed, or cannot be used is a state the
+          // owner can act on (prune C6) - never a card that only fails later.
+          const lost = project.location.state !== 'bound'
           return <div
             className={`wf-card project-tile stagger-item${active ? ' active' : ''}`}
             style={{ ['--i' as string]: index } as React.CSSProperties}
@@ -157,9 +170,19 @@ export function ProjectsScreen({ token, projects, activeProject, opsMigrationSlu
               <span className="wf-card-meta">
                 <span className="pill">{project.slug}</span>
                 {active && <span className="muted">Active</span>}
+                {lost && <span className="pill pill-warn">{LOST_LABEL[project.location.state]}</span>}
               </span>
             </button>
+            {lost && <p className="project-lost-note">{project.location.message}</p>}
             <div className="wf-card-foot">
+              {lost && <button
+                className="ghost-button project-lost-action"
+                disabled={!!busy}
+                aria-label={`Find the folder for ${project.name}`}
+                onClick={() => setRelocating(project)}
+              >
+                Find folder
+              </button>}
               <button
                 className="ghost-button"
                 disabled={!!busy}
@@ -187,6 +210,17 @@ export function ProjectsScreen({ token, projects, activeProject, opsMigrationSlu
             </div>
           </div>
         })}</div>}
+
+    {relocating && <RelocateProjectModal
+      token={token}
+      project={relocating}
+      onClose={() => setRelocating(null)}
+      onRelocated={async project => {
+        setRelocating(null)
+        if (activeProject?.slug === project.slug) onActiveProject(project)
+        await onRefresh()
+      }}
+    />}
 
     {settingsFor && <ContainerSettingsModal
       token={token}

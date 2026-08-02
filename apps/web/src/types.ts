@@ -32,8 +32,42 @@ export type ContainerIdentity = {
 	owner: string;
 	visibility: "private" | "shared";
 };
+// Whether a project's folder is still where its record says (prune C6):
+// "bound" is the healthy case; the others are actionable - the owner points
+// Proxima at the folder's real location (rebind) or unlinks the project.
+export type ProjectLocationState = "bound" | "missing" | "moved" | "unavailable";
+export type ProjectLocation = {
+	state: ProjectLocationState;
+	path: string;
+	message: string;
+};
+export type ProjectIdentityFacts = {
+	label: string | null;
+	summary: string | null;
+	source: string | null;
+};
+export type ProjectIdentityComparison = {
+	matches: boolean;
+	stored: ProjectIdentityFacts;
+	found: ProjectIdentityFacts;
+};
 // One-release compatibility name for the current /api/projects readers and UI.
-export type Project = ContainerIdentity & { role: string };
+export type Project = ContainerIdentity & {
+	role: string;
+	location: ProjectLocation;
+};
+export type ProjectRebindResult = {
+	rebound: boolean;
+	path: string;
+	previous_path: string;
+	identity: ProjectIdentityComparison;
+	repaired: {
+		ops_path: string | null;
+		layout: string[];
+		code_areas_dropped: string[];
+	};
+	project: Project;
+};
 export type ContainerLiveState = {
 	running_tasks: number;
 	queued_tasks: number;

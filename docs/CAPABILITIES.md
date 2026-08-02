@@ -1260,7 +1260,9 @@ was removed, Work selects an existing private Project and shows an explicit,
 dismissible fallback notice naming both the missing and replacement Projects.
 **Endpoints:** `GET/POST /api/projects`, `/projects/link` (`mkdir` and `ops_path`
 optional, `root_id` required),
-`GET /api/fs/dirs` (`root_id` required once a path is selected), `PATCH/DELETE /api/projects/{slug}`.
+`GET /api/fs/dirs` (`root_id` required once a path is selected), `PATCH/DELETE /api/projects/{slug}`,
+`GET /api/projects/{slug}/location` and `POST /api/projects/{slug}/rebind`
+(relocate a moved folder, prune C6 - see Container Areas below).
 
 ### Container Areas and physical Ops storage
 
@@ -1397,6 +1399,50 @@ created at the DEFAULT `<ops>/wiki` position - never invented at a detected
 non-default location. Memory writes happen only on actual memory events
 (post-run log append, index regeneration on run start/end and wiki-note
 commit) - never at link or boot.
+
+**Relocate/rebind a moved or renamed folder (prune C6).** Folders get moved
+and renamed; the Container root is pinned to its filesystem identity at link
+time, so until now that turned every project operation into a boundary error
+with no way back (audit #120 part 2, item 6). The binding between a project
+record and its folder is now a **classified, actionable state**
+(`container_registry.container_binding`, one `lstat` + one directory-handle
+open, never a write) carried on every project payload as `location` and served
+in full by `GET /api/projects/{slug}/location`:
+
+- `bound` - the folder is where the record says, with the identity it was
+  pinned to;
+- `missing` - nothing is at the stored path (moved, renamed, deleted);
+- `moved` - a *different* directory now sits at the stored path (restored from
+  backup, recreated);
+- `unavailable` - the path cannot be inspected (permissions, non-directory).
+
+Anything but `bound` is offered with its two actions - **rebind or unlink** -
+on the project card in Projects (a "Folder missing" pill, the reason, and a
+"Find folder" button); unlinking keeps working with the folder gone.
+Re-pinning runs through `POST /api/projects/{slug}/rebind` and reuses the
+**onboarding folder picker verbatim** (`FolderLinker` in rebind mode), so the
+target is jailed to the configured link roots exactly like a link.
+**Identity is confirmed with the C5 machinery**: the docs the folder already
+has are read AT the new location and compared with the stored projection
+(source hash, else the identity label); the persisted Ops path and every
+registered code Area are checked to still resolve there. A mismatch is refused
+with a 409 naming both identities (stored vs found) - and, because this is a
+single-owner product, the refusal is **overridable**: `confirm: true` re-pins
+anyway ("Re-pin anyway" in the dialog).
+Rebind is **metadata-only**: not one byte is written into either folder.
+Only the record's address changes, so the project keeps its id and therefore
+its history, chats, tasks, deliverable records and approvals, its layout map,
+its Ops path, and its memory-writes toggle. Entries whose *paths* broke are
+re-detected in place at the new location: a persisted Ops folder that is not
+there falls back to link-time detection, layout-map entries whose folder is
+gone re-detect (`layout_map.rebase_project_layout`), auto code Areas follow the
+new tree, and a manual code Area with nothing behind it is dropped and reported
+back (it would otherwise keep the Container permanently invalid). The whole
+apply runs under the Container mutation lock in one transaction that ends with
+a full fail-closed `validated_area_roots` check - a rebind either lands
+completely or changes nothing. Re-pinning a healthy project to the path it is
+already bound to is a no-op; re-pinning it to the same path after a restore is
+how the identity gets re-taken.
 
 **The move-based migration is exclusively an explicit, previewed opt-in** on the
 Ops-migration surface (`.../ops-migration/retry`). Its inspection payload reports

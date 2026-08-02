@@ -343,6 +343,24 @@ class ProjectLinkRequest(ContainerLinkRequest):
     """Compatibility request name for existing project routes."""
 
 
+class ContainerRebindRequest(BaseModel):
+    """Re-pin a project to its folder's real location (prune C6, #141).
+
+    ``path``/``root_id`` come from the same onboarding folder picker, so the
+    target is jailed to the configured link roots. ``confirm`` is the owner's
+    override for a location whose identity does not match the stored
+    projection - single-owner product: the warning is loud, never a wall.
+    """
+
+    path: str = Field(min_length=1)
+    root_id: str = Field(min_length=1, max_length=64)
+    confirm: bool = False
+
+
+class ProjectRebindRequest(ContainerRebindRequest):
+    """Compatibility request name for existing project routes."""
+
+
 class ProjectAreaAddRequest(BaseModel):
     rel_path: str = Field(min_length=1, max_length=500)  # '.' = container root
 

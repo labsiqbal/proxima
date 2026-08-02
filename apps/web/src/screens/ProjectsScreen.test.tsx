@@ -9,6 +9,10 @@ vi.mock('../components/projects/OpsMigrationDetail', () => ({
   OpsMigrationDetail: ({ project }: { project: Project }) =>
     <div data-testid="ops-detail">{project.slug}</div>,
 }))
+vi.mock('../components/projects/RelocateProject', () => ({
+  RelocateProjectModal: ({ project }: { project: Project }) =>
+    <div data-testid="relocate-modal">{project.slug}</div>,
+}))
 vi.mock('../api/projects', () => ({
   createProject: vi.fn(),
   renameProject: vi.fn(),
@@ -22,6 +26,7 @@ const alpha = {
   owner: 'owner',
   role: 'owner',
   visibility: 'private',
+  location: { state: 'bound', path: '/owner/alpha', message: '' },
 } as Project
 const collision = {
   ...alpha,
@@ -41,6 +46,35 @@ describe('ProjectsScreen Ops migration routing', () => {
       onRefresh={vi.fn().mockResolvedValue(undefined)}
     />)
     expect(screen.getByTestId('ops-detail')).toHaveTextContent('legacy-collision')
+  })
+
+  it('surfaces a missing folder as an actionable state, not a broken card', async () => {
+    const user = userEvent.setup()
+    const moved = {
+      ...alpha,
+      slug: 'moved',
+      name: 'Moved',
+      location: {
+        state: 'missing',
+        path: '/owner/moved',
+        message: 'This project’s folder is no longer at its stored location.',
+      },
+    } as Project
+    render(<ProjectsScreen
+      token="token"
+      projects={[alpha, moved]}
+      activeProject={alpha}
+      onActiveProject={vi.fn()}
+      onRefresh={vi.fn().mockResolvedValue(undefined)}
+    />)
+
+    expect(screen.getByText('Folder missing')).toBeInTheDocument()
+    expect(screen.getByText(/no longer at its stored location/)).toBeInTheDocument()
+    // Only the affected card is flagged.
+    expect(screen.getAllByText('Folder missing')).toHaveLength(1)
+
+    await user.click(screen.getByRole('button', { name: 'Find the folder for Moved' }))
+    expect(screen.getByTestId('relocate-modal')).toHaveTextContent('moved')
   })
 
   it('opens migration settings from the matching project card', async () => {

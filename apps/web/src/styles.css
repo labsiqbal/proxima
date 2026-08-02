@@ -883,6 +883,37 @@ button:disabled {
 	max-height: 86vh;
 	overflow: auto;
 }
+/* Relocate/rebind (prune C6): a project whose folder moved says so on its own
+   card and offers the fix, instead of failing the first time it is opened. */
+.pill.pill-warn {
+	border-color: color-mix(in srgb, var(--ui-warning) 42%, var(--ui-stroke-secondary));
+	background: var(--ui-warning-bg);
+	color: var(--ui-warning-text);
+}
+.project-lost-note {
+	margin: 0 var(--space-3) var(--space-2);
+	color: var(--ui-warning-text);
+	font-size: var(--text-sm);
+	text-align: left;
+}
+.project-lost-action {
+	border-color: color-mix(in srgb, var(--ui-warning) 42%, var(--ui-stroke-secondary));
+	color: var(--ui-warning-text);
+}
+.project-relocate-card {
+	width: min(34rem, 92vw);
+	max-height: 86vh;
+	overflow: auto;
+}
+.relocate-stored {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin: 0 0 var(--space-3);
+	font-size: var(--text-sm);
+	text-align: left;
+	overflow-wrap: anywhere;
+}
 .project-add-hint {
 	margin: 0 0 var(--space-2);
 	font-size: var(--text-sm);
@@ -8429,6 +8460,18 @@ div.result-media {
 }
 .fl-create .primary-button {
 	align-self: stretch;
+}
+/* Rebind action (prune C6): the same picker, one decisive action, plus the
+   owner's override when the folder's identity does not match. */
+.fl-rebind {
+	flex-wrap: wrap;
+}
+.fl-rebind .primary-button {
+	flex: 1;
+}
+.fl-override {
+	border-color: color-mix(in srgb, var(--ui-warning) 42%, var(--ui-stroke-secondary));
+	color: var(--ui-warning-text);
 }
 
 /* Terminal dark mode (follows app theme) */

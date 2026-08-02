@@ -330,6 +330,45 @@ def seed_project_layout(
         _persist(conn, project_id, area, rel, source)
 
 
+def rebase_project_layout(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Re-validate the map against the tree the project now points at.
+
+    Used by the relocate/rebind flow (prune C6, #141): after a project is
+    re-pinned to a folder, every persisted entry whose folder no longer
+    resolves re-detects at the new location, and entries that still resolve
+    are left exactly as they were. Returns the areas that changed. Zero-write
+    toward the tree - detection only.
+
+    Ordinary resolution (:func:`project_layout`) deliberately keeps a
+    default-position entry authoritative even when the folder is absent (the
+    writers may create it). A rebind is the one moment where an absent
+    default must be re-checked too: the new folder may keep that area
+    somewhere else entirely.
+    """
+    data = get_container(conn, container)
+    project_id = int(data["id"])
+    root = container_root(data)
+    ops_rel = _ops_rel(conn, project_id)
+    stored = _stored_rows(conn, project_id)
+    rebased: list[str] = []
+    for area in LAYOUT_AREAS:
+        entry = stored.get(area)
+        rel = _safe_rel(entry[0]) if entry else None
+        if rel is not None and _is_real_directory(
+            root.joinpath(*PurePosixPath(rel).parts)
+        ):
+            continue
+        detected = detect_area(root, ops_rel, area)
+        if entry is not None and detected == (entry[0], entry[1]):
+            continue
+        _persist(conn, project_id, area, detected[0], detected[1])
+        rebased.append(area)
+    return tuple(rebased)
+
+
 def try_seed_project_layout(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],

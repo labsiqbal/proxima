@@ -281,7 +281,18 @@ open Settings on the Projects section.
 
 A card shows the name and slug, marks the **active** project (the one the rest of the app
 is pointed at), and carries its own actions: the card body selects it, **Rename** opens a
-prompt dialog, and the hover/focus **×** removes it. Add opens a modal holding both ways in:
+prompt dialog, and the hover/focus **×** removes it. A project whose folder is no
+longer where its record says (moved, renamed, restored, unreadable) is not a card
+that fails later: it carries a warning pill (**Folder missing** / **Folder changed** /
+**Folder unavailable**), the reason in plain words, and a **Find folder** action
+(prune C6). That action opens the relocate dialog, which states the last known
+location and embeds the *same* folder picker used for onboarding - browse to where
+the folder lives now and re-pin it. Nothing is moved or copied; only the project's
+address changes. When the folder's own identity does not match the project's, the
+dialog says which identity it found versus expected and offers a deliberate
+**Re-pin anyway** override next to the primary action (single owner: a loud warning,
+never a wall). The other way out, removing the project, keeps working with the
+folder gone. Add opens a modal holding both ways in:
 create a new project, or point Proxima at a folder on disk - link one you already work
 in, or create a new empty one under a parent you pick.
 

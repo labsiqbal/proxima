@@ -2176,11 +2176,77 @@ def get_fleet_container(
     return _fleet_payload(rows[0]) if rows else None
 
 
+BINDING_BOUND = "bound"
+BINDING_MISSING = "missing"
+BINDING_MOVED = "moved"
+BINDING_UNAVAILABLE = "unavailable"
+
+
+def container_binding(container: sqlite3.Row | Mapping[str, Any]) -> dict[str, Any]:
+    """Classify the link between a Container record and its folder on disk.
+
+    The read-only basis of the relocate flow (prune C6, #141). A folder that
+    was moved, renamed, deleted, or restored in place used to turn every
+    project operation into a raw ``ContainerBoundaryError`` with no way out
+    (audit #120 part 2, item 6). Classifying the binding turns that dead end
+    into a state the UI can act on:
+
+    - ``bound`` - the folder is where the record says, with the same
+      filesystem identity it was pinned to.
+    - ``missing`` - nothing is at the stored path any more (moved/renamed).
+    - ``moved`` - something IS at the stored path, but it is not the same
+      directory (restored from backup, recreated, or a different folder).
+    - ``unavailable`` - the path cannot be inspected here (permissions, or a
+      non-directory now occupies it).
+
+    Costs one ``lstat`` plus one directory-handle open; never writes.
+    """
+    data = _as_dict(container)
+    path = str(data.get("path") or "")
+    try:
+        container_root(data)
+        return {"state": BINDING_BOUND, "path": path, "message": ""}
+    except ContainerBoundaryError as exc:
+        reason = str(exc)
+    state = _path_state(Path(path)) if path else "missing"
+    if state == "missing":
+        return {
+            "state": BINDING_MISSING,
+            "path": path,
+            "message": (
+                "This project's folder is no longer at its stored location. "
+                "Point Proxima at its new location, or unlink the project."
+            ),
+        }
+    if state == "directory":
+        return {
+            "state": BINDING_MOVED,
+            "path": path,
+            "message": (
+                "A different folder now sits at this project's stored "
+                "location. Confirm where the project lives to re-pin it."
+            ),
+        }
+    return {
+        "state": BINDING_UNAVAILABLE,
+        "path": path,
+        "message": f"This project's folder cannot be used: {reason}.",
+    }
+
+
 def compatibility_project_payload(
     container: Mapping[str, Any],
     areas: Mapping[str, Any],
+    *,
+    location: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Render the one-release Project reader alias from Container truth."""
+    """Render the one-release Project reader alias from Container truth.
+
+    ``location`` is the folder-binding state (prune C6): passed in by callers
+    that already computed it for a whole list, else derived from this row.
+    A caller holding a projection WITHOUT ``path_identity`` must pass it -
+    identity cannot be verified from a partial row.
+    """
     data = _as_dict(container)
     return {
         "slug": data["slug"],
@@ -2191,6 +2257,7 @@ def compatibility_project_payload(
         "visibility": data.get("visibility") or "private",
         "code_areas": list(areas.get("code_areas") or []),
         "ops_area": areas.get("ops_area"),
+        "location": dict(location) if location is not None else container_binding(data),
     }
 
 
@@ -2247,10 +2314,22 @@ def list_compatibility_projects(
                 "id": int(row["id"]),
                 "rel_path": row["rel_path"],
             }
+    # The Fleet projection carries no path_identity (it is internal), so the
+    # folder-binding state is computed from the owner's project rows once for
+    # the whole list (prune C6): two syscalls per project, never a write.
+    bindings = {
+        int(row["id"]): container_binding(row)
+        for row in conn.execute(
+            "SELECT id, path, path_identity FROM projects "
+            "WHERE owner_user_id = ? AND archived_at IS NULL",
+            (owner_user_id,),
+        ).fetchall()
+    }
     return [
         compatibility_project_payload(
             container,
             areas_by_container[int(container["id"])],
+            location=bindings.get(int(container["id"])),
         )
         for container in containers
     ]

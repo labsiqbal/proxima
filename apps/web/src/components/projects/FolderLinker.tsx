@@ -1,9 +1,21 @@
 import React from 'react'
-import { apiErrorDetail, browseDirs, linkProject, linkProjectErrorField } from '../../api/projects'
+import {
+  apiErrorDetail,
+  browseDirs,
+  linkProject,
+  linkProjectErrorField,
+  rebindIsConfirmable,
+  rebindProject,
+} from '../../api/projects'
 import type { DirectoryBrowse } from '../../api/projects'
 import type { Project } from '../../types'
 
 type Mode = 'link' | 'create'
+// Re-pinning a project to its folder's real location (prune C6) reuses this
+// picker verbatim - same browser, same jail, same error routing. Only the
+// action differs: no display name, no Ops choice, and an owner override for a
+// location whose identity does not match the project's stored one.
+export type RebindTarget = { slug: string; name: string }
 type ErrorField = 'path' | 'folder' | 'display' | 'ops'
 type FormError = { id: number; message: string; field: ErrorField }
 
@@ -30,7 +42,12 @@ const detectedOpsPath = (cur: DirectoryBrowse): string =>
 // register an EXISTING folder as a Proxima project, or create a brand-new empty
 // folder on disk and register that. Shared by the Projects screen and the
 // first-run onboarding step.
-export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p: Project) => Promise<void> }) {
+export function FolderLinker({ token, onLinked, rebind }: {
+  token: string
+  // The project this picker produced: freshly linked, or re-pinned.
+  onLinked: (p: Project) => Promise<void>
+  rebind?: RebindTarget
+}) {
   const [mode, setMode] = React.useState<Mode>('link')
   const [cur, setCur] = React.useState<DirectoryBrowse | null>(null)
   const [name, setName] = React.useState('')
@@ -39,6 +56,8 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
   // sent as ops_path (and persisted per project by the server).
   const [opsOverride, setOpsOverride] = React.useState<string | null>(null)
   const [error, setError] = React.useState<FormError | null>(null)
+  // Set when the server refused a rebind the owner is allowed to override.
+  const [overridable, setOverridable] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
   const loadSeq = React.useRef(0)
@@ -104,8 +123,31 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
     setOpsOverride(null)
   }
 
-  const submit = async () => {
+  const submit = async (confirm = false) => {
     if (!cur || busy) return
+    if (rebind) {
+      const seq = ++actionSeq.current
+      setBusy(true)
+      setError(null)
+      setOverridable(false)
+      try {
+        const result = await rebindProject(token, rebind.slug, {
+          path: cur.path,
+          root_id: cur.root_id,
+          confirm,
+        })
+        if (!mountedRef.current || seq !== actionSeq.current) return
+        await onLinked(result.project)
+      } catch (e) {
+        if (mountedRef.current && seq === actionSeq.current) {
+          setOverridable(rebindIsConfirmable(e))
+          reportError(apiErrorDetail(e), formErrorField(e, 'path'))
+        }
+      } finally {
+        if (mountedRef.current && seq === actionSeq.current) setBusy(false)
+      }
+      return
+    }
     if (mode === 'create') {
       const folder = folderName.trim()
       if (!folder) {
@@ -192,18 +234,20 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
   const errorField = error?.field
   const detectedOps = detectedOpsPath(cur)
   return <div className="folder-linker">
-    <div className="seg fl-mode" role="group" aria-label="Folder action">
+    {!rebind && <div className="seg fl-mode" role="group" aria-label="Folder action">
       <button type="button" aria-pressed={mode === 'link'} className={mode === 'link' ? 'active' : ''} disabled={busy} onClick={() => switchMode('link')}>
         Link existing
       </button>
       <button type="button" aria-pressed={mode === 'create'} className={mode === 'create' ? 'active' : ''} disabled={busy} onClick={() => switchMode('create')}>
         Create new folder
       </button>
-    </div>
+    </div>}
     <p className="muted fl-hint">
-      {mode === 'link'
-        ? 'Browse to a folder you already have. Nothing is moved or copied.'
-        : 'Pick the parent directory, then name the new empty folder to create on disk.'}
+      {rebind
+        ? 'Browse to where the folder lives now. Nothing is moved or copied - only the project’s address changes.'
+        : mode === 'link'
+          ? 'Browse to a folder you already have. Nothing is moved or copied.'
+          : 'Pick the parent directory, then name the new empty folder to create on disk.'}
     </p>
     <button
       ref={pathRef}
@@ -229,7 +273,19 @@ export function FolderLinker({ token, onLinked }: { token: string; onLinked: (p:
       {cur.dirs.map(d => <button type="button" className="fl-row" disabled={busy} key={d.path} onClick={() => load(d.path, cur.root_id)}>{d.name}</button>)}
       {!cur.dirs.length && <p className="muted fl-empty">No subfolders here.</p>}
     </div>
-    {mode === 'create' ? (
+    {rebind ? (
+      <div className="fl-link fl-rebind">
+        <button type="button" className="primary-button" disabled={busy} onClick={() => void submit()}>
+          {busy ? 'Re-pinning…' : `Re-pin “${rebind.name}” here`}
+        </button>
+        {overridable && <button
+          type="button"
+          className="ghost-button fl-override"
+          disabled={busy}
+          onClick={() => void submit(true)}
+        >Re-pin anyway</button>}
+      </div>
+    ) : mode === 'create' ? (
       <div className="fl-create">
         <label className="fl-field">
           <span className="muted">New folder name</span>

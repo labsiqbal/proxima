@@ -15,7 +15,13 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
-from .. import container_registry, fsapi, layout_map, repo_remote
+from .. import (
+    container_registry,
+    container_relocate,
+    fsapi,
+    layout_map,
+    repo_remote,
+)
 from ..directory_handles import directory_identity_for_path
 from ..project_browse import (
     AllowedRoots,
@@ -38,6 +44,7 @@ from ..schemas import (
     ProjectAreaUpdateRequest,
     ProjectCreateRequest,
     ProjectLinkRequest,
+    ProjectRebindRequest,
     ProjectUpdateRequest,
 )
 from ..settings import validate_slug
@@ -500,6 +507,116 @@ def register(app, deps):
             },
             "memory_writes": {"enabled": layout.memory_writes},
         }
+
+    @app.get("/api/projects/{slug}/location")
+    def get_project_location(slug: str, user: dict[str, Any] = Depends(current_user)):
+        """Where this project's folder should be and whether it is there
+        (prune C6): the actionable replacement for the raw boundary error a
+        moved, renamed, or restored folder used to raise on every operation.
+        Read-only - one lstat plus one directory-handle open."""
+        project = visible_project(slug, user)
+        return container_relocate.location_payload(db(), project)
+
+    @app.post("/api/projects/{slug}/rebind")
+    def rebind_project(
+        slug: str,
+        payload: ProjectRebindRequest,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """Re-pin a project to its folder's real location (prune C6, #141).
+
+        The target comes from the same onboarding folder picker, so it is
+        jailed to the configured link roots exactly like a link. Identity is
+        read from the docs the new location already has (prune C5) and
+        compared with the stored projection: a mismatch is refused with the
+        comparison in the body, and `confirm` is the owner's override.
+        Metadata only - nothing is written into either folder."""
+        project = visible_project(slug, user)
+        try:
+            allowed_roots = AllowedRoots.from_configured(_link_roots())
+        except PathResolutionUnavailable as exc:
+            raise _link_error(403, str(exc), "path") from exc
+        try:
+            resolved_target = allowed_roots.resolve(payload.path, payload.root_id)
+        except PathOutsideRoots as exc:
+            raise _link_error(403, str(exc), "path") from exc
+        except PathResolutionUnavailable as exc:
+            raise _link_error(400, "selected folder is not reachable", "path") from exc
+        try:
+            path_identity = directory_identity(resolved_target)
+        except PermissionError as exc:
+            raise _link_error(
+                403, "permission denied - selected folder is not accessible", "path"
+            ) from exc
+        except (OSError, PathResolutionUnavailable) as exc:
+            raise _link_error(400, "selected folder is not reachable", "path") from exc
+        target = resolved_target.path
+        clash = (
+            db()
+            .execute(
+                "SELECT slug FROM projects WHERE id != ? AND archived_at IS NULL "
+                "AND (path = ? OR path_identity = ?)",
+                (project["id"], str(target), path_identity),
+            )
+            .fetchone()
+        )
+        if clash is not None:
+            raise _link_error(
+                409,
+                f"that folder is already linked as project '{clash['slug']}'",
+                "path",
+            )
+        try:
+            result = container_relocate.rebind_container(
+                db(),
+                project,
+                target,
+                path_identity,
+                confirm=payload.confirm,
+            )
+        except container_relocate.RebindRefused as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": exc.message,
+                    "field": "path",
+                    "confirmable": True,
+                    **exc.preview,
+                },
+            ) from exc
+        except container_registry.ContainerBoundaryError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": str(exc), "field": "path"},
+            ) from exc
+        if result["rebound"]:
+            db().execute(
+                "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
+                "VALUES (?, 'project.rebind', 'project', ?, ?)",
+                (
+                    user["id"],
+                    slug,
+                    json.dumps(
+                        {
+                            "path": result["path"],
+                            "previous_path": result["previous_path"],
+                            "identity_confirmed": result["identity"]["matches"],
+                            "override": bool(payload.confirm),
+                            "repaired": result["repaired"],
+                        }
+                    ),
+                ),
+            )
+        row = dict(
+            db()
+            .execute(
+                "SELECT p.*, u.username AS owner, 'owner' AS role FROM projects p "
+                "JOIN users u ON u.id = p.owner_user_id WHERE p.id = ?",
+                (project["id"],),
+            )
+            .fetchone()
+        )
+        return {**result, "project": project_payload(row)}
 
     @app.put("/api/projects/{slug}/memory-writes")
     def set_memory_writes(

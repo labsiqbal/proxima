@@ -302,6 +302,22 @@ generates `container.md`. Identity is free text, not a Container type enum.
 The file API refreshes the projection immediately when it writes any identity
 doc name; linking refreshes it once; a five-second background
 cycle catches direct owner edits without adding filesystem work to Fleet requests.
+The pin between a project row and its folder is classified rather than
+assumed (prune C6): `container_registry.container_binding()` resolves the
+stored `path`/`path_identity` pair to `bound`, `missing` (nothing there),
+`moved` (a different directory there), or `unavailable`, and rides on every
+project payload as `location` (`GET /api/projects/{slug}/location` adds the
+stored identity and the offered actions). `container_relocate.py` owns the
+re-pin: it previews the move read-only (identity read at the NEW location by
+the same `resolve_container_identity()` and compared with the stored
+projection, plus Ops-path and code-Area resolution), refuses a non-matching
+location with an overridable 409, then - under the Container mutation lock, in
+one transaction ending in `validated_area_roots(deep_ops_scan=True)` - updates
+`path`/`path_identity`, re-detects an Ops path or layout entries whose folders
+broke (`layout_map.rebase_project_layout`), reconciles code Areas, and
+refreshes the identity projection. The project id never changes, so history,
+records, approvals, and per-project settings are untouched by construction,
+and nothing is written into either folder.
 `container_ops_migrations` stores the versioned, hash-bound, resumable migration
 marker for legacy root-level Ops data.
 `file_targets.py` defines the public file identity used after an entry has crossed the

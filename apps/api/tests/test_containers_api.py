@@ -89,8 +89,13 @@ def test_container_routes_are_authenticated_and_keep_project_reader_identity(
         "visibility",
         "code_areas",
         "ops_area",
+        # The folder-binding state (prune C6): the reader tells the UI when a
+        # project's folder moved, so it can offer the rebind instead of
+        # failing later.
+        "location",
     }
     assert set(legacy_detail) == set(legacy)
+    assert legacy["location"]["state"] == "bound"
     for field in ("slug", "name", "path", "owner", "visibility"):
         assert legacy[field] == container[field]
         assert legacy_detail[field] == container[field]

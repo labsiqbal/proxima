@@ -4,6 +4,10 @@ export class ApiError extends Error {
   method?: string
   field?: string
   detail?: string
+  // The structured `detail` object as the server sent it, when it sent one.
+  // Refusals that carry a decision the UI must render (an identity
+  // comparison, an override offer) need more than the flattened message.
+  body?: Record<string, unknown>
   constructor(status: number, message: string, path?: string, method?: string, field?: string, detail?: string) {
     super(message)
     this.status = status
@@ -28,6 +32,7 @@ export async function api<T>(path: string, token?: string, options: RequestInit 
     const text = await res.text()
     let message = text || res.statusText
     let field: string | undefined
+    let body: Record<string, unknown> | undefined
     try {
       const parsed = JSON.parse(text) as { detail?: unknown; message?: unknown }
       const detail = parsed?.detail
@@ -41,35 +46,41 @@ export async function api<T>(path: string, token?: string, options: RequestInit 
           field = [...location].reverse().find(value => typeof value === 'string' && value !== 'body') as string | undefined
         }
       } else if (detail && typeof detail === 'object') {
-        const body = detail as {
+        body = detail as Record<string, unknown>
+        const structured = detail as {
           message?: unknown
           field?: unknown
           active_processes?: unknown
           unresolved_processes?: unknown
         }
-        if (typeof body.message === 'string' && body.message.trim()) {
-          const parts = [body.message.trim()]
-          if (typeof body.active_processes === 'number' && body.active_processes > 0) {
-            parts.push(`Active processes: ${body.active_processes}.`)
+        if (typeof structured.message === 'string' && structured.message.trim()) {
+          const parts = [structured.message.trim()]
+          if (
+            typeof structured.active_processes === 'number'
+            && structured.active_processes > 0
+          ) {
+            parts.push(`Active processes: ${structured.active_processes}.`)
           }
           if (
-            typeof body.unresolved_processes === 'number'
-            && body.unresolved_processes > 0
+            typeof structured.unresolved_processes === 'number'
+            && structured.unresolved_processes > 0
           ) {
-            parts.push(`Unverified processes: ${body.unresolved_processes}.`)
+            parts.push(`Unverified processes: ${structured.unresolved_processes}.`)
           }
           message = parts.join(' ')
         } else {
           message = JSON.stringify(detail)
         }
-        field = typeof body.field === 'string' ? body.field : undefined
+        field = typeof structured.field === 'string' ? structured.field : undefined
       } else if (typeof parsed?.message === 'string') {
         message = parsed.message
       }
     } catch {
       /* not JSON — keep the raw text */
     }
-    throw new ApiError(res.status, `${method} ${path} failed (${res.status}): ${message}`, path, method, field, message)
+    const error = new ApiError(res.status, `${method} ${path} failed (${res.status}): ${message}`, path, method, field, message)
+    error.body = body
+    throw error
   }
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>

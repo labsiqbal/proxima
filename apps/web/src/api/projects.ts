@@ -1,5 +1,14 @@
 import { api, ApiError } from './client'
-import type { AreaRemote, OpsMigrationDetail, Project, ProjectAreas, ProjectLayout } from '../types'
+import type {
+  AreaRemote,
+  OpsMigrationDetail,
+  Project,
+  ProjectAreas,
+  ProjectIdentityComparison,
+  ProjectLayout,
+  ProjectLocation,
+  ProjectRebindResult,
+} from '../types'
 
 export const listProjects = (token: string) => api<{ projects: Project[] }>('/api/projects', token)
 export const listProjectAreas = (token: string, slug: string) => api<ProjectAreas>(`/api/projects/${slug}/areas`, token)
@@ -42,6 +51,25 @@ export const linkProjectErrorField = (error: unknown): 'path' | 'folder' | 'name
   if (error.field === 'path' || error.field === 'parent' || error.field === 'mkdir') return 'path'
   return null
 }
+// Relocate/rebind (prune C6): where the project's folder is now, and re-pinning
+// the record to it. The picker supplies path + root_id, so the target is jailed
+// to the configured link roots exactly like a link; `confirm` is the owner's
+// override for a location whose identity does not match the stored projection.
+export const getProjectLocation = (token: string, slug: string) =>
+  api<ProjectLocation & { identity: ProjectIdentityComparison['stored']; actions: string[] }>(
+    `/api/projects/${encodeURIComponent(slug)}/location`, token)
+export const rebindProject = (
+  token: string,
+  slug: string,
+  body: { path: string; root_id: string; confirm: boolean },
+) => api<ProjectRebindResult>(`/api/projects/${encodeURIComponent(slug)}/rebind`, token, {
+  method: 'POST',
+  body: JSON.stringify(body),
+})
+// A rebind refusal the owner may override says so in its body; everything else
+// (an already-linked folder, an unusable layout) is a plain refusal.
+export const rebindIsConfirmable = (error: unknown): boolean =>
+  error instanceof ApiError && error.status === 409 && error.body?.confirmable === true
 export const renameProject = (token: string, slug: string, name: string) => api<Project>(`/api/projects/${slug}`, token, { method: 'PATCH', body: JSON.stringify({ name }) })
 export const deleteProject = (token: string, slug: string) => api<{ ok: boolean }>(`/api/projects/${slug}`, token, { method: 'DELETE' })
 // The per-project layout map + memory-writes toggle (prune C4/C5).
