@@ -3,13 +3,13 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-193 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+194 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
 
 - [`routes/admin.py`](#routes-admin-py) - 3 endpoints
-- [`routes/archive.py`](#routes-archive-py) - 3 endpoints
+- [`routes/archive.py`](#routes-archive-py) - 4 endpoints
 - [`routes/auth.py`](#routes-auth-py) - 9 endpoints
 - [`routes/chat.py`](#routes-chat-py) - 25 endpoints
 - [`routes/containers.py`](#routes-containers-py) - 3 endpoints
@@ -41,7 +41,8 @@
 | Method | Path | Handler | Description |
 | --- | --- | --- | --- |
 | GET | `/api/archive` | `list_archive` | Paginated deliverable records, newest first, with filter facet counts. |
-| POST | `/api/archive/records/{record_id}/status` | `set_archive_status` | The Archive door of the ONE approval status (late/batch/supersede |
+| GET | `/api/archive/badges` | `archive_badges` | Badge data for the Files tree (the Deliverables lens, #139): the |
+| POST | `/api/archive/records/{record_id}/status` | `set_archive_status` | The record-panel door of the ONE approval status (late/batch/ |
 | GET | `/api/archive/{slug}/{record_slug}` | `get_archive_record` | One full record by its permanent address: metadata, lineage, |
 
 
@@ -323,4 +324,4 @@
 
 
 ---
-_Generated 2026-08-02 15:16 UTC._
+_Generated 2026-08-02 18:12 UTC._

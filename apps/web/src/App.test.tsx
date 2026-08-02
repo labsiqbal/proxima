@@ -102,9 +102,9 @@ describe("Shell project selection", () => {
 	it("keeps only Master and global review destinations in Delegate", () => {
 		expect(isDelegateDestination("master")).toBe(true);
 		expect(isDelegateDestination("activity")).toBe(true);
-		expect(isDelegateDestination("artifacts")).toBe(true);
 		// Files is a Delegate destination too (ADR-0040): global trees behind
-		// a head filter, like Tasks and Archive.
+		// a head filter, like Tasks. It also carries the deliverable ledger -
+		// the separate Archive destination is gone (#139).
 		expect(isDelegateDestination("files")).toBe(true);
 		expect(isDelegateDestination("task")).toBe(true);
 		expect(isDelegateDestination("chat")).toBe(false);

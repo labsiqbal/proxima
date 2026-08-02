@@ -1,8 +1,11 @@
 import { api } from './client'
 import type { FileTarget } from '../types'
 
-// The Archive registry (Phase-1 slice 8, T4): durable deliverable records with
-// lineage and ONE approval status. The scanner feeds it; it never forgets.
+// The deliverable-record registry (Phase-1 slice 8, T4; surfaced as the Files
+// "Deliverables" lens since prune Part D, #139): durable records with lineage
+// and ONE approval status. Record paths are container-relative real paths -
+// the same paths the Files tree browses. The scanner feeds the registry; it
+// never forgets: records whose file is gone live under the history filter.
 
 export type ArchiveStatus = 'draft' | 'review' | 'approved' | 'superseded'
 
@@ -50,7 +53,19 @@ export type ArchiveRecordDetail = ArchiveRecord & {
   superseded_by_slug: string | null
 }
 
-export type ArchiveCounts = { by_type: Record<string, number>; by_status: Record<string, number> }
+export type ArchiveCounts = { by_type: Record<string, number>; by_status: Record<string, number>; missing?: number }
+
+/** Badge data for the Files tree: the latest record per path in one project. */
+export type ArchiveBadge = {
+  id: number
+  slug: string
+  name: string
+  type: string
+  path: string
+  status: ArchiveStatus
+  version: number
+  file_missing: boolean
+}
 
 export type ArchiveListParams = {
   project?: string
@@ -59,6 +74,8 @@ export type ArchiveListParams = {
   q?: string
   days?: number
   path?: string
+  /** The history filter (#139): 1 = only records whose file is gone, 0 = only present. */
+  missing?: 0 | 1
   limit?: number
   offset?: number
 }
@@ -71,12 +88,16 @@ export const listArchive = (token: string, params: ArchiveListParams = {}) => {
   if (params.q) q.set('q', params.q)
   if (params.days) q.set('days', String(params.days))
   if (params.path) q.set('path', params.path)
+  if (params.missing != null) q.set('missing', String(params.missing))
   if (params.limit != null) q.set('limit', String(params.limit))
   if (params.offset != null) q.set('offset', String(params.offset))
   const qs = q.toString()
   return api<{ items: ArchiveRecord[]; total: number; limit: number; offset: number; counts: ArchiveCounts }>(
     `/api/archive${qs ? `?${qs}` : ''}`, token)
 }
+
+export const listArchiveBadges = (token: string, project: string) =>
+  api<{ items: ArchiveBadge[] }>(`/api/archive/badges?project=${encodeURIComponent(project)}`, token)
 
 export const getArchiveRecord = (token: string, project: string, slug: string) =>
   api<ArchiveRecordDetail>(`/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(slug)}`, token)

@@ -70,6 +70,6 @@ def test_dashboard_reuses_artifact_rules_for_legacy_video_shells(tmp_path):
         for artifact in client.get("/api/dashboard", headers=headers).json()["recentArtifacts"]
     }
 
-    assert "artifacts/video/old-studio/index.html" not in paths
-    assert "artifacts/video/old-studio/brief.json" not in paths
-    assert "artifacts/video/old-studio/render.mp4" in paths
+    assert "ops/artifacts/video/old-studio/index.html" not in paths
+    assert "ops/artifacts/video/old-studio/brief.json" not in paths
+    assert "ops/artifacts/video/old-studio/render.mp4" in paths

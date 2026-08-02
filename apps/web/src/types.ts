@@ -640,7 +640,6 @@ export type View =
 	| "master"
 	| "projects"
 	| "wiki"
-	| "artifacts"
 	| "files"
 	| "workflows"
 	| "activity"

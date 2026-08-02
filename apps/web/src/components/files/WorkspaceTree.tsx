@@ -19,6 +19,7 @@ type Ctl = {
   renaming: { path: string; target?: FileTarget } | null
   activePath: string | null
   activePathKind: 'root' | 'directory' | 'file'
+  rowExtra?: (path: string, entry: FileEntry) => React.ReactNode
   openFile: (p: string, target?: FileTarget) => void
   openMenu: (e: React.MouseEvent, path: string | null, isDir: boolean, target?: FileTarget) => void
   submitCreate: (name: string) => void
@@ -120,6 +121,7 @@ function Level({ dir, target, depth, t }: { dir: string; target?: FileTarget; de
             <span className={`tree-chevron ${open ? 'open' : ''}`}><IconChevronRight size={13} /></span>
             <span className="tree-ico"><IconFolder size={15} /></span>
             <span className="tree-name">{entry.name}</span>
+            {t.rowExtra?.(path, entry)}
           </button>
           {open && <Level dir={path} target={entry.target} depth={depth + 1} t={t} />}
         </div>
@@ -127,6 +129,7 @@ function Level({ dir, target, depth, t }: { dir: string; target?: FileTarget; de
       return <button key={path} data-path={path} className={`tree-row file ${t.activePathKind === 'file' && t.activePath === path ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 12 }} onClick={() => t.openFile(path, entry.target)} onContextMenu={t.writableFs ? e => t.openMenu(e, path, false, entry.target) : undefined}>
         <span className="tree-ico"><IconFile size={15} /></span>
         <span className="tree-name">{entry.name}</span>
+        {t.rowExtra?.(path, entry)}
       </button>
     })}
     {loaded && entries.length === 0 && depth === 0 && !t.creating && <p className="muted tree-empty">{t.writableFs ? 'Empty · use + to add' : 'Empty'}</p>}
@@ -145,7 +148,7 @@ function writableAdapter(fs: ReadOnlyFsAdapter | FsAdapter): FsAdapter | null {
   return null
 }
 
-export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSignal = 0, onOpenFile, onChange, activePath, activePathKind = 'file', fileFilter, defaultExt }: { fs: ReadOnlyFsAdapter | FsAdapter; title: string; className?: string; refreshSignal?: number; onOpenFile?: (path: string, target?: FileTarget) => void; onChange?: () => void; activePath?: string | null; activePathKind?: 'root' | 'directory' | 'file'; fileFilter?: (name: string) => boolean; defaultExt?: string }) {
+export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSignal = 0, onOpenFile, onChange, activePath, activePathKind = 'file', fileFilter, defaultExt, rowExtra }: { fs: ReadOnlyFsAdapter | FsAdapter; title: string; className?: string; refreshSignal?: number; onOpenFile?: (path: string, target?: FileTarget) => void; onChange?: () => void; activePath?: string | null; activePathKind?: 'root' | 'directory' | 'file'; fileFilter?: (name: string) => boolean; defaultExt?: string; rowExtra?: (path: string, entry: FileEntry) => React.ReactNode }) {
   const [refreshKey, setRefreshKey] = React.useState(0)
   const [editing, setEditing] = React.useState<{ path: string; target?: FileTarget } | null>(null)
   const [browsePath, setBrowsePath] = React.useState<string | null>(null)
@@ -347,6 +350,7 @@ if (
     toggle: p => { if (!busy) setExpanded(s => { const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n }) },
     creating, renaming, activePath: treeActivePath,
     activePathKind: treeActivePathKind,
+    rowExtra,
     openFile,
     openMenu: (e, path, isDir, target) => {
       if (!writableFs) return

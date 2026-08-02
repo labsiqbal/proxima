@@ -5,6 +5,12 @@ row per deliverable version: name, type, path, size, lineage (session -> job/
 node -> run), approval status, and a version chain. Records survive file moves
 and deletion - a missing file flips ``file_missing``, the record stays.
 
+Record paths are container-relative real paths (prune Part D, #139, decision
+#122): a record's ``path`` is the same path the Files tree browses, resolved
+literally against the container root with the authoritative Area assigned by
+physical ownership. The old Ops-relative record dialect is gone; migration
+v61 rewrote legacy rows.
+
 Approval is one status with two doors: approving a job in its Tasks review
 auto-approves the records that job produced (``approve_records_for_job``), and
 the Archive page edits the SAME status field (``set_status``). Never two
@@ -21,7 +27,7 @@ from typing import Any
 
 from .auth import iso_now
 from . import file_targets, fsapi
-from .container_registry import ops_root
+from .container_registry import container_root
 
 log = logging.getLogger("proxima.archive")
 
@@ -153,7 +159,9 @@ def record_run_outputs(
     prow = conn.execute(
         "SELECT id, path, path_identity FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
-    root = ops_root(conn, prow) if prow and prow["path"] else None
+    # Records speak container-relative paths (#139), so sizes resolve from
+    # the container root - the same root the Files tree browses.
+    root = container_root(prow) if prow and prow["path"] else None
     rrow = conn.execute("SELECT kind FROM runs WHERE id = ?", (run_id,)).fetchone()
     run_kind = rrow["kind"] if rrow else None
     node = conn.execute(
@@ -234,7 +242,9 @@ def refresh_file_presence(
             try:
                 context = file_targets.target_context(conn, project)
                 contexts[project_id] = context
-                roots[project_id] = context.ops_root()
+                # Container-relative record language (#139): presence resolves
+                # from the container root, Area ownership assigned physically.
+                roots[project_id] = context.container_root
             except (
                 file_targets.FileTargetError,
                 ValueError,

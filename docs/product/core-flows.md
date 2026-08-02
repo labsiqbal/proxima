@@ -6,7 +6,7 @@
 > `AGENT.md` memory) are design targets with **no code behind them today**; other
 > inline notes mark where the shipped product diverged. Design Studio and image
 > generation are active; Video Studio was removed. The shipped single-workspace flow (Chat → Tasks → Recipes, run-first
-> plans, repo-job diff review + local merge, script nodes, the Archive) is
+> plans, repo-job diff review + local merge, script nodes, the deliverable ledger on Files) is
 > documented in [../ui-shell.md](../ui-shell.md) and
 > [../CAPABILITIES.md](../CAPABILITIES.md).
 
@@ -311,7 +311,7 @@ Design result card should open Design Studio directly, not Artifacts.
 
 ## Artifacts Flow
 
-> **Status (Phase-1 slice 8, T4):** shipped as the **Archive** - a durable registry
+> **Status (Phase-1 slice 8, T4):** shipped as the durable deliverable registry (the **Files Deliverables lens** since prune Part D, #139) - a durable registry
 > (records with lineage, one synced approval status, version chains, permalinks)
 > rather than a scan-only gallery. See `docs/CAPABILITIES.md` §14.
 

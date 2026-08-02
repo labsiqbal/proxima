@@ -1,16 +1,12 @@
 import React from 'react'
-import type { OutputLink, Project } from '../types'
-import type { Artifact } from '../api/files'
-import { listArchive, setArchiveStatus, type ArchiveCounts, type ArchiveRecord, type ArchiveStatus } from '../api/archive'
-import { Dropdown } from '../components/ui/Dropdown'
-import { ArtifactViewer, type ArtifactReviewFeedback, type ArtifactReviewHandoffResult } from '../components/artifacts/ArtifactViewer'
-import { ArchiveRecordPage } from '../components/artifacts/ArchiveRecordPage'
-import { fmtDate, fmtSize, LineageLine, permalinkOf, RecordPreview, StatusPill, typeMeta } from '../components/artifacts/archive'
+import { listArchive, setArchiveStatus, type ArchiveCounts, type ArchiveRecord, type ArchiveStatus } from '../../api/archive'
+import { fmtDate, fmtSize, LineageLine, permalinkOf, RecordPreview, StatusPill, typeMeta } from './archive'
 
-// The Archive (Phase-1 slice 8, T4): a durable registry of deliverables, not a
-// folder scan. Detail is the captain's combo: a row expands in place for the
-// quick scan, and "Open full record" navigates to the record's permanent
-// address (ArchiveRecordPage). No right panel, no popup.
+// The Deliverables lens on Files (prune Part D, #139): the durable deliverable
+// registry, rendered as a filterable list inside the Files destination. Rows
+// expand in place for the quick scan; "Open full record" navigates to the
+// record's permanent address. `missingOnly` is the history filter: records
+// whose file is gone from disk - they are records, not phantom files.
 
 const clean = (n: string) => n.replace(/\s*\(private\)\s*$/i, '')
 const PAGE_SIZE = 50
@@ -25,36 +21,21 @@ const DATE_CHOICES = [
   { days: 90, label: 'Last 90 days' },
 ]
 
-const recordAsArtifact = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug' | 'target'>): Artifact => ({
-  type: (r.type === 'script-output' ? 'file' : r.type) as Artifact['type'],
-  title: r.name,
-  path: r.path,
-  project_slug: r.project_slug,
-  target: r.target || undefined,
-})
-
-export function ArtifactsScreen({ token, projects, activeProject, globalScope = false, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onActiveProject, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
+export function DeliverablesLens({ token, project = '', missingOnly = false, onOpenRecord, onOpenTask, onOpenSession, onOpenViewer, onOpenDesign, designStudioEnabled = false, onRecordsChanged }: {
   token: string
-  projects: Project[]
-  activeProject: Project | null
-  /** Delegate's Archive is global and intentionally has no project filter menu. */
-  globalScope?: boolean
-  archiveRecord?: { project: string; slug: string } | null
-  pendingFile?: { slug: string; path: string; target?: Artifact['target'] } | null
-  pendingArtifact?: OutputLink | null
-  onPendingConsumed?: () => void
-  onPendingArtifactConsumed?: () => void
-  onActiveProject?: (p: Project) => void
+  /** Project slug to scope to; '' lists every project (Delegate's global lens). */
+  project?: string
+  /** The history filter: only records whose file no longer exists on disk. */
+  missingOnly?: boolean
   onOpenRecord?: (project: string, slug: string) => void
-  onCloseRecord?: () => void
   onOpenTask?: (jobId: number, engine?: string) => void
   onOpenSession?: (sessionId: number) => void
-  designStudioEnabled?: boolean
+  onOpenViewer?: (record: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug' | 'target'> & { session_id?: number | null }) => void
   onOpenDesign?: (id: string) => void
-  reviewSessionId?: number | null
-  onSendFeedback?: (feedback: ArtifactReviewFeedback) => ArtifactReviewHandoffResult | Promise<ArtifactReviewHandoffResult>
+  designStudioEnabled?: boolean
+  /** Approvals notify the parent so tree badges stay in sync. */
+  onRecordsChanged?: () => void
 }) {
-  const [project, setProject] = React.useState('')
   const [type, setType] = React.useState('')
   const [status, setStatus] = React.useState<ArchiveStatus | ''>('')
   const [q, setQ] = React.useState('')
@@ -63,7 +44,6 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   const [total, setTotal] = React.useState(0)
   const [counts, setCounts] = React.useState<ArchiveCounts>({ by_type: {}, by_status: {} })
   const [expandedId, setExpandedId] = React.useState<number | null>(null)
-  const [viewer, setViewer] = React.useState<{ items: Artifact[]; slug: string; sessionId: number | null } | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [loadError, setLoadError] = React.useState('')
   const loadSeq = React.useRef(0)
@@ -79,7 +59,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
     setLoading(true)
     setLoadError('')
     try {
-      const res = await listArchive(token, { project, type, status, q, days, limit: PAGE_SIZE, offset })
+      const res = await listArchive(token, { project, type, status, q, days, missing: missingOnly ? 1 : undefined, limit: PAGE_SIZE, offset })
       if (!mountedRef.current || seq !== loadSeq.current) return
       const items = res.items
       setRecords(prev => append ? [...prev, ...items] : items)
@@ -90,42 +70,11 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
     } finally {
       if (mountedRef.current && seq === loadSeq.current) setLoading(false)
     }
-  }, [token, project, type, status, q, days])
+  }, [token, project, type, status, q, days, missingOnly])
 
   React.useEffect(() => { setExpandedId(null); void fetchPage(0, false) }, [fetchPage])
 
   const refresh = React.useCallback(() => { void fetchPage(0, false) }, [fetchPage])
-
-  const pickProject = React.useCallback((slug: string) => {
-    setProject(slug)
-    const next = projects.find(p => p.slug === slug)
-    if (next) onActiveProject?.(next)
-  }, [projects, onActiveProject])
-
-  // Chat result cards and task file links keep working: a pending artifact
-  // resolves to its registry record (permanent address) when one exists, and
-  // falls back to the universal viewer for anything not (yet) registered.
-  React.useEffect(() => {
-    if (!pendingArtifact) return
-    const link = pendingArtifact
-    onPendingArtifactConsumed?.()
-    const slug = link.project_slug || activeProject?.slug
-    if (!slug || !link.path) return
-    void listArchive(token, { project: slug, path: link.path, limit: 1 }).then(res => {
-      if (!mountedRef.current) return
-      const hit = res.items[0]
-      if (hit) onOpenRecord?.(hit.project_slug, hit.slug)
-      else setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug, target: link.target }], slug, sessionId: reviewSessionId })
-    }).catch(() => {
-      if (mountedRef.current) setViewer({ items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug, target: link.target }], slug, sessionId: reviewSessionId })
-    })
-  }, [pendingArtifact, token, activeProject?.slug, onOpenRecord, onPendingArtifactConsumed, reviewSessionId])
-
-  React.useEffect(() => {
-    if (!pendingFile) return
-    onPendingConsumed?.()
-    setViewer({ items: [{ type: 'file', title: pendingFile.path.split('/').pop() || pendingFile.path, path: pendingFile.path, target: pendingFile.target }], slug: pendingFile.slug, sessionId: reviewSessionId })
-  }, [pendingFile, onPendingConsumed, reviewSessionId])
 
   const approve = async (record: ArchiveRecord) => {
     try {
@@ -140,13 +89,11 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
           approved: (prev.by_status.approved || 0) + 1,
         },
       }))
+      onRecordsChanged?.()
     } catch (cause) {
       if (mountedRef.current) setLoadError(String(cause))
     }
   }
-
-  const openViewer = (record: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug' | 'target'> & { session_id?: number | null }) =>
-    setViewer({ items: [recordAsArtifact(record)], slug: record.project_slug, sessionId: record.session_id ?? reviewSessionId })
 
   // Design opens in its studio, an app runs on its full record page, everything
   // else opens in the universal viewer.
@@ -156,38 +103,8 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
     } else if (r.type === 'app') {
       onOpenRecord?.(r.project_slug, r.slug)
     } else {
-      openViewer(r)
+      onOpenViewer?.(r)
     }
-  }
-
-  const revealInFiles = (r: Pick<ArchiveRecord, 'path' | 'project_slug' | 'target'>) => {
-    const p = projects.find(x => x.slug === r.project_slug)
-    if (p) onActiveProject?.(p)
-    // The right tool rail owns the Files panel; this event asks it to open on
-    // this record's file (see ToolDock).
-    window.dispatchEvent(new CustomEvent('proxima:reveal-file', { detail: { path: r.path, target: r.target || undefined } }))
-  }
-
-  if (projects.length === 0) return <section className="placeholder-view"><div className="assistant-bubble compact"><h1>Archive</h1><p>No projects yet.</p></div></section>
-
-  // ── Full record page (variant A: its own permanent address) ──
-  if (archiveRecord) {
-    return <section className="artifacts-view">
-      <ArchiveRecordPage
-        token={token}
-        project={archiveRecord.project}
-        slug={archiveRecord.slug}
-        onBack={() => onCloseRecord?.()}
-        onOpenRecord={(p, s) => onOpenRecord?.(p, s)}
-        onOpenSession={globalScope ? undefined : onOpenSession}
-        onOpenTask={onOpenTask}
-        onOpenViewer={openViewer}
-        onOpenDesign={designStudioEnabled ? onOpenDesign : undefined}
-        onRevealInFiles={revealInFiles}
-        onChanged={refresh}
-      />
-      {viewer && <ArtifactViewer token={token} slug={viewer.slug} items={viewer.items} index={0} onIndex={() => {}} onClose={() => setViewer(null)} reviewSessionId={viewer.sessionId} onSendFeedback={onSendFeedback} />}
-    </section>
   }
 
   const typeKeys = [...TYPE_ORDER.filter(t => counts.by_type[t]), ...Object.keys(counts.by_type).filter(t => !TYPE_ORDER.includes(t)).sort()]
@@ -235,19 +152,8 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
     </React.Fragment>
   }
 
-  return <section className="artifacts-view">
-    {loadError && <div className="error-bar">Could not load the archive: {loadError}</div>}
-    <div className="archive-head">
-      <div className="archive-head-titles">
-        <h2>Archive</h2>
-        <p className="muted">Every deliverable of record, with lineage and approval - across all projects.</p>
-      </div>
-      <div className="archive-head-controls">
-        {!globalScope && <Dropdown value={project} onChange={pickProject} minWidth={180} options={[{ value: '', label: 'All projects' }, ...projects.map(p => ({ value: p.slug, label: clean(p.name) }))]} />}
-        <input className="archive-search" type="search" placeholder="Search deliverables…" aria-label="Search deliverables" value={q} onChange={e => setQ(e.target.value)} />
-        <button className="ghost-button" onClick={refresh} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
-      </div>
-    </div>
+  return <div className="archive-lens">
+    {loadError && <div className="error-bar">Could not load deliverable records: {loadError}</div>}
     <div className="archive-facets">
       <div className="archive-facet-group" role="group" aria-label="Type">
         <span className="archive-facet-label">Type</span>
@@ -264,6 +170,10 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
           {DATE_CHOICES.map(c => <option key={c.days} value={c.days}>{c.label}</option>)}
         </select>
       </div>
+      <div className="archive-facet-group archive-facet-search">
+        <input className="archive-search" type="search" placeholder="Search deliverables…" aria-label="Search deliverables" value={q} onChange={e => setQ(e.target.value)} />
+        <button className="ghost-button" onClick={refresh} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
+      </div>
     </div>
     <div className="archive-registry">
       <div className="archive-cols" aria-hidden="true">
@@ -279,11 +189,18 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
         {records.length === 0 && <div className="archive-empty teaching-empty" data-testid="teaching-empty">
           {loading ? (
             <h3 className="teaching-empty-title">Loading records…</h3>
+          ) : missingOnly ? (
+            <>
+              <h3 className="teaching-empty-title">No history records here</h3>
+              <p className="teaching-empty-lead">
+                History keeps the record of deliverables whose file was later moved or deleted - lineage and approval survive the file.
+              </p>
+            </>
           ) : (
             <>
               <h3 className="teaching-empty-title">No records match these filters</h3>
               <p className="teaching-empty-lead">
-                Archive is the durable registry of deliverables from Chat, Tasks, and Workflows — not a temporary folder listing.
+                Deliverables is the durable registry of agent output from Chat, Tasks, and Workflows - a lens over the same files you browse here.
               </p>
               <ul className="teaching-empty-caps" aria-label="What you can do here">
                 <li>Browse docs, images, video, designs, and other outputs</li>
@@ -292,7 +209,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
               </ul>
               <ol className="teaching-empty-steps" aria-label="Getting started">
                 <li><span className="teaching-empty-step-n" aria-hidden="true">1</span><span>Produce work in Chat or a Task run</span></li>
-                <li><span className="teaching-empty-step-n" aria-hidden="true">2</span><span>Return here to find deliverables by project, type, or status</span></li>
+                <li><span className="teaching-empty-step-n" aria-hidden="true">2</span><span>Return here to find deliverables by type or status</span></li>
                 <li><span className="teaching-empty-step-n" aria-hidden="true">3</span><span>Open a row for preview, or the full record for approvals</span></li>
               </ol>
             </>
@@ -307,6 +224,5 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
         </span>
       </div>
     </div>
-    {viewer && <ArtifactViewer token={token} slug={viewer.slug} items={viewer.items} index={0} onIndex={() => {}} onClose={() => setViewer(null)} reviewSessionId={viewer.sessionId} onSendFeedback={onSendFeedback} />}
-  </section>
+  </div>
 }

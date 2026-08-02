@@ -5646,6 +5646,72 @@ div.result-media {
 .files-tree {
 	min-height: 0;
 }
+/* Lens chips (prune Part D, #139): Browse the disk, Deliverables (the record
+   ledger), History (records whose file is gone). Same chip grammar as the
+   archive facet chips so the two record surfaces read as one family. */
+.files-lens {
+	display: flex;
+	gap: var(--space-2);
+	align-items: center;
+}
+.files-lens-chip {
+	height: 28px;
+	padding: 0 var(--space-3);
+	border: 1px solid var(--ui-stroke-secondary);
+	border-radius: var(--radius-full);
+	background: var(--ui-surface);
+	color: var(--ui-text-secondary);
+	font-size: var(--text-sm);
+	cursor: pointer;
+	transition: border-color var(--t) var(--ease), color var(--t) var(--ease), background var(--t) var(--ease);
+}
+.files-lens-chip:hover {
+	border-color: var(--ui-stroke-primary);
+	color: var(--ui-text-primary);
+}
+.files-lens-chip.active {
+	border-color: var(--ui-accent);
+	color: var(--ui-accent);
+	background: var(--ui-focus-ring);
+}
+/* Deliverable badge on a tree row: agent-produced files carry their record's
+   approval status; clicking opens the full record. A span, not a nested
+   button - the row itself is one. */
+.files-deliv-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	margin-left: auto;
+	padding: 0 var(--space-2);
+	border-radius: var(--radius-full);
+	font-size: var(--text-2xs);
+	line-height: 18px;
+	color: var(--ui-text-secondary);
+	background: var(--ui-surface-subtle);
+	border: 1px solid var(--ui-stroke-tertiary);
+	flex: 0 0 auto;
+}
+.files-deliv-badge:hover {
+	color: var(--ui-text-primary);
+	border-color: var(--ui-stroke-primary);
+}
+.files-deliv-badge[data-status='approved'] {
+	color: var(--ui-success);
+	border-color: color-mix(in srgb, var(--ui-success) 40%, transparent);
+}
+.files-deliv-badge[data-status='review'] {
+	color: var(--ui-warning);
+	border-color: color-mix(in srgb, var(--ui-warning) 40%, transparent);
+}
+.files-deliv-badge[data-status='superseded'] {
+	color: var(--ui-text-tertiary);
+}
+.files-deliv-badge-label {
+	display: none;
+}
+.tree-row:hover .files-deliv-badge-label {
+	display: inline;
+}
 
 .tasks-head,
 .graph-header {
@@ -12889,45 +12955,22 @@ button.moodboard-add-method:hover {
 	overflow: auto;
 }
 
-/* Archive: the durable deliverable registry (records list + full record page) */
-.artifacts-view {
+/* Deliverable records (Phase-1 slice 8, T4; the Files Deliverables lens since
+   prune Part D, #139): records list, expanding row detail, and the full
+   record page. Combo detail per the ratified mockup - no right panel, no
+   popup. .archive-lens is the list's container inside the Files body. */
+.archive-lens {
 	flex: 1;
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
-	padding: 16px 18px;
+	gap: var(--space-3);
+	padding: var(--space-4) var(--space-5);
 	overflow: hidden;
 	background: var(--ui-bg);
 }
-/* Archive registry (Phase-1 slice 8, T4): durable records list, expanding row
-   detail, and the full record page. Combo detail per the ratified mockup - no
-   right panel, no popup. */
-.archive-head {
-	flex: 0 0 auto;
-	display: flex;
-	align-items: flex-start;
-	gap: var(--space-3);
-	flex-wrap: wrap;
-}
-.archive-head-titles {
-	min-width: 0;
-	flex: 1 1 220px;
-}
-.archive-head-titles h2 {
-	margin: 0;
-	font-size: var(--text-xl);
-	line-height: 1.2;
-}
-.archive-head-titles p {
-	margin: 3px 0 0;
-	font-size: var(--text-sm);
-}
-.archive-head-controls {
-	display: flex;
-	gap: var(--space-2);
-	flex-wrap: wrap;
-	align-items: center;
+.archive-facet-search {
+	margin-left: auto;
 }
 .archive-search {
 	height: 36px;
@@ -14037,41 +14080,9 @@ button.moodboard-add-method:hover {
 }
 
 @media (max-width: 760px) {
-	.artifacts-view {
-		padding: 12px;
+	.archive-lens {
+		padding: var(--space-3);
 		overflow: auto;
-	}
-	.artifacts-head {
-		align-items: flex-start;
-	}
-	.artifacts-head > div:first-of-type {
-		flex-basis: 100%;
-	}
-	.artifact-filters {
-		margin-inline: -2px;
-		padding-inline: 2px;
-		scrollbar-width: none;
-	}
-	.artifact-filters::-webkit-scrollbar {
-		display: none;
-	}
-	.artifacts-body {
-		grid-template-columns: 1fr;
-		overflow: visible;
-		min-height: auto;
-	}
-	.artifacts-body.has-preview {
-		grid-template-columns: 1fr;
-	}
-	.artifacts-main {
-		overflow: visible;
-	}
-	.artifact-masonry {
-		column-width: 145px;
-		column-gap: 10px;
-	}
-	.artifact-preview {
-		min-height: 62vh;
 	}
 	.artifact-list .art-card {
 		padding: 10px 12px;

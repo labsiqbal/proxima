@@ -91,16 +91,18 @@ def test_messages_return_output_links(tmp_path):
     sid = client.post("/api/sessions", headers=headers, json={"title": "outputs", "project_slug": slug}).json()["id"]
     client.app.state.db.execute(
         "INSERT INTO messages(session_id, role, content, author, output_links) VALUES (?, 'assistant', ?, 'Agent', ?)",
-        (sid, "Done.", '[{"type":"design","title":"Launch Post","path":"artifacts/design/launch","id":"launch","project_slug":"%s"}]' % slug),
+        (sid, "Done.", '[{"type":"design","title":"Launch Post","path":"ops/artifacts/design/launch","id":"launch","project_slug":"%s"}]' % slug),
     )
 
     messages = client.get(f"/api/sessions/{sid}/messages", headers=headers).json()["messages"]
 
+    # Record language is container-relative (#139); the target names the
+    # owning Area with its Area-relative path.
     assert messages[0]["output_links"] == [
         {
             "type": "design",
             "title": "Launch Post",
-            "path": "artifacts/design/launch",
+            "path": "ops/artifacts/design/launch",
             "id": "launch",
             "project_slug": slug,
             "target": {

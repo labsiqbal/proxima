@@ -15,7 +15,7 @@ describe('Sidebar single-workspace IA', () => {
     const labels = () => Array.from(document.querySelectorAll('.primary-nav > .nav-item strong')).map(node => node.textContent)
     // Destinations only - blank session lives on Chat header / mobile topbar / `/new`.
     // Project switch is the Work sidebar; project manage is Settings → Projects.
-    expect(labels()).toEqual(['Chat', 'Tasks', 'Workflows', 'Archive', 'Files', 'Design'])
+    expect(labels()).toEqual(['Chat', 'Tasks', 'Workflows', 'Files', 'Design'])
     expect(screen.queryByRole('button', { name: 'New chat' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Projects' })).not.toBeInTheDocument()
     // No workspace switch, and Terminal/Preview stay right-rail tools. Files is
@@ -74,7 +74,7 @@ describe('Sidebar single-workspace IA', () => {
     const user = userEvent.setup()
     const { rerender } = render(<Sidebar {...base} currentView="master" delegate />)
     const labels = () => Array.from(document.querySelectorAll('.primary-nav > .nav-item strong')).map(node => node.textContent)
-    expect(labels()).toEqual(['Master', 'Tasks', 'Archive', 'Files'])
+    expect(labels()).toEqual(['Master', 'Tasks', 'Files'])
     expect(screen.getByRole('navigation', { name: 'Delegate navigation' })).toBeInTheDocument()
     expect(screen.queryByText('Work project')).not.toBeInTheDocument()
     expect(screen.queryByText('Recent chats')).not.toBeInTheDocument()

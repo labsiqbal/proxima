@@ -37,7 +37,7 @@ what an owner sees and how the surfaces connect.
 | Tasks list / board / New task | pass (empty project honest) | `tasks-*.png`, `task-launcher.png` |
 | Recipes home / editor / schedules | pass | `workflows-home.png`, `workflow-blank-canvas.png`, `schedules.png` |
 | Projects | pass | `projects.png` |
-| Archive registry | pass (empty) | `archive-registry.png` |
+| Archive registry (now the Files Deliverables lens, #139) | pass (empty) | `archive-registry.png` |
 | ArtifactViewer v2 deep review | skip - no live artifacts this pass | - |
 | Design home | pass | `design-home.png` |
 | Design studio canvas | skip - not opened beyond home | - |
@@ -54,14 +54,15 @@ what an owner sees and how the surfaces connect.
 
 The shell keeps primary destinations on the left, the current surface in the
 center, and technical tools on the right. Left nav is **destinations only**:
-Chat, Tasks, Workflows, Archive, and Design. There
+Chat, Tasks, Workflows, Files, and Design (Archive merged into Files as its
+Deliverables lens, prune Part D #139; screenshots below predate the merge). There
 is no primary-nav **New chat** row - a blank session starts from the Chat header
 control, the mobile topbar icon, or `/new`.
 
 ![Chat in the shared workspace](screenshots/deck-chat.png)
 
 The first post-setup visit offers a keyboard-trapped core tour. By default it is
-four steps - the primary loop, hands-on Chat, Tasks and Workflows, and Archive;
+four steps - the primary loop, hands-on Chat, Tasks and Workflows, and Files;
 a fifth **delegated Master work** step appears only when the Master feature is
 enabled (see [CAPABILITIES.md](CAPABILITIES.md)). The same tour can be replayed
 later from Settings → Help & Tours.
@@ -164,9 +165,11 @@ honest when no Recipe is saved yet. Trust regression captures live under
 
 ![Scheduled Recipes](screenshots/schedules.png)
 
-## 7. Archive and Projects
+## 7. Deliverables and Projects
 
-Archive remembers deliverables as durable records. Empty registry:
+Files remembers deliverables as durable records under its Deliverables lens
+(the separate Archive destination merged into Files, #139). Empty registry at
+capture time:
 
 ![Archive registry](screenshots/archive-registry.png)
 

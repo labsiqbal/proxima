@@ -307,12 +307,13 @@ marker for legacy root-level Ops data.
 `file_targets.py` defines the public file identity used after an entry has crossed the
 API boundary: `(project slug, authoritative Area kind/id, Area-relative path)`. The
 server constructs these targets for merged tree entries, artifact scan results, task
-and chat run outputs, and Archive records. Scanned paths are resolved from the
-validated Ops scan root back through physical ownership, so a nested Code Area under
-an Ops-at-dot layout remains Code-owned; enrichment is per entry, so an unsafe
+and chat run outputs, and deliverable records. Artifact and record paths are
+container-relative real paths (#139): they resolve literally from the validated
+container root with the authoritative Area assigned by physical ownership, so a
+nested Code Area stays Code-owned; enrichment is per entry, so an unsafe
 symlink is omitted without discarding other scan results. File tree traversal,
 read/write, mutation, raw/preview,
-Archive presence refresh, and ArtifactViewer use the same resolver, which revalidates
+record presence refresh, and ArtifactViewer use the same resolver, which revalidates
 the project/Area relationship before applying `fsapi` realpath jailing. The resolver
 then requires the target Area to be the authoritative owner of the resolved path:
 the most specific active Area wins, Ops wins a legacy same-root tie with Code, and a
@@ -352,7 +353,7 @@ unavailable.
 admission, cookie, framing, worker, and response-policy contract lives in
 [Security boundaries](../security-boundaries.md#canonical-file-preview).
 Markdown resources resolve relative to both the source document directory and its
-target. A validated target context is reused throughout each tree, Archive, or
+target. A validated target context is reused throughout each tree, record-list, or
 message-list request while each path still crosses the realpath jail. Artifact links
 whose Area context or individual path cannot be validated are omitted rather than
 downgraded to a path-only identity. Design canvas, thumbnail, Moodboard, and export
@@ -399,7 +400,7 @@ resolution; the full recursive scan that rejects any symlink inside physical Ops
 opt-in (`deep_ops_scan`) and runs at the fail-closed boundaries - Ops creation,
 legacy migration, Area mutation, and Area-sensitive execution - so hot read paths
 (project lists, Home, file resolution) stay O(1) and lean on per-access realpath
-jailing instead. Best-effort cross-Container aggregations (Home dashboard, Archive
+jailing instead. Best-effort cross-Container aggregations (Home dashboard, deliverable
 list) resolve through `try_ops_root`, which returns None for an unavailable or
 boundary-invalid Container so one missing folder skips that Container instead of
 failing the whole read; direct single-Container access still uses `ops_root` and
@@ -497,7 +498,7 @@ already-physical layout with open migration Attention
 becomes explicitly retryable; the same boundary revalidates it and resolves Attention
 without moving content. It does not add merge, overwrite, delete, cross-device move,
 symlink-following, or content-authority behavior.
-Archive, Wiki, artifacts, Design, scripts, reports, exports, and uploads resolve
+Deliverable records, Wiki, artifacts, Design, scripts, reports, exports, and uploads resolve
 through the active Ops row plus the per-project layout map; the file API resolves
 literal container-relative paths (prune #138). Recovery reveal actions can opt into
 an explicit read-only Container-root inspection target that bypasses Area
@@ -532,9 +533,14 @@ superseded`) both approval doors write, an automatic version chain
 (new producer at the same identity ⇒ v(n+1), prior versions superseded), and a
 permanent per-project slug. The scanner (`artifacts.py`) only discovers; the
 registry (`artifact_registry.py`) remembers - records survive file moves/deletion
-via `file_missing`. Archive presence derives each record's canonical target from its
-validated scan root, including a nested Code owner, so a same-name Container file
-cannot hide a missing deliverable. Workspace discovery
+via `file_missing`. Record paths are container-relative real paths (#139,
+migration v61 rewrote legacy Ops-relative rows): presence resolves each record's
+canonical target literally from the container root through physical ownership,
+and the record scan is container-rooted through the layout map (an artifacts
+area outside the Ops root is covered). The registry is surfaced as the Files
+**Deliverables lens** with a **history filter** (`missing=1`) for gone-file
+records and a badge feed (`GET /api/archive/badges`) for the Files tree; the
+separate Archive destination is gone (prune Part D, #139). Workspace discovery
 does not itself create registry rows. Fed at the one seam every run's outputs pass through
 (`run_outputs.save_assistant_message`); seeded from the scanner by migration 23.
 Migration 26 introduced the original orchestrator foundation. Migration 31
@@ -752,9 +758,9 @@ image/video media, PDF/HTML frames, and download links therefore resolve the sam
 identity returned by the server instead of re-deriving a root from a display path.
 HTML frames use the Area-stable preview namespace, and Markdown sibling resources
 inherit the source document's Area and directory. Chat and task result media,
-Iterate and Archive Markdown, session deletion, and the Design Studio image bridge
+Iterate and record-preview Markdown, session deletion, and the Design Studio image bridge
 retain the same target. Design scene image layers persist the target beside the
-source path, and canvas, gallery, Moodboard, Archive thumbnail, image-frame, and
+source path, and canvas, gallery, Moodboard, record thumbnail, image-frame, and
 export renderers pass it to the media resolver. SVG display uses authenticated raw
 bytes rather than preview-origin document rendering.
 
@@ -913,9 +919,9 @@ does not render a composer while another surface is active.
 When the Master feature is enabled, Delegate keeps the shared AppShell sidebar and
 its focus-managed mobile drawer behavior. Its desktop navigation is fixed alongside
 the desk without hide/collapse or resize controls. Its distinct
-global navigation is Master, Tasks, and Archive only. Delegate passes no Work active
+global navigation is Master, Tasks, and Files only. Delegate passes no Work active
 project into the Master desk and suppresses project filtering and Work-only escape
-paths from its Tasks and Archive views, while preserving task and archive-record deep
+paths from its Tasks and Files views, while preserving task and record deep
 links in the same mode.
 Fleet work, Decisions, and Safety are independent native accordions, open by
 default, with each underlying list constrained to a three-entry internal scroll
@@ -1202,7 +1208,7 @@ job = frozen snapshot of steps + per-step state (steps_state JSON)
     │  steps run sequentially in ONE ACP session (context carries across steps)
     │  review-gate steps pause → Approve / edit-&-continue
     ▼
-job done  →  artifacts surface in the Result view + land as durable Archive records
+job done  →  artifacts surface in the Result view + land as durable deliverable records
              (registry feed; approving the job auto-approves its records - T4)
 ```
 
@@ -1705,7 +1711,7 @@ ProjectSwitcher uses `setActiveProjectOnly` (active project + recent chat sessio
 for coherence) and **stays on the current view**; only intentional open paths
 (Search project pick, etc.) call `selectProject` to open Chat.
 
-`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Files/Preview as overlay panels). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Master, Tasks, Workflows, Archive, gated Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Master's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; Files reuses `WorkspaceTree`+`FileEditor` over `projectFs`, and Preview reuses `AppRunner`. The dock accepts an availability boundary from `App`; unavailable Project context closes and hides the entire dock while retaining any already-visited panes for a safe return. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
+`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Preview as overlay panels; Files is a destination, ADR-0040). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Master, Tasks, Workflows, Files, Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Master's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; the Files destination reuses `WorkspaceTree` over `projectFs` (with the record ledger as its Deliverables lens, #139), and Preview reuses `AppRunner`. The dock accepts an availability boundary from `App`; unavailable Project context closes and hides the entire dock while retaining any already-visited panes for a safe return. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
 
 `App.tsx` serializes Work navigation through `lib/workRoute.ts`: mode, project,
 background Chat session, primary surface, and focused Workflow or Design identity form

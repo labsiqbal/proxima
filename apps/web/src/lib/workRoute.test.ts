@@ -46,6 +46,26 @@ describe("Work URL state", () => {
 		).toMatchObject({ workflowJobId: null, designId: null });
 	});
 
+	it("opens record permalinks inside Files now that Archive merged (#139)", () => {
+		expect(
+			parseWorkRoute({
+				search: "?mode=work&view=chat",
+				hash: "#archive/wingoh/report-md-v1",
+			}),
+		).toMatchObject({ view: "files" });
+		// The record hash survives serialization while Files is the view.
+		const route = parseWorkRoute({
+			search: "?mode=work&view=files",
+			hash: "#archive/wingoh/report-md-v1",
+		});
+		expect(
+			workRouteUrl(
+				"http://localhost/#archive/wingoh/report-md-v1",
+				route,
+			),
+		).toBe("/?mode=work&view=files#archive/wingoh/report-md-v1");
+	});
+
 	it("keeps Files durable in both modes (ADR-0040)", () => {
 		expect(
 			parseWorkRoute({

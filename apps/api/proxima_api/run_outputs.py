@@ -31,11 +31,15 @@ class RunOutputs:
             ).fetchone()
             if not prow:
                 return []
+            # Records speak container-relative paths (#139): scan the whole
+            # container so a mapped artifacts area outside the Ops root is
+            # covered too, and the paths match what the Files tree browses.
             layout = layout_map.project_layout(db, prow)
             fresh = scan_project_artifacts(
-                layout.ops_root,
+                layout.container_root,
                 run_start_ts - 5,
-                artifacts_rel=layout.ops_rel_path("artifacts") or "artifacts",
+                artifacts_rel=layout.rel_paths["artifacts"],
+                deliverable_rels=layout.deliverable_dir_rels(),
             )
             links = artifacts_for_output_links(fresh, prow["slug"])
             return file_targets.add_artifact_targets(db, prow, links)

@@ -102,7 +102,6 @@ def persist_draft(
     project_slug: str,
     *,
     run_pending_id: int,
-    record_path: str | None = None,
 ) -> dict[str, Any]:
     """Write a seeded /design draft to disk and return its chat artifact.
 
@@ -113,15 +112,15 @@ def persist_draft(
     the chat gate) means create_run stays feature-blind about design internals.
 
     ``artifacts_rel`` is the project's mapped artifacts folder relative to
-    ``root`` (layout map, prune #138). ``record_path`` optionally overrides the
-    artifact-record path (records speak Ops-relative language until #139).
+    ``root`` (layout map, prune #138); the returned artifact path is the same
+    container-relative path (record language, #139).
     """
     scene["runPendingId"] = run_pending_id
     design_rel = f"{artifacts_rel}/design/{design_id}"
     d = fsapi.resolve_in_project(root, design_rel)
     d.mkdir(parents=True, exist_ok=True)
     (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")
-    return {"type": "design", "id": design_id, "title": scene["title"], "path": record_path or design_rel, "project_slug": project_slug}
+    return {"type": "design", "id": design_id, "title": scene["title"], "path": design_rel, "project_slug": project_slug}
 
 
 def scene_for_image(

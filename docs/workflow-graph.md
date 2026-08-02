@@ -483,7 +483,7 @@ name and description, rides along client-side and pre-fills the lightweight prom
 dialog. The trigger's shared intake contract and optional schedule seeds stay in the
 graph and autosave with the plan. An empty Plan Chat explains this authoring relationship
 - graph steps, branches, inputs, review gates, and node tests - rather than borrowing
-main Chat's hands-on conversation and Archive guidance.
+main Chat's hands-on conversation and deliverables guidance.
 
 A plan that has started is **frozen** — the job is the record of what ran, so its graph
 cannot be redrawn after the fact. Its **outputs are not**: editing a node's output and

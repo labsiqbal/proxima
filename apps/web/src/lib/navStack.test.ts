@@ -23,7 +23,7 @@ const baseFlags = (over: Partial<DeepShellFlags> = {}): DeepShellFlags => ({
 
 describe('navStack deep detection', () => {
   it('treats top-level surfaces as not deep', () => {
-    for (const view of ['chat', 'master', 'activity', 'workflows', 'artifacts', 'files', 'design', 'settings'] as const) {
+    for (const view of ['chat', 'master', 'activity', 'workflows', 'files', 'design', 'settings'] as const) {
       expect(isDeepShell(baseFlags({ view }))).toBe(false)
       expect(projectSwitcherLocked(baseFlags({ view }))).toBe(false)
     }
@@ -32,8 +32,9 @@ describe('navStack deep detection', () => {
   it('locks project on task, workflow editor, archive record, design canvas, settings stack', () => {
     expect(projectSwitcherLocked(baseFlags({ view: 'task' }))).toBe(true)
     expect(projectSwitcherLocked(baseFlags({ view: 'workflows', graphStage: 'editor' }))).toBe(true)
+    // A record panel is a deep surface inside Files (#139).
     expect(projectSwitcherLocked(baseFlags({
-      view: 'artifacts',
+      view: 'files',
       archiveRecord: { project: 'demo', slug: 'a1' },
     }))).toBe(true)
     expect(projectSwitcherLocked(baseFlags({ view: 'design', designCanvasOpen: true }))).toBe(true)
@@ -117,7 +118,6 @@ describe('viewOriginLabel + keep-alive', () => {
     expect(viewOriginLabel('chat')).toBe('Chat')
     expect(viewOriginLabel('activity')).toBe('Tasks')
     expect(viewOriginLabel('workflows')).toBe('Workflows')
-    expect(viewOriginLabel('artifacts')).toBe('Archive')
     expect(viewOriginLabel('files')).toBe('Files')
   })
 

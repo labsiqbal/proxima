@@ -441,11 +441,17 @@ def add_artifact_target(
     *,
     context: FileTargetContext | None = None,
 ) -> dict[str, Any]:
+    """Resolve an artifact record's locator from its container-relative path.
+
+    Record language is container-relative real paths (prune Part D, #139):
+    the path means exactly what it says from the container root, and the
+    authoritative Area comes from physical ownership.
+    """
     data = container_registry.get_container(conn, container)
     resolved_context = _context_for(conn, data, context)
     resolved = resolve_from_root(
         resolved_context,
-        resolved_context.ops_root(),
+        resolved_context.container_root,
         str(item.get("path") or ""),
     )
     return {

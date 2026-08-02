@@ -737,10 +737,13 @@ def register(app, deps):
             layout = layout_map.project_layout(db(), p)
         except container_registry.ContainerBoundaryError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Container-relative record language (#139): container-rooted scan
+        # through the layout map, covering an artifacts area outside Ops too.
         items = scan_project_artifacts(
-            layout.ops_root,
+            layout.container_root,
             start,
-            artifacts_rel=layout.ops_rel_path("artifacts") or "artifacts",
+            artifacts_rel=layout.rel_paths["artifacts"],
+            deliverable_rels=layout.deliverable_dir_rels(),
         )
         return {
             "artifacts": file_targets.add_artifact_targets(
@@ -781,6 +784,35 @@ def register(app, deps):
         ):
             items = []
         return {"artifacts": items}
+
+    def _session_recorded_artifact(conn, session_id: int, stored_path: str) -> bool:
+        """True when this session recorded a deliverable at ``stored_path``
+        (container-relative record language, #139) in its produced artifacts
+        or any message's output links."""
+
+        def _has(raw: str | None) -> bool:
+            try:
+                items = json.loads(raw or "[]")
+            except Exception:
+                return False
+            return any(
+                isinstance(item, dict) and item.get("path") == stored_path
+                for item in items
+            )
+
+        row = conn.execute(
+            "SELECT produced_artifacts FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if row is not None and _has(row["produced_artifacts"]):
+            return True
+        return any(
+            _has(m["output_links"])
+            for m in conn.execute(
+                "SELECT output_links FROM messages WHERE session_id = ? "
+                "AND output_links != '[]'",
+                (session_id,),
+            ).fetchall()
+        )
 
     @app.delete("/api/sessions/{session_id}/artifacts")
     def delete_session_artifact(
@@ -828,18 +860,14 @@ def register(app, deps):
                             locator,
                             context=context,
                         )
-                        ops_root = context.ops_root()
-                        if (
-                            resolved.path != ops_root
-                            and ops_root not in resolved.path.parents
-                        ):
-                            raise file_targets.FileTargetError(
-                                "session artifact is outside the Ops workspace"
-                            )
+                        # Session artifacts speak container-relative paths
+                        # (#139); resolve_locator already jails the path to
+                        # the container.
+                        container_root = context.container_root
                         stored_path = (
                             ""
-                            if resolved.path == ops_root
-                            else resolved.path.relative_to(ops_root).as_posix()
+                            if resolved.path == container_root
+                            else resolved.path.relative_to(container_root).as_posix()
                         )
                         if not stored_path:
                             raise file_targets.FileTargetError(
@@ -848,6 +876,15 @@ def register(app, deps):
                         if artifact_path and artifact_path != stored_path:
                             raise file_targets.FileTargetError(
                                 "artifact path does not match file target"
+                            )
+                        # Only a file this session actually recorded may be
+                        # deleted through the artifact door (the guard that
+                        # replaced the retired Ops-workspace boundary, #139).
+                        if not _session_recorded_artifact(
+                            db(), session_id, stored_path
+                        ):
+                            raise file_targets.FileTargetError(
+                                "file is not a recorded session artifact"
                             )
                         fsapi.delete(resolved.root, resolved.locator.path)
                     except fsapi.FsError:

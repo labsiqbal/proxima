@@ -5,14 +5,12 @@ const WORK_VIEWS = new Set<View>([
 	"chat",
 	"activity",
 	"workflows",
-	"artifacts",
 	"files",
 	"design",
 ]);
 const DELEGATE_VIEWS = new Set<View>([
 	"master",
 	"activity",
-	"artifacts",
 	"files",
 ]);
 
@@ -47,7 +45,9 @@ export function parseWorkRoute(location: {
 				? "master"
 				: "chat";
 	if (/^#task\/\d+$/.test(location.hash)) view = "task";
-	if (/^#archive\/[^/]+\/[^/]+$/.test(location.hash)) view = "artifacts";
+	// Record permalinks outlive the retired Archive destination (#139):
+	// they open as the record panel inside Files.
+	if (/^#archive\/[^/]+\/[^/]+$/.test(location.hash)) view = "files";
 	return {
 		mode,
 		view,
@@ -107,6 +107,6 @@ export function workRouteUrl(
 	) {
 		url.searchParams.set("design", route.designId);
 	}
-	if (route.view !== "task" && route.view !== "artifacts") url.hash = "";
+	if (route.view !== "task" && route.view !== "files") url.hash = "";
 	return `${url.pathname}${url.search}${url.hash}`;
 }

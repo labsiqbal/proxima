@@ -2,11 +2,11 @@ import React from 'react'
 import { getMasterSettings, saveMasterSettings } from '../../api/master'
 
 const STEPS = [
-  { eyebrow: 'Primary loop', title: 'Welcome to Proxima', body: 'The taught path is Chat → Tasks → Workflows → Archive. Use Chat for hands-on work, watch durable runs in Tasks, keep patterns in Workflows, and find deliverables in Archive.' },
+  { eyebrow: 'Primary loop', title: 'Welcome to Proxima', body: 'The taught path is Chat → Tasks → Workflows → Files. Use Chat for hands-on work, watch durable runs in Tasks, keep patterns in Workflows, and find deliverables in Files.' },
   { eyebrow: 'Hands-on', title: 'Chat keeps you close', body: 'Talk through the work, watch tools run, open outputs in the ArtifactViewer, and restore file-changing turns when you need to roll them back.' },
   { eyebrow: 'Delegate', title: 'Master is the side path', body: 'Master creates durable Autonomous jobs, dispatches up to three workers, and queues the rest. Prefer Chat when you want to stay in the thread; use Master when you want outcomes delegated.' },
   { eyebrow: 'Watch & keep', title: 'Tasks and Workflows', body: 'Tasks holds execution and diff review. When a pattern is worth repeating, save it as a Workflow (manual or scheduled) and re-run without re-explaining.' },
-  { eyebrow: 'Deliverables', title: 'Archive', body: 'Durable deliverables land in Archive with lineage and status. Open supported files with the same in-app viewer used from Chat and Tasks.' },
+  { eyebrow: 'Deliverables', title: 'Files', body: 'Files browses the real project folder, and its Deliverables lens shows every agent output with lineage and approval status. Open supported files with the same in-app viewer used from Chat and Tasks.' },
 ]
 
 export const LOCAL_CORE_TOUR_DONE = 'proxima.tour.coreDone'

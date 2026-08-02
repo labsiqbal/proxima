@@ -4240,7 +4240,7 @@ def test_fresh_container_ops_features_use_real_paths(tmp_path: Path):
         headers=headers,
     ).json()["artifacts"]
     assert any(
-        item["path"] == "artifacts/media/images/source.png" for item in artifacts
+        item["path"] == "ops/artifacts/media/images/source.png" for item in artifacts
     )
     assert (
         api.get(

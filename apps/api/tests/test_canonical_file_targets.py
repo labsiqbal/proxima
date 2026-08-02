@@ -430,11 +430,15 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
     )
     assert shadow_read.json()["content"] == "# Container shadow"
 
+    # Record language is container-relative (#139): the container-rooted scan
+    # lists BOTH same-name files as themselves - no shadowing either way.
     artifact_items = api.get(
         "/api/projects/identity/artifacts?since_minutes=525600",
         headers=headers,
     ).json()["artifacts"]
-    brief_artifact = next(item for item in artifact_items if item["path"] == "brief.md")
+    brief_artifact = next(
+        item for item in artifact_items if item["path"] == "ops/brief.md"
+    )
     assert brief_artifact["target"] == {
         "project": "identity",
         "area": {"kind": "ops", "id": ops_area_id},
@@ -446,6 +450,14 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         params=_target_params(brief_artifact["target"]),
     )
     assert ops_brief.json()["content"] == "# Ops direct brief"
+    root_brief = next(
+        item for item in artifact_items if item["path"] == "brief.md"
+    )
+    assert root_brief["target"] == {
+        "project": "identity",
+        "area": {"kind": "container", "id": None},
+        "path": "brief.md",
+    }
 
     for name, expected in (("visual.png", PNG_1X1), ("handout.pdf", PDF)):
         target = {
@@ -1670,14 +1682,15 @@ def test_archive_targets_resolve_direct_ops_files_without_registering_workspace_
     project = api.app.state.db.execute(
         "SELECT id FROM projects WHERE slug = 'identity'"
     ).fetchone()
+    # Container-relative record language (#139): records name the real path.
     artifact_registry.record_artifacts(
         api.app.state.db,
         project["id"],
-        ops,
+        root,
         [
-            {"type": "doc", "title": "brief.md", "path": "brief.md"},
-            {"type": "image", "title": "visual.png", "path": "visual.png"},
-            {"type": "doc", "title": "handout.pdf", "path": "handout.pdf"},
+            {"type": "doc", "title": "brief.md", "path": "ops/brief.md"},
+            {"type": "image", "title": "visual.png", "path": "ops/visual.png"},
+            {"type": "doc", "title": "handout.pdf", "path": "ops/handout.pdf"},
         ],
     )
 
@@ -1697,7 +1710,7 @@ def test_archive_targets_resolve_direct_ops_files_without_registering_workspace_
     assert all(item["target"]["project"] == "identity" for item in archive["items"])
     assert all(item["file_missing"] is False for item in archive["items"])
 
-    brief = next(item for item in archive["items"] if item["path"] == "brief.md")
+    brief = next(item for item in archive["items"] if item["path"] == "ops/brief.md")
     opened = api.get(
         "/api/projects/identity/file",
         headers=headers,
@@ -1705,13 +1718,13 @@ def test_archive_targets_resolve_direct_ops_files_without_registering_workspace_
     )
     assert opened.json()["content"] == "# Ops archive brief"
 
-    # Presence must follow the record's Ops identity, not a same-name Container
+    # Presence follows the record's literal path, not a same-name Container
     # shadow that still exists.
     (ops / "visual.png").unlink()
     calls_before_refresh = context_calls
     refreshed = api.get("/api/archive?project=identity", headers=headers).json()
     assert context_calls == calls_before_refresh + 1
-    visual = next(item for item in refreshed["items"] if item["path"] == "visual.png")
+    visual = next(item for item in refreshed["items"] if item["path"] == "ops/visual.png")
     assert visual["file_missing"] is True
 
 
@@ -1894,7 +1907,9 @@ def test_session_artifact_reads_and_deletion_keep_ops_target(
         headers=headers,
         json={"title": "Artifact session", "project_slug": "identity"},
     ).json()
-    artifact = {"type": "doc", "title": "brief.md", "path": "brief.md"}
+    # Container-relative record language (#139): the artifact names the real
+    # ops/ path; the same-name Container file is a separate identity.
+    artifact = {"type": "doc", "title": "brief.md", "path": "ops/brief.md"}
     api.app.state.db.execute(
         "UPDATE sessions SET produced_artifacts = ? WHERE id = ?",
         (json.dumps([artifact]), session["id"]),
@@ -2014,8 +2029,10 @@ def test_artifact_enrichment_skips_only_unsafe_entries(tmp_path: Path):
         item["path"]: item
         for item in response.json()["artifacts"]
     }
-    assert artifacts["reports/safe.md"]["target"]["path"] == "reports/safe.md"
-    assert "reports/escape.md" not in artifacts
+    # Container-relative record language (#139): the scan names the real path;
+    # the target's path stays relative to its owning Area.
+    assert artifacts["ops/reports/safe.md"]["target"]["path"] == "reports/safe.md"
+    assert "ops/reports/escape.md" not in artifacts
 
     project = api.app.state.db.execute(
         "SELECT id, slug, path, path_identity "
@@ -2025,14 +2042,14 @@ def test_artifact_enrichment_skips_only_unsafe_entries(tmp_path: Path):
     assert file_targets.add_artifact_targets(
         api.app.state.db,
         project,
-        [{"path": "reports/escape.md"}],
+        [{"path": "ops/reports/escape.md"}],
         context=context,
     ) == []
     with pytest.raises(file_targets.FileTargetError):
         file_targets.add_artifact_target(
             api.app.state.db,
             project,
-            {"path": "reports/escape.md"},
+            {"path": "ops/reports/escape.md"},
             context=context,
         )
 
@@ -2044,7 +2061,7 @@ def test_artifact_enrichment_skips_only_unsafe_entries(tmp_path: Path):
     rejected = api.delete(
         f"/api/sessions/{session['id']}/artifacts",
         headers=headers,
-        params={"path": "reports/escape.md"},
+        params={"path": "ops/reports/escape.md"},
     )
     assert rejected.status_code == 400
 

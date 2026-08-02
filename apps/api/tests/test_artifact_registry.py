@@ -33,8 +33,8 @@ def _client(app) -> tuple[TestClient, dict[str, str]]:
 
 def _project(api: TestClient, h: dict[str, str], root: Path, slug: str) -> dict:
     # ops/ is populated before link so the non-mutating link (prune C2)
-    # adopts it as the physical Ops Area; these tests exercise ops-rooted
-    # artifact records, not the legacy "." layout.
+    # adopts it as the physical Ops Area. Record paths are container-
+    # relative real paths (#139), so feeds below say ops/... explicitly.
     root.mkdir(parents=True, exist_ok=True)
     (root / "ops" / "reports").mkdir(parents=True, exist_ok=True)
     res = api.post(
@@ -94,7 +94,7 @@ def test_feed_creates_draft_records_with_lineage(tmp_path: Path):
     conn = app.state.db
     sid = _session(conn, p["id"])
     rid = _run(conn, sid, p["id"])
-    _feed(conn, rid, sid, p["id"], [{"type": "doc", "title": "plan.md", "path": "reports/plan.md"}])
+    _feed(conn, rid, sid, p["id"], [{"type": "doc", "title": "plan.md", "path": "ops/reports/plan.md"}])
     recs = _records(conn, p["id"])
     assert len(recs) == 1
     r = recs[0]
@@ -114,7 +114,7 @@ def test_feed_is_idempotent_for_the_same_run(tmp_path: Path):
     conn = app.state.db
     sid = _session(conn, p["id"])
     rid = _run(conn, sid, p["id"])
-    links = [{"type": "doc", "title": "plan.md", "path": "reports/plan.md"}]
+    links = [{"type": "doc", "title": "plan.md", "path": "ops/reports/plan.md"}]
     _feed(conn, rid, sid, p["id"], links)
     _feed(conn, rid, sid, p["id"], links)  # per-step + final scan of one run
     recs = _records(conn, p["id"])
@@ -138,13 +138,13 @@ def test_script_run_files_become_script_output_records(tmp_path: Path):
         sid,
         p["id"],
         [
-            {"type": "file", "title": "sync.log", "path": "reports/sync.log"},
-            {"type": "doc", "title": "summary.md", "path": "reports/summary.md"},
+            {"type": "file", "title": "sync.log", "path": "ops/reports/sync.log"},
+            {"type": "doc", "title": "summary.md", "path": "ops/reports/summary.md"},
         ],
     )
     by_path = {r["path"]: r for r in _records(conn, p["id"])}
-    assert by_path["reports/sync.log"]["type"] == "script-output"
-    assert by_path["reports/summary.md"]["type"] == "doc"  # richer types keep their identity
+    assert by_path["ops/reports/sync.log"]["type"] == "script-output"
+    assert by_path["ops/reports/summary.md"]["type"] == "doc"  # richer types keep their identity
 
 
 # ── version chain ─────────────────────────────────────────────────────────
@@ -159,11 +159,11 @@ def test_new_producer_at_same_path_creates_next_version_and_supersedes(tmp_path:
     conn = app.state.db
     s1 = _session(conn, p["id"])
     r1 = _run(conn, s1, p["id"])
-    _feed(conn, r1, s1, p["id"], [{"type": "doc", "title": "churn.md", "path": "reports/churn.md"}])
+    _feed(conn, r1, s1, p["id"], [{"type": "doc", "title": "churn.md", "path": "ops/reports/churn.md"}])
     (root / "ops" / "reports" / "churn.md").write_text("july update", encoding="utf-8")
     s2 = _session(conn, p["id"])
     r2 = _run(conn, s2, p["id"])
-    _feed(conn, r2, s2, p["id"], [{"type": "doc", "title": "churn.md", "path": "reports/churn.md"}])
+    _feed(conn, r2, s2, p["id"], [{"type": "doc", "title": "churn.md", "path": "ops/reports/churn.md"}])
     recs = _records(conn, p["id"])
     assert [r["version"] for r in recs] == [1, 2]
     v1, v2 = recs
@@ -192,7 +192,7 @@ def test_job_approve_auto_approves_its_records(tmp_path: Path):
     sid = _session(conn, p["id"], job_id=job_id)
     conn.execute("UPDATE jobs SET session_id = ? WHERE id = ?", (sid, job_id))
     rid = _run(conn, sid, p["id"])
-    _feed(conn, rid, sid, p["id"], [{"type": "doc", "title": "out.md", "path": "reports/out.md"}])
+    _feed(conn, rid, sid, p["id"], [{"type": "doc", "title": "out.md", "path": "ops/reports/out.md"}])
     rec = _records(conn, p["id"])[0]
     assert rec["job_id"] == job_id and rec["status"] == "draft"
     res = api.post(f"/api/jobs/{job_id}/approve", headers=h)
@@ -211,7 +211,7 @@ def test_archive_door_edits_the_same_status(tmp_path: Path):
     conn = app.state.db
     sid = _session(conn, p["id"])
     rid = _run(conn, sid, p["id"])
-    _feed(conn, rid, sid, p["id"], [{"type": "doc", "title": "out.md", "path": "reports/out.md"}])
+    _feed(conn, rid, sid, p["id"], [{"type": "doc", "title": "out.md", "path": "ops/reports/out.md"}])
     rec_id = _records(conn, p["id"])[0]["id"]
     res = api.post(f"/api/archive/records/{rec_id}/status", headers=h, json={"status": "approved"})
     assert res.status_code == 200, res.text
@@ -232,7 +232,7 @@ def _seed_many(api, h, app, tmp_path: Path, n: int = 5):
     for i in range(n):
         (root / "ops" / "reports" / f"r{i}.md").write_text(f"r{i}", encoding="utf-8")
         rid = _run(conn, sid, p["id"])
-        _feed(conn, rid, sid, p["id"], [{"type": "doc", "title": f"r{i}.md", "path": f"reports/r{i}.md"}])
+        _feed(conn, rid, sid, p["id"], [{"type": "doc", "title": f"r{i}.md", "path": f"ops/reports/r{i}.md"}])
     return p, conn, sid
 
 
@@ -260,7 +260,7 @@ def test_list_filters_by_type_status_query_and_project(tmp_path: Path):
     p, conn, sid = _seed_many(api, h, app, tmp_path, n=3)
     (tmp_path / "proj" / "ops" / "reports" / "shot.png").write_bytes(b"\x89PNG")
     rid = _run(conn, sid, p["id"])
-    _feed(conn, rid, sid, p["id"], [{"type": "image", "title": "shot.png", "path": "reports/shot.png"}])
+    _feed(conn, rid, sid, p["id"], [{"type": "image", "title": "shot.png", "path": "ops/reports/shot.png"}])
     assert api.get("/api/archive?type=image", headers=h).json()["total"] == 1
     assert api.get("/api/archive?status=draft", headers=h).json()["total"] == 4
     assert api.get("/api/archive?q=r1", headers=h).json()["total"] == 1
@@ -296,8 +296,8 @@ def test_version_history_on_record_page(tmp_path: Path):
     conn = app.state.db
     sid = _session(conn, p["id"])
     (root / "ops" / "reports" / "churn.md").write_text("v1", encoding="utf-8")
-    _feed(conn, _run(conn, sid, p["id"]), sid, p["id"], [{"type": "doc", "title": "churn.md", "path": "reports/churn.md"}])
-    _feed(conn, _run(conn, sid, p["id"]), sid, p["id"], [{"type": "doc", "title": "churn.md", "path": "reports/churn.md"}])
+    _feed(conn, _run(conn, sid, p["id"]), sid, p["id"], [{"type": "doc", "title": "churn.md", "path": "ops/reports/churn.md"}])
+    _feed(conn, _run(conn, sid, p["id"]), sid, p["id"], [{"type": "doc", "title": "churn.md", "path": "ops/reports/churn.md"}])
     v1, v2 = _records(conn, p["id"])
     rec = api.get(f"/api/archive/proj/{v1['slug']}", headers=h).json()
     assert [v["version"] for v in rec["versions"]] == [2, 1]
@@ -316,7 +316,7 @@ def test_record_survives_file_deletion_and_notes_it(tmp_path: Path):
     f.write_text("bye", encoding="utf-8")
     conn = app.state.db
     sid = _session(conn, p["id"])
-    _feed(conn, _run(conn, sid, p["id"]), sid, p["id"], [{"type": "doc", "title": "gone.md", "path": "reports/gone.md"}])
+    _feed(conn, _run(conn, sid, p["id"]), sid, p["id"], [{"type": "doc", "title": "gone.md", "path": "ops/reports/gone.md"}])
     f.unlink()
     body = api.get("/api/archive", headers=h).json()
     assert body["total"] == 1

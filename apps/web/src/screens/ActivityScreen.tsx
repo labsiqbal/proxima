@@ -328,7 +328,7 @@ export function ActivityScreen({ token, activeProject, projects = [], globalScop
                     <ol className="teaching-empty-steps" aria-label="Getting started">
                       <li><span className="teaching-empty-step-n" aria-hidden="true">1</span><span>Start from Chat (slice a plan) or press <strong>New task</strong></span></li>
                       <li><span className="teaching-empty-step-n" aria-hidden="true">2</span><span>Return here anytime — leave/return keeps this list mounted</span></li>
-                      <li><span className="teaching-empty-step-n" aria-hidden="true">3</span><span>When a run finishes, open Archive for durable deliverables</span></li>
+                      <li><span className="teaching-empty-step-n" aria-hidden="true">3</span><span>When a run finishes, open Files → Deliverables for durable records</span></li>
                     </ol>
                     {onNewTask && (
                       <button type="button" className="primary-button teaching-empty-cta" onClick={onNewTask}>New task</button>

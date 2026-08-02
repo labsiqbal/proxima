@@ -42,8 +42,6 @@ export function viewOriginLabel(view: View): string {
     case 'workflows':
     case 'graph':
       return 'Workflows'
-    case 'artifacts':
-      return 'Archive'
     case 'files':
       return 'Files'
     case 'design':
@@ -69,7 +67,8 @@ export function isDeepShell(flags: DeepShellFlags): boolean {
   if (flags.view === 'task') return true
   if (flags.view === 'workflows' && flags.graphStage === 'editor') return true
   if (flags.view === 'graph' && flags.graphStage === 'editor') return true
-  if (flags.view === 'artifacts' && flags.archiveRecord != null) return true
+  // A deliverable record panel is a deep surface inside Files (#139).
+  if (flags.view === 'files' && flags.archiveRecord != null) return true
   if (flags.view === 'design' && flags.designCanvasOpen) return true
   if (flags.view === 'settings' && flags.settingsStack) return true
   return false
@@ -116,7 +115,6 @@ export const KEEP_ALIVE_VIEWS: readonly View[] = [
   'master',
   'activity',
   'workflows',
-  'artifacts',
   'files',
   'design',
 ] as const

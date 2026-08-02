@@ -24,7 +24,7 @@ import json
 import re
 import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .db import (
@@ -6399,6 +6399,198 @@ def _freeze_reroute_era_paths(conn: sqlite3.Connection) -> None:
                 )
 
 
+def _container_relative_record_path(path: str, ops_rel: str, root: Path | None) -> str:
+    """A legacy Ops-relative record path in container-relative language.
+
+    Record language was Ops-relative until the Part D ledger rework (#139):
+    a record path resolved against the Ops root, so its container-relative
+    form is the same path behind the Ops prefix. Two guards keep the rewrite
+    idempotent and loss-free:
+
+    - A path already under the Ops prefix is left alone (the skip-guard that
+      also makes a second run a no-op), UNLESS the double-prefixed file
+      exists on disk while the literal does not (a real ``<ops>/...`` folder
+      inside Ops - vanishingly rare, but the disk decides).
+    - A path whose literal file exists while its Ops-prefixed one does not
+      is already container-relative (the #138 outside-Ops artifacts case,
+      where the bridge stored the container path unchanged).
+    """
+    text = str(path or "")
+    if not text or text == ".":
+        return ops_rel if text == "." else text
+
+    def _exists(rel: str) -> bool:
+        if root is None:
+            return False
+        try:
+            return Path(root).joinpath(*PurePosixPath(rel).parts).exists()
+        except (OSError, ValueError):
+            return False
+
+    prefixed = f"{ops_rel}/{text}"
+    if text == ops_rel or text.startswith(f"{ops_rel}/"):
+        if _exists(prefixed) and not _exists(text):
+            return prefixed
+        return text
+    if _exists(text) and not _exists(prefixed):
+        return text
+    return prefixed
+
+
+def _rework_artifact_record_paths(conn: sqlite3.Connection) -> None:
+    # Part D ledger rework (#139, decision #122): artifact-record language
+    # becomes container-relative real paths - the same paths the Files tree
+    # browses - instead of the Ops-relative dialect the registry spoke since
+    # T4. One-time rewrite, only for projects whose Ops folder is not the
+    # container root, covering every structured record store:
+    # artifact_records.path, sessions.produced_artifacts, messages.
+    # output_links, and jobs.steps_state step produced_artifacts. Approvals,
+    # lineage, version chains, and slugs are untouched (path column only).
+    tables = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    if not {"projects", "project_areas"} <= tables:
+        return
+    area_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(project_areas)").fetchall()
+    }
+    if not {"project_id", "kind", "rel_path", "source"} <= area_columns:
+        return
+    project_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
+    }
+    # Historical fixture schemas may predate the container path column; the
+    # disk tiebreak is then unavailable and the pure prefix rewrite applies.
+    path_select = "p.path" if "path" in project_columns else "NULL AS path"
+    ops_rels: dict[int, str] = {}
+    roots: dict[int, Path | None] = {}
+    for row in conn.execute(
+        f"SELECT pa.project_id, pa.rel_path, {path_select} FROM project_areas pa "
+        "JOIN projects p ON p.id = pa.project_id "
+        "WHERE pa.kind = 'ops' AND pa.source != 'excluded'"
+    ).fetchall():
+        rel = str(row["rel_path"] or ".").strip().strip("/")
+        if rel in ("", "."):
+            continue
+        project_id = int(row["project_id"])
+        ops_rels[project_id] = rel
+        root = Path(str(row["path"] or ""))
+        try:
+            roots[project_id] = root if str(row["path"] or "") and root.is_dir() else None
+        except OSError:
+            roots[project_id] = None
+    if not ops_rels:
+        return
+
+    def _rewrite_items(raw: str | None, project_id: int) -> str | None:
+        """Rewrite a JSON artifact list's path/dir fields; None if unchanged."""
+        ops_rel = ops_rels.get(project_id)
+        if ops_rel is None:
+            return None
+        try:
+            items = json.loads(raw or "[]")
+        except (TypeError, ValueError):
+            return None
+        changed = False
+        if not isinstance(items, list):
+            return None
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for key in ("path", "dir"):
+                if key not in item:
+                    continue
+                fixed = _container_relative_record_path(
+                    str(item.get(key) or ""), ops_rel, roots.get(project_id)
+                )
+                if fixed != item.get(key):
+                    item[key] = fixed
+                    changed = True
+        return json.dumps(items) if changed else None
+
+    if "artifact_records" in tables:
+        for row in conn.execute(
+            "SELECT id, project_id, path FROM artifact_records"
+        ).fetchall():
+            ops_rel = ops_rels.get(int(row["project_id"]))
+            if ops_rel is None:
+                continue
+            fixed = _container_relative_record_path(
+                str(row["path"] or ""), ops_rel, roots.get(int(row["project_id"]))
+            )
+            if fixed != row["path"]:
+                conn.execute(
+                    "UPDATE artifact_records SET path = ? WHERE id = ?",
+                    (fixed, row["id"]),
+                )
+
+    if "sessions" in tables:
+        for row in conn.execute(
+            "SELECT id, project_id, produced_artifacts FROM sessions "
+            "WHERE project_id IS NOT NULL AND produced_artifacts IS NOT NULL "
+            "AND produced_artifacts NOT IN ('', '[]')"
+        ).fetchall():
+            fixed = _rewrite_items(row["produced_artifacts"], int(row["project_id"] or 0))
+            if fixed is not None:
+                conn.execute(
+                    "UPDATE sessions SET produced_artifacts = ? WHERE id = ?",
+                    (fixed, row["id"]),
+                )
+
+    if {"messages", "sessions"} <= tables:
+        for row in conn.execute(
+            "SELECT m.id, m.output_links, s.project_id FROM messages m "
+            "JOIN sessions s ON s.id = m.session_id "
+            "WHERE s.project_id IS NOT NULL AND m.output_links IS NOT NULL "
+            "AND m.output_links NOT IN ('', '[]')"
+        ).fetchall():
+            fixed = _rewrite_items(row["output_links"], int(row["project_id"] or 0))
+            if fixed is not None:
+                conn.execute(
+                    "UPDATE messages SET output_links = ? WHERE id = ?",
+                    (fixed, row["id"]),
+                )
+
+    if "jobs" in tables:
+        job_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "steps_state" in job_columns:
+            for row in conn.execute(
+                "SELECT id, project_id, steps_state FROM jobs "
+                "WHERE project_id IS NOT NULL AND steps_state IS NOT NULL "
+                "AND steps_state NOT IN ('', '[]')"
+            ).fetchall():
+                ops_rel = ops_rels.get(int(row["project_id"] or 0))
+                if ops_rel is None:
+                    continue
+                try:
+                    steps = json.loads(row["steps_state"] or "[]")
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(steps, list):
+                    continue
+                changed = False
+                for step in steps:
+                    if not isinstance(step, dict):
+                        continue
+                    arts = step.get("produced_artifacts")
+                    if not isinstance(arts, list):
+                        continue
+                    fixed = _rewrite_items(
+                        json.dumps(arts), int(row["project_id"] or 0)
+                    )
+                    if fixed is not None:
+                        step["produced_artifacts"] = json.loads(fixed)
+                        changed = True
+                if changed:
+                    conn.execute(
+                        "UPDATE jobs SET steps_state = ? WHERE id = ?",
+                        (json.dumps(steps), row["id"]),
+                    )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -6674,6 +6866,11 @@ MIGRATIONS: list[Migration] = [
         60,
         "freeze reroute-era reserved-name paths to their historical Ops meaning",
         _freeze_reroute_era_paths,
+    ),
+    (
+        61,
+        "rework artifact-record paths to container-relative real paths (#139)",
+        _rework_artifact_record_paths,
     ),
 ]
 

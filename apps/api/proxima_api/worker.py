@@ -1417,7 +1417,15 @@ class RunWorker:
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 start = dt.timestamp() - 5
-        artifacts = scan_project_artifacts(ops_root(db, prow), start)
+        # Container-relative record language (#139): scan the container root
+        # through the layout map, like the chat-run output scan.
+        layout = layout_map.project_layout(db, prow)
+        artifacts = scan_project_artifacts(
+            layout.container_root,
+            start,
+            artifacts_rel=layout.rel_paths["artifacts"],
+            deliverable_rels=layout.deliverable_dir_rels(),
+        )
         return file_targets.add_artifact_targets(db, prow, artifacts)
 
     async def execute_run(self, run: dict[str, Any]) -> None:

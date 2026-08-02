@@ -1718,9 +1718,8 @@ def register(app, deps):
                 project = visible_project(slug, user)
                 with container_registry.container_mutation_lock(db(), project):
                     # The save location follows the project's mapped artifacts
-                    # folder (layout map, prune #138); the artifact record
-                    # keeps the Ops-relative language records speak until the
-                    # Part D ledger rework (#139).
+                    # folder (layout map); the artifact record speaks the same
+                    # container-relative path (#139).
                     layout = layout_map.project_layout(db(), project)
                     media_rel = f"{layout.rel_paths['artifacts']}/media/images"
                     stamp = _as_int(time.time())
@@ -1741,7 +1740,7 @@ def register(app, deps):
                 artifact = {
                     "type": "image",
                     "title": target.name,
-                    "path": layout.ops_record_rel(container_rel),
+                    "path": container_rel,
                     "project_slug": slug,
                     "actions": actions,
                 }
@@ -1789,12 +1788,9 @@ def register(app, deps):
             )
             project = visible_project(slug, user)
             with container_registry.container_mutation_lock(db(), project):
-                # The draft lands in the mapped artifacts folder (prune #138);
-                # the record path stays Ops-relative (records language, #139).
+                # The draft lands in the mapped artifacts folder, and the
+                # record path is the same container-relative path (#139).
                 layout = layout_map.project_layout(db(), project)
-                design_rel = (
-                    f"{layout.rel_paths['artifacts']}/design/{design_id}"
-                )
                 artifact = design_scenes.persist_draft(
                     layout.container_root,
                     layout.rel_paths["artifacts"],
@@ -1802,7 +1798,6 @@ def register(app, deps):
                     scene,
                     slug,
                     run_pending_id=design_run["run_id"],
-                    record_path=layout.ops_record_rel(design_rel),
                 )
             text = f"Created Design Studio draft: `{artifact['path']}`. The design agent is composing it from your brief — open it in Design Studio to watch it land or edit."
             return _complete_media_run(
@@ -1958,23 +1953,27 @@ def register(app, deps):
         recent_artifacts: list[dict[str, Any]] = []
         for p in projects[:12]:
             layout = layout_map.try_project_layout(d, p)
-            if layout is None or not layout.ops_root.is_dir():
+            if layout is None or not layout.container_root.is_dir():
                 continue
-            root = layout.ops_root
-            artifacts_rel = layout.ops_rel_path("artifacts") or "artifacts"
+            # Container-relative record language (#139): container-rooted
+            # scan through the layout map.
+            root = layout.container_root
+            deliverable_rels = layout.deliverable_dir_rels()
             # Reuse the bounded/pruned artifact scanner used by run results. The
             # old dashboard rglob walked every descendant on every Home poll and
             # had a second, drifting type classifier.
             for artifact in scan_project_artifacts(
-                root, 0.0, artifacts_rel=artifacts_rel
+                root,
+                0.0,
+                artifacts_rel=layout.rel_paths["artifacts"],
+                deliverable_rels=deliverable_rels,
             ):
                 rel = str(artifact.get("path") or "")
                 parts = Path(rel).parts
                 if (
                     not parts
-                    or not (
-                        rel.startswith(f"{artifacts_rel}/")
-                        or parts[0] in {"reports", "exports"}
+                    or not any(
+                        rel.startswith(f"{dr}/") for dr in deliverable_rels
                     )
                     or "renders" in parts
                 ):

@@ -33,12 +33,12 @@ created at the DEFAULT position - Proxima never invents a directory at a
 detected non-default location.
 
 Reserved-name virtual rerouting is GONE (#138): a path means exactly what it
-says on disk, and the map is the only source of per-project locations. Two
-sites deliberately keep fixed Ops-relative names: the Knowledge-graph
-allowlist (Knowledge is Ops-scoped by security design - see graph_context.py)
-and the artifact RECORD language (produced_artifacts / output_links / Archive
-rows resolve Ops-relative until the Part D ledger rework, #139 - writers that
-follow the map use :meth:`ProjectLayout.ops_record_rel` to bridge).
+says on disk, and the map is the only source of per-project locations. One
+site deliberately keeps fixed Ops-relative names: the Knowledge-graph
+allowlist (Knowledge is Ops-scoped by security design - see graph_context.py).
+The artifact RECORD language (produced_artifacts / output_links /
+artifact_records rows) speaks container-relative real paths since the Part D
+ledger rework (#139) - the same language the Files tree browses.
 """
 from __future__ import annotations
 
@@ -172,19 +172,18 @@ class ProjectLayout:
             return self.ops_root, ops_rel_path
         return self.container_root, self.rel_paths[area]
 
-    def ops_record_rel(self, container_rel: str) -> str:
-        """The record-language (Ops-relative) form of a container-relative
-        path when it lies inside the Ops root; unchanged otherwise.
-
-        Artifact records (produced_artifacts, output_links, Archive rows)
-        stay Ops-anchored by contract until the Part D ledger rework (#139);
-        writers that follow the layout map use this to keep records valid."""
-        if self.ops_rel in ("", "."):
-            return container_rel
-        prefix = f"{self.ops_rel}/"
-        if container_rel.startswith(prefix):
-            return container_rel[len(prefix):]
-        return container_rel
+    def deliverable_dir_rels(self) -> tuple[str, ...]:
+        """Container-relative folders whose files are deliverables for the
+        artifact scanner: the mapped artifacts area plus the fixed-name
+        ``reports``/``exports`` folders under the Ops root AND the container
+        root (record language is container-relative, #139; ``reports`` /
+        ``exports`` keep their fixed names, #138)."""
+        rels: list[str] = [self.rel_paths["artifacts"]]
+        for name in ("reports", "exports"):
+            for rel in (default_rel(self.ops_rel, name), name):
+                if rel not in rels:
+                    rels.append(rel)
+        return tuple(rels)
 
     def wiki_memory_write_root(self) -> Path | None:
         """Where the AUTOMATIC memory writers (log.md append, index.md

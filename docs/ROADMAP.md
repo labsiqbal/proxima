@@ -38,7 +38,7 @@ integrity-checked DB backup.
 Alpha → Tasks → Recipes, tools on a right rail) · project work containers (code
 areas + ops area) · run-first plans with per-job targets · repo jobs in isolated
 worktrees with in-app diff review + local merge · turn-timeout auto-continuation ·
-deterministic script nodes with hash-bound trust · durable Archive registry
+deterministic script nodes with hash-bound trust · durable deliverable registry (the Files Deliverables lens since #139)
 (lineage, synced approval, permalinks) · bundled capability pack (masterplan skill
 + work-discipline preamble) · flow-centric positioning with the honest
 two-sentence security note · BYO repo-remote connector (per-area push-after-merge,

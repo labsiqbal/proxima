@@ -31,6 +31,7 @@ def scan_project_artifacts(
     *,
     cap: int = 40,
     artifacts_rel: str = "artifacts",
+    deliverable_rels: tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     """Typed list of artifacts under `root` modified at/after `start_ts`, so the UI can
     preview each: design / app (runnable package.json) / page (.html) / doc (.md) / file.
@@ -38,20 +39,25 @@ def scan_project_artifacts(
     `cap` bounds the result (default 40 for live scan surfaces; the registry seed
     passes a higher cap because durable records are paginated, not capped).
     `artifacts_rel` is the project's artifacts location relative to `root`
-    (per-project layout map, prune C4) - `artifacts` by default; `reports/` and
-    `exports/` keep their fixed names."""
+    (per-project layout map, prune C4). `deliverable_rels` lists every folder
+    whose files count as deliverables (record scans pass
+    ``ProjectLayout.deliverable_dir_rels()`` so the container-rooted scan
+    keeps Ops-rooted ``reports``/``exports`` deliverable, #139); the default
+    is today's fixed names relative to `root`."""
     if not root.is_dir():
         return []
     design_prefix = f"{artifacts_rel}/design/"
     video_prefix = f"{artifacts_rel}/video/"
+    rels = (
+        deliverable_rels
+        if deliverable_rels is not None
+        else (artifacts_rel, "reports", "exports")
+    )
 
     def in_deliverable_dir(rel_parts: tuple[str, ...], rel_text: str) -> bool:
         if not rel_parts:
             return False
-        return (
-            rel_text.startswith(f"{artifacts_rel}/")
-            or rel_parts[0] in ("reports", "exports")
-        )
+        return any(rel_text.startswith(f"{rel}/") for rel in rels)
 
     def mtime(p: "Path") -> float:
         try:

@@ -7,9 +7,9 @@ Proxima is an opinionated agent harness and workspace OS. It gives AI agents ful
 > **How to read this doc:** this is product *direction*, not a description of current
 > behavior - some flows below are **not in the code yet**. Implemented today
 > (through Phase-1 slice 9): the single-workspace flow (Chat → Tasks → Recipes,
-> plus Projects and the Archive), run-first plans on the graph engine, repo jobs
+> plus Projects and the Files Deliverables lens), run-first plans on the graph engine, repo jobs
 > with worktree isolation + local diff review and merge, deterministic script
-> nodes, turn-timeout auto-continuation, the durable Archive registry, the
+> nodes, turn-timeout auto-continuation, the durable deliverable registry, the
 > bundled capability pack, chat, schedules, wiki, image generation, and
 > **Design Studio** (active). Planned only - marked *(planned)*
 > on their sections: **Main Project**, **Integrations** (global connections +
@@ -159,7 +159,7 @@ Instruction priority:
 
 More specific instructions override broader ones.
 
-### Artifacts Are The Output Library *(shipped as the Archive registry - Phase-1 slice 8, T4)*
+### Artifacts Are The Output Library *(shipped as the deliverable registry - Phase-1 slice 8, T4; surfaced as the Files Deliverables lens since prune Part D, #139)*
 
 Artifacts is the universal gallery for outputs in the active project.
 
@@ -259,7 +259,7 @@ Chat
 Tasks
 Recipes
 Projects
-Archive
+Files (deliverables lens)
 Design
 ```
 
