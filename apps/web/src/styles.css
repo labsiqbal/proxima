@@ -3472,7 +3472,10 @@ button:disabled {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.tree-row.file .tree-ico {
+/* Leaf rows (files and skipped symlinks) reserve the chevron column so their
+   icons line up with the folder icons at the same depth. */
+.tree-row.file .tree-ico,
+.tree-row.skipped .tree-ico {
 	margin-left: 19px;
 }
 .tree-chevron {
@@ -4294,16 +4297,21 @@ button:disabled {
 .tree-row.skipped {
 	display: flex;
 	align-items: center;
+	justify-content: flex-start;
 	gap: var(--space-1);
 	color: var(--ui-text-tertiary);
 	cursor: default;
 }
+.tree-row.skipped .tree-name {
+	flex: 0 1 auto;
+}
 .tree-row.skipped:hover {
 	background: transparent;
 }
+/* Sits right beside the name, not pinned to the panel edge: at Files width the
+   row is very wide and a far-right badge reads as unrelated to its entry. */
 .tree-skip-badge {
 	flex: 0 0 auto;
-	margin-left: auto;
 	padding: 0 var(--space-1);
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-sm);
