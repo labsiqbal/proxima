@@ -450,9 +450,10 @@ class RunPrompting:
             if routing:
                 prompt_text += "\n\n---\n\n# Proxima routing context\n\n" + routing
         moodboard_references: list[dict[str, Any]] = []
-        # The project's layout-map-resolved locations (prune C4): the wiki the
-        # preamble READS may differ from where the automatic memory writers may
-        # write (wiki_memory_write_root - the #137 seam).
+        # The project's layout-map-resolved locations (prune C4): the wiki
+        # the preamble reads and the automatic memory writers' target both
+        # follow the detected wiki (wiki_memory_write_root - adaptive memory
+        # writes, prune C5; None when the per-project toggle is off).
         project_wiki = (
             project_layout.dir("wiki") if project_layout is not None else None
         )
@@ -473,10 +474,10 @@ class RunPrompting:
                         f"# Profile instructions\n\n{instr.strip()}\n\n---\n\n"
                         + prompt_text
                     )
-                # Generate the catalog on first sight so the preamble can point
-                # at it. Automatic memory writes only target the wiki's DEFAULT
-                # location (layout_map's #137 seam) - a wiki detected elsewhere
-                # is read-only for the index writer.
+                # Generate the catalog on first sight so the preamble can
+                # point at it. The write target is the project's own detected
+                # wiki (adaptive memory writes, prune C5); the seam returns
+                # None when the per-project toggle is off.
                 memory_wiki = (
                     project_layout.wiki_memory_write_root()
                     if project_layout is not None

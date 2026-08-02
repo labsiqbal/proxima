@@ -111,6 +111,21 @@ def _v1_manifest(root: Path, *names: str) -> dict:
     }
 
 
+def _legacy_generate_container_doc(name: str) -> dict:
+    """The container_doc plan historical (pre-C5) manifests stored when no
+    legacy container.md existed: a generated identity document. New plans
+    are strategy "none"; stored generate plans must keep executing."""
+    content = container_registry._container_doc_text(name)
+    expected = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return {
+        "path": "container.md",
+        "strategy": "generate",
+        "content": content,
+        "sha256": expected,
+        "recovery_temp": container_registry._planned_recovery_temp(expected),
+    }
+
+
 def _store_moving_manifest(conn, container_id: int, manifest: dict) -> None:
     conn.execute(
         """
@@ -136,6 +151,9 @@ def _prepare_completed_filesystem_move(
         conn,
         container_registry.get_container(conn, container_id),
     )
+    # Simulate a stored pre-C5 manifest mid-flight: those planned a generated
+    # container.md (new plans are strategy "none" and write nothing).
+    manifest["container_doc"] = _legacy_generate_container_doc(root.name)
     strategy, content, _ = container_registry._manifest_container_doc(manifest)
     assert strategy == "generate"
     assert content is not None
@@ -198,14 +216,10 @@ def test_clean_legacy_ops_migration_preserves_bytes_and_is_idempotent(tmp_path: 
     assert all(entry["sha256"] for entry in manifest["entries"])
     planned_doc = manifest["container_doc"]
     assert planned_doc["path"] == "container.md"
-    assert planned_doc["strategy"] == "generate"
-    assert (
-        planned_doc["sha256"]
-        == hashlib.sha256(planned_doc["content"].encode("utf-8")).hexdigest()
-    )
-    assert (root / "ops" / "container.md").read_text(encoding="utf-8") == planned_doc[
-        "content"
-    ]
+    # Prune C5 (#137): with no legacy container.md, the migration plans NO
+    # identity document at all - nothing is generated into ops/.
+    assert planned_doc["strategy"] == "none"
+    assert not (root / "ops" / "container.md").exists()
     before = {
         path.relative_to(root).as_posix(): path.read_bytes()
         for path in (root / "ops").rglob("*")
@@ -279,6 +293,11 @@ def test_v5_planned_directory_manifest_upgrades_with_empty_ownership(
         container_registry.get_container(conn, container_id),
     )
     manifest["version"] = 5
+    # Historical v5 manifests planned a generated container.md (new plans are
+    # strategy "none" since prune C5) - reconstruct that stored shape.
+    manifest["container_doc"] = _legacy_generate_container_doc(
+        "v5-planned-directory"
+    )
     for entry in manifest["entries"]:
         entry["publication"].pop("destination_directories")
     container_registry._upsert_marker(
@@ -319,6 +338,9 @@ def test_v5_partial_directory_without_identity_stops_for_owner(
         container_registry.get_container(conn, container_id),
     )
     manifest["version"] = 5
+    manifest["container_doc"] = _legacy_generate_container_doc(
+        "v5-ambiguous-directory"
+    )
     wiki = next(entry for entry in manifest["entries"] if entry["name"] == "wiki")
     wiki["publication"]["phase"] = "publishing"
     for entry in manifest["entries"]:
@@ -779,8 +801,10 @@ def test_inspect_previews_every_migrate_write_before_anything_moves(
 
     body = container_registry.inspect_ops_migration(conn, container_id)
     assert body["retry_action"] == "migrate"
+    # Prune C5 (#137): no legacy container.md means NO container.md write is
+    # planned (or previewed) - the migration imposes no identity document.
     assert body["planned_writes"] == {
-        "container_doc": "generate",
+        "container_doc": None,
         "git_exclude": True,
     }
 
@@ -1308,8 +1332,9 @@ def test_interrupted_retry_rejects_container_doc_symlink_before_remaining_move(
 
     outside = tmp_path / "outside-container.md"
     outside.write_text("outside", encoding="utf-8")
+    # No container.md is generated anymore (prune C5); the symlink appearing
+    # at that position mid-flight must still fail closed.
     container_doc = root / "ops" / "container.md"
-    container_doc.unlink()
     container_doc.symlink_to(outside)
 
     detail = api.post(
@@ -2970,6 +2995,14 @@ def test_generated_container_doc_creation_never_clobbers_late_content(
     container_id = _legacy_container(conn, root, "late-container-doc")
     (root / "wiki").mkdir()
     (root / "wiki" / "keep.md").write_text("keep", encoding="utf-8")
+    # Route through a stored pre-C5 manifest: new plans generate nothing, but
+    # a stored generate plan must still never clobber late owner content.
+    manifest = container_registry._build_manifest(
+        conn,
+        container_registry.get_container(conn, container_id),
+    )
+    manifest["container_doc"] = _legacy_generate_container_doc("late-container-doc")
+    container_registry._upsert_marker(conn, container_id, "moving", manifest)
     real_publish = container_registry._publish_anonymous_file
     injected = False
 
@@ -3122,6 +3155,11 @@ def test_generated_document_recovers_each_owned_write_stage(
         conn,
         container_registry.get_container(conn, container_id),
     )
+    # New plans are strategy "none" (prune C5); a stored pre-C5 manifest with
+    # a generated document must still recover every owned write stage.
+    manifest["container_doc"] = _legacy_generate_container_doc(
+        f"document-stage-{stage}"
+    )
     planned = manifest["container_doc"]
     recovery = planned["recovery_temp"]
     container_registry._upsert_marker(conn, container_id, "moving", manifest)
@@ -3256,6 +3294,9 @@ def test_v2_generated_document_manifest_upgrades_with_owned_recovery(
         container_registry.get_container(conn, container_id),
     )
     manifest["version"] = 2
+    manifest["container_doc"] = _legacy_generate_container_doc(
+        "v2-generated-document"
+    )
     manifest["container_doc"].pop("recovery_temp")
     _store_moving_manifest(conn, container_id, manifest)
 
@@ -3286,6 +3327,9 @@ def test_v4_planned_document_upgrades_to_owned_recovery_protocol(
         container_registry.get_container(conn, container_id),
     )
     manifest["version"] = 4
+    manifest["container_doc"] = _legacy_generate_container_doc(
+        "v4-generated-document"
+    )
     manifest["container_doc"]["recovery_temp"].pop("ownership_token", None)
     _store_moving_manifest(conn, container_id, manifest)
 
@@ -3312,6 +3356,9 @@ def test_recovery_temp_cleanup_requires_exact_manifest_ownership(tmp_path: Path)
         conn,
         container_registry.get_container(conn, container_id),
     )
+    manifest["container_doc"] = _legacy_generate_container_doc(
+        "ambiguous-recovery-temp"
+    )
     recovery = manifest["container_doc"]["recovery_temp"]
     container_registry._upsert_marker(conn, container_id, "moving", manifest)
     (root / "ops").mkdir()
@@ -3331,6 +3378,9 @@ def test_recovery_temp_spoof_with_exact_bytes_is_preserved(tmp_path: Path):
     manifest = container_registry._build_manifest(
         conn,
         container_registry.get_container(conn, container_id),
+    )
+    manifest["container_doc"] = _legacy_generate_container_doc(
+        "spoofed-recovery-temp"
     )
     planned = manifest["container_doc"]
     recovery = planned["recovery_temp"]
@@ -3359,6 +3409,9 @@ def test_unproven_generated_document_with_exact_bytes_is_preserved(
         conn,
         container_registry.get_container(conn, container_id),
     )
+    manifest["container_doc"] = _legacy_generate_container_doc(
+        "unproven-generated-document"
+    )
     planned = manifest["container_doc"]
     container_registry._upsert_marker(conn, container_id, "moving", manifest)
     (root / "ops").mkdir()
@@ -3382,14 +3435,20 @@ def test_recovery_artifact_intent_is_unpredictable_and_manifest_bound(
         second_root,
         "recovery-intent-second",
     )
-    first = container_registry._build_manifest(
-        conn,
-        container_registry.get_container(conn, first_id),
-    )["container_doc"]["recovery_temp"]
-    second = container_registry._build_manifest(
-        conn,
-        container_registry.get_container(conn, second_id),
-    )["container_doc"]["recovery_temp"]
+    # New manifests plan no recovery artifact at all (strategy "none",
+    # prune C5); the recovery-temp intent contract still holds for the
+    # protocol used by stored pre-C5 manifests.
+    for container_id in (first_id, second_id):
+        assert container_registry._build_manifest(
+            conn,
+            container_registry.get_container(conn, container_id),
+        )["container_doc"] == {"path": "container.md", "strategy": "none"}
+    first = _legacy_generate_container_doc("recovery-intent-first")[
+        "recovery_temp"
+    ]
+    second = _legacy_generate_container_doc("recovery-intent-second")[
+        "recovery_temp"
+    ]
 
     assert first["path"] != second["path"]
     assert first["phase"] == second["phase"] == "planned"
@@ -4109,17 +4168,20 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
     )
     assert response.status_code == 201, response.text
     root = Path(response.json()["path"])
-    container_doc = root / "ops" / "container.md"
-    assert container_doc.is_file()
+    # Prune C5: no ops/container.md is generated; identity projects from the
+    # scaffolded README instead.
+    assert not (root / "ops" / "container.md").exists()
     registry = api.app.state.db.execute(
-        "SELECT identity_label, summary, source_hash FROM container_registry "
+        "SELECT identity_label, summary, identity_source, source_hash "
+        "FROM container_registry "
         "WHERE container_id = (SELECT id FROM projects WHERE slug = 'fresh')"
     ).fetchone()
-    assert registry["identity_label"] == "General"
-    assert registry["summary"] == "Work and durable context for Fresh."
+    assert registry["identity_label"] == "fresh"
+    assert registry["summary"] == "Proxima project workspace."
+    assert registry["identity_source"] == "README.md"
     assert len(registry["source_hash"]) == 64
 
-    container_doc.write_text(
+    (root / "AGENTS.md").write_text(
         "---\nidentity: Client success\nsummary: Launch workspace.\n---\n",
         encoding="utf-8",
     )
@@ -4193,17 +4255,15 @@ def test_fresh_container_uses_windows_no_reparse_boundary(
 ):
     root = tmp_path / "windows-fresh"
     root.mkdir()
-    called: list[tuple[Path, str, tuple[str, ...]]] = []
+    called: list[tuple[Path, tuple[str, ...]]] = []
 
     def create_windows(
         container: Path,
-        name: str,
         starter_dirs: tuple[str, ...],
     ) -> Path:
-        called.append((container, name, starter_dirs))
+        called.append((container, starter_dirs))
         physical = container / "ops"
         physical.mkdir()
-        (physical / "container.md").write_text("owned", encoding="utf-8")
         return physical
 
     monkeypatch.setattr(
@@ -4217,16 +4277,12 @@ def test_fresh_container_uses_windows_no_reparse_boundary(
         create_windows,
     )
 
-    physical = container_registry.create_physical_ops_root(
-        root,
-        "Windows",
-    )
+    physical = container_registry.create_physical_ops_root(root)
 
     assert physical == root.absolute() / "ops"
     assert called == [
         (
             root.absolute(),
-            "Windows",
             container_registry.DEFAULT_STARTER_DIRS,
         )
     ]
@@ -4260,9 +4316,6 @@ def test_windows_starter_directories_are_created_relative_to_stable_handles(
         handles[handle] = target
         return handle, (1, hash(target))
 
-    def create_file(parent_handle: int, name: str, content: bytes):
-        (handles[parent_handle] / name).write_bytes(content)
-
     monkeypatch.setattr(
         container_registry,
         "_windows_open_directory",
@@ -4275,18 +4328,12 @@ def test_windows_starter_directories_are_created_relative_to_stable_handles(
     )
     monkeypatch.setattr(
         container_registry,
-        "_windows_create_file_at",
-        create_file,
-    )
-    monkeypatch.setattr(
-        container_registry,
         "_windows_close_handle",
         lambda _handle: None,
     )
 
     physical = container_registry._create_physical_ops_root_windows(
         root,
-        "Windows relative",
         ("wiki/deep", "artifacts"),
     )
 
@@ -4298,7 +4345,8 @@ def test_windows_starter_directories_are_created_relative_to_stable_handles(
         (physical, "artifacts"),
     ]
     assert (physical / "wiki" / "deep").is_dir()
-    assert (physical / "container.md").is_file()
+    # Prune C5: no container.md is generated on any platform.
+    assert not (physical / "container.md").exists()
 
 
 def test_project_list_survives_ops_descendant_symlink(tmp_path: Path):

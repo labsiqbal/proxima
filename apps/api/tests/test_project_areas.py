@@ -141,7 +141,8 @@ def test_created_project_has_ops_area_and_zero_code_areas(tmp_path: Path):
     assert p["ops_area"]["rel_path"] == "ops"
     root = Path(p["path"])
     assert (root / "ops").is_dir()
-    assert (root / "ops" / "container.md").is_file()
+    # Prune C5: no ops/container.md is generated for fresh containers.
+    assert not (root / "ops" / "container.md").exists()
     assert (root / "ops" / "wiki").is_dir()
     assert (root / "ops" / "artifacts").is_dir()
     assert not (root / "wiki").exists()

@@ -39,7 +39,9 @@ def test_scaffold_project_dir_creates_folders_and_readme(tmp_path):
     assert (path / "ops" / "wiki").is_dir()
     assert (path / "ops" / "tasks").is_dir()
     assert (path / "ops" / "artifacts").is_dir()
-    assert (path / "ops" / "container.md").is_file()
+    # No generated identity document (prune C5): identity is read from
+    # the docs the folder already has (here, the scaffolded README).
+    assert not (path / "ops" / "container.md").exists()
     assert (path / "README.md").read_text().startswith("# demo")
 
 
@@ -50,7 +52,7 @@ def test_scaffold_honors_custom_starter_dirs(tmp_path):
     path = provisioning.scaffold_project_dir(cfg, "demo")
     assert (path / "ops" / "docs").is_dir()
     assert (path / "ops" / "notes").is_dir()
-    assert (path / "ops" / "container.md").is_file()
+    assert not (path / "ops" / "container.md").exists()
 
 
 def test_scaffold_rejects_unsafe_starter_dirs(tmp_path):

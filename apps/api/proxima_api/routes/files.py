@@ -408,9 +408,12 @@ def register(app, deps):
                 )
             except fsapi.FsError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            if (
-                resolved.locator.area.kind == "ops"
-                and resolved.locator.path == container_registry.CONTAINER_DOC
+            # Editing an identity source doc (AGENTS.md / README.md /
+            # HANDOFF.md / legacy container.md - prune C5) refreshes the
+            # registry projection immediately; the change-detection hash
+            # makes a non-identity write a no-op.
+            if Path(resolved.locator.path).name in (
+                container_registry.IDENTITY_DOC_BASENAMES
             ):
                 container_registry.refresh_registry_projection(db(), project)
             _audit_fs(user, "file.write", slug, resolved.locator.path)

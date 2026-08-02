@@ -16,11 +16,7 @@ def _projects_root(cfg: dict[str, Any]) -> Path:
     return Path(cfg["workspace_root"]) / "projects"
 
 
-def scaffold_project_dir(
-    cfg: dict[str, Any],
-    slug: str,
-    name: str | None = None,
-) -> Path:
+def scaffold_project_dir(cfg: dict[str, Any], slug: str) -> Path:
     """Create projects/<slug>/ with starter subdirs + README. Idempotent, no ACL."""
     # Belt-and-suspenders: reject slugs that could escape the projects root.
     if "/" in slug or "\\" in slug or ".." in slug or slug.startswith("."):
@@ -28,7 +24,7 @@ def scaffold_project_dir(
     path = _projects_root(cfg) / slug
     path.mkdir(parents=True, exist_ok=True)
     starters = tuple(cfg.get("provision_starter_dirs") or ["wiki", "tasks", "artifacts"])
-    create_physical_ops_root(path, name or slug, starters)
+    create_physical_ops_root(path, starters)
     readme = path / "README.md"
     if not readme.exists():
         readme.write_text(f"# {slug}\n\nProxima project workspace.\n", encoding="utf-8")
@@ -67,11 +63,11 @@ def provision_private_project(conn: sqlite3.Connection, cfg: dict[str, Any], use
     slug, existing = _resolve_private_slug(conn, user)
     if existing:
         # Only ever reached when the row is verified as this user's own private project.
-        scaffold_project_dir(cfg, slug, str(existing["name"]))
+        scaffold_project_dir(cfg, slug)
         ensure_ops_area(conn, existing["id"])
         refresh_registry_projection(conn, existing["id"])
         return existing
-    path = str(scaffold_project_dir(cfg, slug, str(user["username"])))
+    path = str(scaffold_project_dir(cfg, slug))
     path_identity = directory_identity_for_path(Path(path))
     cur = conn.execute(
         "INSERT INTO projects("

@@ -37,8 +37,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "provision_starter_dirs": ["wiki", "tasks", "artifacts"],
     "auto_provision": True,
     "start_worker": True,
-    # Refresh ops/container.md projections off the request path. File API writes
-    # refresh immediately; this cycle covers owner edits made directly on disk.
+    # Refresh identity-doc projections (AGENTS.md/README.md/HANDOFF.md/legacy
+    # container.md - prune C5) off the request path. File API writes refresh
+    # immediately; this cycle covers owner edits made directly on disk.
     "container_registry_refresh_seconds": 5,
     "web_dist_path": None,
     # Release update check (docs/installation.md#updating). update_check=False

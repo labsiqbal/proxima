@@ -1775,6 +1775,11 @@ def test_resolver_rejects_cross_area_aliases_and_tree_switches_to_code_identity(
         headers=headers,
         params=_target_params(forged_ops_alias),
     ).status_code == 400
+    # No container.md is generated anymore (prune C5) - an owner-authored one
+    # still resolves through its canonical Ops target.
+    (root / "ops" / "container.md").write_text(
+        "# Identity\n\nOwner notes.\n", encoding="utf-8"
+    )
     canonical_ops = {
         "project": "identity",
         "area": {"kind": "ops", "id": ops_area_id},

@@ -33,6 +33,7 @@ from ..project_browse import (
 from ..project_areas import areas_payload, ensure_ops_area, sync_code_areas
 from ..provisioning import scaffold_project_dir
 from ..schemas import (
+    MemoryWritesRequest,
     ProjectAreaAddRequest,
     ProjectAreaUpdateRequest,
     ProjectCreateRequest,
@@ -370,6 +371,10 @@ def register(app, deps):
             # (prune C4): zero-write detection of where this folder actually
             # keeps its wiki/artifacts/scripts/uploads.
             layout_map.seed_project_layout(db(), pid)
+            # Project the identity from the folder's existing docs right away
+            # (prune C5) so the Fleet shows it without waiting for the
+            # background refresh cycle. Read-only toward the tree.
+            container_registry.refresh_registry_projection(db(), pid)
             audit_action = "project.link.mkdir" if made_dir else "project.link"
             db().execute(
                 "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) VALUES (?, ?, 'project', ?, ?)",
@@ -431,7 +436,7 @@ def register(app, deps):
             raise HTTPException(status_code=409, detail="project slug already exists")
         path = str(Path(cfg["workspace_root"]) / "projects" / payload.slug)
         run_projectctl("create-project", payload.slug, "--owner", user["os_user"])
-        scaffold_project_dir(cfg, payload.slug, payload.name)
+        scaffold_project_dir(cfg, payload.slug)
         path_identity = directory_identity_for_path(Path(path))
         cur = db().execute(
             "INSERT INTO projects("
@@ -476,7 +481,8 @@ def register(app, deps):
     def get_project_layout(slug: str, user: dict[str, Any] = Depends(current_user)):
         """The per-project layout map (prune C4): where this project keeps its
         wiki, artifacts, scripts, and uploads - detected from the real tree,
-        today's fixed names as the defaults when nothing was detected."""
+        today's fixed names as the defaults when nothing was detected. Also
+        reports the per-project memory-writes toggle (prune C5)."""
         project = visible_project(slug, user)
         try:
             layout = layout_map.project_layout(db(), project)
@@ -492,7 +498,33 @@ def register(app, deps):
                 }
                 for area in layout_map.LAYOUT_AREAS
             },
+            "memory_writes": {"enabled": layout.memory_writes},
         }
+
+    @app.put("/api/projects/{slug}/memory-writes")
+    def set_memory_writes(
+        slug: str,
+        payload: MemoryWritesRequest,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """The per-project memory-writes toggle (prune C5, decision #121):
+        default ON, Proxima's automatic memory (log.md append + wiki index
+        regeneration) follows the project's own detected wiki location; OFF
+        disables those writers entirely for this project."""
+        project = visible_project(slug, user)
+        layout_map.set_memory_writes_enabled(
+            db(), int(project["id"]), payload.enabled
+        )
+        db().execute(
+            "INSERT INTO audit_log(actor_user_id, action, target_type, target_id, metadata) "
+            "VALUES (?, 'project.memory_writes', 'project', ?, ?)",
+            (
+                user["id"],
+                project["slug"],
+                json.dumps({"enabled": payload.enabled}),
+            ),
+        )
+        return {"enabled": payload.enabled}
 
     @app.get("/api/projects/{slug}/ops-migration")
     def get_ops_migration(slug: str, user: dict[str, Any] = Depends(current_user)):

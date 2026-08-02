@@ -21,17 +21,21 @@ four well-known Ops locations:
   (audit #120 sites): wiki read surfaces, the run preamble, the script
   library, uploads, artifact/design/moodboard scanning.
 
-Scope seams left deliberately clean:
+Memory writes are ADAPTIVE and default ON (prune C5, #137, decision #121):
+the automatic memory writers (``log.md`` append, ``index.md`` regeneration)
+target the project's own detected wiki location through one seam,
+:func:`wiki_memory_write_root`. A per-project toggle
+(:func:`memory_writes_enabled`, ``app_settings`` key
+``project:<id>:memory_writes``) turns them off entirely. The seam stays
+fail-closed for writes: a wiki position occupied by a symlink (or any
+non-directory) is never a write target, and a missing directory is only
+created at the DEFAULT position - Proxima never invents a directory at a
+detected non-default location.
 
-- :func:`wiki_memory_write_root` is the #137 seam - the automatic memory
-  writers (``log.md`` append, ``index.md`` regeneration) only ever target the
-  wiki while the map agrees with its DEFAULT location. A wiki detected away
-  from the default is read-only for them until #137 ships adaptive memory
-  writes (per-project toggleable). Note a ``.`` project's root ``wiki/``
-  (BIP) IS its default location, so it keeps memory writes exactly as today.
-- Reserved-name virtual rerouting still exists (removed by #138); the
-  Knowledge-graph allowlist keeps the fixed ops-relative names, which
-  coincide with every detectable map today (see graph_context.py).
+Scope seam left deliberately clean: reserved-name virtual rerouting still
+exists (removed by #138); the Knowledge-graph allowlist keeps the fixed
+ops-relative names, which coincide with every detectable map today (see
+graph_context.py).
 """
 from __future__ import annotations
 
@@ -54,6 +58,34 @@ SOURCE_DETECTED = "detected"
 SOURCE_DEFAULT = "default"
 
 logger = logging.getLogger("proxima.layout_map")
+
+
+def _memory_writes_key(project_id: int) -> str:
+    return f"project:{project_id}:memory_writes"
+
+
+def memory_writes_enabled(conn: sqlite3.Connection, project_id: int) -> bool:
+    """The per-project memory-writes toggle (prune C5): default ON; only an
+    explicit "off" disables the automatic writers."""
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ?",
+        (_memory_writes_key(int(project_id)),),
+    ).fetchone()
+    return (row["value"] if row else "on") != "off"
+
+
+def set_memory_writes_enabled(
+    conn: sqlite3.Connection,
+    project_id: int,
+    enabled: bool,
+) -> None:
+    conn.execute(
+        "INSERT INTO app_settings(key, value, updated_at) "
+        "VALUES (?, ?, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+        "updated_at = CURRENT_TIMESTAMP",
+        (_memory_writes_key(int(project_id)), "on" if enabled else "off"),
+    )
 
 
 def _join_rel(base: str, name: str) -> str:
@@ -110,6 +142,8 @@ class ProjectLayout:
     ops_rel: str
     rel_paths: Mapping[str, str]
     sources: Mapping[str, str]
+    # The per-project memory-writes toggle (prune C5): default ON.
+    memory_writes: bool = True
 
     def dir(self, area: str) -> Path:
         """The area's absolute directory (may not exist yet)."""
@@ -136,13 +170,29 @@ class ProjectLayout:
         return self.container_root, self.rel_paths[area]
 
     def wiki_memory_write_root(self) -> Path | None:
-        """The #137 seam: where the AUTOMATIC memory writers (log.md append,
-        index.md regeneration) may write. Only the wiki's default location -
-        a wiki detected elsewhere is read-only for them until #137 enables
-        adaptive memory writes. (A '.' project's root wiki IS its default.)"""
-        if self.rel_paths["wiki"] == default_rel(self.ops_rel, "wiki"):
-            return self.dir("wiki")
-        return None
+        """Where the AUTOMATIC memory writers (log.md append, index.md
+        regeneration) may write: the project's own detected wiki location -
+        adaptive memory writes, default ON (prune C5, #137).
+
+        None when writes are refused: the per-project toggle is off; the
+        wiki position is occupied by a symlink or any non-directory (writes
+        stay fail-closed through symlinks); or the directory is missing at a
+        detected non-default position (writers may create the DEFAULT
+        location, as they always have, but never invent a directory
+        elsewhere in the owner's tree)."""
+        if not self.memory_writes:
+            return None
+        target = self.dir("wiki")
+        try:
+            if target.is_symlink():
+                return None
+            if target.exists():
+                return target if target.is_dir() else None
+        except OSError:
+            return None
+        if self.rel_paths["wiki"] != default_rel(self.ops_rel, "wiki"):
+            return None
+        return target
 
 
 def _ops_rel(conn: sqlite3.Connection, project_id: int) -> str:
@@ -238,6 +288,7 @@ def project_layout(
         ops_rel=ops_rel,
         rel_paths=rel_paths,
         sources=sources,
+        memory_writes=memory_writes_enabled(conn, project_id),
     )
 
 
@@ -298,5 +349,6 @@ def wiki_memory_write_root(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
 ) -> Path | None:
-    """Where automatic memory writes may go (see the #137 seam above)."""
+    """Where automatic memory writes may go: the detected wiki location,
+    None when the per-project toggle is off or the position is unsafe."""
     return project_layout(conn, container).wiki_memory_write_root()

@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS container_registry (
   container_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
   identity_label TEXT,
   summary TEXT,
+  identity_source TEXT,
   source_hash TEXT,
   indexed_at TEXT,
   last_activity_at TEXT

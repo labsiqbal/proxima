@@ -121,13 +121,17 @@ def test_container_routes_are_authenticated_and_keep_project_reader_identity(
 def test_registry_refresh_cycle_projects_free_text_identity_and_bounded_summary(
     tmp_path: Path,
 ):
+    """Identity comes from the docs the folder already has (prune C5):
+    writing AGENTS.md through the Files API refreshes the projection
+    immediately, and an on-disk edit is picked up by the refresh cycle.
+    Frontmatter stays optional free text, with the summary bounded."""
     api, headers = _api(tmp_path)
     project = _create(api, headers)
     root = Path(project["path"])
     summary = "s" * 700
 
     written = api.put(
-        "/api/projects/fleet-one/file?path=container.md",
+        "/api/projects/fleet-one/file?path=AGENTS.md",
         headers=headers,
         json={
             "content": (
@@ -142,15 +146,13 @@ def test_registry_refresh_cycle_projects_free_text_identity_and_bounded_summary(
     immediate = api.get("/api/containers/fleet-one", headers=headers).json()
     assert immediate["identity_label"] == "Client, internal lab, and anything else"
     assert immediate["summary"] == summary[:500]
+    assert immediate["identity_source"] == "AGENTS.md"
     assert len(immediate["source_hash"]) == 64
     assert immediate["indexed_at"]
 
     source_hash = immediate["source_hash"]
-    (root / "ops" / "container.md").write_text(
-        "---\n"
-        "identity: Proxima itself, still free text\n"
-        "summary: Changed directly on disk.\n"
-        "---\n",
+    (root / "AGENTS.md").write_text(
+        "# Proxima itself, still free text\n\nChanged directly on disk.\n",
         encoding="utf-8",
     )
     cycle = container_registry.refresh_registry_projections(api.app.state.db)
@@ -207,10 +209,12 @@ def test_live_counts_and_activity_follow_committed_database_state(
         (json.dumps({"job_id": running_id}),),
     )
 
-    def no_projection_read(_path):
-        raise AssertionError("Fleet reads must not inspect ops/container.md")
+    def no_projection_read(*_args, **_kwargs):
+        raise AssertionError("Fleet reads must not inspect identity docs")
 
-    monkeypatch.setattr(container_registry, "_parse_container_doc", no_projection_read)
+    monkeypatch.setattr(
+        container_registry, "resolve_container_identity", no_projection_read
+    )
     detail = api.get("/api/containers/fleet-one", headers=headers).json()
     assert detail["live"] == {
         "running_tasks": 1,
@@ -331,7 +335,7 @@ def test_one_thousand_container_fleet_uses_one_sql_statement_and_no_file_scan(
 
     monkeypatch.setattr(container_registry, "container_root", no_filesystem)
     monkeypatch.setattr(container_registry, "ops_root", no_filesystem)
-    monkeypatch.setattr(container_registry, "_parse_container_doc", no_filesystem)
+    monkeypatch.setattr(container_registry, "resolve_container_identity", no_filesystem)
     response = api.get("/api/containers", headers=headers)
     assert response.status_code == 200, response.text
     assert len(response.json()["containers"]) == 1000

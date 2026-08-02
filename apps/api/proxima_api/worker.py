@@ -2281,9 +2281,9 @@ class RunWorker:
                         "auto-title failed (non-fatal)"
                     )
                 # Re-catalog the wiki in case the agent wrote/updated notes this run, so
-                # the next session's preamble reflects the new knowledge. Automatic
-                # memory writes only target the wiki's DEFAULT location - a wiki
-                # detected elsewhere stays read-only until #137 (layout_map seam).
+                # the next session's preamble reflects the new knowledge. The write
+                # target is the project's own detected wiki (adaptive memory writes,
+                # prune C5); the seam is None when the per-project toggle is off.
                 try:
                     memory_wiki = (
                         project_layout.wiki_memory_write_root()

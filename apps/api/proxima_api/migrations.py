@@ -2021,6 +2021,35 @@ def _add_project_layout(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_identity_source(conn: sqlite3.Connection) -> None:
+    # Identity from existing docs (prune C5, #137): the registry projection
+    # records WHICH doc identified the container (container-root-relative,
+    # e.g. "AGENTS.md" or "ops/container.md"; NULL = folder-name fallback).
+    # The label/summary columns themselves are unchanged - the resolver just
+    # reads AGENTS.md/README.md/HANDOFF.md instead of requiring frontmatter.
+    # A database that never materialized the projection table (it is normally
+    # created by db.py's bootstrap SCHEMA before migrations run) gets the full
+    # current shape; an existing table gains only the new column.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS container_registry (
+          container_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+          identity_label TEXT,
+          summary TEXT,
+          identity_source TEXT,
+          source_hash TEXT,
+          indexed_at TEXT,
+          last_activity_at TEXT
+        )
+        """
+    )
+    cols = {
+        r[1] for r in conn.execute("PRAGMA table_info(container_registry)").fetchall()
+    }
+    if "identity_source" not in cols:
+        conn.execute("ALTER TABLE container_registry ADD COLUMN identity_source TEXT")
+
+
 def _preserve_master_history_scope(conn: sqlite3.Connection) -> None:
     tables = {
         str(row[0])
@@ -6515,6 +6544,11 @@ MIGRATIONS: list[Migration] = [
         58,
         "add project_layout: per-project map of wiki/artifacts/scripts/uploads (prune C4)",
         _add_project_layout,
+    ),
+    (
+        59,
+        "record which existing doc identified a container (prune C5)",
+        _add_identity_source,
     ),
 ]
 

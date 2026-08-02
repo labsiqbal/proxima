@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-192 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+193 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -19,7 +19,7 @@
 - [`routes/graphs.py`](#routes-graphs-py) - 2 endpoints
 - [`routes/master.py`](#routes-master-py) - 20 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) - 12 endpoints
-- [`routes/projects.py`](#routes-projects-py) - 16 endpoints
+- [`routes/projects.py`](#routes-projects-py) - 17 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) - 6 endpoints
 - [`routes/update.py`](#routes-update-py) - 3 endpoints
 - [`routes/wiki.py`](#routes-wiki-py) - 8 endpoints
@@ -243,6 +243,7 @@
 | DELETE | `/api/projects/{slug}/areas/{area_id}` | `remove_project_area` | Remove a code area. The row becomes an 'excluded' tombstone (not a |
 | PATCH | `/api/projects/{slug}/areas/{area_id}` | `update_project_area` | Per-area settings - today that is the T9 push-after-merge toggle |
 | GET | `/api/projects/{slug}/layout` | `get_project_layout` | The per-project layout map (prune C4): where this project keeps its |
+| PUT | `/api/projects/{slug}/memory-writes` | `set_memory_writes` | The per-project memory-writes toggle (prune C5, decision #121): |
 | GET | `/api/projects/{slug}/ops-migration` | `get_ops_migration` | Inspect one Project's physical Ops migration without changing its files. |
 | POST | `/api/projects/{slug}/ops-migration/retry` | `retry_ops_migration` | Retry only a currently safe layout using the durable migration marker. |
 | POST | `/api/projects/{slug}/ops-migration/validate` | `validate_ops_migration` | Refresh the read-only collision and retry-safety projection. |
@@ -322,4 +323,4 @@
 
 
 ---
-_Generated 2026-08-02 13:47 UTC._
+_Generated 2026-08-02 15:16 UTC._

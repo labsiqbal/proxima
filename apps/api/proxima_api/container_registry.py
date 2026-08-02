@@ -47,9 +47,7 @@ from .ops_filesystem import (
     valid_identity as _valid_identity,
     windows_close_handle as _windows_close_handle,
     windows_create_directory_at as _windows_create_directory_at,
-    windows_create_file_at as _windows_create_file_at,
     windows_open_directory as _windows_open_directory,
-    windows_read_file_at as _windows_read_file_at,
 )
 
 logger = logging.getLogger("proxima.container_registry")
@@ -85,6 +83,12 @@ DEFAULT_STARTER_DIRS = ("wiki", "tasks", "artifacts")
 MAX_CONTAINER_DOC_BYTES = 64 * 1024
 MAX_IDENTITY_LABEL_CHARS = 120
 MAX_SUMMARY_CHARS = 500
+# Identity comes from the docs the folder already has (prune C5, #137):
+# these names are probed at the container root first, then at the Ops root,
+# with the legacy ops/container.md still honored after them. None of these
+# is required - a folder with no docs falls back to its own name.
+IDENTITY_DOC_NAMES = ("AGENTS.md", "README.md", "HANDOFF.md")
+IDENTITY_DOC_BASENAMES = frozenset((*IDENTITY_DOC_NAMES, CONTAINER_DOC))
 RECOVERY_TEMP_PREFIX = ".proxima-ops-migration-container-"
 RETAINED_SOURCE_PREFIX = ".proxima-ops-migration-retained-"
 
@@ -398,7 +402,6 @@ def _planned_recovery_temp(
 
 def _create_physical_ops_root_windows(
     container: Path,
-    name: str,
     starter_dirs: tuple[str, ...],
 ) -> Path:
     physical = container / OPS_RELPATH
@@ -432,26 +435,9 @@ def _create_physical_ops_root_windows(
                 raise ContainerBoundaryError(
                     "physical Ops root changed during creation"
                 )
-        document = _container_doc_text(name).encode("utf-8")
-        try:
-            _windows_create_file_at(
-                physical_handle,
-                CONTAINER_DOC,
-                document,
-            )
-        except FileExistsError:
-            try:
-                existing_document = _windows_read_file_at(
-                    physical_handle,
-                    CONTAINER_DOC,
-                    max_bytes=MAX_CONTAINER_DOC_BYTES,
-                )
-            except (ContainerBoundaryError, OSError):
-                existing_document = None
-            if existing_document != document:
-                raise ContainerBoundaryError(
-                    "ops/container.md exists with unexpected content or type"
-                ) from None
+        # No identity document is generated (prune C5, #137): identity is
+        # read from the docs the folder already has, so a fresh Ops root
+        # carries only its starter directories.
         check_root, current_root_identity = _windows_open_directory(container)
         check_physical, current_physical_identity = _windows_open_directory(physical)
         _windows_close_handle(check_root)
@@ -838,7 +824,6 @@ def _atomic_write_if_missing(
 
 def create_physical_ops_root(
     root: Path,
-    name: str,
     starter_dirs: tuple[str, ...] = DEFAULT_STARTER_DIRS,
 ) -> Path:
     """Create the physical Ops layout for a fresh Container."""
@@ -850,7 +835,6 @@ def create_physical_ops_root(
             raise ContainerBoundaryError("Container root is missing")
         return _create_physical_ops_root_windows(
             raw_root.absolute(),
-            name,
             starter_dirs,
         )
     container = raw_root.resolve()
@@ -872,19 +856,9 @@ def create_physical_ops_root(
             if target.is_symlink() or (target.exists() and not target.is_dir()):
                 raise ContainerBoundaryError(f"Ops starter path is unsafe: {dirname}")
         target.mkdir(parents=True, exist_ok=True)
-    with _stable_migration_directories(container) as (
-        root_fd,
-        physical_fd,
-        _,
-        _,
-    ):
-        _atomic_write_if_missing(
-            physical / CONTAINER_DOC,
-            _container_doc_text(name),
-            parent_fd=physical_fd,
-        )
-        _revalidate_root_identity(container, root_fd)
-        _revalidate_physical_identity(root_fd, physical_fd)
+    # No ops/container.md is generated and no existing file is inspected
+    # (prune C5, #137): identity comes from the docs the folder already has,
+    # so Proxima has no metadata requirement to enforce here.
     _reject_symlinks(physical)
     return physical
 
@@ -1433,17 +1407,11 @@ def _build_manifest(
             "sha256": owner_doc["sha256"],
         }
     else:
-        content = _container_doc_text(
-            str(container.get("name") or container.get("slug") or "Container")
-        )
-        expected_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        container_doc = {
-            "path": CONTAINER_DOC,
-            "strategy": "generate",
-            "content": content,
-            "sha256": expected_hash,
-            "recovery_temp": _planned_recovery_temp(expected_hash),
-        }
+        # No identity document is generated anymore (prune C5, #137): a
+        # migration without a legacy container.md plans NO container.md at
+        # all. (Stored manifests with the historical "generate" strategy
+        # still execute; only new plans stopped imposing the file.)
+        container_doc = {"path": CONTAINER_DOC, "strategy": "none"}
     return {
         "version": OPS_MIGRATION_VERSION,
         "container_root": str(root),
@@ -1803,16 +1771,13 @@ def _apply_manifest(
     return physical
 
 
-def _parse_container_doc(path: Path) -> tuple[str | None, str | None, str | None]:
-    if not path.is_file() or path.is_symlink():
-        return None, None, None
-    source_hash = _hash_file(path)
-    with path.open("rb") as handle:
-        data = handle.read(MAX_CONTAINER_DOC_BYTES)
-    text = data.decode("utf-8", errors="replace")
+def _parse_identity_doc(text: str) -> tuple[str | None, str | None]:
+    """Label + one-line summary from a doc's OPTIONAL frontmatter, else its
+    heading and first body line. Nothing here is ever required (prune C5)."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     identity: str | None = None
     summary: str | None = None
+    body = text
     if text.startswith("---\n"):
         end = text.find("\n---\n", 4)
         if end >= 0:
@@ -1820,12 +1785,22 @@ def _parse_container_doc(path: Path) -> tuple[str | None, str | None, str | None
                 key, separator, value = line.partition(":")
                 if not separator:
                     continue
-                if key.strip() == "identity":
+                key = key.strip().lower()
+                if key in ("identity", "title", "name") and identity is None:
                     identity = value.strip()[:MAX_IDENTITY_LABEL_CHARS] or None
-                elif key.strip() == "summary":
+                elif key in ("summary", "description") and summary is None:
                     summary = value.strip()[:MAX_SUMMARY_CHARS] or None
+            body = text[end + len("\n---\n"):]
+    if identity is None:
+        identity = next(
+            (
+                line[2:].strip()[:MAX_IDENTITY_LABEL_CHARS] or None
+                for line in body.splitlines()
+                if line.startswith("# ")
+            ),
+            None,
+        )
     if summary is None:
-        body = text.split("\n---\n", 1)[-1] if text.startswith("---\n") else text
         summary = next(
             (
                 line.strip()[:MAX_SUMMARY_CHARS]
@@ -1834,7 +1809,83 @@ def _parse_container_doc(path: Path) -> tuple[str | None, str | None, str | None
             ),
             None,
         )
-    return identity, summary, source_hash
+    return identity, summary
+
+
+def _identity_doc_candidates(
+    root: Path,
+    ops: Path | None,
+) -> list[tuple[str, Path]]:
+    """(container-root-relative label, absolute path) probe order: each known
+    doc name at the container root, then under the Ops root, with the legacy
+    ops/container.md honored last."""
+    candidates: list[tuple[str, Path]] = []
+    ops_rel: str | None = None
+    if ops is not None and ops != root:
+        try:
+            ops_rel = ops.relative_to(root).as_posix()
+        except ValueError:
+            ops_rel = None
+    for name in IDENTITY_DOC_NAMES:
+        candidates.append((name, root / name))
+        if ops_rel is not None:
+            candidates.append((f"{ops_rel}/{name}", ops / name))
+    if ops_rel is not None:
+        candidates.append((f"{ops_rel}/{CONTAINER_DOC}", ops / CONTAINER_DOC))
+    else:
+        candidates.append((CONTAINER_DOC, root / CONTAINER_DOC))
+    return candidates
+
+
+def resolve_container_identity(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+) -> tuple[str | None, str | None, str | None, str]:
+    """(identity_label, summary, source_rel, source_hash) from the docs the
+    folder already has - AGENTS.md / README.md / HANDOFF.md (root first, then
+    the Ops root), legacy ops/container.md after them. No Proxima frontmatter
+    is required anywhere: a doc's optional frontmatter is honored, else its
+    heading/first line, and a folder with no docs at all is identified by its
+    own name (decision #121, prune C5). Read-only toward the tree."""
+    data = get_container(conn, container)
+    root = container_root(data)
+    try:
+        ops: Path | None = ops_root(conn, data)
+    except ContainerBoundaryError:
+        ops = None
+    for rel, path in _identity_doc_candidates(root, ops):
+        try:
+            if not path.is_file() or path.is_symlink():
+                continue
+            with path.open("rb") as handle:
+                raw = handle.read(MAX_CONTAINER_DOC_BYTES)
+        except OSError:
+            continue
+        identity, summary = _parse_identity_doc(
+            raw.decode("utf-8", errors="replace")
+        )
+        if identity is None and summary is None:
+            continue
+        digest = hashlib.sha256()
+        digest.update(rel.encode("utf-8", errors="replace"))
+        digest.update(b"\x00")
+        digest.update(raw)
+        if identity is None:
+            identity = _folder_name_identity(data)
+        return identity, summary, rel, digest.hexdigest()
+    # No docs anywhere: the folder's own name IS the identity. The hash keeps
+    # the projection "ready" and change-detection working (it flips as soon
+    # as a doc appears).
+    label = _folder_name_identity(data)
+    fallback = hashlib.sha256(
+        b"proxima-identity-folder-name\x00" + label.encode("utf-8", errors="replace")
+    ).hexdigest()
+    return label, None, None, fallback
+
+
+def _folder_name_identity(data: Mapping[str, Any]) -> str:
+    name = Path(str(data.get("path") or "")).name or str(data.get("name") or "")
+    return name.strip()[:MAX_IDENTITY_LABEL_CHARS] or "Container"
 
 
 def refresh_registry_projection(
@@ -1842,15 +1893,16 @@ def refresh_registry_projection(
     container: int | sqlite3.Row | Mapping[str, Any],
 ) -> None:
     data = get_container(conn, container)
-    root = ops_root(conn, data)
-    identity, summary, source_hash = _parse_container_doc(root / CONTAINER_DOC)
+    identity, summary, source_rel, source_hash = resolve_container_identity(
+        conn, data
+    )
     conn.execute(
         """
         INSERT INTO container_registry(
-          container_id, identity_label, summary, source_hash, indexed_at,
-          last_activity_at
+          container_id, identity_label, summary, identity_source, source_hash,
+          indexed_at, last_activity_at
         ) VALUES (
-          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
           (
             SELECT MAX(activity_at)
             FROM (
@@ -1873,6 +1925,11 @@ def refresh_registry_projection(
               THEN excluded.summary
             ELSE container_registry.summary
           END,
+          identity_source = CASE
+            WHEN excluded.source_hash IS NOT container_registry.source_hash
+              THEN excluded.identity_source
+            ELSE container_registry.identity_source
+          END,
           source_hash = excluded.source_hash,
           indexed_at = CASE
             WHEN excluded.source_hash IS NOT container_registry.source_hash
@@ -1885,6 +1942,7 @@ def refresh_registry_projection(
             data["id"],
             identity,
             summary,
+            source_rel,
             source_hash,
             iso_now(),
             data["id"],
@@ -2015,6 +2073,7 @@ SELECT
   u.username AS owner,
   cr.identity_label,
   cr.summary,
+  cr.identity_source,
   cr.source_hash,
   cr.indexed_at,
   cr.last_activity_at AS projected_last_activity_at,
@@ -2085,6 +2144,7 @@ def _fleet_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "visibility": data.get("visibility") or "private",
         "identity_label": data.get("identity_label"),
         "summary": data.get("summary"),
+        "identity_source": data.get("identity_source"),
         "source_hash": data.get("source_hash"),
         "indexed_at": data.get("indexed_at"),
         "last_activity_at": data.get("live_last_activity_at"),
@@ -2656,11 +2716,11 @@ def _manifest_container_doc(
     strategy = planned.get("strategy")
     content = planned.get("content")
     expected_hash = planned.get("sha256")
-    if (
-        planned.get("path") != CONTAINER_DOC
-        or strategy not in {"generate", "move"}
-        or not isinstance(expected_hash, str)
-    ):
+    if planned.get("path") != CONTAINER_DOC or strategy not in {
+        "generate",
+        "move",
+        "none",
+    }:
         raise OpsMigrationCollision(
             "stored Ops migration manifest has an invalid planned container.md"
         )
@@ -2669,6 +2729,23 @@ def _manifest_container_doc(
         for entry in manifest.get("entries") or []
         if isinstance(entry, Mapping) and entry.get("name") == CONTAINER_DOC
     ]
+    if strategy == "none":
+        # Prune C5: nothing is planned for container.md - no content, no
+        # recovery artifact, no bound owner document.
+        if (
+            content is not None
+            or expected_hash is not None
+            or planned.get("recovery_temp") is not None
+            or doc_entries
+        ):
+            raise OpsMigrationCollision(
+                "stored Ops migration manifest has an invalid planned container.md"
+            )
+        return strategy, None, ""
+    if not isinstance(expected_hash, str):
+        raise OpsMigrationCollision(
+            "stored Ops migration manifest has an invalid planned container.md"
+        )
     if strategy == "generate":
         recovery_temp = planned.get("recovery_temp")
         if (
@@ -3063,9 +3140,9 @@ def _validated_retry_manifest(
         raise OpsMigrationCollision("ops/container.md is a symlink")
     if container_doc_state not in {"missing", "file"}:
         raise OpsMigrationCollision("ops/container.md is not a regular file")
-    if (
-        container_doc_state == "file"
-        and _hash_file(container_doc_path) != expected_container_doc_hash
+    if container_doc_state == "file" and (
+        container_doc_strategy == "none"
+        or _hash_file(container_doc_path) != expected_container_doc_hash
     ):
         raise OpsMigrationCollision("ops/container.md changed after migration planning")
     if container_doc_state == "file" and container_doc_strategy == "generate":
@@ -3101,7 +3178,7 @@ def _validated_retry_manifest(
             "container.md recovery file has ambiguous ownership"
         )
     if (
-        container_doc_strategy == "generate"
+        container_doc_strategy in {"generate", "none"}
         and _path_state(root / CONTAINER_DOC) != "missing"
     ):
         raise OpsMigrationCollision(
@@ -3413,7 +3490,11 @@ def inspect_ops_migration(
                     else ""
                 )
                 planned_writes = {
-                    "container_doc": strategy or None,
+                    # "none" (prune C5) means no container.md write at all -
+                    # the preview reports only real writes.
+                    "container_doc": (
+                        strategy if strategy in {"move", "generate"} else None
+                    ),
                     # The migration's exclude append opens `.git` as a
                     # directory only; a gitfile checkout is left untouched.
                     "git_exclude": root is not None and (root / ".git").is_dir(),
@@ -3722,7 +3803,17 @@ def _migrate_container_ops_locked(
                     manifest,
                 ),
             )
-            if _hash_file_at(physical_fd, CONTAINER_DOC) != expected_container_doc_hash:
+            if strategy == "none":
+                # Nothing was planned for container.md (prune C5) - one
+                # appearing mid-flight is concurrent modification.
+                if _path_state_at(physical_fd, CONTAINER_DOC) != "missing":
+                    raise OpsMigrationCollision(
+                        "ops/container.md changed during migration"
+                    )
+            elif (
+                _hash_file_at(physical_fd, CONTAINER_DOC)
+                != expected_container_doc_hash
+            ):
                 raise OpsMigrationCollision("ops/container.md changed during migration")
             exclude_ops_from_root_repo(root, root_fd=root_fd)
             _revalidate_root_identity(root, root_fd)

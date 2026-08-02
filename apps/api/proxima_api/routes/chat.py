@@ -1160,9 +1160,9 @@ def register(app, deps):
                     json.dumps({"mode": payload.mode, "session_id": session_id}),
                 ),
             )
-            # Automatic index regeneration only targets the wiki's DEFAULT
-            # location (the layout map's #137 seam); a wiki detected elsewhere
-            # keeps its index untouched until adaptive memory writes land.
+            # Automatic index regeneration follows the project's own detected
+            # wiki location (adaptive memory writes, prune C5); the seam
+            # returns None when the per-project toggle is off.
             try:
                 memory_root = layout_map.wiki_memory_write_root(
                     db(), int(session["project_id"])

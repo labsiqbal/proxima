@@ -24,9 +24,9 @@ class RunSummaries:
     def wiki_root_for_run(self, run: dict[str, Any]) -> Path | None:
         """Where this run's automatic log entry may be written. Wiki is
         project-scoped — a project-less (ad-hoc) chat has no wiki and is not
-        logged. The automatic memory writer only targets the wiki's DEFAULT
-        location per the layout map (a wiki detected elsewhere is read-only
-        until #137 enables adaptive memory writes)."""
+        logged. The layout-map seam resolves the project's own detected wiki
+        location (adaptive memory writes, prune C5) and returns None when the
+        per-project memory-writes toggle is off or the position is unsafe."""
         if not run["project_id"]:
             return None
         db = self.app.state.worker_db
@@ -37,13 +37,6 @@ class RunSummaries:
         if row and row["path"]:
             return layout_map.wiki_memory_write_root(db, row)
         return None
-
-    def autolog_enabled(self, project_id: int | None) -> bool:
-        if project_id is None:
-            return True
-        db = self.app.state.worker_db
-        row = db.execute("SELECT value FROM app_settings WHERE key = ?", (f"project:{project_id}:wiki_autolog",)).fetchone()
-        return (row["value"] if row else "on") != "off"
 
     async def generate_title(self, proc: Any, cwd: str, user_msg: str, assistant_msg: str) -> str:
         """Ask the agent (in a throwaway ACP session so the chat isn't polluted)
@@ -67,10 +60,11 @@ class RunSummaries:
         return " ".join(words[:3])[:48]
 
     async def write_auto_log(self, run: dict[str, Any], proc: Any, acp_sid: str) -> None:
-        """Best-effort: summarize the just-finished turn and append to the log."""
+        """Best-effort: summarize the just-finished turn and append to the log.
+        The seam in wiki_root_for_run already applies the per-project
+        memory-writes toggle, so a None root covers both "no wiki" and
+        "memory writes disabled"."""
         db = self.app.state.worker_db
-        if not self.autolog_enabled(run["project_id"]):
-            return
         root = self.wiki_root_for_run(run)
         if root is None:
             return

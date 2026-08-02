@@ -280,14 +280,27 @@ resolve through `layout_map.project_layout(...)`: wiki read surfaces (chat
 note draft/commit, run preamble catalog), the script library (catalog,
 approval card, `script_runner` execution), the upload default folder, the
 artifact/design scanners, and the preamble's designs list. The automatic
-memory writers (`log.md` append via `run_summaries`, `index.md` regeneration)
-go through `wiki_memory_write_root()`, which only returns the wiki while the
-map agrees with its default location - the deliberate #137 seam for adaptive
-memory writes. `GET /api/projects/{slug}/layout` exposes the resolved map.
-`container_registry` stores a bounded projection of identity and summary from
-`ops/container.md`, its full source hash, the projection timestamp, and last known
-activity. Identity is free text, not a Container type enum. The file API refreshes
-the projection immediately when it writes `container.md`; a five-second background
+memory writers (`log.md` append via `run_summaries`, `index.md` regeneration
+in the worker, run preamble, and wiki-note commit) go through one seam,
+`wiki_memory_write_root()`: **adaptive memory writes, default ON** (prune C5,
+decision #121) - it returns the project's own detected wiki location, and
+None when the per-project toggle is off (`app_settings` key
+`project:<id>:memory_writes`, set via `PUT /api/projects/{slug}/memory-writes`)
+or the position is unsafe (symlink/non-directory fail-closed; a missing
+directory is only created at the default `<ops>/wiki` position).
+`GET /api/projects/{slug}/layout` exposes the resolved map plus
+`memory_writes.enabled`.
+`container_registry` stores a bounded projection of identity and summary read
+from the docs the folder already has (prune C5):
+`resolve_container_identity()` probes `AGENTS.md`, `README.md`, `HANDOFF.md`
+(container root, then Ops root), then a legacy `ops/container.md`; optional
+frontmatter is honored, else the first H1 / first body line, and a folder with
+no docs is identified by its own name. The projection records the winning
+doc (`identity_source`), its source hash, the projection timestamp, and last
+known activity - no Proxima frontmatter is required anywhere, and nothing
+generates `container.md`. Identity is free text, not a Container type enum.
+The file API refreshes the projection immediately when it writes any identity
+doc name; linking refreshes it once; a five-second background
 cycle catches direct owner edits without adding filesystem work to Fleet requests.
 `container_ops_migrations` stores the versioned, hash-bound, resumable migration
 marker for legacy root-level Ops data.
@@ -410,12 +423,14 @@ manifest exists (mid-move content is migration-owned) and stays fail-closed for
 a symlinked, non-directory, or unreadable target or one overlapping a repo Area.
 `inspect_ops_migration` mirrors the same predicate and reports `retry_action`
 (`adopt`/`migrate`/`revalidate`) plus - for a safe `migrate` - `planned_writes`
-(`container_doc: move|generate`, `git_exclude`), so the migration surface
+(`container_doc: move|null`, `git_exclude`), so the migration surface
 previews every write exactly and the retry confirmation names the real action.
 The move-based path runs **only** through that explicit retry:
 it creates a dry-run manifest with content hashes. It includes an existing owner-authored
-`container.md` as a byte-preserving move, or binds exact generated content only when
-that legacy document is absent. It rejects collisions or ambiguous types before
+`container.md` as a byte-preserving move; with no legacy document it plans
+nothing for `container.md` (strategy `"none"`, prune C5 - no identity document
+is generated; stored pre-C5 manifests with a planned generated document still
+execute through the recovery protocol below). It rejects collisions or ambiguous types before
 publication. Regular files are linked into authoritative names from opened,
 manifest-bound descriptors. Directories are published entry by entry relative to
 stable no-follow descriptors. Manifest version 6 records each Proxima-created

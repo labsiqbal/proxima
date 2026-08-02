@@ -270,6 +270,12 @@ def test_knowledge_rebuild_is_local_and_limited_to_allowlist(
     api, headers = _api(tmp_path)
     project, _ = _container(api, headers, with_code=False)
     root = Path(project["path"])
+    # Fresh containers no longer generate ops/container.md (prune C5); an
+    # owner-authored one is still allowlisted knowledge, so write one here.
+    (root / "ops" / "container.md").write_text(
+        "# Graph One\n\nDurable container context.\n",
+        encoding="utf-8",
+    )
     (root / "ops" / "wiki").mkdir(exist_ok=True)
     (root / "ops" / "wiki" / "note.md").write_text(
         "# Note\n\nCurated knowledge.\n",

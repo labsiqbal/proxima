@@ -4,8 +4,9 @@ Where a project keeps its wiki, artifacts, scripts, and uploads is per-project
 data seeded by zero-write detection from the real tree at link time (and
 lazily for already-linked projects). Today's fixed names are only the
 DEFAULTS when nothing is detected; features resolve those locations through
-the persisted map instead of hardcoded names. Memory WRITES into a detected
-non-default wiki stay disabled here - that is #137's job.
+the persisted map instead of hardcoded names. Memory WRITES follow the
+detected wiki too (adaptive, per-project toggleable - prune C5, #137; see
+test_identity_and_memory.py for the toggle and fail-closed rules).
 """
 
 from __future__ import annotations
@@ -387,7 +388,7 @@ def test_scripts_and_designs_resolve_through_the_map(tmp_path: Path):
     assert [d["id"] for d in designs] == ["d1"]
 
 
-# ── The #137 seam: memory writes stay on the default location ────────────
+# ── The memory-write seam: adaptive, default ON (prune C5, #137) ─────────
 
 
 def test_wiki_memory_write_root_matches_default_location(tmp_path: Path):
@@ -404,10 +405,10 @@ def test_wiki_memory_write_root_matches_default_location(tmp_path: Path):
     )
 
 
-def test_wiki_memory_writes_disabled_for_divergent_detected_wiki(tmp_path: Path):
-    """A wiki detected AWAY from the default location is read-only for the
-    automatic memory writers until #137 enables adaptive writes: reads resolve
-    through the map, but log.md/index regeneration must not touch it."""
+def test_wiki_memory_writes_follow_a_divergent_detected_wiki(tmp_path: Path):
+    """Adaptive memory writes (prune C5, #137): a wiki detected AWAY from the
+    default location IS the automatic writers' target - Proxima's memory goes
+    into the project's own wiki, wherever the folder keeps it."""
     root = tmp_path / "memory-divergent"
     (root / "ops").mkdir(parents=True)
     (root / "wiki").mkdir()
@@ -419,4 +420,6 @@ def test_wiki_memory_writes_disabled_for_divergent_detected_wiki(tmp_path: Path)
     layout = layout_map.project_layout(api.app.state.db, project)
     assert layout.rel_paths["wiki"] == "wiki"
     assert layout.dir("wiki") == root / "wiki"
-    assert layout_map.wiki_memory_write_root(api.app.state.db, project) is None
+    assert layout_map.wiki_memory_write_root(api.app.state.db, project) == (
+        root / "wiki"
+    )

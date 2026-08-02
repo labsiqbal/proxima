@@ -245,6 +245,7 @@ class Container(BaseModel):
     visibility: str
     identity_label: str | None = None
     summary: str | None = None
+    identity_source: str | None = None
     source_hash: str | None = None
     indexed_at: str | None = None
     last_activity_at: str | None = None
@@ -356,6 +357,12 @@ class ProjectAreaUpdateRequest(BaseModel):
     # T9 (slice 11): the per-code-area push-after-merge opt-in. Enabling
     # requires a detected git remote (no remote -> the toggle is not offered).
     push_on_merge: bool
+
+
+class MemoryWritesRequest(BaseModel):
+    # Prune C5 (#137): the per-project toggle for Proxima's automatic memory
+    # writers (log.md append + wiki index regeneration). Default ON.
+    enabled: bool
 
 
 class CommandRequest(BaseModel):

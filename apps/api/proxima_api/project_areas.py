@@ -134,10 +134,7 @@ def _ensure_ops_area_locked(
         ).fetchone()
         if project is None:
             raise ValueError("Container does not exist")
-        create_physical_ops_root(
-            Path(project["path"]),
-            str(project["name"] or project["slug"]),
-        )
+        create_physical_ops_root(Path(project["path"]))
     conn.execute(
         "INSERT INTO project_areas(project_id, kind, rel_path, source) "
         "SELECT ?, 'ops', ?, ? "

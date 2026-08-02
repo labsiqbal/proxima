@@ -1274,8 +1274,9 @@ global assumption that Ops lives at `ops/`.
 and foreign-key truth; the Ops row's `rel_path` is the persisted per-project Ops
 path and every Ops feature resolves through it (`ops_root`). Workspace-created
 Containers (`POST /api/projects`, under
-Proxima's own data dir) still scaffold `ops/`, `ops/container.md`, and one active
-Ops row with `rel_path='ops'`. **Linked folders are never written to** (prune C2,
+Proxima's own data dir) still scaffold `ops/` with starter dirs, a root
+README, and one active Ops row with `rel_path='ops'` - but no
+`ops/container.md` (identity comes from existing docs, prune C5). **Linked folders are never written to** (prune C2,
 below): the link flow offers the detected default (an existing `ops/` folder ->
 `ops`, else the project root -> `.`) in the folder picker's "Ops folder" select;
 the owner may override it with any existing subfolder or the root (`ops_path` on
@@ -1341,25 +1342,59 @@ survives restarts even if a default-position folder disappears; an entry
 detected OUTSIDE the Ops root stays authoritative only while its folder exists
 and re-detects when it is gone (self-healing after the explicit migration moves
 content into Ops). `GET /api/projects/{slug}/layout` reports the map
-(`ops_path` + per-area `path`/`source`/`exists`). Deliberate seams: automatic
-memory writes (`log.md` append, `index.md` regeneration) only target the
-wiki's DEFAULT location - a wiki detected elsewhere is read-only for them
-until #137 ships adaptive memory writes; moodboard storage, chat-generated
+(`ops_path` + per-area `path`/`source`/`exists`, plus the memory-writes
+toggle below). Deliberate seam: moodboard storage, chat-generated
 image saves, and the Knowledge-graph allowlist keep fixed Ops-relative names
 (they coincide with every detectable map today; the path-model cleanup is
 #138).
 
+**Identity from existing docs + adaptive memory writes (prune C5).** A
+project's identity (the Fleet's `identity_label` + `summary`) is read from
+the docs the folder **already has** - `AGENTS.md`, `README.md`, `HANDOFF.md`
+(probed at the container root first, then under the Ops root), with a legacy
+`ops/container.md` still honored after them - and no Proxima frontmatter is
+required anywhere. A doc's optional frontmatter (`identity`/`title`/`name`,
+`summary`/`description`) is honored when present; otherwise the first H1 is
+the label and the first body line the summary. A folder with none of these
+files links fine and is identified by its own folder name.
+`resolve_container_identity` (`container_registry.py`) picks the first doc
+that yields anything; the projection records which doc won
+(`container_registry.identity_source`, also in the Fleet payload) and
+re-indexes only when the source hash changes (boot + 5s background cycle +
+immediately after link and after a Files-API write to any identity doc name).
+Nothing generates `ops/container.md` anymore: fresh workspace Containers
+scaffold only starter dirs + README, and the explicit migration plans
+`container_doc: "none"` when no legacy root `container.md` exists (stored
+pre-C5 manifests with a planned generated document still execute).
+
+Proxima's **automatic memory writes** - the post-run `log.md` append and
+`index.md` regeneration - are **adaptive and default ON** (decision #121):
+they target the project's own detected wiki location through one seam,
+`layout_map.wiki_memory_write_root()` (so BIP-style root `wiki/` folders
+receive the log and index directly). A **per-project toggle** turns them off
+entirely: `PUT /api/projects/{slug}/memory-writes` (`app_settings` key
+`project:<id>:memory_writes`), reported by `GET /api/projects/{slug}/layout`
+as `memory_writes.enabled` and surfaced as a checkbox in the project settings
+dialog. Writes stay fail-closed: a wiki position occupied by a symlink or
+non-directory is never a write target, and a missing directory is only ever
+created at the DEFAULT `<ops>/wiki` position - never invented at a detected
+non-default location. Memory writes happen only on actual memory events
+(post-run log append, index regeneration on run start/end and wiki-note
+commit) - never at link or boot.
+
 **The move-based migration is exclusively an explicit, previewed opt-in** on the
 Ops-migration surface (`.../ops-migration/retry`). Its inspection payload reports
 `retry_action: "adopt" | "migrate" | "revalidate" | null` plus, for a safe
-`migrate`, `planned_writes: { container_doc: "move" | "generate", git_exclude:
+`migrate`, `planned_writes: { container_doc: "move" | null, git_exclude:
 bool }`; together with `legacy_owned_paths` the UI shows **exactly** what would
-change - each planned move, whether `ops/container.md` is moved or generated,
+change - each planned move, whether a legacy root `ops/container.md` is moved,
 and whether the root repo's `.git/info/exclude` gains `/ops/` - both in the
 validation panel and in the confirm dialog, before anything is touched. The
 migration first builds and hashes a dry-run manifest. An owner-authored legacy `container.md` is
-hash-bound and moved byte-for-byte; a generated document is planned only when the
-legacy document is absent. Atomic no-clobber publication through stable no-follow
+hash-bound and moved byte-for-byte; with no legacy document, nothing is planned
+for `container.md` at all (strategy `"none"`, prune C5 - the historical
+generated-document protocol below remains executable for stored pre-C5
+manifests). Atomic no-clobber publication through stable no-follow
 directory handles publishes only manifest-bound inodes for known Ops-owned paths.
 Regular files are linked from opened descriptors; directories are published entry
 by entry. Manifest version 6 persists every Proxima-created destination directory
@@ -1746,8 +1781,12 @@ This is ArtifactViewer functionality, not a Design Studio canvas path.
 ## 15. Wiki + memory (knowledge)
 
 **Why:** Per-project + global knowledge that compounds across sessions.
-**How:** Markdown files under each project's `wiki/`; a built index + tree; global
-aggregation. Fed by Chat→Wiki (§5). Opened from **Settings → Knowledge**
+**How:** Markdown files in each project's own wiki location (layout-map
+resolved, prune C4 - e.g. root `wiki/` or `ops/wiki/`); a built index + tree;
+global aggregation. The automatic log/index writers follow the same detected
+location and honor the per-project memory-writes toggle (prune C5, §"Identity
+from existing docs + adaptive memory writes"). Fed by Chat→Wiki (§5). Opened
+from **Settings → Knowledge**
 (Files / Graph / Search). Preview renders `[[wikilinks]]`; existing targets open
 the note, and **missing (red) links create the note on click** (title heading stub,
 open in edit beside the current note when nested) so owners are never stuck on a
