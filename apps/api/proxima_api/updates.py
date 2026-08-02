@@ -169,10 +169,12 @@ class UpdateManager:
         self._marker_state()
 
     def apply(self) -> dict[str, Any]:
-        # Never revive the live-checkout pull/build/restart path.  A future
-        # enrolled external controller receives an explicitly verified request
-        # through /api/self-updates; this legacy endpoint cannot activate code.
-        raise UpdateUnsupported("safe self-update is not enrolled; no update was started")
+        # Never revive the live-checkout pull/build/restart path. Updating is a
+        # manual git pull plus a service restart; this legacy endpoint cannot
+        # activate code.
+        raise UpdateUnsupported(
+            "in-app update is unavailable; run git pull and restart the service"
+        )
 
     def _marker_state(
         self,
@@ -225,7 +227,7 @@ class UpdateManager:
             "last_error": self.last_error,
             "log_tail": self._log_tail() if state in ("running", "failed") else None,
             "apply_supported": False,
-            "manual_command": "Safe self-update requires an enrolled external updater; no in-app activation is available.",
+            "manual_command": "Update manually: git pull in the checkout, then restart the proxima service.",
         }
 
     def _log_tail(self, lines: int = LOG_TAIL_LINES) -> str | None:

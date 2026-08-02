@@ -109,8 +109,6 @@ function disposableApiEnvironment({ fixtureRoot, fixtureHome, dataRoot, workspac
     PROXIMA_PREVIEW_BIND: 'off',
     PROXIMA_GRAPH_SEMANTIC_EGRESS: '0',
     PROXIMA_FEATURE_MASTER_ORCHESTRATOR: '0',
-    PROXIMA_FEATURE_SAFE_SELF_UPDATE: '0',
-    PROXIMA_CANDIDATE_MODE: '0',
   })
   for (const name of [
     'HOME',

@@ -182,15 +182,13 @@ with TestClient(serve.app) as client:
     config_response = client.get("/api/config")
     config_response.raise_for_status()
     # Fresh-boot defaults: shipped features are on, including Master (ADR-0039).
-    # Safe self-update stays off until an external updater is enrolled.
     assert config_response.json()["features"] == {
         "design_studio": True,
         "workflow_graph": True,
         "repo_worktrees": True,
         "master_orchestrator": True,
-        "safe_self_update": False,
     }
-    print("config: shipped features on, safe self-update off")
+    print("config: shipped features on")
 
     auth_response = client.post("/auth/auto", json={})
     auth_response.raise_for_status()
@@ -315,9 +313,8 @@ async function main() {
     workflow_graph: true,
     repo_worktrees: true,
     master_orchestrator: true,
-    safe_self_update: false,
   })
-  console.log('config: shipped features on, safe self-update off')
+  console.log('config: shipped features on')
 
   const auth = await request('/auth/auto', { method: 'POST', body: {} })
   assert.equal(auth.user?.username, 'fresh-owner')

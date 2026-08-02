@@ -33,7 +33,7 @@ export function UpdateModal(props: { status: UpdateStatus; onApply: () => Promis
       <p className="muted">You're on v{props.status.current_version}.</p>
       <div className="update-notes"><ReactMarkdown remarkPlugins={[remarkGfm]}>{latest.notes || '_No release notes._'}</ReactMarkdown></div>
       {latest.url && <a className="update-release-link" href={latest.url} target="_blank" rel="noreferrer">View release on GitHub ↗</a>}
-      {!props.status.apply_supported && <p className="update-manual"><span className="muted">{props.status.manual_command || 'Automatic promotion is unavailable until a managed external updater has passed its safety and rollback checks.'}</span></p>}
+      {!props.status.apply_supported && <p className="update-manual"><span className="muted">{props.status.manual_command || 'Automatic promotion is unavailable. Update manually: git pull, then restart the service.'}</span></p>}
       {error && <p className="update-error">{error}</p>}
       <div className="confirm-actions">
         <button type="button" className="ghost-button" onClick={props.onClose}>Later</button>

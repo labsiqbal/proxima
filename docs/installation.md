@@ -38,7 +38,7 @@ bash scripts/linux-daily-driver-acceptance
 ```
 
 See the [executable acceptance matrix](linux-daily-driver-acceptance.md). It never
-targets the installed database or service and keeps Safe Self-Update disabled.
+targets the installed database or service.
 
 ### Grok Build CLI
 
@@ -176,8 +176,6 @@ PROXIMA_SERVICE_NAME=proxima
 PROXIMA_FEATURE_DESIGN_STUDIO=1
 PROXIMA_FEATURE_WORKFLOW_GRAPH=1
 PROXIMA_FEATURE_MASTER_ORCHESTRATOR=1
-PROXIMA_FEATURE_SAFE_SELF_UPDATE=0
-PROXIMA_SAFE_UPDATE_FENCE_PATH=
 PROXIMA_MASTER_MAX_PARALLEL=3
 PROXIMA_GRAPH_SEMANTIC_EGRESS=0
 PROXIMA_RUNNER_ENV_ALLOWLIST=

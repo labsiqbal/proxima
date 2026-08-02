@@ -63,7 +63,7 @@ systemctl --user restart proxima
 # Stop the service
 systemctl --user stop proxima
 
-# Safe-update activation is unavailable; this exits without changing anything
+# In-app update is unavailable; update with git pull + restart instead
 ./scripts/proxima update
 ```
 
@@ -93,8 +93,6 @@ Key variables:
 | `PROXIMA_HERMES_BIN` | _(unset, uses PATH)_ | Explicit path to the `hermes` binary |
 | `PROXIMA_UPDATE_REPO` | `labsiqbal/proxima` | GitHub release source |
 | `PROXIMA_SERVICE_NAME` | `proxima` | Managed service selected by the CLI |
-| `PROXIMA_FEATURE_SAFE_SELF_UPDATE` | `0` | External updater request surface remains disabled |
-| `PROXIMA_SAFE_UPDATE_FENCE_PATH` | _(unset)_ | Absolute root-owned maintenance fence read by the app |
 | `PROXIMA_FEATURE_DESIGN_STUDIO` | `1` | Set to `0` to disable Design Studio |
 | `PROXIMA_FEATURE_MASTER_ORCHESTRATOR` | `1` | Master runtime, UI, and graph routes. Set to `0` to run Proxima as a plain chat/workflow cockpit with no Delegate surface |
 | `PROXIMA_GRAPH_SEMANTIC_EGRESS` | `0` | Reserved graph-policy flag; see [configuration notes](docs/installation.md#configuration) |
