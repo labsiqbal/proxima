@@ -244,7 +244,8 @@ def test_link_rejects_unusable_ops_path(tmp_path: Path):
 
 
 def test_ops_features_resolve_through_the_persisted_path(tmp_path: Path):
-    """File features route through the per-project Ops path, not 'ops/'."""
+    """File features resolve real paths, with the persisted Ops path owning
+    Area identity - no virtual names (prune #138)."""
     root = tmp_path / "resolved"
     (root / "runbook" / "wiki").mkdir(parents=True)
     (root / "runbook" / "wiki" / "existing.md").write_bytes(b"# existing\n")
@@ -254,21 +255,22 @@ def test_ops_features_resolve_through_the_persisted_path(tmp_path: Path):
     linked = _link(api, headers, root, "resolved", ops_path="runbook")
     assert linked.status_code == 201, linked.text
 
-    # A virtual Ops write lands inside the chosen folder.
+    # A write into the chosen Ops folder uses its real path and carries the
+    # Ops Area identity.
     written = api.put(
         "/api/projects/resolved/file",
         headers=headers,
-        params={"path": "wiki/note.md"},
+        params={"path": "runbook/wiki/note.md"},
         json={"content": "# routed\n"},
     )
     assert written.status_code == 200, written.text
+    assert written.json()["target"]["area"]["kind"] == "ops"
     assert (root / "runbook" / "wiki" / "note.md").read_text(
         encoding="utf-8"
     ) == "# routed\n"
     assert not (root / "wiki").exists()
     assert not (root / "ops").exists()
 
-    # An explicit Ops-folder path resolves into the same Area.
     read = api.get(
         "/api/projects/resolved/file",
         headers=headers,
@@ -277,8 +279,8 @@ def test_ops_features_resolve_through_the_persisted_path(tmp_path: Path):
     assert read.status_code == 200, read.text
     assert read.json()["content"] == "# existing\n"
 
-    # The virtual root listing overlays the chosen Ops folder, without
-    # duplicating it as a plain directory entry.
+    # The root listing is the real folder: the chosen Ops folder is a normal
+    # directory entry, nothing is overlaid over root names.
     listing = api.get(
         "/api/projects/resolved/tree",
         headers=headers,
@@ -286,20 +288,18 @@ def test_ops_features_resolve_through_the_persisted_path(tmp_path: Path):
     )
     assert listing.status_code == 200, listing.text
     names = {entry["name"] for entry in listing.json()["entries"]}
-    assert "wiki" in names
-    assert "README.md" in names
-    assert "runbook" not in names
+    assert names == {"runbook", "README.md"}
 
-    # Reference autocomplete merges through the same per-project path.
+    # Reference autocomplete lists real container-relative paths.
     references = api.get(
         "/api/projects/resolved/reference-files",
         headers=headers,
     )
     assert references.status_code == 200, references.text
     paths = {item["path"] for item in references.json()["files"]}
-    assert "wiki/note.md" in paths
+    assert "runbook/wiki/note.md" in paths
     assert "README.md" in paths
-    assert not any(path.startswith("runbook/") for path in paths)
+    assert "wiki/note.md" not in paths
 
     # The migration surface reports the persisted path as settled.
     detail = api.get("/api/projects/resolved/ops-migration", headers=headers)

@@ -336,9 +336,9 @@ unsupported targets disabled with an accessible refusal reason. If the ordinary
 Files editor already holds unsaved project bytes, inspection keeps that buffer
 mounted and read-only with a visible retain banner; tree selection can browse the
 inspection side without replacing those bytes, and write returns only when the
-ordinary virtual root is restored.
+ordinary Area-validated adapter is restored.
 Closing that inspection, changing Projects, or opening Files normally clears the
-Container-root target and restores the ordinary virtual Files view. Changing
+Container-root target and restores the ordinary Files view. Changing
 Projects or leaving the Projects Settings section clears the durable detail hash,
 while changing directly between recovery routes clears stale detail data before
 loading the next Project. Validation refresh is read-only, and guarded retry remains

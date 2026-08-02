@@ -26,7 +26,6 @@ from .container_registry import (
     container_root,
     ops_root,
     recover_container_activity_guardians,
-    root_for_virtual_path,
 )
 from .profile_seed import seed_agent_home
 from .master_runtime import ensure_master_identity
@@ -649,13 +648,6 @@ def build_route_deps(
         except ContainerBoundaryError as exc:
             raise _boundary_http(exc) from exc
 
-    def _virtual_root(slug: str, path: str, user: dict[str, Any]) -> Path:
-        project = visible_project(slug, user)
-        try:
-            return root_for_virtual_path(db(), project, path)
-        except ContainerBoundaryError as exc:
-            raise _boundary_http(exc) from exc
-
     def user_from_token_query(token: str) -> dict[str, Any]:
         with app.state.db_lock:
             row = (
@@ -695,7 +687,6 @@ def build_route_deps(
         "_purge_project": _purge_project,
         "_project_root": _project_root,
         "_ops_root": _ops_root,
-        "_virtual_root": _virtual_root,
         "user_from_token_query": user_from_token_query,
         "create_token": create_token,
         "public_user": public_user,

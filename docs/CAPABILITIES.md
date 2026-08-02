@@ -1313,7 +1313,7 @@ nothing is moved, generated, or rewritten; no `container.md` is created - an
 existing one is simply read for the identity/summary projection); resuming a
 previously authorized in-flight move (a durable "moving" manifest); and
 otherwise **leaving the folder byte-identical** - the Ops row stays at `.`
-(fully readable through the legacy virtual mapping), with no marker and no
+(its files resolve at their literal root paths), with no marker and no
 Attention item. The startup sweep re-validates persisted choices and
 auto-adopts a populated `ops/` only for detection-sourced legacy `.` rows;
 persisted non-`.` paths are first-class settled layouts, never "unsupported".
@@ -1343,10 +1343,24 @@ detected OUTSIDE the Ops root stays authoritative only while its folder exists
 and re-detects when it is gone (self-healing after the explicit migration moves
 content into Ops). `GET /api/projects/{slug}/layout` reports the map
 (`ops_path` + per-area `path`/`source`/`exists`, plus the memory-writes
-toggle below). Deliberate seam: moodboard storage, chat-generated
-image saves, and the Knowledge-graph allowlist keep fixed Ops-relative names
-(they coincide with every detectable map today; the path-model cleanup is
-#138).
+toggle below).
+Since prune #138 the map is also the web client's source of area locations
+(`useProjectAreaPaths`): the project Wiki screen browses the mapped wiki
+folder, and Design Studio, the Moodboard, and diagram whiteboards live under
+the mapped artifacts folder - the moodboard store (`<artifacts>/moodboard`,
+container-relative item paths with a read-boundary upgrade for reroute-era
+Ops-relative entries), design scenes/assets (`<artifacts>/design`),
+chat-generated images (`<artifacts>/media/images`), and whiteboards
+(`<artifacts>/whiteboards`). Two sites deliberately keep fixed Ops-relative
+names (decided in #138): the **Knowledge-graph allowlist**, because Knowledge
+scope is a security boundary (only the Ops workspace may enter Knowledge,
+never repo/Container files - and inside the Ops root detection can only ever
+produce these exact names, so allowlist and map cannot diverge there); and
+the **artifact record language** (`produced_artifacts`, `output_links`,
+Archive rows), which resolves Ops-relative until the Part D ledger rework
+(#139) - writers that follow the map bridge through
+`ProjectLayout.ops_record_rel`, so an artifacts area outside the Ops root
+saves files in the right real place while its records join in #139.
 
 **Identity from existing docs + adaptive memory writes (prune C5).** A
 project's identity (the Fleet's `identity_label` + `summary`) is read from
@@ -1449,10 +1463,10 @@ and file-read operations; its Files tree removes mutation controls, opens files
 read-only, and visibly expands and marks directory targets. An already-dirty ordinary
 Files buffer stays mounted and read-only across the inspection adapter swap and path
 browses; inspection never discards those unsaved project bytes, and write returns only
-with the ordinary virtual root. Backend-declared root
+with the ordinary Area-validated adapter. Backend-declared root
 inspectability disables unavailable or unsafe reveal actions with an accessible
 reason. Closing inspection,
-changing Projects, or opening Files normally restores the ordinary virtual writable
+changing Projects, or opening Files normally restores the ordinary writable
 boundary. The durable detail route pins the shell to its Project across reload and
 refresh; switching Settings sections clears the detail route. Retry stays disabled
 until the current layout passes the existing collision, type, hash, symlink, overlap,
@@ -1502,22 +1516,27 @@ and `GET /api/projects/{slug}/ops-migration`,
 chunk-streamed file upload with collision-safe naming and a configurable 100 MB default
 limit, plus an authenticated raw/preview
 route (for images and embedded previews). A separate bounded, path-only reference index
-powers `@` autocomplete without returning file contents; produced artifacts from the
+powers `@` autocomplete without returning file contents - every listed path is the
+real container-relative one (an ops/wiki note is `ops/wiki/...`, never a virtual
+`wiki/...`); produced artifacts from the
 project artifact scan are merged into the same picker on the client.
-Merged tree entries and produced/Archive artifacts carry a server-owned file target:
+Tree entries and produced/Archive artifacts carry a server-owned file target:
 the project slug, authoritative Container Area kind/id, and Area-relative path. Tree,
 read/write, raw/preview, file mutation, Archive presence checks, and ArtifactViewer all
-resolve that target through the same jailed resolver. Merged traversal changes to the
+resolve that target through the same jailed resolver. Tree traversal switches to the
 authoritative Ops or Code identity when it enters an Area, so direct physical Ops files
 stay distinct from same-name Container files. Broken, escaping, or otherwise invalid
 tree and artifact entries are omitted individually instead of weakening the jail or
 discarding the rest of the response.
-Historical virtual paths such as `wiki/...`, `artifacts/...`, `scripts/...`, and
-`uploads/...` remain stable at the API boundary. The server maps those paths to the
-canonical Ops root, while repo files continue to resolve from the Container root.
-Path-only clients remain compatible, including explicit `ops/...` paths for physical
-layouts. For a legacy Ops Area at `.`, `ops/...` remains literal Area-relative input
-and is not stripped or reinterpreted.
+**Paths mean exactly what they say on disk** (prune #138, decision #121):
+reserved-name virtual rerouting is gone. A path-only request resolves literally
+from the Container root - a real folder named `wiki/`, `scripts/`, or `tasks/`
+is just that folder, and Files browsing shows the real tree (the Ops folder is a
+normal directory entry; nothing is overlaid or shadowed). Uploads return
+container-relative paths (the mapped uploads folder by default, a literal
+folder when an explicit dir is given), and reroute-era rows (turn-journal
+paths, markdown refs in chat text) were frozen once to their historical
+Ops-prefixed meaning by migration v60.
 
 Session and Task results, Archive records, ArtifactViewer, Markdown sibling media,
 deletion, and Design Studio retain the server target. Design scenes persist image
@@ -1646,8 +1665,10 @@ later supervisor disconnect preserves fail-closed authority.
 ## 13. Image generation and Design Studio
 
 **Active:** image generation remains available through `/image` (alias `/gambar`).
-It uses the image provider selected in Settings, saves output under
-`artifacts/media/images/`, returns the artifact in the originating chat, and feeds the
+It uses the image provider selected in Settings, saves output under the project's
+mapped artifacts folder at `<artifacts>/media/images/` (layout map, prune #138;
+`ops/artifacts/...` for a detected Ops layout), returns the artifact in the
+originating chat, and feeds the
 same durable Archive registry as agent runs (so Image type filters and records list
 new media, not only the chat result card / fallback viewer). Chat Created-outputs
 cards expose a spaced `Open Image, <title>` accessible name. Images
@@ -1694,15 +1715,18 @@ tag filtering, edit/delete/open actions, paste/drag/upload input, and a
 **Use as reference** selection. Selected card metadata enters the existing
 design-run preamble and local cached OG images/screenshots are attached as vision;
 preview-fetch failures save graceful fallback cards instead of breaking the board.
-Moodboard data lives under `artifacts/moodboard/` and is isolated by project. On
+Moodboard data lives under the mapped artifacts folder at
+`<artifacts>/moodboard/` (layout map, prune #138) and is isolated by project;
+item image paths are container-relative real paths, with reroute-era
+Ops-relative entries upgraded at the read boundary. On
 desktop the left rail (Chat /
 Assets / Layers) and the right inspector are drag-resizable (same `useDragWidth`
 pattern as Workflows Plan Chat / node inspector); widths persist in
 `localStorage` (`proxima.design.leftWidth`, `proxima.design.inspectorWidth`) and
 handles hide when a panel is collapsed. Mobile keeps bottom sheets only. Scenes
-persist at `artifacts/design/<id>/scene.json` and appear as design records in the
-Archive.
-The optional project component library (`artifacts/design/_components.json`) is
+persist at `<artifacts>/design/<id>/scene.json` in the mapped artifacts folder
+(layout map, prune #138) and appear as design records in the Archive.
+The optional project component library (`<artifacts>/design/_components.json`) is
 loaded only when the design root listing already contains that file, so a fresh
 project does not probe a missing path. Zoom/Fit and Layers-panel rows expose
 explicit accessible names (and keyboard activation on layer rows) so symbol-only

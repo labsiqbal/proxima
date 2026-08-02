@@ -125,7 +125,6 @@ def register(app, deps):
     session_for_user = deps["session_for_user"]
     _project_root = deps["_project_root"]
     _ops_root = deps["_ops_root"]
-    _virtual_root = deps["_virtual_root"]
 
     @contextmanager
     def _project_mutation(slug: str, user: dict[str, Any]):
@@ -191,13 +190,10 @@ def register(app, deps):
 
     def _file_root(
         slug: str,
-        path: str,
         user: dict[str, Any],
-        root_side: Literal["virtual", "container"],
     ) -> Path:
-        if root_side == "container":
-            return _project_root(slug, user)
-        return _virtual_root(slug, path, user)
+        """The read-only Container-inspection root (``root_side=container``)."""
+        return _project_root(slug, user)
 
     def _audit_fs(user: dict[str, Any], action: str, slug: str, path: str) -> None:
         """Project-scoped path audit (file writes, app starts, tree ops)."""
@@ -226,90 +222,32 @@ def register(app, deps):
     ):
         try:
             if root_side == "container":
-                root = _file_root(slug, path, user, root_side)
+                root = _file_root(slug, user)
                 return {"path": path, "entries": fsapi.list_tree(root, path)}
+            # Files browses the real disk (prune #138): every listing - the
+            # root included - is the literal folder as it exists, with each
+            # entry carrying its authoritative Area target. The Ops folder is
+            # a normal directory entry; nothing is overlaid or shadowed.
             project = visible_project(slug, user)
             context = file_targets.target_context(db(), project)
-            if path or target:
-                resolved = _resolved_file(
-                    slug,
-                    user,
-                    path=path,
-                    target=target,
-                    project=project,
-                    context=context,
-                )
-                return {
-                    "path": path or resolved.locator.path,
-                    "target": resolved.locator.payload(),
-                    "entries": file_targets.add_targets(
-                        db(),
-                        project,
-                        fsapi.list_tree(resolved.root, resolved.locator.path),
-                        resolved.path,
-                        root=resolved.root,
-                        context=context,
-                    ),
-                }
-            ops_target = file_targets.ops_locator(db(), project)
-            container_root = container_registry.container_root(project)
-            ops = file_targets.resolve_locator(
-                db(),
-                project,
-                ops_target,
+            resolved = _resolved_file(
+                slug,
+                user,
+                path=path,
+                target=target,
+                project=project,
                 context=context,
             )
-            if container_root == ops.root:
-                return {
-                    "path": path,
-                    "target": ops_target.payload(),
-                    "entries": file_targets.add_targets(
-                        db(),
-                        project,
-                        fsapi.list_tree(ops.root, ""),
-                        ops.path,
-                        root=ops.root,
-                        context=context,
-                    ),
-                }
-            # Hide the Ops folder itself from the container listing - its
-            # content is overlaid below. The name comes from the per-project
-            # Ops path (prune C3), not a fixed "ops" constant; a nested Ops
-            # path has no single top-level entry to hide.
-            try:
-                ops_rel = ops.root.relative_to(container_root).as_posix()
-            except ValueError:
-                ops_rel = "."
-            ops_entry_name = ops_rel if "/" not in ops_rel else None
-            entries = {
-                entry["name"]: entry
-                for entry in file_targets.add_targets(
+            return {
+                "path": path or resolved.locator.path,
+                "target": resolved.locator.payload(),
+                "entries": file_targets.add_targets(
                     db(),
                     project,
-                    fsapi.list_tree(container_root, ""),
-                    container_root,
-                    root=container_root,
+                    fsapi.list_tree(resolved.root, resolved.locator.path),
+                    resolved.path,
+                    root=resolved.root,
                     context=context,
-                )
-                if entry["name"] != ops_entry_name
-            }
-            for entry in file_targets.add_targets(
-                db(),
-                project,
-                fsapi.list_tree(ops.root, ""),
-                ops.path,
-                root=ops.root,
-                context=context,
-            ):
-                if entry["name"] in container_registry.OPS_VIRTUAL_NAMES:
-                    entries[entry["name"]] = entry
-                else:
-                    entries.setdefault(entry["name"], entry)
-            return {
-                "path": path,
-                "entries": sorted(
-                    entries.values(),
-                    key=lambda entry: (entry["type"] != "dir", entry["name"].lower()),
                 ),
             }
         except (
@@ -336,19 +274,25 @@ def register(app, deps):
         container_files, container_truncated = fsapi.list_reference_files(
             container, limit=limit
         )
+        # Ops files are listed separately so durable notes stay present under
+        # the cap, but every path is the real container-relative one (prune
+        # #138): an ops/wiki note is `ops/wiki/...`, never a virtual `wiki/...`.
         ops_files, ops_truncated = fsapi.list_reference_files(ops, limit=limit)
-        # Deduplicate through the per-project Ops path (prune C3): container
-        # entries inside the Ops folder are re-listed Ops-relative above.
         try:
             ops_prefix = f"{ops.relative_to(container).as_posix()}/"
         except ValueError:
             ops_prefix = None
-        merged = {
-            item["path"]: item
-            for item in container_files
-            if ops_prefix is None or not item["path"].startswith(ops_prefix)
-        }
-        merged.update({item["path"]: item for item in ops_files})
+        merged = {item["path"]: item for item in container_files}
+        if ops_prefix is not None:
+            merged.update(
+                {
+                    f"{ops_prefix}{item['path']}": {
+                        **item,
+                        "path": f"{ops_prefix}{item['path']}",
+                    }
+                    for item in ops_files
+                }
+            )
         files = sorted(merged.values(), key=lambda item: item["path"].casefold())
         truncated = container_truncated or ops_truncated or len(files) > limit
         return {"files": files[:limit], "truncated": truncated}
@@ -364,7 +308,7 @@ def register(app, deps):
         if root_side == "container":
             if not path:
                 raise HTTPException(status_code=400, detail="file path is required")
-            root = _file_root(slug, path, user, root_side)
+            root = _file_root(slug, user)
             try:
                 return {"path": path, "content": fsapi.read_file(root, path)}
             except fsapi.FsError as exc:
@@ -451,19 +395,19 @@ def register(app, deps):
             staged.seek(0)
             with _project_mutation(slug, user):
                 # The default uploads folder is the project's mapped uploads
-                # location (layout map, prune C4) - e.g. an adopted root-level
-                # uploads/. An explicit non-default dir keeps the historical
-                # virtual-path behavior (reserved-name removal is #138).
-                if folder == "uploads":
-                    project = visible_project(slug, user)
-                    try:
-                        root, rel_dir = layout_map.project_layout(
-                            db(), project
-                        ).anchored("uploads")
-                    except container_registry.ContainerBoundaryError as exc:
-                        raise HTTPException(status_code=400, detail=str(exc)) from exc
-                else:
-                    root, rel_dir = _virtual_root(slug, folder, user), folder
+                # location (layout map, prune C4). An explicit dir is a literal
+                # container-relative folder (prune #138) - reserved names carry
+                # no routing meaning. Returned paths are container-relative so
+                # chat markdown and previews mean the same real file.
+                project = visible_project(slug, user)
+                try:
+                    layout = layout_map.project_layout(db(), project)
+                except container_registry.ContainerBoundaryError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                root = layout.container_root
+                rel_dir = (
+                    layout.rel_paths["uploads"] if folder == "uploads" else folder
+                )
                 try:
                     target = fsapi.resolve_in_project(root, f"{rel_dir}/{name}")
                 except fsapi.FsError as exc:

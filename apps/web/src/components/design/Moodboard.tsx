@@ -9,6 +9,7 @@ import {
   uploadFile,
   type MoodboardItem,
 } from '../../api/files'
+import { useProjectAreaPaths } from '../../hooks/useProjectAreaPaths'
 import { useRawBlobUrl } from '../../hooks/useRawBlobUrl'
 import { confirmDialog } from '../ui/Dialog'
 
@@ -99,6 +100,9 @@ export function Moodboard({ token, slug }: { token: string; slug: string }) {
   const [status, setStatus] = React.useState('')
   const [edit, setEdit] = React.useState<MoodboardItem | null>(null)
   const fileRef = React.useRef<HTMLInputElement>(null)
+  // The moodboard lives in the project's mapped artifacts folder (layout
+  // map, prune #138) - the upload dir must name that real path.
+  const areaPaths = useProjectAreaPaths(token, slug)
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -134,13 +138,13 @@ export function Moodboard({ token, slug }: { token: string; slug: string }) {
 
   const addFiles = async (files: File[]) => {
     const images = files.filter(file => file.type.startsWith('image/')).slice(0, 6)
-    if (!images.length || busy) return
+    if (!images.length || busy || !areaPaths) return
     setBusy(true)
     setStatus(`Uploading ${images.length} screenshot${images.length === 1 ? '' : 's'}...`)
     try {
       const added: MoodboardItem[] = []
       for (const file of images) {
-        const uploaded = await uploadFile(token, slug, file, 'artifacts/moodboard/images')
+        const uploaded = await uploadFile(token, slug, file, `${areaPaths.artifacts}/moodboard/images`)
         const result = await addMoodboardItem(token, slug, {
           imagePath: uploaded.path,
           title: file.name.replace(/\.[^.]+$/, ''),

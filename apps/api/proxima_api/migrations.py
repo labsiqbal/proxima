@@ -21,6 +21,7 @@ entry. Prefer additive changes (``ADD COLUMN``, ``CREATE TABLE``).
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -6279,6 +6280,125 @@ def _add_turn_journal_root_semantics(conn: sqlite3.Connection) -> None:
         )
 
 
+# The reserved names the pre-#138 virtual mapping rerouted to the Ops root.
+# This is a FROZEN historical list for the v60 data migration - the live code
+# no longer assigns any routing meaning to these names (decision #121).
+_REROUTE_ERA_NAMES = frozenset(
+    (
+        "wiki",
+        "artifacts",
+        "reports",
+        "exports",
+        "scripts",
+        "tasks",
+        "uploads",
+        "container.md",
+        "design.md",
+    )
+)
+_MD_REF_RE = re.compile(r"\]\(([^)\s]+)\)")
+
+
+def _frozen_reroute_path(path: str, ops_rel: str) -> str:
+    """A reroute-era path's historical meaning, made literal.
+
+    Under the old virtual mapping a path whose first segment was a reserved
+    name resolved against the Ops root; freezing prefixes it with the
+    project's persisted Ops path so the same real file keeps being meant.
+    A path already under the Ops prefix is left alone (this also makes the
+    rewrite idempotent when the Ops folder itself carries a reserved name).
+    """
+    text = str(path or "")
+    first = text.split("/", 1)[0]
+    if first not in _REROUTE_ERA_NAMES:
+        return text
+    if text == ops_rel or text.startswith(f"{ops_rel}/"):
+        return text
+    return f"{ops_rel}/{text}"
+
+
+def _freeze_reroute_era_paths(conn: sqlite3.Connection) -> None:
+    # Reserved-name virtual rerouting was removed (#138): a path now means
+    # exactly what it says on disk. Rows written under the reroute era carried
+    # Ops-relative meanings behind reserved first segments; this one-time
+    # rewrite freezes that historical meaning into literal container-relative
+    # paths, only for projects whose Ops folder is not the container root:
+    # - turn_file_journals entry paths (restore no longer name-reroutes), and
+    # - markdown file references in chat message text (previews resolve the
+    #   literal path). Structured artifact records (produced_artifacts,
+    #   output_links, artifact_records) stay Ops-anchored by contract and are
+    #   not touched; the moodboard store upgrades at its own read boundary.
+    tables = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    if not {"projects", "project_areas", "sessions"} <= tables:
+        return
+    area_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(project_areas)").fetchall()
+    }
+    if not {"project_id", "kind", "rel_path", "source"} <= area_columns:
+        # A historical fixture schema without per-Area paths predates any
+        # non-'.' Ops root, so there is nothing to freeze.
+        return
+    ops_rels: dict[int, str] = {}
+    for row in conn.execute(
+        "SELECT project_id, rel_path FROM project_areas "
+        "WHERE kind = 'ops' AND source != 'excluded'"
+    ).fetchall():
+        rel = str(row["rel_path"] or ".").strip().strip("/")
+        if rel not in ("", "."):
+            ops_rels[int(row["project_id"])] = rel
+    if not ops_rels:
+        return
+
+    if "turn_file_journals" in tables:
+        for row in conn.execute(
+            "SELECT j.id, j.entries_json, s.project_id FROM turn_file_journals j "
+            "JOIN sessions s ON s.id = j.session_id WHERE s.project_id IS NOT NULL"
+        ).fetchall():
+            ops_rel = ops_rels.get(int(row["project_id"] or 0))
+            if ops_rel is None:
+                continue
+            try:
+                entries = json.loads(row["entries_json"] or "[]")
+            except (TypeError, ValueError):
+                continue
+            changed = False
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                frozen = _frozen_reroute_path(str(entry.get("path") or ""), ops_rel)
+                if frozen != entry.get("path"):
+                    entry["path"] = frozen
+                    changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE turn_file_journals SET entries_json = ? WHERE id = ?",
+                    (json.dumps(entries), row["id"]),
+                )
+
+    if "messages" in tables:
+        for row in conn.execute(
+            "SELECT m.id, m.content, s.project_id FROM messages m "
+            "JOIN sessions s ON s.id = m.session_id "
+            "WHERE s.project_id IS NOT NULL AND m.content LIKE '%](%'"
+        ).fetchall():
+            ops_rel = ops_rels.get(int(row["project_id"] or 0))
+            if ops_rel is None:
+                continue
+            content = str(row["content"] or "")
+            frozen = _MD_REF_RE.sub(
+                lambda match: "](" + _frozen_reroute_path(match.group(1), ops_rel) + ")",
+                content,
+            )
+            if frozen != content:
+                conn.execute(
+                    "UPDATE messages SET content = ? WHERE id = ?",
+                    (frozen, row["id"]),
+                )
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -6549,6 +6669,11 @@ MIGRATIONS: list[Migration] = [
         59,
         "record which existing doc identified a container (prune C5)",
         _add_identity_source,
+    ),
+    (
+        60,
+        "freeze reroute-era reserved-name paths to their historical Ops meaning",
+        _freeze_reroute_era_paths,
     ),
 ]
 

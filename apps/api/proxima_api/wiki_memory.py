@@ -408,9 +408,13 @@ def read_design_guidelines(project_root: Path | None) -> str | None:
     return text or None
 
 
-def read_moodboard_references(project_root: Path | None) -> list[dict[str, Any]]:
-    """Selected Moodboard items for design context. Missing/corrupt stores are empty."""
-    return moodboard.active_references(project_root)
+def read_moodboard_references(
+    store: "moodboard.MoodboardStore | None",
+) -> list[dict[str, Any]]:
+    """Selected Moodboard items for design context. Missing/corrupt stores are
+    empty. The store is layout-map-resolved (prune #138) and its image paths
+    are container-relative real paths."""
+    return moodboard.active_references(store)
 
 
 def moodboard_reference_context(references: list[dict[str, Any]]) -> str:

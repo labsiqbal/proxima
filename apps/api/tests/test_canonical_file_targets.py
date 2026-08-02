@@ -379,8 +379,20 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         encoding="utf-8",
     )
 
+    # The root listing is the real folder (prune #138): ops files live under
+    # the ops/ entry, same-name root files are their own entries - no overlay.
     entries = _by_name(api, headers)
-    ops_only = entries["ops-only.md"]["target"]
+    assert "ops-only.md" not in entries
+    ops_listing = api.get(
+        "/api/projects/identity/tree",
+        headers=headers,
+        params={"path": "ops"},
+    )
+    assert ops_listing.status_code == 200, ops_listing.text
+    ops_entries = {
+        entry["name"]: entry for entry in ops_listing.json()["entries"]
+    }
+    ops_only = ops_entries["ops-only.md"]["target"]
     container_brief = entries["brief.md"]["target"]
     ops_area = api.app.state.db.execute(
         "SELECT id, project_id FROM project_areas "
@@ -474,9 +486,11 @@ def test_physical_ops_direct_files_keep_server_owned_identity_across_surfaces(
         },
     )
     assert design.status_code == 200, design.text
+    # The from-image response path is container-relative (prune #138).
+    assert design.json()["path"].startswith("ops/artifacts/design/")
     scene = json.loads(
         (
-            ops
+            root
             / design.json()["path"]
             / "scene.json"
         ).read_text(encoding="utf-8")

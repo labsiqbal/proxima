@@ -3510,10 +3510,16 @@ def test_retry_serializes_virtual_file_write_before_root_resolution(
     assert write_was_blocked is True
     assert retry.status_code == 200, retry.text
     assert write.status_code == 200, write.text
-    assert not (root / "wiki").exists()
-    assert (root / "ops" / "wiki" / "new.md").read_text(
+    # The write serialized after the migration and means its literal path
+    # (prune #138): a fresh root-level wiki/new.md, while the migrated
+    # content lives under ops/wiki.
+    assert (root / "wiki" / "new.md").read_text(
         encoding="utf-8"
     ) == "late owner edit"
+    assert (root / "ops" / "wiki" / "existing.md").read_text(
+        encoding="utf-8"
+    ) == "existing"
+    assert not (root / "wiki" / "existing.md").exists()
 
 
 def test_retry_serializes_complete_project_purge(
@@ -3850,7 +3856,9 @@ def test_retry_serializes_design_writer_before_root_resolution(
             return api.post(
                 "/api/projects/serialized-design-writer/designs/from-image",
                 headers=headers,
-                json={"path": "artifacts/media/images/source.png"},
+                # The literal post-migration path (prune #138): the request
+                # serializes after the retry moves artifacts/ into ops/.
+                json={"path": "ops/artifacts/media/images/source.png"},
             )
         finally:
             design_finished.set()
@@ -3872,7 +3880,7 @@ def test_retry_serializes_design_writer_before_root_resolution(
     assert design_was_blocked is True
     assert retry.status_code == 200, retry.text
     assert design.status_code == 200, design.text
-    scene = root / "ops" / design.json()["path"] / "scene.json"
+    scene = root / design.json()["path"] / "scene.json"
     assert scene.is_file()
 
 
@@ -4043,13 +4051,22 @@ def test_file_api_can_inspect_explicit_container_side_after_migration(tmp_path: 
     (root / "wiki").mkdir()
     (root / "wiki" / "legacy.txt").write_text("legacy", encoding="utf-8")
 
-    virtual = api.get(
+    # Paths are literal (prune #138): the migrated file is ops/wiki/..., the
+    # re-created root wiki/ is its own folder.
+    physical_side = api.get(
         "/api/projects/explicit-container-side/file",
-        params={"path": "wiki/physical.txt"},
+        params={"path": "ops/wiki/physical.txt"},
         headers=headers,
     )
-    assert virtual.status_code == 200, virtual.text
-    assert virtual.json()["content"] == "physical"
+    assert physical_side.status_code == 200, physical_side.text
+    assert physical_side.json()["content"] == "physical"
+    legacy_side = api.get(
+        "/api/projects/explicit-container-side/file",
+        params={"path": "wiki/legacy.txt"},
+        headers=headers,
+    )
+    assert legacy_side.status_code == 200, legacy_side.text
+    assert legacy_side.json()["content"] == "legacy"
 
     legacy = api.get(
         "/api/projects/explicit-container-side/file",
@@ -4159,7 +4176,7 @@ def test_validation_blocks_cross_filesystem_retry_before_any_move(
     assert not (root / "ops").exists()
 
 
-def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
+def test_fresh_container_ops_features_use_real_paths(tmp_path: Path):
     api, headers = _api(tmp_path)
     response = api.post(
         "/api/projects",
@@ -4201,7 +4218,7 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
 
     assert (
         api.put(
-            "/api/projects/fresh/file?path=wiki/note.md",
+            "/api/projects/fresh/file?path=ops/wiki/note.md",
             headers=headers,
             json={"content": "# Note"},
         ).status_code
@@ -4227,7 +4244,7 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
     )
     assert (
         api.get(
-            "/api/projects/fresh/raw?path=artifacts/media/images/source.png",
+            "/api/projects/fresh/raw?path=ops/artifacts/media/images/source.png",
             headers=headers,
         ).status_code
         == 200
@@ -4236,10 +4253,10 @@ def test_fresh_container_ops_features_keep_virtual_paths(tmp_path: Path):
     design = api.post(
         "/api/projects/fresh/designs/from-image",
         headers=headers,
-        json={"path": "artifacts/media/images/source.png"},
+        json={"path": "ops/artifacts/media/images/source.png"},
     )
     assert design.status_code == 200, design.text
-    assert (root / "ops" / design.json()["path"] / "scene.json").is_file()
+    assert (root / design.json()["path"] / "scene.json").is_file()
 
     script = root / "ops" / "scripts" / "report.sh"
     script.parent.mkdir()

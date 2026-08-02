@@ -341,8 +341,9 @@ def test_upload_lands_in_the_mapped_uploads_folder(tmp_path: Path):
 
 
 def test_upload_default_location_is_unchanged(tmp_path: Path):
-    """With nothing detected the default keeps today's behavior byte-for-byte:
-    uploads go to <ops>/uploads."""
+    """With nothing detected the default keeps today's disk location:
+    uploads go to <ops>/uploads. The returned path is the container-relative
+    real path (prune #138) - what the composer embeds and previews resolve."""
     root = tmp_path / "plain-uploader"
     (root / "ops").mkdir(parents=True)
     api, headers = _api(tmp_path)
@@ -354,7 +355,7 @@ def test_upload_default_location_is_unchanged(tmp_path: Path):
         files={"file": ("note.txt", b"hello", "text/plain")},
     )
     assert uploaded.status_code == 200, uploaded.text
-    assert uploaded.json()["path"] == "uploads/note.txt"
+    assert uploaded.json()["path"] == "ops/uploads/note.txt"
     assert (root / "ops" / "uploads" / "note.txt").read_bytes() == b"hello"
 
 

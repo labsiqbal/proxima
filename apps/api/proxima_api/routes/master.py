@@ -812,6 +812,10 @@ def register(app, deps):
                 db(),
                 int(row["project_id"]),
             ):
+                # Journal paths are literal (prune #138): container semantics
+                # restore from the Container root, ops semantics from the Ops
+                # root. Reroute-era rows were frozen to their historical
+                # meaning by migration v60, so no name-based routing remains.
                 result = turn_restore.restore(
                     db(),
                     message_id,
@@ -821,10 +825,10 @@ def register(app, deps):
                             int(row["project_id"]),
                         )
                         if semantics == turn_restore.ROOT_OPS_V1
-                        else container_registry.root_for_virtual_path(
-                            db(),
-                            int(row["project_id"]),
-                            rel,
+                        else container_registry.container_root(
+                            container_registry.get_container(
+                                db(), int(row["project_id"])
+                            )
                         )
                     ),
                     confirmed=payload.get("confirm") is True,

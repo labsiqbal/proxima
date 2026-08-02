@@ -14,6 +14,7 @@ from typing import Any
 
 from . import fsapi
 from . import layout_map
+from . import moodboard
 from . import recommended_tools
 from . import wiki_memory
 
@@ -497,8 +498,10 @@ class RunPrompting:
                     else None
                 )
                 moodboard_references = (
-                    wiki_memory.read_moodboard_references(project_ops)
-                    if project_ops is not None
+                    wiki_memory.read_moodboard_references(
+                        moodboard.store_for_layout(project_layout)
+                    )
+                    if project_layout is not None
                     else []
                 )
                 preamble = wiki_memory.build_run_preamble(
@@ -580,10 +583,10 @@ class RunPrompting:
         # what the client sent — keeps the agent editing the scene, never launching
         # workflows or unrelated tasks.
         if session_mode == "design":
-            if not moodboard_references and project_ops is not None:
+            if not moodboard_references and project_layout is not None:
                 try:
                     moodboard_references = wiki_memory.read_moodboard_references(
-                        project_ops
+                        moodboard.store_for_layout(project_layout)
                     )
                 except Exception:
                     logger.exception("moodboard context read failed (non-fatal)")

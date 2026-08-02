@@ -1661,7 +1661,6 @@ def register(app, deps):
         slug = _project_slug_for_session(session) or payload.project_slug
         if not slug:
             return None
-        root = _ops_root(slug, user)
         kind, prompt = media
         # Thin brief → clarify in THIS (main) chat with a compact form instead of
         # generating something generic. Answering re-issues the command (submit-as)
@@ -1684,10 +1683,13 @@ def register(app, deps):
             clean_prompt = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", prompt).strip()
             sources: list[tuple[bytes, str | None]] = []
             if ref_paths and caps.get("imageEdit"):
+                # Attachment refs are container-relative real paths (prune
+                # #138); the Ops root stays as a fallback for reroute-era
+                # refs re-sent from old drafts.
                 sources = load_project_images(
-                    root,
+                    _project_root(slug, user),
                     ref_paths,
-                    fallback_root=_project_root(slug, user),
+                    fallback_root=_ops_root(slug, user),
                 )
                 if len(sources) > 1 and not caps.get("referenceImages"):
                     sources = sources[:1]
@@ -1715,11 +1717,16 @@ def register(app, deps):
                 )
                 project = visible_project(slug, user)
                 with container_registry.container_mutation_lock(db(), project):
-                    current_root = _ops_root(slug, user)
+                    # The save location follows the project's mapped artifacts
+                    # folder (layout map, prune #138); the artifact record
+                    # keeps the Ops-relative language records speak until the
+                    # Part D ledger rework (#139).
+                    layout = layout_map.project_layout(db(), project)
+                    media_rel = f"{layout.rel_paths['artifacts']}/media/images"
                     stamp = _as_int(time.time())
                     target = fsapi.resolve_in_project(
-                        current_root,
-                        f"artifacts/media/images/chat-{stamp}-{run_id}.png",
+                        layout.container_root,
+                        f"{media_rel}/chat-{stamp}-{run_id}.png",
                     )
                     target.parent.mkdir(parents=True, exist_ok=True)
                     i = 1
@@ -1727,16 +1734,19 @@ def register(app, deps):
                         target = target.parent / f"chat-{stamp}-{run_id}-{i}.png"
                         i += 1
                     target.write_bytes(raw)
+                    container_rel = target.relative_to(
+                        layout.container_root
+                    ).as_posix()
                 actions = ["open-design-studio", "use-as-reference"]
                 artifact = {
                     "type": "image",
                     "title": target.name,
-                    "path": str(target.relative_to(current_root)),
+                    "path": layout.ops_record_rel(container_rel),
                     "project_slug": slug,
                     "actions": actions,
                 }
                 text = (
-                    f"Generated image artifact: `{artifact['path']}`. "
+                    f"Generated image artifact: `{container_rel}`. "
                     "Saved to the project Archive as a reusable deliverable."
                 )
                 if refs_ignored:
@@ -1779,13 +1789,20 @@ def register(app, deps):
             )
             project = visible_project(slug, user)
             with container_registry.container_mutation_lock(db(), project):
-                current_root = _ops_root(slug, user)
+                # The draft lands in the mapped artifacts folder (prune #138);
+                # the record path stays Ops-relative (records language, #139).
+                layout = layout_map.project_layout(db(), project)
+                design_rel = (
+                    f"{layout.rel_paths['artifacts']}/design/{design_id}"
+                )
                 artifact = design_scenes.persist_draft(
-                    current_root,
+                    layout.container_root,
+                    layout.rel_paths["artifacts"],
                     design_id,
                     scene,
                     slug,
                     run_pending_id=design_run["run_id"],
+                    record_path=layout.ops_record_rel(design_rel),
                 )
             text = f"Created Design Studio draft: `{artifact['path']}`. The design agent is composing it from your brief — open it in Design Studio to watch it land or edit."
             return _complete_media_run(

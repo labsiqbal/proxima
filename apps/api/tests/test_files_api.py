@@ -250,13 +250,13 @@ def test_upload_streams_content_and_deduplicates_names(tmp_path):
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert first.json()["path"] == "uploads/bundle.bin"
-    assert second.json()["path"] == "uploads/bundle-1.bin"
+    assert first.json()["path"] == "ops/uploads/bundle.bin"
+    assert second.json()["path"] == "ops/uploads/bundle-1.bin"
     project_root = Path(
         c.get("/api/projects", headers=headers).json()["projects"][0]["path"]
     )
-    assert (project_root / "ops" / first.json()["path"]).read_bytes() == content
-    assert (project_root / "ops" / second.json()["path"]).read_bytes() == b"second"
+    assert (project_root / first.json()["path"]).read_bytes() == content
+    assert (project_root / second.json()["path"]).read_bytes() == b"second"
 
 
 def test_upload_stages_async_body_before_container_publish_lock(
@@ -315,7 +315,7 @@ def test_upload_stages_async_body_before_container_publish_lock(
     assert lock_was_free is True
     assert response.status_code == 200, response.text
     assert (
-        Path(project["path"]) / "ops" / response.json()["path"]
+        Path(project["path"]) / response.json()["path"]
     ).read_bytes() == b"staged"
 
 
@@ -460,12 +460,12 @@ def test_design_from_image_seeds_full_bleed_scene(tmp_path):
     res = c.post(
         "/api/projects/demo/designs/from-image",
         headers=headers,
-        json={"path": "artifacts/media/images/chat-1.png"},
+        json={"path": "ops/artifacts/media/images/chat-1.png"},
     )
 
     assert res.status_code == 200, res.text
     body = res.json()
-    scene = json.loads((root / "ops" / body["path"] / "scene.json").read_text())
+    scene = json.loads((root / body["path"] / "scene.json").read_text())
     ab = scene["artboards"][0]
     assert ab["width"] == 1 and ab["height"] == 2  # dims read from the PNG header
     layer = ab["layers"][0]
@@ -483,7 +483,7 @@ def test_design_from_image_missing_file_404(tmp_path):
     res = c.post(
         "/api/projects/demo/designs/from-image",
         headers=headers,
-        json={"path": "artifacts/nope.png"},
+        json={"path": "ops/artifacts/nope.png"},
     )
     assert res.status_code == 404
 
@@ -515,7 +515,7 @@ def test_design_image_edit_uses_codex_directly(tmp_path, monkeypatch):
     res = c.post(
         "/api/projects/demo/design/image",
         headers=headers,
-        json={"prompt": "variation", "image": "artifacts/media/images/ref.png"},
+        json={"prompt": "variation", "image": "ops/artifacts/media/images/ref.png"},
     )
     assert res.status_code == 200, res.text
     assert calls == ["codex"]  # codex edits directly, no fallback

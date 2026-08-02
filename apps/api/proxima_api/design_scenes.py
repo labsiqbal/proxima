@@ -94,7 +94,16 @@ def design_run_message(scene: dict[str, Any], brief: str) -> str:
     )
 
 
-def persist_draft(root: Path, design_id: str, scene: dict[str, Any], project_slug: str, *, run_pending_id: int) -> dict[str, Any]:
+def persist_draft(
+    root: Path,
+    artifacts_rel: str,
+    design_id: str,
+    scene: dict[str, Any],
+    project_slug: str,
+    *,
+    run_pending_id: int,
+    record_path: str | None = None,
+) -> dict[str, Any]:
     """Write a seeded /design draft to disk and return its chat artifact.
 
     The scene must already carry its ``sessionId`` (the linked design session).
@@ -102,12 +111,17 @@ def persist_draft(root: Path, design_id: str, scene: dict[str, Any], project_slu
     Studio's recovery-on-open only auto-applies a finished run the on-disk scene
     was still waiting for. Keeping the scene shape + on-disk layout here (not in
     the chat gate) means create_run stays feature-blind about design internals.
+
+    ``artifacts_rel`` is the project's mapped artifacts folder relative to
+    ``root`` (layout map, prune #138). ``record_path`` optionally overrides the
+    artifact-record path (records speak Ops-relative language until #139).
     """
     scene["runPendingId"] = run_pending_id
-    d = fsapi.resolve_in_project(root, f"artifacts/design/{design_id}")
+    design_rel = f"{artifacts_rel}/design/{design_id}"
+    d = fsapi.resolve_in_project(root, design_rel)
     d.mkdir(parents=True, exist_ok=True)
     (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")
-    return {"type": "design", "id": design_id, "title": scene["title"], "path": f"artifacts/design/{design_id}", "project_slug": project_slug}
+    return {"type": "design", "id": design_id, "title": scene["title"], "path": record_path or design_rel, "project_slug": project_slug}
 
 
 def scene_for_image(

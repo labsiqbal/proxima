@@ -23,6 +23,7 @@ from .. import design_scenes
 from .. import file_targets
 from .. import fsapi
 from .. import image_providers
+from .. import layout_map
 from .. import media_settings
 from .. import moodboard
 from ..schemas import ImageGenRequest
@@ -32,6 +33,7 @@ def register(app, deps):
     db = deps["db"]
     current_user = deps["current_user"]
     _ops_root = deps["_ops_root"]
+    _project_root = deps["_project_root"]
     profile_for_user = deps["profile_for_user"]
     visible_project = deps["visible_project"]
 
@@ -47,11 +49,21 @@ def register(app, deps):
             (user["id"], action, slug, json.dumps({"path": path})),
         )
 
+    def _moodboard_store(slug: str, user: dict[str, Any]) -> moodboard.MoodboardStore:
+        """The project's moodboard location, resolved through the layout map
+        (prune #138) - container-relative paths, real folders only."""
+        project = visible_project(slug, user)
+        try:
+            return moodboard.store_for_layout(
+                layout_map.project_layout(db(), project)
+            )
+        except container_registry.ContainerBoundaryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/projects/{slug}/design/moodboard")
     def list_moodboard(slug: str, user: dict[str, Any] = Depends(current_user)):
         """List this project's curated visual references."""
-        root = _ops_root(slug, user)
-        return {"items": moodboard.read_items(root)}
+        return {"items": moodboard.read_items(_moodboard_store(slug, user))}
 
     @app.post("/api/projects/{slug}/design/moodboard")
     def add_moodboard_item(
@@ -94,9 +106,9 @@ def register(app, deps):
             )
         else:
             with _project_mutation(slug, user):
-                root = _ops_root(slug, user)
+                store = _moodboard_store(slug, user)
                 try:
-                    source = moodboard.validate_local_image(root, image_path)
+                    source = moodboard.validate_local_image(store, image_path)
                 except (ValueError, fsapi.FsError, OSError) as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 title = title or source.stem
@@ -117,11 +129,11 @@ def register(app, deps):
             "updatedAt": created,
         }
         with _project_mutation(slug, user):
-            root = _ops_root(slug, user)
+            store = _moodboard_store(slug, user)
             if preview_image is not None:
                 image_path = (
                     moodboard.cache_preview_image(
-                        root,
+                        store,
                         item_id,
                         preview_image[0],
                         preview_image[1],
@@ -130,21 +142,19 @@ def register(app, deps):
                 )
                 item["imagePath"] = image_path or None
             try:
-                moodboard.append_item(root, item)
+                moodboard.append_item(store, item)
             except ValueError as exc:
                 if (
                     image_path
-                    and image_path.startswith(f"{moodboard.IMAGE_DIR}/")
+                    and image_path.startswith(f"{store.image_dir_rel}/")
                     and raw_url
                 ):
                     try:
-                        fsapi.resolve_in_project(root, image_path).unlink(
-                            missing_ok=True
-                        )
+                        store.resolve(image_path).unlink(missing_ok=True)
                     except (OSError, fsapi.FsError):
                         pass
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            _audit_fs(user, "design.moodboard.add", slug, moodboard.STORE_PATH)
+            _audit_fs(user, "design.moodboard.add", slug, store.store_rel)
         return {"item": item, "warning": warning or None}
 
     @app.patch("/api/projects/{slug}/design/moodboard/{item_id}")
@@ -168,14 +178,14 @@ def register(app, deps):
                 status_code=400, detail="No editable Moodboard fields were provided."
             )
         with _project_mutation(slug, user):
-            root = _ops_root(slug, user)
-            item = moodboard.patch_item(root, item_id, patch)
+            store = _moodboard_store(slug, user)
+            item = moodboard.patch_item(store, item_id, patch)
             if item is not None:
                 _audit_fs(
                     user,
                     "design.moodboard.update",
                     slug,
-                    moodboard.STORE_PATH,
+                    store.store_rel,
                 )
         if item is None:
             raise HTTPException(status_code=404, detail="Moodboard item not found.")
@@ -187,14 +197,14 @@ def register(app, deps):
     ):
         """Delete a Moodboard card and its private cached/uploaded image."""
         with _project_mutation(slug, user):
-            root = _ops_root(slug, user)
-            item = moodboard.delete_item(root, item_id)
+            store = _moodboard_store(slug, user)
+            item = moodboard.delete_item(store, item_id)
             if item is not None:
                 _audit_fs(
                     user,
                     "design.moodboard.delete",
                     slug,
-                    moodboard.STORE_PATH,
+                    store.store_rel,
                 )
         if item is None:
             raise HTTPException(status_code=404, detail="Moodboard item not found.")
@@ -218,7 +228,9 @@ def register(app, deps):
         ][:8]
         notes = (data.get("notes") or "").strip()[:4000]
         image_rels: list[str] = []
-        root = _ops_root(slug, user)
+        # Reference images are container-relative real paths (prune #138); the
+        # worker's vision loader resolves them with the same semantics.
+        root = _project_root(slug, user)
         for rel in (data.get("imagePaths") or [])[:6]:
             if not isinstance(rel, str):
                 continue
@@ -330,6 +342,7 @@ def register(app, deps):
             raise HTTPException(status_code=400, detail="path is required")
         with _project_mutation(slug, user) as project:
             try:
+                layout = layout_map.project_layout(db(), project)
                 resolved = file_targets.resolve_request(
                     db(),
                     project,
@@ -341,14 +354,27 @@ def register(app, deps):
                 file_targets.FileTargetError,
             ) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            if resolved.locator.area.kind != "ops":
+            source = resolved.path
+            # Sources stay inside the Ops workspace or the project's mapped
+            # artifacts/uploads areas (layout map, prune #138) - never
+            # arbitrary repo files.
+            allowed_roots = [
+                layout.ops_root,
+                layout.dir("artifacts"),
+                layout.dir("uploads"),
+            ]
+            if resolved.locator.area.kind != "ops" and not any(
+                source == allowed or allowed in source.parents
+                for allowed in allowed_roots
+            ):
                 raise HTTPException(
                     status_code=400,
-                    detail="Design Studio image sources must belong to the Ops Area",
+                    detail=(
+                        "Design Studio image sources must belong to the Ops "
+                        "workspace or the project's artifacts/uploads areas"
+                    ),
                 )
-            source = resolved.path
             rel = resolved.locator.path
-            root = resolved.root
             if not source.is_file():
                 raise HTTPException(status_code=404, detail=f"file not found: {rel}")
             design_id, scene = design_scenes.scene_for_image(
@@ -357,11 +383,12 @@ def register(app, deps):
                 payload.get("title"),
                 resolved.locator.payload(),
             )
-            d = fsapi.resolve_in_project(root, f"artifacts/design/{design_id}")
+            design_rel = f"{layout.rel_paths['artifacts']}/design/{design_id}"
+            d = fsapi.resolve_in_project(layout.container_root, design_rel)
             d.mkdir(parents=True, exist_ok=True)
             (d / "scene.json").write_text(json.dumps(scene, indent=2), encoding="utf-8")
-            _audit_fs(user, "design.from_image", slug, f"{rel} -> artifacts/design/{design_id}")
-        return {"ok": True, "id": design_id, "title": scene["title"], "path": f"artifacts/design/{design_id}"}
+            _audit_fs(user, "design.from_image", slug, f"{rel} -> {design_rel}")
+        return {"ok": True, "id": design_id, "title": scene["title"], "path": design_rel}
 
     @app.post("/api/projects/{slug}/design/image")
     async def design_image(
@@ -381,7 +408,8 @@ def register(app, deps):
         )
         sources: list[tuple[bytes, str]] = []
         with _project_mutation(slug, user):
-            root = _ops_root(slug, user)
+            # Asset paths are container-relative real paths (prune #138).
+            root = _project_root(slug, user)
             for rel in src_paths:
                 try:
                     src = fsapi.resolve_in_project(root, rel)
@@ -447,11 +475,17 @@ def register(app, deps):
                 status_code=502, detail="provider returned no image data"
             )
         # Every provider returns bytes — persist them here (the out_path shortcut was
-        # dead: generate() never wrote files itself).
-        with _project_mutation(slug, user):
-            root = _ops_root(slug, user)
+        # dead: generate() never wrote files itself). The asset library lives in
+        # the project's mapped artifacts location (layout map, prune #138) and
+        # the returned path is container-relative.
+        with _project_mutation(slug, user) as project:
+            try:
+                layout = layout_map.project_layout(db(), project)
+            except container_registry.ContainerBoundaryError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            assets_rel = f"{layout.rel_paths['artifacts']}/design/_assets"
             target = fsapi.resolve_in_project(
-                root, f"artifacts/design/_assets/gen-{int(time.time())}.png"
+                layout.container_root, f"{assets_rel}/gen-{int(time.time())}.png"
             )
             target.parent.mkdir(parents=True, exist_ok=True)
             i = 1
@@ -459,7 +493,7 @@ def register(app, deps):
                 target = target.parent / f"gen-{int(time.time())}-{i}.png"
                 i += 1
             target.write_bytes(raw)
-            rel = f"artifacts/design/_assets/{target.name}"
+            rel = f"{assets_rel}/{target.name}"
             _audit_fs(user, "design.image", slug, rel)
         return {"path": rel, "name": target.name}
 

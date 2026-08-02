@@ -321,11 +321,15 @@ the active-root realpath jail before ownership is assigned. Safe in-Container
 symlinks receive the target of their resolved authoritative Area, while broken or
 escaping symlinks are omitted. Merged tree entries switch to an Ops or Code target
 as traversal enters that Area, so cross-Area aliases are rejected.
-Display names never select a physical root. Path-only callers remain a compatibility
-input, with historical virtual Ops names plus paths prefixed by the Container's
-persisted Ops path (`ops/...` or the per-project folder chosen at link time)
-upgrading to the Ops Area; legacy Ops-at-dot keeps `ops/...` as an
-Area-relative literal instead of stripping it.
+Display names never select a physical root. A path-only request means exactly
+what it says on disk (prune #138, decision #121): it resolves from the Container
+root and the authoritative Area is assigned by physical ownership - a path
+inside the persisted Ops folder gets the Ops Area, everything else its real
+owner. Reserved names (`wiki`, `scripts`, `tasks`, ...) carry no routing
+meaning, so a repo's own `scripts/` or a root-level `wiki/` is never shadowed.
+Rows written under the reroute era (turn-journal entry paths, markdown file
+references in chat text) were frozen to their historical Ops-prefixed meaning
+once, idempotently, by migration v60.
 `target_preview.py` owns targeted preview transport. The authenticated
 `/api/target-preview/{slug}/{kind}/{id}/{path}` entry validates the locator and asks
 `TargetPreviewManager` for an Area-only origin: a named local host, an apps-domain
@@ -403,8 +407,8 @@ stays fail-closed. The intentional repo-at-root plus `ops/` containment is permi
 the explicit migration (only) adds `/ops/` to the root repo's local git exclude
 when it creates `ops/`.
 
-Ops rows at `.` are a fully supported steady state (prune C2), readable
-through the reserved-name virtual mapping, and any persisted non-`.` Ops path is
+Ops rows at `.` are a fully supported steady state (prune C2) - their root
+files simply resolve at their literal paths - and any persisted non-`.` Ops path is
 a first-class settled layout (prune C3) that the sweep validates and refreshes -
 never "unsupported". **Link and the boot sweep never mutate the folder**:
 `settle_container_ops` / `migrate_legacy_ops_containers`
@@ -479,7 +483,7 @@ Project purge require bounded exclusive quiescence and return an active-process
 reason instead of waiting forever. Explicit owner retry recovers only project-scoped
 guardians whose trusted owner, guardian, interpreter, script, and platform control
 identities still match.
-Upload request bodies are staged before synchronous publication. Virtual roots are
+Upload request bodies are staged before synchronous publication. Area roots are
 resolved only after acquiring the appropriate boundary, and late destinations fail
 without replacement. See
 [ADR-0038](../adr/0038-owner-safe-container-activity-boundaries.md).
@@ -493,13 +497,15 @@ already-physical layout with open migration Attention
 becomes explicitly retryable; the same boundary revalidates it and resolves Attention
 without moving content. It does not add merge, overwrite, delete, cross-device move,
 symlink-following, or content-authority behavior.
-Archive, Wiki, artifacts, Design, scripts, reports, exports, uploads, and the virtual
-file API all resolve through the active Ops row. Recovery reveal actions can opt into
-an explicit read-only Container-root file target so legacy `wiki` and physical
-`ops/wiki` remain independently inspectable even after physical Ops becomes active.
+Archive, Wiki, artifacts, Design, scripts, reports, exports, and uploads resolve
+through the active Ops row plus the per-project layout map; the file API resolves
+literal container-relative paths (prune #138). Recovery reveal actions can opt into
+an explicit read-only Container-root inspection target that bypasses Area
+validation, so both sides of an in-flight migration stay inspectable.
 Only tree and file reads accept that target; write, mkdir, rename, and delete remain
-virtual-root operations. The inspection projection declares each root's inspectability
-and refusal reason so unavailable or unsafe root actions never dispatch a read.
+Area-validated operations. The inspection projection declares each root's
+inspectability and refusal reason so unavailable or unsafe root actions never
+dispatch a read.
 
 The authenticated public Fleet boundary uses Container terminology:
 `GET /api/containers`, `GET /api/containers/{slug}`, and
@@ -1068,10 +1074,12 @@ Normal project Chat snapshots bounded eligible files at the turn boundary and us
 tool events as the journal trigger. Only changed paths and their pre-turn bytes are
 persisted; dependency/build/cache/git/media paths and oversized files are skipped.
 The journal lives for the session, previews every impacted path, and warns before an
-owner restores while Master work is active in the same project. Pre-migration rows
-default to legacy Container-relative semantics. Restore resolves those virtual paths
-through the current Ops Area while holding the Container mutation lock, so an old
-`wiki/...` entry cannot recreate a hidden root-level tree after migration.
+owner restores while Master work is active in the same project. Journal paths are
+literal (prune #138): container semantics restore from the Container root, ops
+semantics from the Ops root, while holding the Container mutation lock. Rows
+recorded under the reroute era were frozen to their historical Ops-prefixed
+meaning by migration v60, so an old `wiki/...` entry still cannot recreate a
+hidden root-level tree after the folder migration moved that content.
 
 Runs are per-session serialized and bounded-concurrent globally; a heartbeat +
 reaper fail hung runs, and a per-turn quota cancels stragglers. The quota

@@ -22,7 +22,7 @@ from proxima_api.job_checkpoints import (
 )
 from proxima_api.db import connect
 from proxima_api.main import create_app
-from proxima_api import app_settings, turn_restore
+from proxima_api import app_settings, migrations, turn_restore
 from proxima_api import master_focus
 
 
@@ -1407,6 +1407,9 @@ def test_turn_restore_previews_paths_and_restores_pre_turn_content(tmp_path: Pat
 def test_pre_migration_turn_journal_restores_through_active_ops_root(
     tmp_path: Path,
 ):
+    """A reroute-era journal row is frozen to its historical Ops meaning by
+    migration v60; the (now literal) restore lands in ops/wiki instead of
+    recreating a hidden root-level tree (prune #138)."""
     app, client = _client(tmp_path)
     project = client.get("/api/projects").json()["projects"][0]
     root = Path(project["path"])
@@ -1435,6 +1438,7 @@ def test_pre_migration_turn_journal_restores_through_active_ops_root(
         ") VALUES (?, ?, ?)",
         (message_id, session["id"], json.dumps(entries)),
     )
+    migrations._freeze_reroute_era_paths(app.state.db)
 
     restored = client.post(
         f"/api/chat/messages/{message_id}/restore-turn",

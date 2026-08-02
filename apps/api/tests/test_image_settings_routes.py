@@ -168,7 +168,7 @@ def test_design_image_edit_passes_source_mime(tmp_path, monkeypatch):
     monkeypatch.setattr(image_providers, "generate", fake_generate)
     r = c.post(
         f"/api/projects/{slug}/design/image",
-        json={"prompt": "make it pop", "image": "artifacts/design/_assets/source.webp"},
+        json={"prompt": "make it pop", "image": "ops/artifacts/design/_assets/source.webp"},
     )
 
     assert r.status_code == 200, r.text

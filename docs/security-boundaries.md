@@ -278,12 +278,13 @@ Duplicate roots, unsafe overlaps, path escape, and a symlinked Container or Ops
 root fail closed on every resolution. The full recursive scan that rejects every
 symlink beneath physical `ops/` runs at the fail-closed boundaries - Ops creation,
 legacy migration, Area mutation, and Area-sensitive execution - rather than on hot
-read paths (project lists, Home, file resolution), which stay O(1). Historical
-virtual Ops paths remain stable but resolve to the active Ops row, which may
+read paths (project lists, Home, file resolution), which stay O(1). Path-only
+requests resolve literally from the Container root (prune #138) with the
+authoritative Area assigned by physical ownership; the active Ops row may
 temporarily be legacy `.` while a collision awaits owner attention.
 Migration creation and rename use stable no-follow directory handles with identity
 revalidation, and one cross-process Container lock covers migration, Area changes,
-Files mutations, and Project purge before any virtual root is selected. Generated
+Files mutations, and Project purge before any Area root is selected. Generated
 document fallback bytes are manifest-name and hash bound; ambiguous bytes are never
 removed. Destination directories are filled only after their platform identities
 are durable in the migration manifest. Process guardians bind both their live API

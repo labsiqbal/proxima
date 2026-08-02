@@ -6,6 +6,7 @@ import { type WikiNoteRaw } from '../api/wiki'
 import { projectWikiAll } from '../api/files'
 import { baseName, buildWikiModel, notePathForTarget } from '../components/wiki/wikiGraph'
 import { WikiSearch } from '../components/wiki/WikiSearch'
+import { useProjectAreaPaths } from '../hooks/useProjectAreaPaths'
 import { IconFolder, IconChevronRight } from '../components/shell/icons'
 
 const cleanName = (name: string) => name.replace(/\s*\(private\)\s*$/i, '')
@@ -48,7 +49,14 @@ export function WikiScreen({ token, projects, activeProject, onActiveProject }: 
   }, [pickerOpen])
 
   const selected = projects.find(p => p.slug === activeProject?.slug) || projects[0] || null
-  const fs = React.useMemo(() => (selected ? projectFs(token, selected.slug, 'wiki') : null), [token, selected?.slug])
+  // The wiki lives wherever the project really keeps it (layout map, prune
+  // #138) - e.g. ops/wiki, or a root-level wiki/ - so the tree browses that
+  // real container-relative path, never a fixed name.
+  const areaPaths = useProjectAreaPaths(token, selected?.slug)
+  const fs = React.useMemo(
+    () => (selected && areaPaths ? projectFs(token, selected.slug, areaPaths.wiki) : null),
+    [token, selected?.slug, areaPaths],
+  )
   const loadAll = React.useCallback(
     () => (selected ? projectWikiAll(token, selected.slug) : Promise.resolve({ notes: [] as WikiNoteRaw[] })),
     [token, selected?.slug],

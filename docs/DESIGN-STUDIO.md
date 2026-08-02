@@ -32,7 +32,11 @@ separate HTML-flow engine.
 - **Chat / AI iterate** — reuse the existing run loop; agent reads current doc, edits it.
 - **Canvas frame** — the surface-specific renderer (Konva stage or HTML iframe).
 - **Inspector (tweaks panel)** — properties of the selected element (text, font, color, spacing, size).
-- **Storage** — design doc + assets in the project under `artifacts/design/<slug>/`.
+- **Storage** — design doc + assets in the project's mapped artifacts folder
+  (per-project layout map, prune #138) under `<artifacts>/design/<slug>/` —
+  `ops/artifacts/design/...` for a detected Ops layout. Agent-facing paths in
+  this doc are written relative to the design run's working directory (the Ops
+  root), where the mapped folder is `artifacts/` for every detected-in-Ops layout.
 
 ## Scene schema (current)
 
@@ -155,8 +159,10 @@ the project's own visual rules; Moodboard is a curated gallery of external inspi
 Each card may come from a URL or an uploaded/pasted/dropped screenshot and carries a
 source, optional note, and tags. Search and tag filters stay client-side.
 
-- Storage: `artifacts/moodboard/items.json`, with cached OG images and uploaded
-  screenshots under `artifacts/moodboard/images/`.
+- Storage: `<artifacts>/moodboard/items.json` in the mapped artifacts folder
+  (layout map, prune #138), with cached OG images and uploaded screenshots under
+  `<artifacts>/moodboard/images/`; the API speaks container-relative real paths
+  and upgrades reroute-era Ops-relative item paths at the read boundary.
 - Display: local card images, including SVG, load through authenticated raw bytes into
   managed blob URLs rather than preview-origin document rendering.
 - API: the gated `/api/projects/{slug}/design/moodboard` list/add route plus item

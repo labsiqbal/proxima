@@ -84,8 +84,10 @@ def test_moodboard_link_crud_and_project_isolation(tmp_path, monkeypatch):
     item = created.json()["item"]
     assert item["siteName"] == "inspiration.test"
     assert item["tags"] == ["hero", "dark"]
-    assert item["imagePath"].startswith("artifacts/moodboard/images/")
-    assert Path(first["path"], "ops", item["imagePath"]).read_bytes() == b"preview"
+    # Paths are container-relative real paths (prune #138): the scaffolded
+    # project keeps its artifacts at ops/artifacts, so the store lives there.
+    assert item["imagePath"].startswith("ops/artifacts/moodboard/images/")
+    assert Path(first["path"], item["imagePath"]).read_bytes() == b"preview"
 
     assert client.get("/api/projects/second/design/moodboard", headers=headers).json() == {"items": []}
     listed = client.get("/api/projects/first/design/moodboard", headers=headers).json()["items"]
@@ -102,7 +104,7 @@ def test_moodboard_link_crud_and_project_isolation(tmp_path, monkeypatch):
 
     removed = client.delete(f"/api/projects/first/design/moodboard/{item['id']}", headers=headers)
     assert removed.status_code == 200
-    assert not Path(first["path"], "ops", item["imagePath"]).exists()
+    assert not Path(first["path"], item["imagePath"]).exists()
     assert client.get("/api/projects/first/design/moodboard", headers=headers).json() == {"items": []}
     app.state.db.close()
 
@@ -118,7 +120,7 @@ def test_moodboard_upload_and_failed_preview_fallback(tmp_path, monkeypatch):
     uploaded = client.post(
         "/api/projects/demo/design/moodboard",
         headers=headers,
-        json={"imagePath": "artifacts/moodboard/images/upload.png", "siteName": "Uploaded screenshot"},
+        json={"imagePath": "ops/artifacts/moodboard/images/upload.png", "siteName": "Uploaded screenshot"},
     )
     assert uploaded.status_code == 200
     assert uploaded.json()["item"]["kind"] == "upload"
@@ -146,7 +148,10 @@ def test_selected_moodboard_reference_uses_preamble_and_vision_path(tmp_path):
     image = project / "artifacts/moodboard/images/ref.png"
     image.parent.mkdir(parents=True)
     image.write_bytes(b"image")
-    moodboard.write_items(project, [{
+    store = moodboard.MoodboardStore(
+        container_root=project, artifacts_rel="artifacts", ops_rel="."
+    )
+    moodboard.write_items(store, [{
         "id": "mb-1",
         "siteName": "example.test",
         "url": "https://example.test/",
@@ -156,7 +161,7 @@ def test_selected_moodboard_reference_uses_preamble_and_vision_path(tmp_path):
         "useAsReference": True,
     }])
 
-    references = wiki_memory.read_moodboard_references(project)
+    references = wiki_memory.read_moodboard_references(store)
     preamble = wiki_memory.build_run_preamble(
         "Demo",
         "demo",
@@ -272,5 +277,8 @@ def test_remote_svg_preview_image_is_rejected(monkeypatch):
 
 
 def test_cache_preview_image_refuses_remote_svg(tmp_path):
-    assert moodboard.cache_preview_image(tmp_path, "mb-svg", b"<svg></svg>", "image/svg+xml") is None
-    assert not (tmp_path / moodboard.IMAGE_DIR).exists()
+    store = moodboard.MoodboardStore(
+        container_root=tmp_path, artifacts_rel="artifacts", ops_rel="."
+    )
+    assert moodboard.cache_preview_image(store, "mb-svg", b"<svg></svg>", "image/svg+xml") is None
+    assert not (tmp_path / store.image_dir_rel).exists()

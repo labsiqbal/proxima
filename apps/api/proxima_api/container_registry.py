@@ -68,6 +68,11 @@ __all__ = (
 OPS_RELPATH = "ops"
 CONTAINER_DOC = "container.md"
 OPS_MIGRATION_VERSION = 6
+# The legacy top-level Ops entries the explicit, previewed opt-in migration
+# offers to move into the chosen Ops folder. This list exists ONLY for that
+# migration's manifest/inventory - the names carry no routing meaning anywhere
+# else (reserved-name virtual rerouting was removed by prune #138; paths mean
+# exactly what they say on disk, decision #121).
 KNOWN_OPS_DIRS = (
     "wiki",
     "artifacts",
@@ -78,7 +83,6 @@ KNOWN_OPS_DIRS = (
     "uploads",
 )
 KNOWN_OPS_FILES = (CONTAINER_DOC, "design.md")
-OPS_VIRTUAL_NAMES = frozenset((*KNOWN_OPS_DIRS, *KNOWN_OPS_FILES))
 DEFAULT_STARTER_DIRS = ("wiki", "tasks", "artifacts")
 MAX_CONTAINER_DOC_BYTES = 64 * 1024
 MAX_IDENTITY_LABEL_CHARS = 120
@@ -360,19 +364,6 @@ def validate_ops_path_choice(root: Path, raw: str) -> str:
         )
     _reject_symlinks(candidate)
     return normalized
-
-
-def root_for_virtual_path(
-    conn: sqlite3.Connection,
-    container: int | sqlite3.Row | Mapping[str, Any],
-    rel_path: str,
-) -> Path:
-    """Choose the Container or Ops root while keeping historical virtual paths."""
-    data = get_container(conn, container)
-    first = next(iter(PurePosixPath((rel_path or "").replace("\\", "/")).parts), "")
-    if first in OPS_VIRTUAL_NAMES:
-        return ops_root(conn, data)
-    return container_root(data)
 
 
 def _container_doc_text(name: str) -> str:

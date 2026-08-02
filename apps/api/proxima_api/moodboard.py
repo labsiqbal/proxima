@@ -1,15 +1,19 @@
 """Project-scoped Moodboard storage and lightweight link previews.
 
-Moodboard items live under ``artifacts/moodboard`` in the project so they move
-with the project and remain inspectable outside Proxima. Link previews cache the
-page's OG image locally, which makes the gallery reliable and lets design runs
-attach the same image as vision without fetching it again.
+Moodboard items live under ``<artifacts>/moodboard`` in the project so they
+move with the project and remain inspectable outside Proxima. The base follows
+the per-project layout map (prune C4/#138): the project's mapped artifacts
+location - ``ops/artifacts`` for a detected Ops layout, a root-level
+``artifacts/`` when that is where the folder really lives. Link previews cache
+the page's OG image locally, which makes the gallery reliable and lets design
+runs attach the same image as vision without fetching it again.
 
-The ``artifacts/moodboard`` base is a deliberately FIXED Ops-relative path
-rather than a layout-map lookup (prune C4): stored ``imagePath`` values and the
-vision hand-off to design runs are Ops-root-relative strings, so the base moves
-with the path-model cleanup (#138), not before. It coincides with the layout
-map's artifacts location for every project detectable today.
+All paths this module stores and returns are **container-root-relative** -
+paths mean exactly what they say on disk (decision #121). Items written under
+the pre-#138 reroute era stored Ops-relative strings behind reserved first
+segments; :func:`_frozen_item_path` upgrades them to their historical meaning
+at the read boundary (reads never rewrite the store; the next explicit owner
+write persists the upgrade).
 """
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ import mimetypes
 import os
 import socket
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -29,8 +34,6 @@ import httpx
 
 from . import fsapi
 
-STORE_PATH = "artifacts/moodboard/items.json"
-IMAGE_DIR = "artifacts/moodboard/images"
 MAX_ITEMS = 500
 MAX_HTML_BYTES = 750_000
 MAX_IMAGE_BYTES = 8_000_000
@@ -46,6 +49,80 @@ _IMAGE_EXTENSIONS = {
     "image/webp": ".webp",
 }
 _REMOTE_IMAGE_EXTENSIONS = {mime: ext for mime, ext in _IMAGE_EXTENSIONS.items() if mime != "image/svg+xml"}
+
+
+# The names the pre-#138 virtual mapping rerouted to the Ops root - a frozen
+# historical list used only to upgrade reroute-era stored item paths.
+_REROUTE_ERA_NAMES = frozenset(
+    ("wiki", "artifacts", "reports", "exports", "scripts", "tasks", "uploads")
+)
+
+
+@dataclass(frozen=True)
+class MoodboardStore:
+    """One project's moodboard location, resolved through the layout map.
+
+    ``artifacts_rel`` is the mapped artifacts folder and ``ops_rel`` the
+    persisted Ops path, both container-root-relative (``.`` = the root).
+    """
+
+    container_root: Path
+    artifacts_rel: str
+    ops_rel: str
+
+    @property
+    def base_rel(self) -> str:
+        return f"{self.artifacts_rel}/moodboard"
+
+    @property
+    def store_rel(self) -> str:
+        return f"{self.base_rel}/items.json"
+
+    @property
+    def image_dir_rel(self) -> str:
+        return f"{self.base_rel}/images"
+
+    def resolve(self, rel: str) -> Path:
+        return fsapi.resolve_in_project(self.container_root, rel)
+
+
+def store_for_layout(layout: Any) -> MoodboardStore:
+    """Build the store from a resolved :class:`layout_map.ProjectLayout`."""
+    return MoodboardStore(
+        container_root=layout.container_root,
+        artifacts_rel=layout.rel_paths["artifacts"],
+        ops_rel=layout.ops_rel,
+    )
+
+
+def _frozen_item_path(store: "MoodboardStore", path: str) -> str:
+    """A reroute-era item path's historical (Ops-relative) meaning, literal.
+
+    A first segment from the reserved list resolved against the Ops root
+    before #138. The literal container-relative file wins whenever it exists
+    (paths mean what they say on disk); only a dangling reserved-name path
+    whose Ops-prefixed sibling exists is upgraded to that historical meaning.
+    Paths already under the Ops prefix stay as they are (which also makes the
+    upgrade idempotent), and dot-Ops projects need no upgrade.
+    """
+    text = str(path or "")
+    ops_rel = store.ops_rel
+    if not text or ops_rel in ("", "."):
+        return text
+    first = text.split("/", 1)[0]
+    if first not in _REROUTE_ERA_NAMES:
+        return text
+    if text == ops_rel or text.startswith(f"{ops_rel}/"):
+        return text
+    prefixed = f"{ops_rel}/{text}"
+    try:
+        if store.resolve(text).exists():
+            return text
+        if store.resolve(prefixed).exists():
+            return prefixed
+    except (OSError, fsapi.FsError):
+        return text
+    return text
 
 
 class UnsafeUrlError(ValueError):
@@ -92,46 +169,55 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _store_file(project_root: Path) -> Path:
-    return fsapi.resolve_in_project(project_root, STORE_PATH)
+def _store_file(store: MoodboardStore) -> Path:
+    return store.resolve(store.store_rel)
 
 
-def _lock_for(project_root: Path) -> threading.Lock:
-    key = str(_store_file(project_root))
+def _lock_for(store: MoodboardStore) -> threading.Lock:
+    key = str(_store_file(store))
     with _LOCKS_GUARD:
         return _LOCKS.setdefault(key, threading.Lock())
 
 
-def read_items(project_root: Path) -> list[dict[str, Any]]:
-    path = _store_file(project_root)
+def read_items(store: MoodboardStore) -> list[dict[str, Any]]:
+    path = _store_file(store)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return []
     items = raw.get("items") if isinstance(raw, dict) else raw
-    return [item for item in (items or []) if isinstance(item, dict) and item.get("id")][:MAX_ITEMS]
+    upgraded: list[dict[str, Any]] = []
+    for item in (items or [])[: MAX_ITEMS * 2]:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        image_path = str(item.get("imagePath") or "")
+        frozen = _frozen_item_path(store, image_path)
+        if frozen != image_path:
+            item = {**item, "imagePath": frozen}
+        upgraded.append(item)
+    return upgraded[:MAX_ITEMS]
 
 
-def write_items(project_root: Path, items: list[dict[str, Any]]) -> None:
-    path = _store_file(project_root)
+def write_items(store: MoodboardStore, items: list[dict[str, Any]]) -> None:
+    path = _store_file(store)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps({"version": 1, "items": items[:MAX_ITEMS]}, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
 
 
-def append_item(project_root: Path, item: dict[str, Any]) -> None:
-    with _lock_for(project_root):
-        items = read_items(project_root)
+def append_item(store: MoodboardStore, item: dict[str, Any]) -> None:
+    with _lock_for(store):
+        items = read_items(store)
         if len(items) >= MAX_ITEMS:
             raise ValueError(f"Moodboard is limited to {MAX_ITEMS} items.")
         items.insert(0, item)
-        write_items(project_root, items)
+        write_items(store, items)
 
 
-def patch_item(project_root: Path, item_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
-    with _lock_for(project_root):
-        items = read_items(project_root)
+def patch_item(store: MoodboardStore, item_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    with _lock_for(store):
+        items = read_items(store)
         found: dict[str, Any] | None = None
         for index, item in enumerate(items):
             if item.get("id") == item_id:
@@ -139,22 +225,22 @@ def patch_item(project_root: Path, item_id: str, patch: dict[str, Any]) -> dict[
                 items[index] = found
                 break
         if found is not None:
-            write_items(project_root, items)
+            write_items(store, items)
         return found
 
 
-def delete_item(project_root: Path, item_id: str) -> dict[str, Any] | None:
-    with _lock_for(project_root):
-        items = read_items(project_root)
+def delete_item(store: MoodboardStore, item_id: str) -> dict[str, Any] | None:
+    with _lock_for(store):
+        items = read_items(store)
         found = next((item for item in items if item.get("id") == item_id), None)
         if found is None:
             return None
         remaining = [item for item in items if item.get("id") != item_id]
-        write_items(project_root, remaining)
+        write_items(store, remaining)
         image_path = str(found.get("imagePath") or "")
-        if image_path.startswith(f"{IMAGE_DIR}/") and not any(item.get("imagePath") == image_path for item in remaining):
+        if image_path.startswith(f"{store.image_dir_rel}/") and not any(item.get("imagePath") == image_path for item in remaining):
             try:
-                fsapi.resolve_in_project(project_root, image_path).unlink(missing_ok=True)
+                store.resolve(image_path).unlink(missing_ok=True)
             except (OSError, fsapi.FsError):
                 pass
         return found
@@ -172,8 +258,8 @@ def normalize_tags(raw: Any) -> list[str]:
     return tags
 
 
-def validate_local_image(project_root: Path, rel: str) -> Path:
-    path = fsapi.resolve_in_project(project_root, rel)
+def validate_local_image(store: MoodboardStore, rel: str) -> Path:
+    path = store.resolve(rel)
     mime = mimetypes.guess_type(path.name)[0] or ""
     if not path.is_file() or not mime.startswith("image/"):
         raise ValueError("imagePath must point to an uploaded project image.")
@@ -316,17 +402,17 @@ def fetch_link_preview(raw_url: str, timeout: float = 12.0) -> dict[str, Any]:
     return result
 
 
-def cache_preview_image(project_root: Path, item_id: str, data: bytes | None, mime: str) -> str | None:
+def cache_preview_image(store: MoodboardStore, item_id: str, data: bytes | None, mime: str) -> str | None:
     if not data or mime not in _REMOTE_IMAGE_EXTENSIONS:
         return None
-    rel = f"{IMAGE_DIR}/{item_id}{_REMOTE_IMAGE_EXTENSIONS[mime]}"
-    target = fsapi.resolve_in_project(project_root, rel)
+    rel = f"{store.image_dir_rel}/{item_id}{_REMOTE_IMAGE_EXTENSIONS[mime]}"
+    target = store.resolve(rel)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)
     return rel
 
 
-def active_references(project_root: Path | None) -> list[dict[str, Any]]:
-    if project_root is None:
+def active_references(store: MoodboardStore | None) -> list[dict[str, Any]]:
+    if store is None:
         return []
-    return [item for item in read_items(project_root) if item.get("useAsReference")][:10]
+    return [item for item in read_items(store) if item.get("useAsReference")][:10]

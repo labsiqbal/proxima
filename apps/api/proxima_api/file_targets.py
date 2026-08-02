@@ -160,51 +160,6 @@ def container_locator(
     )
 
 
-def area_locator(
-    conn: sqlite3.Connection,
-    container: int | sqlite3.Row | Mapping[str, Any],
-    area_id: int,
-    path: str = "",
-) -> FileLocator:
-    data = container_registry.get_container(conn, container)
-    row = conn.execute(
-        "SELECT id, kind FROM project_areas "
-        "WHERE id = ? AND project_id = ? AND source != 'excluded'",
-        (area_id, data["id"]),
-    ).fetchone()
-    if row is None or row["kind"] not in ("ops", "code"):
-        raise FileTargetError("Area is not active in this Container")
-    return FileLocator(
-        project=str(data["slug"]),
-        area=FileArea(kind=str(row["kind"]), id=int(row["id"])),
-        path=normalize_relative_path(path),
-    )
-
-
-def ops_locator(
-    conn: sqlite3.Connection,
-    container: int | sqlite3.Row | Mapping[str, Any],
-    path: str = "",
-) -> FileLocator:
-    data = container_registry.get_container(conn, container)
-    row = conn.execute(
-        "SELECT id FROM project_areas "
-        "WHERE project_id = ? AND kind = 'ops' AND source != 'excluded'",
-        (data["id"],),
-    ).fetchone()
-    if row is None:
-        raise FileTargetError("Container has no active Ops Area")
-    return area_locator(conn, data, int(row["id"]), path)
-
-
-def child_locator(parent: FileLocator, name: str) -> FileLocator:
-    child = normalize_relative_path(
-        f"{parent.path}/{name}" if parent.path else name,
-        allow_empty=False,
-    )
-    return FileLocator(project=parent.project, area=parent.area, path=child)
-
-
 def _area_bindings(
     conn: sqlite3.Connection,
     container: sqlite3.Row | Mapping[str, Any],
@@ -381,41 +336,6 @@ def resolve_from_root(
     )
 
 
-def legacy_locator(
-    conn: sqlite3.Connection,
-    container: int | sqlite3.Row | Mapping[str, Any],
-    path: str,
-    *,
-    context: FileTargetContext | None = None,
-) -> FileLocator:
-    """Upgrade a documented path-only request without guessing from a basename.
-
-    Reserved virtual Ops roots retain their historical mapping. An explicit
-    path into the Container's persisted Ops folder (``ops/`` or the
-    per-project path chosen at link time, prune C3) upgrades to the Ops Area.
-    When the active Ops Area is ``.``, the prefix remains literal
-    Area-relative input so it cannot be stripped to a same-name root file.
-    """
-    data = container_registry.get_container(conn, container)
-    normalized = normalize_relative_path(path)
-    first = next(iter(PurePosixPath(normalized).parts), "")
-    row = conn.execute(
-        "SELECT id, rel_path FROM project_areas "
-        "WHERE project_id = ? AND kind = 'ops' AND source != 'excluded'",
-        (data["id"],),
-    ).fetchone()
-    ops_rel = str(row["rel_path"]) if row is not None else None
-    if row is not None and ops_rel not in (None, "."):
-        ops_parts = PurePosixPath(ops_rel).parts
-        parts = PurePosixPath(normalized).parts
-        if parts[: len(ops_parts)] == ops_parts:
-            relative = "/".join(parts[len(ops_parts):])
-            return area_locator(conn, data, int(row["id"]), relative)
-    if first in container_registry.OPS_VIRTUAL_NAMES:
-        return ops_locator(conn, data, normalized)
-    return canonical_locator(conn, data, normalized, context=context)
-
-
 def resolve_request(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
@@ -424,11 +344,19 @@ def resolve_request(
     target: Any = "",
     context: FileTargetContext | None = None,
 ) -> ResolvedFile:
+    """Resolve a request by target, or by a literal container-relative path.
+
+    Path-only requests mean exactly what they say on disk (prune #138,
+    decision #121): the path resolves from the Container root and the
+    authoritative Area is assigned by physical ownership - a path inside the
+    persisted Ops folder gets the Ops Area, everything else its real owner.
+    Reserved names (wiki, scripts, tasks, ...) carry no routing meaning.
+    """
     has_target = target is not None and target != ""
     locator = (
         parse_locator(target)
         if has_target
-        else legacy_locator(conn, container, path, context=context)
+        else canonical_locator(conn, container, path, context=context)
     )
     return resolve_locator(conn, container, locator, context=context)
 

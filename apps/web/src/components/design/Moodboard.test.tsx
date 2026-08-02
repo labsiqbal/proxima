@@ -38,6 +38,16 @@ vi.mock('../../hooks/useRawBlobUrl', () => ({
 vi.mock('../ui/Dialog', () => ({
   confirmDialog: vi.fn().mockResolvedValue(true),
 }))
+// The moodboard follows the project's mapped artifacts location (layout map,
+// prune #138) - this project keeps it inside ops/.
+vi.mock('../../hooks/useProjectAreaPaths', () => ({
+  useProjectAreaPaths: () => ({
+    wiki: 'ops/wiki',
+    artifacts: 'ops/artifacts',
+    scripts: 'ops/scripts',
+    uploads: 'ops/uploads',
+  }),
+}))
 
 const items: MoodboardItem[] = [{
   id: 'one',
@@ -153,7 +163,7 @@ describe('Moodboard', () => {
       'token',
       'demo',
       file,
-      'artifacts/moodboard/images',
+      'ops/artifacts/moodboard/images',
     ))
     await waitFor(() => expect(addMoodboardItem).toHaveBeenLastCalledWith(
       'token',

@@ -21,6 +21,7 @@ import {
   resolveProjectMediaSrc,
   type ProjectMediaRef,
 } from '../api/projectMedia'
+import { useProjectAreaPaths } from '../hooks/useProjectAreaPaths'
 import { useProjectMediaUrls } from '../hooks/useProjectMediaUrls'
 import { MessageContent } from '../components/chat/MessageContent'
 import { Composer } from '../components/chat/Composer'
@@ -456,6 +457,7 @@ const IMAGE_GEN_CLIENT_TIMEOUT_MS = 6 * 60 * 1000
 // task server-side; we poll design.md until it lands. The file then auto-feeds every
 // future design run so the AI composes on-brand.
 function BrandGuideModal({ token, slug, onClose, onOpenFile }: { token: string; slug: string; onClose: () => void; onOpenFile?: () => void }) {
+  const areaPaths = useProjectAreaPaths(token, slug)
   const [urls, setUrls] = React.useState<string[]>([''])
   const [notes, setNotes] = React.useState('')
   const [images, setImages] = React.useState<{ path: string; name: string }[]>([])
@@ -470,11 +472,11 @@ function BrandGuideModal({ token, slug, onClose, onOpenFile }: { token: string; 
   const addUrl = () => setUrls(u => [...u, ''])
   const removeUrl = (i: number) => setUrls(u => u.length > 1 ? u.filter((_, j) => j !== i) : [''])
   const onUpload = async (files: FileList | null) => {
-    if (!files?.length) return
+    if (!files?.length || !areaPaths) return
     setUploading(true); setError('')
     try {
       for (const f of Array.from(files).slice(0, 6)) {
-        const r = await uploadFile(token, slug, f, 'artifacts/design/_assets')
+        const r = await uploadFile(token, slug, f, `${areaPaths.artifacts}/design/_assets`)
         setImages(im => [...im, { path: r.path, name: r.name }])
       }
     } catch (e) { setError(String(e)) } finally { setUploading(false) }
@@ -773,7 +775,16 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   )
   const targetMediaUrls = useProjectMediaUrls(token, project?.slug, targetMedia)
   const [projectComponents, setProjectComponents] = React.useState<ProjectComponent[]>([])
-  const designFs = React.useMemo(() => project ? projectFs(token, project.slug, 'artifacts/design') : null, [token, project?.slug])
+  // Design Studio's on-disk home is the project's mapped artifacts folder
+  // (layout map, prune #138) - e.g. ops/artifacts/design, or a root-level
+  // artifacts/design. Every path the studio reads, writes, or embeds in a
+  // scene is container-relative to that real location.
+  const areaPaths = useProjectAreaPaths(token, project?.slug)
+  const artifactsBase = areaPaths?.artifacts ?? null
+  const designFs = React.useMemo(
+    () => (project && artifactsBase ? projectFs(token, project.slug, `${artifactsBase}/design`) : null),
+    [token, project?.slug, artifactsBase],
+  )
   const saveTimer = React.useRef<number | undefined>(undefined)
   const mountedRef = React.useRef(true)
   const saveSeq = React.useRef(0)
@@ -1243,20 +1254,20 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   // any re-upload or bridge.
   const loadAssets = React.useCallback(() => {
     const seq = ++assetsSeq.current
-    if (!designFs || !project) { if (mountedRef.current) setAssets([]); return }
+    if (!designFs || !project || !artifactsBase) { if (mountedRef.current) setAssets([]); return }
     const IMG_EXT = /\.(png|jpe?g|gif|webp|svg)$/i
-    const chatFs = projectFs(token, project.slug, 'artifacts/media/images')
+    const chatFs = projectFs(token, project.slug, `${artifactsBase}/media/images`)
     Promise.all([
       designFs.list('_assets').catch(() => ({ entries: [] as { type: string; name: string }[] })),
       chatFs.list('').catch(() => ({ entries: [] as { type: string; name: string }[] })),
     ]).then(([design, chat]) => {
       if (!mountedRef.current || seq !== assetsSeq.current) return
       setAssets([
-        ...(design.entries || []).filter(e => e.type === 'file' && IMG_EXT.test(e.name)).map(e => `artifacts/design/_assets/${e.name}`),
-        ...(chat.entries || []).filter(e => e.type === 'file' && IMG_EXT.test(e.name)).map(e => `artifacts/media/images/${e.name}`),
+        ...(design.entries || []).filter(e => e.type === 'file' && IMG_EXT.test(e.name)).map(e => `${artifactsBase}/design/_assets/${e.name}`),
+        ...(chat.entries || []).filter(e => e.type === 'file' && IMG_EXT.test(e.name)).map(e => `${artifactsBase}/media/images/${e.name}`),
       ])
     }).catch(() => { if (mountedRef.current && seq === assetsSeq.current) setAssets([]) })
-  }, [designFs, token, project?.slug])
+  }, [designFs, token, project?.slug, artifactsBase])
   React.useEffect(() => { loadAssets() }, [loadAssets])
 
   const writeProjectComponents = React.useCallback((components: ProjectComponent[]) => {
@@ -1475,8 +1486,19 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }
   const onTouchEnd = (e: Konva.KonvaEventObject<TouchEvent>) => { if (e.evt.touches.length < 2) { pinchRef.current = null; stageRef.current?.draggable(panMode) } }
 
+  // Reroute-era scenes stored Ops-relative srcs ("artifacts/...") without a
+  // target; the same real file now lives at the mapped artifacts path
+  // (prune #138). Upgrade only untargeted srcs - a target already names the
+  // authoritative Area, and targeted media keys on the raw src.
+  const legacySrc = React.useCallback(
+    (s: string) =>
+      artifactsBase && artifactsBase !== 'artifacts' && s.startsWith('artifacts/')
+        ? `${artifactsBase}/${s.slice('artifacts/'.length)}`
+        : s,
+    [artifactsBase],
+  )
   const resolveSrc = (s: string, target?: FileTarget) =>
-    resolveProjectMediaSrc(s, target, project?.slug, targetMediaUrls)
+    resolveProjectMediaSrc(target ? s : legacySrc(s), target, project?.slug, targetMediaUrls)
   const openDesign = async (id: string) => {
     if (!designFs) return
     studioFrom.current = stage === 'gallery' ? 'gallery' : 'start'
@@ -1928,12 +1950,12 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   const addLine = () => addLayer({ id: uid('ln'), type: 'line', x: 120, y: 200, x2: 440, y2: 200, stroke: '#111827', strokeWidth: 8 })
   const addBlob = () => addLayer({ id: uid('bl'), type: 'path', x: 100, y: 100, width: 360, height: 360, d: blobPath(BLOB_BASE, 7 + Math.floor(Math.random() * 4), Math.random() * 100), fill: '#3b82f6', opacity: 0.9 })
   const doUpload = async (files: FileList | null) => {
-    if (!files || !project) return
+    if (!files || !project || !artifactsBase) return
     const seq = ++actionSeq.current
     setUploading(true)
     try {
       for (const f of Array.from(files)) {
-        await uploadFile(token, project.slug, f, 'artifacts/design/_assets')
+        await uploadFile(token, project.slug, f, `${artifactsBase}/design/_assets`)
         if (!mountedRef.current || seq !== actionSeq.current) return
       }
       if (mountedRef.current && seq === actionSeq.current) loadAssets()

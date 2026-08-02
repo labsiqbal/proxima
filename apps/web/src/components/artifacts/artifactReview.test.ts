@@ -64,4 +64,25 @@ describe('Mermaid review helpers', () => {
     expect(whiteboardPathFor('reports/System Flow.md', 1)).toBe(whiteboardPathFor('reports/System Flow.md', 1))
     expect(sourceFingerprint('graph LR; A-->B')).not.toBe(sourceFingerprint('graph LR; A-->C'))
   })
+
+  it('roots whiteboards in the mapped artifacts folder (prune #138)', () => {
+    // The base is the project's real artifacts location from the layout map.
+    expect(whiteboardPathFor('reports/System Flow.md', 1, 'ops/artifacts')).toMatch(
+      /^ops\/artifacts\/whiteboards\/system-flow-[a-f0-9]{8}\.excalidraw$/,
+    )
+    // Stored review state accepts either era's real path shape.
+    saveArtifactReview('master', 'doc.md', {
+      annotations: [],
+      generalNote: '',
+      whiteboardPaths: [
+        'ops/artifacts/whiteboards/flow-a1b2c3.excalidraw',
+        'artifacts/whiteboards/flow-d4e5f6.excalidraw',
+        '../escape/artifacts-whiteboards.excalidraw',
+      ],
+    })
+    expect(loadArtifactReview('master', 'doc.md').whiteboardPaths).toEqual([
+      'ops/artifacts/whiteboards/flow-a1b2c3.excalidraw',
+      'artifacts/whiteboards/flow-d4e5f6.excalidraw',
+    ])
+  })
 })

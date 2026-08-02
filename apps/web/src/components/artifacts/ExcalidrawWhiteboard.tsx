@@ -15,6 +15,7 @@ import type {
 } from '@excalidraw/excalidraw/types'
 import { projectFs } from '../../api/fsAdapter'
 import { sourceFingerprint, whiteboardPathFor } from './artifactReview'
+import { useProjectAreaPaths } from '../../hooks/useProjectAreaPaths'
 
 const EXCALIDRAW_STYLE_ID = 'proxima-excalidraw-styles'
 
@@ -62,7 +63,14 @@ export function ExcalidrawWhiteboard({ token, slug, sourcePath, source, diagramI
   onSaved: (path: string) => void
 }) {
   const fs = React.useMemo(() => projectFs(token, slug), [token, slug])
-  const scenePath = React.useMemo(() => whiteboardPathFor(sourcePath, diagramIndex), [sourcePath, diagramIndex])
+  // Whiteboards live in the project's mapped artifacts folder (layout map,
+  // prune #138); wait for the real base before reading or writing a scene.
+  const areaPaths = useProjectAreaPaths(token, slug)
+  const artifactsBase = areaPaths?.artifacts ?? null
+  const scenePath = React.useMemo(
+    () => (artifactsBase ? whiteboardPathFor(sourcePath, diagramIndex, artifactsBase) : null),
+    [sourcePath, diagramIndex, artifactsBase],
+  )
   const fingerprint = React.useMemo(() => sourceFingerprint(source), [source])
   const [initialData, setInitialData] = React.useState<ExcalidrawInitialDataState | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -94,6 +102,7 @@ export function ExcalidrawWhiteboard({ token, slug, sourcePath, source, diagramI
   }, [source])
 
   React.useEffect(() => {
+    if (!scenePath) return
     let alive = true
     setLoading(true)
     setInitialData(null)
@@ -127,7 +136,7 @@ export function ExcalidrawWhiteboard({ token, slug, sourcePath, source, diagramI
 
   const save = async () => {
     const api = apiRef.current
-    if (!api || saving) return
+    if (!api || saving || !scenePath || !artifactsBase) return
     setSaving(true)
     setError('')
     try {
@@ -140,7 +149,7 @@ export function ExcalidrawWhiteboard({ token, slug, sourcePath, source, diagramI
       )
       const document = JSON.parse(serialized) as Record<string, unknown>
       document.proxima = { sourcePath, sourceFingerprint: fingerprint, diagramIndex }
-      await fs.mkdir('artifacts/whiteboards').catch(() => undefined)
+      await fs.mkdir(`${artifactsBase}/whiteboards`).catch(() => undefined)
       await fs.write(scenePath, JSON.stringify(document, null, 2))
       savedSceneVersion.current = hashElementsVersion(elements)
       setDirty(false)
@@ -161,7 +170,7 @@ export function ExcalidrawWhiteboard({ token, slug, sourcePath, source, diagramI
     <header className="av-whiteboard-bar">
       <div>
         <strong>Editable whiteboard</strong>
-        <span className="mono" title={scenePath}>{scenePath}</span>
+        <span className="mono" title={scenePath ?? undefined}>{scenePath}</span>
       </div>
       <div className="av-whiteboard-actions">
         <button type="button" className="ghost-button" onClick={onClose}>Back to artifact</button>

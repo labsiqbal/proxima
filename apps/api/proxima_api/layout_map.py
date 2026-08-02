@@ -32,10 +32,13 @@ non-directory) is never a write target, and a missing directory is only
 created at the DEFAULT position - Proxima never invents a directory at a
 detected non-default location.
 
-Scope seam left deliberately clean: reserved-name virtual rerouting still
-exists (removed by #138); the Knowledge-graph allowlist keeps the fixed
-ops-relative names, which coincide with every detectable map today (see
-graph_context.py).
+Reserved-name virtual rerouting is GONE (#138): a path means exactly what it
+says on disk, and the map is the only source of per-project locations. Two
+sites deliberately keep fixed Ops-relative names: the Knowledge-graph
+allowlist (Knowledge is Ops-scoped by security design - see graph_context.py)
+and the artifact RECORD language (produced_artifacts / output_links / Archive
+rows resolve Ops-relative until the Part D ledger rework, #139 - writers that
+follow the map use :meth:`ProjectLayout.ops_record_rel` to bridge).
 """
 from __future__ import annotations
 
@@ -168,6 +171,20 @@ class ProjectLayout:
         if ops_rel_path is not None:
             return self.ops_root, ops_rel_path
         return self.container_root, self.rel_paths[area]
+
+    def ops_record_rel(self, container_rel: str) -> str:
+        """The record-language (Ops-relative) form of a container-relative
+        path when it lies inside the Ops root; unchanged otherwise.
+
+        Artifact records (produced_artifacts, output_links, Archive rows)
+        stay Ops-anchored by contract until the Part D ledger rework (#139);
+        writers that follow the layout map use this to keep records valid."""
+        if self.ops_rel in ("", "."):
+            return container_rel
+        prefix = f"{self.ops_rel}/"
+        if container_rel.startswith(prefix):
+            return container_rel[len(prefix):]
+        return container_rel
 
     def wiki_memory_write_root(self) -> Path | None:
         """Where the AUTOMATIC memory writers (log.md append, index.md

@@ -48,7 +48,10 @@ export function loadArtifactReview(slug: string, path: string): ArtifactReviewSt
       })
       : []
     const whiteboardPaths = Array.isArray(parsed.whiteboardPaths)
-      ? [...new Set(parsed.whiteboardPaths.filter((value): value is string => typeof value === 'string' && value.startsWith('artifacts/whiteboards/')))].slice(0, MAX_ANNOTATIONS)
+      // Whiteboards live under <mapped artifacts>/whiteboards (layout map,
+      // prune #138) - accept the container-relative real path, wherever the
+      // project keeps its artifacts folder.
+      ? [...new Set(parsed.whiteboardPaths.filter((value): value is string => typeof value === 'string' && /(^|\/)artifacts\/whiteboards\//.test(value)))].slice(0, MAX_ANNOTATIONS)
       : []
     return {
       annotations,
@@ -92,11 +95,11 @@ export function sourceFingerprint(source: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
-export function whiteboardPathFor(sourcePath: string, diagramIndex = 0): string {
+export function whiteboardPathFor(sourcePath: string, diagramIndex = 0, artifactsBase = 'artifacts'): string {
   const name = sourcePath.split('/').pop()?.replace(/\.[^.]+$/, '') || 'diagram'
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'diagram'
   const suffix = sourceFingerprint(`${sourcePath}:${diagramIndex}`)
-  return `artifacts/whiteboards/${safeName}-${suffix}.excalidraw`
+  return `${artifactsBase}/whiteboards/${safeName}-${suffix}.excalidraw`
 }
 
 export function formatArtifactReviewDraft(args: {
