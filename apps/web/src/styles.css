@@ -5598,6 +5598,50 @@ div.result-media {
    (52px vs 68px, different border, one with a background) while sitting one tab
    click from each other. Values are the tokens the old literals already equalled
    (12/16/20 = --space-3/4/5). */
+/* Files destination (ADR-0040). Shares the Tasks head language so the two global
+   surfaces read as one family; the body scrolls per tree so a long Container
+   cannot push the head off screen. */
+.files-view {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	flex: 1;
+	overflow: hidden;
+}
+.files-head {
+	display: flex;
+	gap: var(--space-3);
+	align-items: center;
+	padding: var(--space-4) var(--space-5);
+	border-bottom: 1px solid var(--ui-stroke-tertiary);
+}
+.files-scope {
+	font-size: var(--text-sm);
+}
+.files-empty {
+	padding: var(--space-5);
+}
+.files-body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: var(--space-3) var(--space-4);
+}
+.files-body-global {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-5);
+}
+.files-project-name {
+	font-size: var(--text-sm);
+	color: var(--ui-text-secondary);
+	margin: 0 0 var(--space-2);
+	padding-left: var(--space-2);
+}
+.files-tree {
+	min-height: 0;
+}
+
 .tasks-head,
 .graph-header {
 	display: flex;

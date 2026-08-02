@@ -29,7 +29,7 @@ Single-user cockpit · full-power Chat with approvals and turn restore · **Alph
 orchestration desk** with three worker slots, checkpoints, budgets, and optional
 unattended starts · global **Attention** inbox · multi-agent brainstorm / debate +
 validate sidecar · workflows, jobs, and cron schedules · reviewable workflow
-graphs · in-browser Terminal, Files, and Preview · projects and linked folders ·
+graphs · in-browser Terminal and Preview · Files as a navigable destination · projects and linked folders ·
 agent profiles with ready/not-ready runner status · Claude Code, Codex, Grok,
 Hermes, and Pi runners · wiki + graph · Design Studio · themes and PWA · daily
 integrity-checked DB backup.

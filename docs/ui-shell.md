@@ -16,12 +16,18 @@ work surface. Work also adds a slim right tool rail whose tools open as overlays
 The header-level **Work / Delegate** control is URL durable (`?mode=work` or
 `?mode=delegate`) and uses pressed-button semantics. Work navigation is flow-ordered:
 **Chat** (hands-on), **Tasks** (watch it run), **Workflows** (keep what worked), then
-**Archive** (where deliverables live), plus feature-gated **Design**. The active-project
+**Archive** (where deliverables live) and **Files** (what is actually in the
+Container), plus feature-gated **Design**. The active-project
 switcher belongs to the Work sidebar, not global chrome or Master. Project management
 (list / link / create / remove / container settings) lives under **Settings → Projects**,
 not primary nav. Agents and Settings stay in the Work account menu. The default landing
 mode and surface are Work and Chat. Delegate uses the same header and left-panel
-geometry but its global navigation is only **Master**, **Tasks**, and **Archive**.
+geometry but its global navigation is only **Master**, **Tasks**, **Archive**, and
+**Files**.
+
+Files is a destination in both navigations (ADR-0040): Work scopes it to the
+active Container, Delegate lists every Container behind a head filter, and both
+open files in the ArtifactViewer. Terminal and Preview remain right-rail tools.
 
 Every Work destination has a stable history entry. Its URL records the Work mode,
 active project, active Chat session, primary surface, and the open Workflow or Design
@@ -48,16 +54,20 @@ project adds a warning. The journal belongs to that chat session and disappears 
 ## Master
 
 Master navigation, settings, tours, and deep links are omitted unless the
-server-owned `feature_master_orchestrator` flag is enabled. It defaults on now
+server-owned `feature_master_orchestrator` flag is enabled. The header status
+cluster (Running tasks + Attention) renders in both modes; its Work-only targets
+switch the shell back to Work before opening. The flag defaults on now
 that the
 [documented product and installation-specific runner gates](master-integrated-acceptance.md#activation-decision)
 have passed. Stale local view state cannot bypass this gate.
 
 Delegate presents Master as a first-class desk, not a Chat tab or Tasks filter. It keeps
 the shared, persisted sidebar panel but replaces Work navigation with **Master**,
-**Tasks**, and **Archive**. Those destinations are global: they do not show a project
-switcher, recent chat history, project filter menu, account controls, ordinary Work Chat,
-Workflows, Design, search, tool rail, or popup. Tasks and Archive query across projects;
+**Tasks**, **Archive**, and **Files**. Those destinations are global: they do not show
+a project switcher, recent chat history, project filter menu, ordinary Work Chat,
+Workflows, Design, search, tool rail, or popup. The account menu stays - it is the
+only route to Projects, Agents, Settings, and Log out - and each of those entries
+switches the shell back to Work before opening. Tasks and Archive query across projects;
 their rows and cards visibly and accessibly name the owning Project, and their task
 and record deep links remain usable without leaving Delegate. Switching back
 restores the prior Work surface. Its header identifies
@@ -145,7 +155,7 @@ visible **Back to Tasks** (or matching origin) label.
 
 Reloading a `#task/<id>` permalink first resolves the Task and its owning Project
 behind a dedicated loading state, then atomically selects and locks that Project.
-The shell does not expose Terminal, Files, or Preview until Task ownership and the
+The shell does not expose Terminal or Preview until Task ownership and the
 active Project are synchronized. The Task banner always names the Project and Area.
 
 The **New task** launcher lives behind the Tasks screen's `+ New task` button (it is no longer a nav destination of its own). It is a focused launcher with no destination dashboard grid. Its integrated Task Composer splits into two rows by kind. The prompt row carries only *actions*: the Add menu for attachments/image/design, and the start action. A context bar underneath groups the three controls that describe a task's **execution context** — a searchable Project/folder picker (where it runs), Agent (who runs it), and Guarded or Autonomous execution policy (how it is governed). Each context control carries a leading icon inside its own click target and all three share one type scale, so the bar reads as one row of peers rather than three unrelated widgets. `/image` and feature-gated `/design` create real media runs that are linked back to the durable task lifecycle. A created task opens `#task/<id>` with live progress, review, approval, and deliverables. Ordinary start failures clean up the queued task; media link failures preserve and identify the task for inspection.
@@ -185,21 +195,16 @@ Schedule inputs mirror each workflow's declared definitions, validate required v
 
 Every schedule row offers **Run now**, which fires it immediately and opens the task it spawned. It exists so a schedule can be trusted before it is left alone: the run goes through the scheduler's own spawn, so what executes is what the cron would have executed — same recipe, project, agent profile and stored input — rather than a lookalike. A manual run deliberately does **not** claim the scheduler's minute, and it works on a disabled schedule, since `enabled` governs the tick and trying a schedule out is exactly when it is still switched off. The stored overlap policy is honoured but never silently: a `skip` schedule with a run already in flight reports that instead of appearing to do nothing.
 
-## Right tool rail — Terminal, Files, Preview
+## Right tool rail — Terminal, Preview
 
-Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, scoped to the active project when Project context is available:
+Terminal and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, scoped to the active project when Project context is available. Files used to be the third rail tool; it is a left-navigation destination now (ADR-0040) - the workspace tree renders in `FilesScreen`, recovery inspection reveals (`rootSide: 'container'`) still select the read-only Container-root adapter there, and files open in the ArtifactViewer.
 
 During Task permalink resolution and any cross-Project Task mismatch, the entire rail
 and panel are suppressed. They return only after the Task owning Project and active
-Project agree, preventing Files or Preview from presenting stale Work context.
+Project agree, preventing Preview from presenting stale Work context.
 
 - **Terminal** — the multi-tab PTY terminal. Once opened it stays mounted (hidden when
   the panel closes) so shells survive closing the panel and navigating anywhere.
-- **Files** — the shared workspace tree over the project root, with the inline
-  CodeMirror editor. Also kept mounted after first open so unsaved edits survive a
-  closed panel. Recovery inspection can swap the tree to a read-only Container-root
-  adapter; a dirty ordinary project buffer stays mounted and read-only, never
-  discarded by inspection path browses, and write returns when inspection ends.
 - **Preview** — the Run & Preview dev-server dock (`AppRunner`). Not kept mounted:
   its server is a managed backend process that survives on its own, and unmounting
   stops the status polling. The Archive and the recipe test bench keep their own

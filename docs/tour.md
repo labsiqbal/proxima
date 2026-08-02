@@ -177,8 +177,10 @@ Projects is a card grid around the active work container.
 
 ## 8. Tool rail
 
-Terminal, Files, and Preview are tools, not destinations. They open over the
-current surface and remain scoped to the active project.
+Terminal and Preview are tools, not destinations. They open over the
+current surface and remain scoped to the active project. Files is a
+left-navigation destination (ADR-0040): the workspace tree in its own
+screen, opening files in the ArtifactViewer.
 
 ![Connected terminal](screenshots/terminal.png)
 

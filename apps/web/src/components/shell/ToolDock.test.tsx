@@ -34,13 +34,15 @@ describe('ToolDock', () => {
     vi.clearAllMocks()
   })
 
-  it('offers Terminal, Files, and Preview as rail tools plus Settings', () => {
+  it('offers Terminal and Preview as rail tools plus Settings', () => {
     const onOpenSettings = vi.fn()
     render(<ToolDock token="t" project={project} onOpenSettings={onOpenSettings} />)
     const rail = screen.getByRole('complementary', { name: 'Tools' })
-    for (const name of ['Terminal', 'Files', 'Preview']) {
+    for (const name of ['Terminal', 'Preview']) {
       expect(rail.querySelector(`[aria-label="${name}"]`)).toBeTruthy()
     }
+    // Files is a destination now (ADR-0040), not a rail tool.
+    expect(rail.querySelector('[aria-label="Files"]')).toBeNull()
     ;(rail.querySelector('[aria-label="Settings"]') as HTMLButtonElement).click()
     expect(onOpenSettings).toHaveBeenCalled()
   })
@@ -67,9 +69,9 @@ describe('ToolDock', () => {
     render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />, { container: root })
     const rail = screen.getByRole('complementary', { name: 'Tools' })
     expect(shell.classList.contains('tool-open')).toBe(false)
-    await user.click(rail.querySelector('[aria-label="Files"]') as HTMLElement)
+    await user.click(rail.querySelector('[aria-label="Terminal"]') as HTMLElement)
     expect(shell.classList.contains('tool-open')).toBe(true)
-    await user.click(rail.querySelector('[aria-label="Files"]') as HTMLElement)
+    await user.click(rail.querySelector('[aria-label="Terminal"]') as HTMLElement)
     expect(shell.classList.contains('tool-open')).toBe(false)
     shell.remove()
   })
@@ -84,12 +86,10 @@ describe('ToolDock', () => {
     expect(screen.getByTestId('terminal-stub')).not.toBeVisible()
   })
 
-  it('asks for a project before Files or Preview can work', async () => {
+  it('asks for a project before Preview can work', async () => {
     const user = userEvent.setup()
     render(<ToolDock token="t" project={null} onOpenSettings={vi.fn()} />)
     const rail = screen.getByRole('complementary', { name: 'Tools' })
-    await user.click(rail.querySelector('[aria-label="Files"]') as HTMLElement)
-    expect(screen.getByText('Pick a project to browse its files.')).toBeVisible()
     await user.click(rail.querySelector('[aria-label="Preview"]') as HTMLElement)
     expect(screen.getByText('Pick a project to run and preview its app.')).toBeVisible()
   })
@@ -102,19 +102,6 @@ describe('ToolDock', () => {
     expect(await screen.findByTestId('preview-stub')).toBeVisible()
     await user.click(rail.querySelector('[aria-label="Preview"]') as HTMLElement)
     expect(screen.queryByTestId('preview-stub')).not.toBeInTheDocument()
-  })
-
-  it('opens the Files panel when proxima:reveal-file fires', async () => {
-    // Path expand/highlight is covered in WorkspaceTree tests; here we only
-    // assert the dock owns the event and surfaces the Files tool.
-    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent('proxima:reveal-file', { detail: { path: 'artifacts/note.md' } }))
-    })
-    const panel = await screen.findByLabelText('Tool panel')
-    expect(panel).toHaveAttribute('aria-hidden', 'false')
-    const filesTab = panel.querySelector('.tool-panel-tab.active')
-    expect(filesTab?.textContent).toMatch(/Files/)
   })
 
   it('suppresses Project tools during Task synchronization without unmounting terminals', async () => {
@@ -142,91 +129,5 @@ describe('ToolDock', () => {
     )
     expect(screen.getByRole('complementary', { name: 'Tools' })).toBeVisible()
     expect(screen.getByTestId('terminal-stub')).toBeInTheDocument()
-  })
-
-  it('uses a read-only Container adapter for migration reveal targets', async () => {
-    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent('proxima:reveal-file', {
-        detail: {
-          path: 'wiki',
-          projectSlug: project.slug,
-          rootSide: 'container',
-        },
-      }))
-    })
-    await screen.findByLabelText('Tool panel')
-    expect(containerInspectionFs).toHaveBeenLastCalledWith('t', project.slug)
-    expect(screen.getByText('Read-only')).toBeVisible()
-    expect(screen.queryByRole('button', { name: 'New file' })).not.toBeInTheDocument()
-  })
-
-  it('clears recovery inspection when the panel closes and Files reopens', async () => {
-    const user = userEvent.setup()
-    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent('proxima:reveal-file', {
-        detail: {
-          path: 'wiki',
-          pathKind: 'directory',
-          projectSlug: project.slug,
-          rootSide: 'container',
-        },
-      }))
-    })
-    expect(containerInspectionFs).toHaveBeenCalledWith('t', project.slug)
-
-    await user.click(screen.getByRole('button', { name: 'Close tool panel' }))
-    const rail = screen.getByRole('complementary', { name: 'Tools' })
-    await user.click(rail.querySelector('[aria-label="Files"]') as HTMLElement)
-
-    expect(projectFs).toHaveBeenLastCalledWith('t', project.slug)
-    expect(screen.queryByText('Read-only')).not.toBeInTheDocument()
-  })
-
-  it('clears recovery inspection when the active Project changes', async () => {
-    const nextProject = { ...project, slug: 'next', name: 'Next' }
-    const view = render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent('proxima:reveal-file', {
-        detail: {
-          path: 'ops',
-          pathKind: 'directory',
-          projectSlug: project.slug,
-          rootSide: 'container',
-        },
-      }))
-    })
-    expect(containerInspectionFs).toHaveBeenCalledWith('t', project.slug)
-
-    await act(async () => {
-      view.rerender(
-        <ToolDock token="t" project={nextProject} onOpenSettings={vi.fn()} />,
-      )
-    })
-
-    expect(projectFs).toHaveBeenLastCalledWith('t', nextProject.slug)
-    expect(screen.queryByText('Read-only')).not.toBeInTheDocument()
-  })
-
-  it('clears recovery inspection before an ordinary Files open', async () => {
-    const user = userEvent.setup()
-    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent('proxima:reveal-file', {
-        detail: {
-          path: 'ops',
-          pathKind: 'directory',
-          projectSlug: project.slug,
-          rootSide: 'container',
-        },
-      }))
-    })
-    const rail = screen.getByRole('complementary', { name: 'Tools' })
-    await user.click(rail.querySelector('[aria-label="Terminal"]') as HTMLElement)
-    await user.click(rail.querySelector('[aria-label="Files"]') as HTMLElement)
-
-    expect(projectFs).toHaveBeenLastCalledWith('t', project.slug)
-    expect(screen.queryByText('Read-only')).not.toBeInTheDocument()
   })
 })

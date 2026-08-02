@@ -614,6 +614,7 @@ export type View =
 	| "projects"
 	| "wiki"
 	| "artifacts"
+	| "files"
 	| "workflows"
 	| "activity"
 	| "task"

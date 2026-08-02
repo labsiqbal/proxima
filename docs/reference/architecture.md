@@ -1249,7 +1249,7 @@ label and Area as secondary context. In-app Task opens (Attention and other pres
 hash stamps) keep the selected Work Project and lock the deep surface. A full-page
 `#task/<id>` reload instead resolves the Task and Project list before mounting
 `AppShell`, selects the owner in one state transition, and only then exposes the
-Project-bound tool dock. Any mismatch keeps Terminal, Files, and Preview unavailable.
+Project-bound tool dock. Any mismatch keeps Terminal and Preview unavailable.
 Task-linked Design resolves through the Task owning Project without rewriting Work
 selection, and the return path restamps preserve-work so ownership stays coherent.
 

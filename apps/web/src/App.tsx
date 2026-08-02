@@ -63,6 +63,7 @@ const IterateStage = React.lazy(() => import('./screens/IterateStage').then(m =>
 const DesignStudio = React.lazy(() => import('./screens/DesignStudio').then(m => ({ default: m.DesignStudio })))
 const WikiScreen = React.lazy(() => import('./screens/WikiScreen').then(m => ({ default: m.WikiScreen })))
 const ArtifactsScreen = React.lazy(() => import('./screens/ArtifactsScreen').then(m => ({ default: m.ArtifactsScreen })))
+const FilesScreen = React.lazy(() => import('./screens/FilesScreen').then(m => ({ default: m.FilesScreen })))
 const WorkflowsScreen = React.lazy(() => import('./screens/WorkflowsScreen').then(m => ({ default: m.WorkflowsScreen })))
 const ActivityScreen = React.lazy(() => import('./screens/ActivityScreen').then(m => ({ default: m.ActivityScreen })))
 const MasterScreen = React.lazy(() => import('./screens/MasterScreen').then(m => ({ default: m.MasterScreen })))
@@ -521,6 +522,30 @@ export function App() {
   const [runRecipeLabel, setRunRecipeLabel] = React.useState<string | undefined>(undefined)
   const [runRecipeInstantResult, setRunRecipeInstantResult] = React.useState<string | undefined>(undefined)
   const [pendingFile, setPendingFile] = React.useState<{ slug: string; path: string; target?: FileTarget } | null>(null)
+  const [revealFile, setRevealFile] = React.useState<{ slug: string; path: string; pathKind?: 'root' | 'directory' | 'file'; rootSide?: 'container' | 'virtual' } | null>(null)
+  // "Reveal in Files" is a window event so any surface can raise it without
+  // threading a callback. The Files destination owns it now that the right rail
+  // no longer carries a Files panel (ADR-0040).
+  React.useEffect(() => {
+    const onReveal = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {}
+      const path = typeof detail.path === 'string' ? detail.path : ''
+      if (!path) return
+      const slug = typeof detail.projectSlug === 'string'
+        ? detail.projectSlug
+        : activeProjectRef.current?.slug
+      if (!slug) return
+      setRevealFile({
+        slug,
+        path,
+        pathKind: detail.pathKind === 'root' || detail.pathKind === 'directory' ? detail.pathKind : 'file',
+        rootSide: detail.rootSide === 'container' ? 'container' : 'virtual',
+      })
+      setView('files')
+    }
+    window.addEventListener('proxima:reveal-file', onReveal)
+    return () => window.removeEventListener('proxima:reveal-file', onReveal)
+  }, [])
   const [pendingMasterMessageId, setPendingMasterMessageId] = React.useState<number | null>(null)
   const [pendingArtifact, setPendingArtifact] = React.useState<OutputLink | null>(null)
   const reviewDraftNonce = React.useRef(0)
@@ -1600,6 +1625,7 @@ export function App() {
   const masterActive = delegateActive && view === 'master'
   const masterHomeActive = masterActive
   const activityActive = view === 'activity'
+  const filesActive = view === 'files'
   const workflowsActive = view === 'workflows'
   const artifactsActive = view === 'artifacts'
   const designActive = view === 'design'
@@ -1704,6 +1730,7 @@ export function App() {
       })()}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
       {keep('artifacts') && pane('artifacts', artifactsActive, <React.Suspense fallback={<ViewFallback label="Loading archive..." />}><ArtifactsScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onActiveProject={delegateActive ? undefined : setActiveProject} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={delegateActive ? undefined : openSessionById} designStudioEnabled={delegateActive ? false : features.designStudio} onOpenDesign={delegateActive ? undefined : features.designStudio ? id => { const origin = archiveRecord ? 'artifacts' : view; openDesignById(id, origin) } : undefined} reviewSessionId={delegateActive ? null : returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={delegateActive ? undefined : continueArtifactReview} /></React.Suspense>)}
+      {keep('files') && pane('files', filesActive, <React.Suspense fallback={<ViewFallback label="Loading files..." />}><FilesScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} revealPath={revealFile} onRevealConsumed={() => setRevealFile(null)} /></React.Suspense>)}
       {keep('workflows') && pane('workflows', workflowsActive, <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen graphContent={features.workflowGraph ? <GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} features={features} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} backNonce={graphBackNonce} /> : undefined} /></React.Suspense>)}
       {keep('activity') && pane('activity', activityActive, <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={delegateActive ? null : activeProject} projects={projects} globalScope={delegateActive} features={features} profiles={profiles} onOpenTask={jobId => openTask(jobId, 'activity')} onOpenPlan={jobId => {
         // A graph plan editor is a Work surface. Opening it is an explicit

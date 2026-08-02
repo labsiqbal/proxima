@@ -1,27 +1,19 @@
 import React from 'react'
 import type { Project } from '../../types'
-import { containerInspectionFs, projectFs } from '../../api/fsAdapter'
-import type { FileRootSide } from '../../api/files'
-import { WorkspaceTree } from '../files/WorkspaceTree'
-import { IconClose, IconFile, IconGear, IconMonitor, IconTerminal } from './icons'
+import { IconClose, IconGear, IconMonitor, IconTerminal } from './icons'
 
 const TerminalTabs = React.lazy(() => import('../terminal/TerminalTabs').then(m => ({ default: m.TerminalTabs })))
 const AppRunner = React.lazy(() => import('../files/AppRunner').then(m => ({ default: m.AppRunner })))
 
-// Terminal, Files, and Preview are tools, not destinations: a slim icon rail on
-// the right opens each one as an overlay panel above the current screen, so the
-// plan/chat you were reading stays where it was. All three are scoped to the
-// active project, in any context.
-export type Tool = 'terminal' | 'files' | 'preview'
-type RevealTarget = {
-  path: string
-  pathKind: 'root' | 'directory' | 'file'
-  projectSlug?: string
-  rootSide: FileRootSide
-}
+// Terminal and Preview are tools, not destinations: a slim icon rail on the
+// right opens each one as an overlay panel above the current screen, so the
+// plan/chat you were reading stays where it was. Both are scoped to the active
+// project, in any context. Files moved out to its own destination (ADR-0040) -
+// browsing is navigation, and a tree in a narrow overlay could not carry the
+// cross-project scope Delegate needs.
+export type Tool = 'terminal' | 'preview'
 const TOOLS: { id: Tool; label: string; Icon: React.ComponentType<{ size?: number }> }[] = [
   { id: 'terminal', label: 'Terminal', Icon: IconTerminal },
-  { id: 'files', label: 'Files', Icon: IconFile },
   { id: 'preview', label: 'Preview', Icon: IconMonitor },
 ]
 
@@ -37,19 +29,16 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
   onOpenChange?: (open: boolean) => void
 }) {
   const [open, setOpen] = React.useState<Tool | null>(null)
-  const [revealTarget, setRevealTarget] = React.useState<RevealTarget | null>(null)
-  // Latch: once Terminal or Files has been opened it stays mounted (hidden when
-  // closed) — unmounting would SIGHUP every shell and drop unsaved file edits.
+  // Latch: once Terminal has been opened it stays mounted (hidden when closed) —
+  // unmounting would SIGHUP every shell.
   // Preview is NOT latched: its dev server is a backend process that survives on
   // its own, and an unmounted AppRunner stops status-polling for free.
   const visited = React.useRef(new Set<Tool>())
   if (open && open !== 'preview') visited.current.add(open)
   const closePanel = React.useCallback(() => {
     setOpen(null)
-    setRevealTarget(null)
   }, [])
   const selectTool = (tool: Tool, toggle: boolean) => {
-    setRevealTarget(null)
     setOpen(current => toggle && current === tool ? null : tool)
   }
 
@@ -77,58 +66,7 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
     }
   }, [onOpenChange, open])
 
-  // "Reveal in Files" (Archive record actions): the dock owns the Files panel,
-  // so far-away screens ask for it with an event instead of prop-drilling
-  // through the whole shell. detail.path highlights the file in the tree.
-  React.useEffect(() => {
-    const onReveal = (event: Event) => {
-      if (!available) return
-      const detail = (event as CustomEvent).detail
-      const path = detail?.path
-      const projectSlug = detail?.projectSlug
-      if (typeof path !== 'string') return
-      if (
-        typeof projectSlug === 'string'
-        && projectSlug
-        && projectSlug !== project?.slug
-      ) return
-      setRevealTarget({
-        path,
-        pathKind: detail?.pathKind === 'root' || detail?.pathKind === 'directory'
-          ? detail.pathKind
-          : 'file',
-        projectSlug: typeof projectSlug === 'string' ? projectSlug : undefined,
-        rootSide: detail?.rootSide === 'container' ? 'container' : 'virtual',
-      })
-      setOpen('files')
-    }
-    window.addEventListener('proxima:reveal-file', onReveal)
-    return () => window.removeEventListener('proxima:reveal-file', onReveal)
-  }, [available, project?.slug])
-
   const slug = project?.slug
-  React.useEffect(() => {
-    setRevealTarget(null)
-  }, [slug])
-  const applicableReveal = !!(
-    slug
-    && revealTarget
-    && (!revealTarget.projectSlug || revealTarget.projectSlug === slug)
-  )
-  const recoveryInspection = !!(
-    applicableReveal
-    && revealTarget?.rootSide === 'container'
-  )
-  const revealPath = applicableReveal ? revealTarget?.path ?? null : null
-  const revealPathKind = applicableReveal ? revealTarget?.pathKind : undefined
-  const fs = React.useMemo(
-    () => slug
-      ? recoveryInspection
-        ? containerInspectionFs(token, slug)
-        : projectFs(token, slug)
-      : null,
-    [recoveryInspection, slug, token],
-  )
 
   const toolButton = (tool: typeof TOOLS[number], where: 'rail' | 'tab') => (
     <button
@@ -163,10 +101,6 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
           <React.Suspense fallback={<PaneFallback label="Loading terminal…" />}>
             <TerminalTabs token={token} projectSlug={slug} />
           </React.Suspense>)}
-        {pane('files',
-          fs && project
-            ? <WorkspaceTree key={slug} fs={fs} title={project.name} className="tool-files" activePath={revealPath} activePathKind={revealPathKind} />
-            : <PaneFallback label="Pick a project to browse its files." />)}
         {open === 'preview' && <div className="tool-pane" style={{ display: 'flex' }}>
           {slug
             ? <React.Suspense fallback={<PaneFallback label="Loading preview…" />}>

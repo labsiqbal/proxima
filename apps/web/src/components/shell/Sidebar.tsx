@@ -1,27 +1,30 @@
 import { useState, type ComponentType } from 'react'
 import type { AppFeatures, ChatSession, Profile, Project, User, View } from '../../types'
-import { IconChat, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout, IconSparkle } from './icons'
+import { IconChat, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconFile, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout, IconSparkle } from './icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
 import { ProjectSwitcher } from './ProjectSwitcher'
 
 // One workspace, nav ordered by the flow: talk it through (Chat), watch it run
 // (Tasks), keep what worked (Workflows), then Archive. Project *switch* lives
-// in the Work sidebar; project *manage* lives under Settings. Terminal/Files/
-// Preview are tools on the right rail, not destinations; Agents/Settings stay
-// in the account menu.
+// in the Work sidebar; project *manage* lives under Settings. Files is a
+// destination in both navigations (ADR-0040) - Work scopes it to the active
+// Container, Delegate goes global like Tasks and Archive. Terminal and Preview
+// stay right-rail tools; Agents/Settings stay in the account menu.
 type Destination = { id: View; label: string; icon: ComponentType<{ size?: number }> }
 const primary: Destination[] = [
   { id: 'chat', label: 'Chat', icon: IconChat },
   { id: 'activity', label: 'Tasks', icon: IconTasks },
   { id: 'workflows', label: 'Workflows', icon: IconWorkflows },
   { id: 'artifacts', label: 'Archive', icon: IconArtifacts },
+  { id: 'files', label: 'Files', icon: IconFile },
   { id: 'design', label: 'Design', icon: IconDesign },
 ]
 const delegatePrimary: Destination[] = [
   { id: 'master', label: 'Master', icon: IconSparkle },
   { id: 'activity', label: 'Tasks', icon: IconTasks },
   { id: 'artifacts', label: 'Archive', icon: IconArtifacts },
+  { id: 'files', label: 'Files', icon: IconFile },
 ]
 const enabled = (item: Destination, features: AppFeatures) =>
   (item.id !== 'design' || features.designStudio)
