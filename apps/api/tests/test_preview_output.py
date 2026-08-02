@@ -599,6 +599,57 @@ def test_upgrade_preflight_refuses_unmarked_legacy_preview_child(
         process.wait(timeout=5)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="procfs check requires POSIX")
+def test_upgrade_preflight_ignores_nondumpable_and_zombie_processes(
+    tmp_path: Path,
+) -> None:
+    # Same-uid processes whose environ read is denied (dumpable flag cleared,
+    # like systemd --user / sshd session leaders) and unreaped zombies exist in
+    # every real Linux user session; the preflight must not report them as
+    # uninspectable, or scripts/install-user can never pass on a real host.
+    helper = ROOT / "scripts" / "check-preview-drained"
+    nondumpable = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import ctypes, time\n"
+            "ctypes.CDLL(None).prctl(4, 0)\n"  # PR_SET_DUMPABLE = 0
+            "time.sleep(60)\n",
+        ],
+    )
+    zombie = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            state = (
+                Path(f"/proc/{zombie.pid}/stat")
+                .read_text(encoding="utf-8")
+                .rsplit(") ", 1)[1]
+                .split()[0]
+            )
+            if state == "Z":
+                break
+            time.sleep(0.02)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(helper),
+                "--protocol",
+                "proxima-preview-supervisor-v2:user",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert str(nondumpable.pid) not in result.stderr
+        assert str(zombie.pid) not in result.stderr
+        assert "could not inspect" not in result.stderr
+    finally:
+        nondumpable.terminate()
+        nondumpable.wait(timeout=5)
+        zombie.wait(timeout=5)
+
+
 @pytest.mark.skipif(
     os.environ.get("PROXIMA_TEST_SYSTEMD_BROKER") != "1"
     or shutil.which("systemd-run") is None,
