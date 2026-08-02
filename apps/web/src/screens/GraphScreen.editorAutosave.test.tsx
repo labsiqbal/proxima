@@ -166,7 +166,7 @@ describe('GraphScreen editor autosave actions', () => {
     expect(screen.getByText('Saved ✓')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Rename workflow Untitled plan' }))
-    const title = screen.getByRole('textbox', { name: 'Workflow name' })
+    const title = await screen.findByRole('textbox', { name: 'Workflow name' })
     fireEvent.change(title, { target: { value: 'Daily research' } })
 
     expect(screen.getByText('Saving…')).toBeInTheDocument()
@@ -556,7 +556,7 @@ describe('GraphScreen editor autosave actions', () => {
     await screen.findByRole('heading', { name: 'Untitled plan' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Rename workflow Untitled plan' }))
-    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), { target: { value: 'Daily research' } })
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Workflow name' }), { target: { value: 'Daily research' } })
     expect(screen.getByText('Saving…')).toBeInTheDocument()
 
     // Leave draft 42 for draft 99 before the 700ms autosave timer fires: the queued
