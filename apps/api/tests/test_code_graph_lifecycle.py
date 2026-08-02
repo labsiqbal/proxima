@@ -18,7 +18,6 @@ from proxima_api.code_graph_lifecycle import (
     REASON_TASK_MERGED,
     CodeGraphLifecycle,
 )
-from proxima_api.graph_context import GRAPHIFY_GITIGNORE_LINE
 from proxima_api.graphify_area_mcp import _query, main as mcp_main
 from proxima_api.main import create_app
 
@@ -139,17 +138,25 @@ def test_multiple_areas_receive_distinct_paths_state_and_generations(
     assert len(rows) == 2
     assert rows[0]["graph_path"] != rows[1]["graph_path"]
     assert rows[0]["source_fingerprint"] != rows[1]["source_fingerprint"] or (
-        Path(rows[0]["graph_path"]).parent.parent.name
-        != Path(rows[1]["graph_path"]).parent.parent.name
+        Path(rows[0]["graph_path"]).parent.name
+        != Path(rows[1]["graph_path"]).parent.name
     )
     assert all(int(row["generation"]) == 1 for row in rows)
     assert all(row["repo_head"] for row in rows)
-    for row in rows:
+    root = Path(project["path"])
+    runtime = tmp_path / "runtime"
+    for index, row in enumerate(rows):
         graph_path = Path(row["graph_path"])
         assert graph_path.is_file()
-        exclude = graph_path.parent.parent / ".git" / "info" / "exclude"
-        assert exclude.is_file()
-        assert GRAPHIFY_GITIGNORE_LINE in exclude.read_text(encoding="utf-8")
+        # Graph outputs live in Proxima's runtime dir, never inside the Area
+        # (prune C2): no graphify-out/ and no ignore-file appends in the repo.
+        assert runtime in graph_path.parents
+        area_root = root / f"repo-{index}"
+        assert not (area_root / "graphify-out").exists()
+        assert not (area_root / ".gitignore").exists()
+        exclude = area_root / ".git" / "info" / "exclude"
+        if exclude.is_file():
+            assert "graphify-out" not in exclude.read_text(encoding="utf-8")
     public = api.get(
         "/api/containers/life-one/graphs",
         headers=headers,

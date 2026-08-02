@@ -107,6 +107,12 @@ export type OpsMigrationDetail = {
 	conflicts: { path: string; reason: string }[];
 	retry_safe: boolean;
 	retry_action: "adopt" | "migrate" | "revalidate" | null;
+	/** Every write a safe "migrate" would perform beyond the planned moves;
+	 * null unless retry_action is "migrate" (prune C2 preview contract). */
+	planned_writes: {
+		container_doc: "move" | "generate" | null;
+		git_exclude: boolean;
+	} | null;
 	validation_reason: string | null;
 	what_remains_usable: {
 		legacy_ops_active: boolean;

@@ -178,10 +178,11 @@ def register(app, deps):
     def link_project(
         payload: ProjectLinkRequest, user: dict[str, Any] = Depends(current_user)
     ):
-        """Register a folder as a project (no scaffold under the data dir). The
-        project's path points at the real folder, so chat/terminal/files operate
-        on it. Pass mkdir=true to create a brand-new empty directory first
-        (parent must already exist inside the link roots)."""
+        """Register a folder as a project without writing anything into it
+        (prune C2): no moves, no scaffold, no git-exclude appends. The
+        project's path points at the real folder, so chat/terminal/files
+        operate on it. Pass mkdir=true to create a brand-new empty directory
+        first (parent must already exist inside the link roots)."""
         created_dir: CreatedDirectory | None = None
         pid: int | None = None
         made_dir = False
@@ -328,10 +329,14 @@ def register(app, deps):
                     "selected folder identity changed",
                     "parent" if made_dir else "path",
                 ) from exc
-            # Container areas (T1): register the ops area + auto-detect code areas.
+            # Container areas (T1): register the ops area + auto-detect code
+            # areas. Linking never writes into the folder (prune C2):
+            # settle adopts an existing populated ops/ as-is and otherwise
+            # keeps the legacy "." layout; the move-based migration is only
+            # the explicit, previewed opt-in on the ops-migration surface.
             ensure_ops_area(db(), pid, rel_path=".")
             container_registry.container_root(registered)
-            container_registry.migrate_container_ops(db(), pid)
+            container_registry.settle_container_ops(db(), pid)
             container_registry.container_root(registered)
             summary = sync_code_areas(db(), pid, target)
             audit_action = "project.link.mkdir" if made_dir else "project.link"
@@ -763,7 +768,9 @@ def register(app, deps):
         filesystem; manual and excluded rows are never clobbered."""
         project = visible_project(slug, user)
         with container_registry.container_mutation_lock(db(), project):
-            ensure_ops_area(db(), project["id"])
+            # Repair a missing Ops row at "." - never scaffold ops/ into a
+            # linked folder from a detection request (prune C2).
+            ensure_ops_area(db(), project["id"], rel_path=".")
             summary = sync_code_areas(db(), project["id"], project["path"])
         _notify_code_graphs(
             owner_user_id=int(user["id"]),

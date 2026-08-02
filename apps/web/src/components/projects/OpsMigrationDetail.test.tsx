@@ -50,6 +50,7 @@ const collision: Detail = {
   conflicts: [{ path: 'wiki', reason: 'Both wiki and ops/wiki exist.' }],
   retry_safe: false,
   retry_action: null,
+  planned_writes: null,
   validation_reason: 'physical Ops root is not empty',
   what_remains_usable: {
     legacy_ops_active: true,
@@ -74,6 +75,10 @@ const safe = {
   ...collision,
   retry_safe: true,
   retry_action: 'migrate' as const,
+  planned_writes: {
+    container_doc: 'generate' as const,
+    git_exclude: true,
+  },
   validation_reason: null,
   conflicts: [],
   legacy_owned_paths: [{
@@ -90,6 +95,7 @@ const complete: Detail = {
   active_ops_path: 'ops',
   retry_safe: false,
   retry_action: null,
+  planned_writes: null,
   validation_reason: 'Migration is already complete; no retry is needed.',
   legacy_owned_paths: [{
     ...safe.legacy_owned_paths[0],
@@ -242,10 +248,25 @@ describe('OpsMigrationDetail', () => {
     await user.click(retry)
     await waitFor(() => expect(retryOpsMigration).toHaveBeenCalledWith('token', project.slug))
     expect(confirmDialog).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('move only the planned Ops-owned paths'),
+      message: expect.stringContaining('only these planned writes'),
     }))
+    // The confirm enumerates exactly what would change before anything moves.
+    const message = vi.mocked(confirmDialog).mock.calls[0]?.[0]?.message || ''
+    expect(message).toContain('move wiki -> ops/wiki')
+    expect(message).toContain('create ops/container.md')
+    expect(message).toContain(".git/info/exclude")
     expect(await screen.findByText('Ops migration completed. The Attention item is resolved.')).toBeInTheDocument()
     expect(changed).toHaveBeenCalled()
+  })
+
+  it('lists the exact planned writes in the validation panel for a safe migrate', async () => {
+    vi.mocked(getOpsMigration).mockResolvedValue(safe)
+    render(<OpsMigrationDetail token="token" project={project} onBack={vi.fn()} onChanged={vi.fn()} />)
+
+    const plan = await screen.findByRole('list', { name: 'Exactly what a migration would change' })
+    expect(within(plan).getByText('move wiki -> ops/wiki')).toBeInTheDocument()
+    expect(within(plan).getByText('create ops/container.md (generated identity document)')).toBeInTheDocument()
+    expect(within(plan).getByText("append /ops/ to this repo's .git/info/exclude")).toBeInTheDocument()
   })
 
   it('uses revalidate-only confirmation copy for repaired physical layouts', async () => {
@@ -265,7 +286,7 @@ describe('OpsMigrationDetail', () => {
       message: expect.stringContaining('revalidate ownership and layout and resolve Attention without moving content'),
     }))
     const message = vi.mocked(confirmDialog).mock.calls[0]?.[0]?.message || ''
-    expect(message).not.toContain('move only the planned Ops-owned paths')
+    expect(message).not.toContain('only these planned writes')
   })
 
   it('uses adopt-as-is confirmation copy when retry adopts a populated ops/', async () => {
@@ -284,7 +305,7 @@ describe('OpsMigrationDetail', () => {
       message: expect.stringContaining('adopt the existing ops/ content exactly as it is on disk'),
     }))
     const message = vi.mocked(confirmDialog).mock.calls[0]?.[0]?.message || ''
-    expect(message).not.toContain('move only the planned Ops-owned paths')
+    expect(message).not.toContain('only these planned writes')
   })
 
   it('ignores stale reload responses after a newer request starts', async () => {

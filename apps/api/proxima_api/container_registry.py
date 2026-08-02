@@ -3307,6 +3307,7 @@ def inspect_ops_migration(
     retry_safe = False
     retry_action: str | None = None
     validation_reason: str | None = None
+    planned_writes: dict[str, Any] | None = None
     if root_error:
         validation_reason = root_error
     elif active_ops_path == ".":
@@ -3330,12 +3331,28 @@ def inspect_ops_migration(
             validation_reason = adoption_error
         else:
             try:
-                _validated_retry_manifest(conn, data, marker)
+                planned_manifest = _validated_retry_manifest(conn, data, marker)
             except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
                 validation_reason = str(exc)
             else:
                 retry_safe = True
                 retry_action = "migrate"
+                # The full preview contract (prune C2): a migrate never runs
+                # implicitly, and its opt-in names every write beyond the
+                # planned moves - the container.md strategy and whether the
+                # root repo's .git/info/exclude gains an /ops/ line.
+                container_doc_plan = planned_manifest.get("container_doc")
+                strategy = (
+                    str(container_doc_plan.get("strategy") or "")
+                    if isinstance(container_doc_plan, Mapping)
+                    else ""
+                )
+                planned_writes = {
+                    "container_doc": strategy or None,
+                    # The migration's exclude append opens `.git` as a
+                    # directory only; a gitfile checkout is left untouched.
+                    "git_exclude": root is not None and (root / ".git").is_dir(),
+                }
     elif active_ops_path == OPS_RELPATH:
         try:
             validated_area_roots(conn, data, deep_ops_scan=True)
@@ -3415,6 +3432,7 @@ def inspect_ops_migration(
         "conflicts": conflicts,
         "retry_safe": retry_safe,
         "retry_action": retry_action,
+        "planned_writes": planned_writes,
         "validation_reason": validation_reason,
         "what_remains_usable": {
             "legacy_ops_active": legacy_active,
@@ -3443,8 +3461,18 @@ def inspect_ops_migration(
 def _migrate_container_ops_locked(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
+    *,
+    allow_moves: bool = True,
 ) -> bool:
-    """Migrate one legacy ``.`` Ops Area. Returns True only when complete."""
+    """Migrate one legacy ``.`` Ops Area. Returns True only when complete.
+
+    With ``allow_moves=False`` (link and the startup settle sweep, prune C2)
+    only zero-write outcomes run: adopting a populated ``ops/`` and resuming
+    a previously authorized in-flight move (a durable ``moving`` manifest).
+    A ``.`` layout with nothing to adopt is left exactly as it is - active,
+    readable, no marker, no attention - until the owner opts into the
+    previewed migration through the retry route.
+    """
     data = get_container(conn, container)
     row = conn.execute(
         "SELECT id, rel_path FROM project_areas "
@@ -3524,6 +3552,13 @@ def _migrate_container_ops_locked(
                 _upsert_marker(conn, int(data["id"]), "attention", None, reason)
                 _attention(conn, data, reason)
                 return False
+            return True
+        if not allow_moves:
+            # Non-mutating settle (prune C2): nothing to adopt, and moving
+            # files needs the owner's explicit, previewed opt-in. The legacy
+            # "." Ops Area stays fully readable through the virtual mapping;
+            # any stored marker/attention is owner-facing state we leave for
+            # the retry surface to resolve.
             return True
         try:
             manifest = _build_manifest(conn, data)
@@ -3633,6 +3668,8 @@ def _migrate_container_ops_locked(
 def migrate_container_ops(
     conn: sqlite3.Connection,
     container: int | sqlite3.Row | Mapping[str, Any],
+    *,
+    allow_moves: bool = True,
 ) -> bool:
     """Migrate one legacy ``.`` Ops Area. Returns True only when complete."""
     with container_mutation_lock(conn, container):
@@ -3663,7 +3700,11 @@ def migrate_container_ops(
                         if recovery.unresolved
                         else "Container has active processes; stop them before retrying"
                     )
-                return _migrate_container_ops_locked(conn, container)
+                return _migrate_container_ops_locked(
+                    conn,
+                    container,
+                    allow_moves=allow_moves,
+                )
         except ContainerBoundaryError as exc:
             data = get_container(conn, container)
             reason = str(exc)
@@ -3671,8 +3712,27 @@ def migrate_container_ops(
             return False
 
 
+def settle_container_ops(
+    conn: sqlite3.Connection,
+    container: int | sqlite3.Row | Mapping[str, Any],
+) -> bool:
+    """Register one Container's Ops layout without ever moving its files.
+
+    The zero-write companion to :func:`migrate_container_ops` used at link
+    time and by the startup sweep (prune C2): a populated ``ops/`` is adopted
+    as-is, an interrupted authorized move resumes from its durable manifest,
+    and every other layout is left byte-identical on disk.
+    """
+    return migrate_container_ops(conn, container, allow_moves=False)
+
+
 def migrate_legacy_ops_containers(conn: sqlite3.Connection) -> dict[str, int]:
-    """Run the resumable physical Ops migration for every current Container."""
+    """Settle every current Container's Ops layout without moving files.
+
+    Startup sweep (prune C2): adopts populated ``ops/`` layouts, resumes only
+    a previously authorized in-flight move, and never plans new moves - the
+    move-based migration is exclusively the owner's previewed opt-in.
+    """
     summary = {"complete": 0, "attention": 0}
     rows = conn.execute(
         "SELECT id, slug, name, path, path_identity "
@@ -3680,7 +3740,7 @@ def migrate_legacy_ops_containers(conn: sqlite3.Connection) -> dict[str, int]:
     ).fetchall()
     for row in rows:
         try:
-            if migrate_container_ops(conn, row):
+            if settle_container_ops(conn, row):
                 summary["complete"] += 1
             else:
                 summary["attention"] += 1

@@ -41,6 +41,11 @@ def _client(app) -> TestClient:
 
 
 def _project(client: TestClient, tmp_path: Path, slug: str = "proj") -> Path:
+    """Link a real folder with a top-level scripts/ library.
+
+    Linking is non-mutating (prune C2): the folder keeps its layout and the
+    Ops Area stays at the legacy "." root, so the script library is the
+    folder's own scripts/ directory."""
     folder = tmp_path / slug
     (folder / "scripts").mkdir(parents=True, exist_ok=True)
     res = client.post(
@@ -48,7 +53,7 @@ def _project(client: TestClient, tmp_path: Path, slug: str = "proj") -> Path:
         json=with_browse_root(client, {"path": str(folder), "slug": slug}),
     )
     assert res.status_code == 201, res.text
-    return folder / "ops"
+    return folder
 
 
 def _write_script(folder: Path, name: str, body: str) -> Path:

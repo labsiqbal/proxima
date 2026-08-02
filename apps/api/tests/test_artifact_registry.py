@@ -32,7 +32,11 @@ def _client(app) -> tuple[TestClient, dict[str, str]]:
 
 
 def _project(api: TestClient, h: dict[str, str], root: Path, slug: str) -> dict:
+    # ops/ is populated before link so the non-mutating link (prune C2)
+    # adopts it as the physical Ops Area; these tests exercise ops-rooted
+    # artifact records, not the legacy "." layout.
     root.mkdir(parents=True, exist_ok=True)
+    (root / "ops" / "reports").mkdir(parents=True, exist_ok=True)
     res = api.post(
         "/api/projects/link",
         headers=h,
@@ -43,7 +47,6 @@ def _project(api: TestClient, h: dict[str, str], root: Path, slug: str) -> dict:
         ),
     )
     assert res.status_code == 201, res.text
-    (root / "ops" / "reports").mkdir(parents=True, exist_ok=True)
     payload = res.json()
     row = api.app.state.db.execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone()
     return {**payload, "id": int(row["id"])}

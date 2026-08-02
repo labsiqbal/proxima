@@ -213,6 +213,55 @@ def test_code_rebuild_and_query_include_scope_freshness_citations_and_provenance
     )
 
 
+def test_graph_outputs_live_in_the_runtime_dir_not_the_scope(tmp_path: Path):
+    """Prune C2: graph builds persist only under the workspace runtime dir.
+
+    The scope (container root, ops/, code Areas) stays byte-identical: no
+    graphify-out/ directories and no .gitignore / git-exclude appends."""
+    api, headers = _api(tmp_path)
+    project, area_id = _container(api, headers)
+    assert area_id is not None
+    root = Path(project["path"])
+    (root / "ops" / "wiki").mkdir(exist_ok=True)
+    (root / "ops" / "wiki" / "note.md").write_text(
+        "# Note\n\nDurable knowledge.\n",
+        encoding="utf-8",
+    )
+
+    code_state = _rebuild_code(api, headers, slug="graph-one", area_id=area_id)
+    assert code_state["state"] == "fresh"
+    knowledge = api.post(
+        "/api/containers/graph-one/graphs/rebuild",
+        headers=headers,
+        json={"kind": "knowledge"},
+    )
+    assert knowledge.status_code == 200, knowledge.text
+    assert knowledge.json()["state"] == "fresh"
+
+    runtime = tmp_path / "runtime"
+    for row in api.app.state.db.execute(
+        "SELECT kind, graph_path FROM graph_states"
+    ).fetchall():
+        graph_path = Path(row["graph_path"])
+        assert graph_path.is_file(), row["kind"]
+        assert runtime in graph_path.parents
+        assert root not in graph_path.parents
+    assert not (root / "graphify-out").exists()
+    assert not (root / "ops" / "graphify-out").exists()
+    assert not (root / ".gitignore").exists()
+    assert not (root / "ops" / ".gitignore").exists()
+
+    # Queries answer from the runtime-dir graph, still citing scope paths.
+    result = api.app.state.graph_context.query(
+        owner_user_id=1,
+        container_slug="graph-one",
+        kind="knowledge",
+        question="durable note",
+    )
+    assert result["error"] is None
+    assert result["items"]
+
+
 def test_knowledge_rebuild_is_local_and_limited_to_allowlist(
     tmp_path: Path,
 ):

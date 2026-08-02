@@ -411,9 +411,12 @@ exact scope, generation, freshness, citations, and provenance.
 
 Group 10 adds the **Code graph lifecycle** on top of that adapter:
 
-- One distinct Code graph state row and canonical
-  `<repo-area>/graphify-out/graph.json` per registered repo Area (never a Task
-  worktree). Generated output is gitignored by default.
+- One distinct Code graph state row per registered repo Area (never a Task
+  worktree). The canonical graph lives in Proxima's runtime dir at
+  `<workspace_root>/graphs/container-<id>/code-area-<area_id>/graph.json`
+  (prune C2): builds never create `graphify-out/` or append ignore lines
+  inside the repo. Pre-C2 rows pointing inside an Area reset to the runtime
+  path on next resolve ("registered graph scope changed") and rebuild there.
 - Initial full build is enqueued when a code Area is registered (create, link,
   detect, or manual add).
 - A successful Proxima Task merge marks **only that Area's** Code graph `stale`
@@ -441,8 +444,10 @@ Group 10 adds the **Code graph lifecycle** on top of that adapter:
 
 Group 11 adds the **Knowledge graph lifecycle** and the **typed context router**:
 
-- At most one Knowledge graph per Container Ops area at
-  `<container>/ops/graphify-out/graph.json`, with state in `graph_states`.
+- At most one Knowledge graph per Container Ops area, canonical at
+  `<workspace_root>/graphs/container-<id>/knowledge/graph.json` in Proxima's
+  runtime dir (never inside the Container - prune C2), with state in
+  `graph_states`.
 - Builds read only the resolved Ops allowlist: `container.md`, `design.md`,
   curated `wiki/**/*.md` (not `index.md` / `log.md`), `reports/**` text docs, and
   durable artifact metadata named `METADATA.md` or `*.meta.json` under
@@ -1264,36 +1269,50 @@ when the Container root is itself a repo. The Ops Area is physically rooted at
 `ops/`, so Ops-owned files cannot be confused with a sibling repo.
 
 **How:** The compatibility `projects` and `project_areas` tables remain the storage
-and foreign-key truth. New Containers create `ops/`, `ops/container.md`, and exactly
-one active Ops row with `rel_path='ops'`. `container_registry.py` is the canonical
+and foreign-key truth. Workspace-created Containers (`POST /api/projects`, under
+Proxima's own data dir) still scaffold `ops/`, `ops/container.md`, and one active
+Ops row with `rel_path='ops'`. **Linked folders are never written to** (prune C2,
+below): link registers the Ops row at `.` (or adopts an existing populated
+`ops/`), and `mkdir`-linking creates exactly the empty directory the owner asked
+for - nothing inside it. `container_registry.py` is the canonical
 resolver for Container, Area, and Ops roots. It validates realpath containment and
 rejects path traversal, duplicate roots, unsafe overlaps, and Container-or-Ops-root
 symlinks on every resolution; the recursive scan that rejects every symlink under the
 physical Ops root is opt-in (`deep_ops_scan`) and enforced fail-closed at Ops
 creation, migration, Area mutation, and Area-sensitive execution, keeping project
 lists and Home O(1) while per-access realpath jailing still blocks symlink escapes.
-A repo at `.` is the one intentional containment case; its local git exclude keeps
-`/ops/` out of that repo.
+A repo at `.` is the one intentional containment case; the explicit migration
+(only) adds `/ops/` to that repo's local git exclude when it creates `ops/`.
 
 `container_activity.py`, `ops_filesystem.py`, and `ops_publication.py` own the
 cross-process lease, native identity, and descriptor publication boundaries. They
 do not depend on registry projection; `container_registry.py` orchestrates them.
 
-Existing Containers whose Ops row is `.` migrate at startup. **Adoption comes
-first (prune C1):** when the folder already contains a real, populated `ops/`
-directory, Proxima adopts it exactly as it exists on disk - the Ops row flips to
-`ops`, the durable marker completes with a `mode: "adopted"` manifest holding a
-top-level inventory of the existing content, and nothing is moved, generated, or
-rewritten (no `container.md` is created; an existing one is simply read for the
-identity/summary projection). Linking a folder with a populated `ops/` therefore
-succeeds with zero Attention items, and the owner-facing retry adopts instead of
-demanding an empty directory (the migration detail reports
-`retry_action: "adopt" | "migrate" | "revalidate" | null` so the confirm copy
-matches what retry will actually do). Adoption never applies mid-move: a durable
-"moving" manifest means the migration owns whatever sits inside `ops/`. A
-symlinked, non-directory, or unreadable `ops/`, or one overlapping a repo Area,
-stays fail-closed with an Attention item (symlink softening is prune C7). Only a
-missing or empty `ops/` continues into the planned move-based migration. The
+**Link and startup are non-mutating (prune C2).** `POST /api/projects/link` and
+the boot sweep run `settle_container_ops` / `migrate_legacy_ops_containers`,
+which only ever take zero-write paths: **adoption first (prune C1)** - when the
+folder already contains a real, populated `ops/` directory, Proxima adopts it
+exactly as it exists on disk (the Ops row flips to `ops`, the durable marker
+completes with a `mode: "adopted"` manifest holding a top-level inventory, and
+nothing is moved, generated, or rewritten; no `container.md` is created - an
+existing one is simply read for the identity/summary projection); resuming a
+previously authorized in-flight move (a durable "moving" manifest); and
+otherwise **leaving the folder byte-identical** - the Ops row stays at `.`
+(fully readable through the legacy virtual mapping), with no marker and no
+Attention item. Linking therefore never moves top-level `wiki/`, `tasks/`, etc.,
+never creates `ops/` or `container.md`, and never appends to `.git/info/exclude`
+- the onboarding promise "Nothing is moved or copied" is literally true.
+A symlinked, non-directory, or unreadable `ops/`, or one overlapping a repo
+Area, stays fail-closed with an Attention item (symlink softening is prune C7).
+
+**The move-based migration is exclusively an explicit, previewed opt-in** on the
+Ops-migration surface (`.../ops-migration/retry`). Its inspection payload reports
+`retry_action: "adopt" | "migrate" | "revalidate" | null` plus, for a safe
+`migrate`, `planned_writes: { container_doc: "move" | "generate", git_exclude:
+bool }`; together with `legacy_owned_paths` the UI shows **exactly** what would
+change - each planned move, whether `ops/container.md` is moved or generated,
+and whether the root repo's `.git/info/exclude` gains `/ops/` - both in the
+validation panel and in the confirm dialog, before anything is touched. The
 migration first builds and hashes a dry-run manifest. An owner-authored legacy `container.md` is
 hash-bound and moved byte-for-byte; a generated document is planned only when the
 legacy document is absent. Atomic no-clobber publication through stable no-follow

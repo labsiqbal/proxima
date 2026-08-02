@@ -172,8 +172,9 @@ def test_link_mkdir_creates_folder_and_registers_project(tmp_path: Path):
     assert body["name"] == "Fresh App"
     assert body["path"] == str(target.resolve())
     assert target.is_dir()
-    assert [path.name for path in target.iterdir()] == ["ops"]
-    assert (target / "ops" / "container.md").is_file()
+    # Linking never writes into the folder (prune C2) - the brand-new
+    # directory stays exactly as created: empty, no scaffolded ops/.
+    assert [path.name for path in target.iterdir()] == []
 
 
 def test_folder_requests_require_returned_root_identity(tmp_path: Path):
@@ -885,20 +886,20 @@ def test_link_mkdir_rolls_back_nonempty_tree_after_ops_failure(
     parent.mkdir()
     c, h = _link_client(tmp_path)
     target = parent / "ops-fail"
-    original = container_registry.migrate_container_ops
+    original = container_registry.settle_container_ops
     should_fail = {"value": True}
 
     def fail_after_ops(conn, project_id):
         result = original(conn, project_id)
         assert target.is_dir()
-        assert (target / "ops").is_dir()
-        assert (target / "ops" / "container.md").is_file()
+        # Settle never writes into the folder (prune C2).
+        assert not (target / "ops").exists()
         if should_fail["value"]:
             raise RuntimeError("simulated post-ops failure")
         return result
 
     monkeypatch.setattr(
-        "proxima_api.routes.projects.container_registry.migrate_container_ops",
+        "proxima_api.routes.projects.container_registry.settle_container_ops",
         fail_after_ops,
     )
     with pytest.raises(RuntimeError, match="simulated post-ops failure"):
@@ -924,7 +925,7 @@ def test_link_mkdir_rolls_back_nonempty_tree_after_ops_failure(
     )
     assert retry.status_code == 201, retry.text
     assert target.is_dir()
-    assert (target / "ops" / "container.md").is_file()
+    assert [path.name for path in target.iterdir()] == []
 
 
 def test_link_mkdir_post_ops_rollback_skips_replacement(
@@ -942,16 +943,15 @@ def test_link_mkdir_post_ops_rollback_skips_replacement(
     def replace_owned_then_fail(conn, project_id):
         original(conn, project_id)
         assert target.is_dir()
-        assert (target / "ops").is_dir()
         target.rename(moved)
         target.mkdir()
         (target / "keep.txt").write_text(replacement_marker, encoding="utf-8")
         raise RuntimeError("simulated replacement race after ops")
 
-    original = container_registry.migrate_container_ops
+    original = container_registry.settle_container_ops
 
     monkeypatch.setattr(
-        "proxima_api.routes.projects.container_registry.migrate_container_ops",
+        "proxima_api.routes.projects.container_registry.settle_container_ops",
         replace_owned_then_fail,
     )
     with pytest.raises(RuntimeError, match="simulated replacement race after ops"):

@@ -191,7 +191,9 @@ Code resolves to one exact active code Area after symlink resolution and exclude
 all nested registered Areas. Source citations are re-resolved and revalidated at
 build and query time, then returned only as paths relative to that validated scope.
 
-Build output is confined to a validated `graphify-out` directory inside that scope.
+Build output is confined to a validated per-scope directory under Proxima's own
+runtime dir (`<workspace_root>/graphs/container-<id>/...`), never inside the
+Container or Area (prune C2).
 A symlinked output directory, incomplete walk, escaped citation, malformed JSON,
 wrong scope, timeout, or killed worker fails before atomic publication and leaves
 the prior canonical graph unchanged. Canonical reads use no-follow descriptor

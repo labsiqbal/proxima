@@ -233,7 +233,7 @@
 | GET | `/api/fs/dirs` | `fs_dirs` | Browse directories under the configured link roots, to pick an existing |
 | GET | `/api/projects` | `list_projects` |  |
 | POST | `/api/projects` | `create_project` |  |
-| POST | `/api/projects/link` | `link_project` | Register a folder as a project (no scaffold under the data dir). The |
+| POST | `/api/projects/link` | `link_project` | Register a folder as a project without writing anything into it |
 | DELETE | `/api/projects/{slug}` | `delete_project` |  |
 | GET | `/api/projects/{slug}` | `get_project` | Return one owner-visible Project compatibility payload. |
 | PATCH | `/api/projects/{slug}` | `update_project` |  |
@@ -321,4 +321,4 @@
 
 
 ---
-_Generated 2026-08-02 08:28 UTC._
+_Generated 2026-08-02 11:42 UTC._

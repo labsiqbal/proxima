@@ -22,7 +22,6 @@ from .container_registry import (
     OPS_RELPATH,
     container_mutation_lock,
     create_physical_ops_root,
-    exclude_ops_from_root_repo,
     validated_area_roots,
 )
 
@@ -162,10 +161,11 @@ def _sync_code_areas_locked(
     *,
     validate: bool,
 ) -> dict:
+    # Detection is read-only (prune C2). The one .git/info/exclude write that
+    # keeps a created ops/ out of a root repo's status happens exclusively
+    # inside the explicit, previewed Ops migration - never here.
     root = Path(root)
     detected = set(detect_code_areas(root)) if root.is_dir() else set()
-    if "." in detected:
-        exclude_ops_from_root_repo(root)
     rows = conn.execute(
         "SELECT id, rel_path, source FROM project_areas WHERE project_id = ? AND kind = 'code'",
         (project_id,),

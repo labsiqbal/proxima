@@ -822,6 +822,8 @@ def test_graph_repo_node_runs_in_worktree_and_ops_node_in_ops_area(tmp_path: Pat
             report_cwd = str(states["report"]["output"]).split("ran-in:", 1)[1].strip()
             wt_path = str(Path(payload["worktree"]["worktree_path"]).resolve())
             assert str(Path(fix_cwd).resolve()) == wt_path
-            assert str(Path(report_cwd).resolve()) == str((repo / "ops").resolve())
+            # Linking is non-mutating (prune C2): no ops/ is scaffolded, so
+            # the active Ops Area for this linked repo is the legacy "." root.
+            assert str(Path(report_cwd).resolve()) == str(repo.resolve())
     finally:
         _restore_fake_runner(*saved)

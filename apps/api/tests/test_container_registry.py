@@ -562,19 +562,9 @@ def test_link_adopts_populated_ops_as_is(tmp_path: Path):
     assert linked.status_code == 201, linked.text
 
     # Adoption is read-only: no moves, no generated container.md, no
-    # scaffolding. The only writes left at link time are the Knowledge-graph
-    # build artifacts (ops/graphify-out/, ops/.gitignore) - a #131-scope
-    # link-time mutation owned by the graph feature, not the migration.
-    graph_artifacts = {"ops/graphify-out", "ops/.gitignore"}
-
-    def _without_graph_artifacts(tree: dict[str, bytes | None]) -> dict:
-        return {
-            path: content
-            for path, content in tree.items()
-            if path not in graph_artifacts
-        }
-
-    assert _without_graph_artifacts(_tree_snapshot(root)) == before
+    # scaffolding, and (prune C2) no graph-build artifacts either - graph
+    # outputs live in the runtime dir, never inside the linked folder.
+    assert _tree_snapshot(root) == before
     conn = api.app.state.db
     container_id = conn.execute(
         "SELECT id FROM projects WHERE slug = 'client-folder'"
@@ -628,7 +618,7 @@ def test_link_adopts_populated_ops_as_is(tmp_path: Path):
     # The startup sweep re-validates without re-raising attention or touching files.
     summary = migrate_legacy_ops_containers(conn)
     assert summary["attention"] == 0
-    assert _without_graph_artifacts(_tree_snapshot(root)) == before
+    assert _tree_snapshot(root) == before
 
     # Unlink and relink: adoption is repeatable against the same folder.
     deleted = api.delete("/api/projects/client-folder", headers=headers)
@@ -644,7 +634,175 @@ def test_link_adopts_populated_ops_as_is(tmp_path: Path):
         },
     )
     assert relinked.status_code == 201, relinked.text
-    assert _without_graph_artifacts(_tree_snapshot(root)) == before
+    assert _tree_snapshot(root) == before
+
+
+def _strict_tree_snapshot(root: Path) -> dict[str, tuple]:
+    """Byte- and mtime-exact identity for every path under root, dotfiles
+    included: any created, removed, moved, or rewritten entry changes it."""
+    snapshot: dict[str, tuple] = {}
+    for path in sorted(root.rglob("*")):
+        info = path.lstat()
+        snapshot[path.relative_to(root).as_posix()] = (
+            info.st_mode,
+            info.st_mtime_ns,
+            path.read_bytes() if path.is_file() and not path.is_symlink() else None,
+        )
+    return snapshot
+
+
+def test_link_never_writes_into_a_folder_without_ops(tmp_path: Path):
+    """Prune C2: linking mutates NOTHING. A folder with the exact layouts the
+    old link used to rearrange - top-level wiki/tasks, a git root - stays
+    byte-identical: no moves into ops/, no scaffolded ops/ or container.md,
+    no .git/info/exclude appends, no graph outputs, no attention items."""
+    root = tmp_path / "real-folder"
+    (root / "wiki").mkdir(parents=True)
+    (root / "wiki" / "note.md").write_bytes(b"# durable note\n")
+    (root / "tasks").mkdir()
+    (root / "tasks" / "todo.md").write_bytes(b"- keep\n")
+    (root / "container.md").write_bytes(b"# owner doc\n")
+    (root / "README.md").write_bytes(b"# real\n")
+    # The root is itself a git checkout: the old link appended /ops/ to
+    # .git/info/exclude and graph builds appended graphify-out ignores.
+    (root / ".git" / "info").mkdir(parents=True)
+    (root / ".git" / "HEAD").write_bytes(b"ref: refs/heads/main\n")
+    (root / ".git" / "info" / "exclude").write_bytes(b"# owner lines\n")
+    before = _strict_tree_snapshot(root)
+    api, headers = _api(tmp_path)
+
+    roots = api.get("/api/fs/dirs", headers=headers)
+    assert roots.status_code == 200, roots.text
+    linked = api.post(
+        "/api/projects/link",
+        headers=headers,
+        json={
+            "path": str(root),
+            "root_id": roots.json()["root_id"],
+            "name": "Real folder",
+            "slug": "real-folder",
+        },
+    )
+    assert linked.status_code == 201, linked.text
+
+    assert _strict_tree_snapshot(root) == before
+    conn = api.app.state.db
+    container_id = conn.execute(
+        "SELECT id FROM projects WHERE slug = 'real-folder'"
+    ).fetchone()["id"]
+    # The legacy '.' Ops Area stays active and readable; migration is only an
+    # explicit, previewed opt-in later.
+    assert (
+        conn.execute(
+            "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+            (container_id,),
+        ).fetchone()["rel_path"]
+        == "."
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM container_ops_migrations WHERE container_id = ?",
+            (container_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    open_items = conn.execute(
+        "SELECT COUNT(*) FROM attention_items WHERE status = 'open'"
+    ).fetchone()[0]
+    assert open_items == 0
+
+    # The startup settle sweep is equally hands-off.
+    assert migrate_legacy_ops_containers(conn)["attention"] == 0
+    assert _strict_tree_snapshot(root) == before
+
+    # Unlink and relink: still byte-identical, still zero attention.
+    deleted = api.delete("/api/projects/real-folder", headers=headers)
+    assert deleted.status_code in (200, 204), deleted.text
+    relinked = api.post(
+        "/api/projects/link",
+        headers=headers,
+        json={
+            "path": str(root),
+            "root_id": roots.json()["root_id"],
+            "name": "Real folder",
+            "slug": "real-folder",
+        },
+    )
+    assert relinked.status_code == 201, relinked.text
+    assert _strict_tree_snapshot(root) == before
+
+
+def test_startup_settle_never_moves_but_explicit_migration_still_works(
+    tmp_path: Path,
+):
+    """The boot sweep settles without moving; the move-based migration runs
+    only through the explicit opt-in call and still completes correctly."""
+    conn = _database(tmp_path)
+    root = tmp_path / "legacy-settle"
+    container_id = _legacy_container(conn, root, "legacy-settle")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_bytes(b"# note\n")
+    before = _strict_tree_snapshot(root)
+
+    assert migrate_legacy_ops_containers(conn) == {"complete": 1, "attention": 0}
+    assert _strict_tree_snapshot(root) == before
+    assert (
+        conn.execute(
+            "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+            (container_id,),
+        ).fetchone()["rel_path"]
+        == "."
+    )
+    attention = conn.execute(
+        "SELECT status FROM attention_items WHERE source_key = ? AND status = 'open'",
+        (f"container-ops-migration:{container_id}",),
+    ).fetchone()
+    assert attention is None
+
+    # Explicit opt-in (the retry route's executor) still migrates for real.
+    assert migrate_container_ops(conn, container_id) is True
+    assert (root / "ops" / "wiki" / "note.md").read_bytes() == b"# note\n"
+    assert not (root / "wiki").exists()
+
+
+def test_inspect_previews_every_migrate_write_before_anything_moves(
+    tmp_path: Path,
+):
+    """The opt-in preview names everything a migrate would write: the moved
+    paths, the container.md strategy, and the .git/info/exclude append."""
+    conn = _database(tmp_path)
+    root = tmp_path / "preview"
+    container_id = _legacy_container(conn, root, "preview")
+    (root / "wiki").mkdir()
+    (root / "wiki" / "note.md").write_bytes(b"# note\n")
+    (root / ".git" / "info").mkdir(parents=True)
+
+    body = container_registry.inspect_ops_migration(conn, container_id)
+    assert body["retry_action"] == "migrate"
+    assert body["planned_writes"] == {
+        "container_doc": "generate",
+        "git_exclude": True,
+    }
+
+    # A non-repo root migrates without touching any git metadata.
+    other = tmp_path / "preview-plain"
+    other_id = _legacy_container(conn, other, "preview-plain")
+    (other / "container.md").write_bytes(b"# owner doc\n")
+    plain = container_registry.inspect_ops_migration(conn, other_id)
+    assert plain["retry_action"] == "migrate"
+    assert plain["planned_writes"] == {
+        "container_doc": "move",
+        "git_exclude": False,
+    }
+
+    # Adoption and completed layouts plan no writes at all.
+    adopted = tmp_path / "preview-adopt"
+    adopted_id = _legacy_container(conn, adopted, "preview-adopt")
+    (adopted / "ops" / "wiki").mkdir(parents=True)
+    (adopted / "ops" / "wiki" / "note.md").write_bytes(b"# note\n")
+    adopt_body = container_registry.inspect_ops_migration(conn, adopted_id)
+    assert adopt_body["retry_action"] == "adopt"
+    assert adopt_body["planned_writes"] is None
 
 
 def test_stuck_populated_ops_retry_adopts_without_moving(tmp_path: Path):

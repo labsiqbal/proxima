@@ -8,12 +8,30 @@ const inspectableKind = (state: string): 'directory' | 'file' | null => (
   state === 'directory' || state === 'file' ? state : null
 )
 
+function migratePlannedWrites(detail: OpsMigrationDetailPayload): string[] {
+  const moves = detail.legacy_owned_paths
+    .filter(path => path.legacy_state !== 'missing')
+    .map(path => `${path.path} -> ${path.destination}`)
+  const extra: string[] = []
+  if (detail.planned_writes?.container_doc === 'generate') {
+    extra.push('create ops/container.md (generated identity document)')
+  }
+  if (detail.planned_writes?.git_exclude) {
+    extra.push("append /ops/ to this repo's .git/info/exclude")
+  }
+  return [...moves.map(move => `move ${move}`), ...extra]
+}
+
 function retryConfirmMessage(detail: OpsMigrationDetailPayload): string {
   if (detail.retry_action === 'adopt') {
     return 'Validation is currently safe. Proxima will adopt the existing ops/ content exactly as it is on disk - nothing is moved, copied, or rewritten.'
   }
   if (detail.retry_action === 'migrate') {
-    return 'Validation is currently safe. Proxima will move only the planned Ops-owned paths on this filesystem and will stop if the layout changes.'
+    const writes = migratePlannedWrites(detail)
+    const plan = writes.length
+      ? ` Exactly what will change: ${writes.join('; ')}.`
+      : ''
+    return `Validation is currently safe. Proxima will perform only these planned writes on this filesystem and will stop if the layout changes.${plan}`
   }
   return 'Validation is currently safe. Proxima will revalidate ownership and layout and resolve Attention without moving content.'
 }
@@ -184,6 +202,13 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
           <p className="eyebrow">Current validation</p>
           <strong>{safe ? 'Layout is safe to retry' : detail.phase === 'complete' || detail.phase === 'not_required' ? 'No retry needed' : 'Retry remains disabled'}</strong>
           <p>{detail.validation_reason || 'All planned paths passed collision, type, hash, symlink, overlap, and same-filesystem checks.'}</p>
+          {detail.retry_action === 'migrate' && (
+            <ul className="ops-migration-list" aria-label="Exactly what a migration would change">
+              {migratePlannedWrites(detail).map(item => (
+                <li key={item}><span>{item}</span></li>
+              ))}
+            </ul>
+          )}
         </div>
         <div className="ops-migration-actions">
           <button

@@ -42,7 +42,6 @@ GRAPH_STATES = frozenset(
 )
 GRAPH_KINDS = frozenset({"knowledge", "code"})
 GRAPH_PROVENANCE = frozenset({"EXTRACTED", "INFERRED", "AMBIGUOUS"})
-GRAPHIFY_GITIGNORE_LINE = "graphify-out/"
 GRAPH_PUBLISH_JOURNAL_NAME = "graph.publish-pending.json"
 GRAPH_PUBLISH_JOURNAL_SCHEMA = 2
 GRAPH_PUBLISH_JOURNAL_MAX_BYTES = 4096
@@ -191,91 +190,49 @@ def _contains(root: Path, target: Path) -> bool:
     return target == root or root in target.parents
 
 
-def _graph_path(root: Path, *, create: bool) -> Path:
-    root = root.resolve(strict=True)
-    output = root / "graphify-out"
+def _runtime_graph_path(
+    workspace_root: Path,
+    container_id: int,
+    kind: str,
+    area_id: int | None,
+    *,
+    create: bool,
+) -> Path:
+    """Canonical graph location under Proxima's own runtime dir (prune C2).
+
+    Graph builds are Proxima state, not project content: they must never
+    create graphify-out/ directories or append ignore lines inside the
+    owner's folder. Each scope gets a stable directory keyed by container id
+    plus kind/Area id, so relinking or renaming a project never orphans it.
+    """
+    if kind == "knowledge":
+        scope_dir = "knowledge"
+    else:
+        if area_id is None:
+            raise GraphScopeError("Code graph scope requires an Area id")
+        scope_dir = f"code-area-{int(area_id)}"
+    output = (
+        workspace_root / "graphs" / f"container-{int(container_id)}" / scope_dir
+    )
     if output.is_symlink():
         raise GraphScopeError("graph output directory cannot be a symlink")
     if output.exists() and not output.is_dir():
         raise GraphScopeError("graph output path is not a directory")
     if create:
-        output.mkdir(parents=False, exist_ok=True)
-        ensure_graphify_gitignore(root)
-    if output.exists():
-        resolved_output = output.resolve(strict=True)
-        if not _contains(root, resolved_output):
-            raise GraphScopeError("graph output directory escapes its scope")
+        output.mkdir(parents=True, exist_ok=True)
     graph = output / "graph.json"
     if graph.is_symlink():
         raise GraphScopeError("canonical graph cannot be a symlink")
     return graph
 
 
-def _repo_exclude_path(root: Path) -> Path | None:
-    """Return this checkout's repo-local exclude file when git metadata is present."""
-    git_meta = root / ".git"
-    if git_meta.is_dir():
-        return git_meta / "info" / "exclude"
-    if not git_meta.is_file():
-        return None
-    try:
-        text = git_meta.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    for line in text.splitlines():
-        if line.lower().startswith("gitdir:"):
-            raw = line.split(":", 1)[1].strip()
-            if not raw:
-                return None
-            gitdir = Path(raw)
-            if not gitdir.is_absolute():
-                gitdir = (root / gitdir).resolve()
-            return gitdir / "info" / "exclude"
-    return None
-
-
 def _is_graphify_ignore_path(rel_path: str) -> bool:
+    """Legacy in-scope build noise (pre-C2 graphify-out/ leftovers and the
+    ignore bootstrap) that freshness fingerprints must keep skipping."""
     normalized = rel_path.replace("\\", "/").strip().strip("/")
     if normalized in {".gitignore", "graphify-out"}:
         return True
     return normalized.startswith("graphify-out/")
-
-
-def _ensure_ignore_line(path: Path) -> None:
-    if path.is_symlink():
-        return
-    existing = ""
-    if path.is_file():
-        existing = path.read_text(encoding="utf-8")
-        for line in existing.splitlines():
-            if line.strip() in {
-                "graphify-out/",
-                "graphify-out",
-                "/graphify-out/",
-                "/graphify-out",
-            }:
-                return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    suffix = "" if not existing or existing.endswith("\n") else "\n"
-    path.write_text(
-        f"{existing}{suffix}# Proxima Code graph build output\n"
-        f"{GRAPHIFY_GITIGNORE_LINE}\n",
-        encoding="utf-8",
-    )
-
-
-def ensure_graphify_gitignore(root: Path) -> None:
-    """Keep generated graph artifacts as ignored build outputs inside the repo.
-
-    Prefer the repo-local exclude file so Proxima never dirties a tracked
-    ``.gitignore`` (which would loop Code graph dirty-tree rebuilds forever).
-    Fall back to ``.gitignore`` only when this path is not a git checkout.
-    """
-    path = _repo_exclude_path(root) or (root / ".gitignore")
-    try:
-        _ensure_ignore_line(path)
-    except OSError:
-        log.warning("could not ensure graphify-out ignore under %s", root)
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -1864,8 +1821,32 @@ class GraphContextService:
             area_id=resolved_area_id,
             area_rel_path=rel_path,
             root=resolved_root,
-            graph_path=_graph_path(resolved_root, create=create_output),
+            graph_path=self._scope_graph_path(
+                int(container["id"]),
+                kind,
+                resolved_area_id,
+                create=create_output,
+            ),
             excluded_roots=excluded_roots,
+        )
+
+    def _scope_graph_path(
+        self,
+        container_id: int,
+        kind: str,
+        area_id: int | None,
+        *,
+        create: bool,
+    ) -> Path:
+        workspace = self.config.get("workspace_root")
+        if not workspace:
+            raise GraphScopeError("graph output root is not configured")
+        return _runtime_graph_path(
+            Path(str(workspace)),
+            container_id,
+            kind,
+            area_id,
+            create=create,
         )
 
     def _state_row(self, scope: GraphScope) -> sqlite3.Row:
@@ -2407,7 +2388,12 @@ class GraphContextService:
         build_result: Mapping[str, Any],
         expected_metadata: Mapping[str, Any],
     ) -> sqlite3.Row:
-        current_graph_path = _graph_path(scope.root, create=True)
+        current_graph_path = self._scope_graph_path(
+            scope.container_id,
+            scope.kind,
+            scope.area_id,
+            create=True,
+        )
         if current_graph_path != scope.graph_path:
             raise GraphValidationError("registered graph output scope changed")
         try:
@@ -2936,7 +2922,15 @@ class GraphContextService:
             self._emit(scope, state_row)
             pending_head_commit = claimed_head or pending_head_commit
             generation = int(state_row["generation"]) + 1
-            if _graph_path(scope.root, create=True) != scope.graph_path:
+            if (
+                self._scope_graph_path(
+                    scope.container_id,
+                    scope.kind,
+                    scope.area_id,
+                    create=True,
+                )
+                != scope.graph_path
+            ):
                 raise GraphValidationError("registered graph output scope changed")
             generation_dir = Path(
                 tempfile.mkdtemp(
@@ -3190,7 +3184,13 @@ class GraphContextService:
         )
         if (
             int(row["generation"]) <= 0
-            or _graph_path(scope.root, create=False) != scope.graph_path
+            or self._scope_graph_path(
+                scope.container_id,
+                scope.kind,
+                scope.area_id,
+                create=False,
+            )
+            != scope.graph_path
             or not scope.graph_path.is_file()
         ):
             return self._unavailable_result(

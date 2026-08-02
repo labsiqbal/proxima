@@ -359,21 +359,28 @@ jailing instead. Best-effort cross-Container aggregations (Home dashboard, Archi
 list) resolve through `try_ops_root`, which returns None for an unavailable or
 boundary-invalid Container so one missing folder skips that Container instead of
 failing the whole read; direct single-Container access still uses `ops_root` and
-stays fail-closed. The intentional repo-at-root plus `ops/` containment is permitted
-and `/ops/` is added to the root repo's local git exclude.
+stays fail-closed. The intentional repo-at-root plus `ops/` containment is permitted;
+the explicit migration (only) adds `/ops/` to the root repo's local git exclude
+when it creates `ops/`.
 
-Legacy Ops rows at `.` remain usable until migration succeeds. Before any
-manifest is planned, a populated pre-existing `ops/` directory is **adopted
-as-is** (prune C1): the Ops row flips to `ops`, the marker completes with a
-`mode: "adopted"` manifest carrying a top-level inventory of the existing
+Legacy Ops rows at `.` are a fully supported steady state (prune C2), readable
+through the reserved-name virtual mapping. **Link and the boot sweep never
+mutate the folder**: `settle_container_ops` / `migrate_legacy_ops_containers`
+take only zero-write paths - adopt, resume an authorized in-flight move, or
+leave the layout byte-identical at `.` with no marker and no Attention. Before
+any manifest is considered, a populated pre-existing `ops/` directory is
+**adopted as-is** (prune C1): the Ops row flips to `ops`, the marker completes
+with a `mode: "adopted"` manifest carrying a top-level inventory of the existing
 content, and no file is moved, generated, or rewritten - `container.md` is
 optional and only read if present. Adoption is skipped while a durable `moving`
 manifest exists (mid-move content is migration-owned) and stays fail-closed for
 a symlinked, non-directory, or unreadable `ops/` or one overlapping a repo Area.
 `inspect_ops_migration` mirrors the same predicate and reports `retry_action`
-(`adopt`/`migrate`/`revalidate`) so the retry confirmation names the real
-action. Only a missing or empty `ops/` proceeds to the move-based path: startup
-creates a dry-run manifest with content hashes. It includes an existing owner-authored
+(`adopt`/`migrate`/`revalidate`) plus - for a safe `migrate` - `planned_writes`
+(`container_doc: move|generate`, `git_exclude`), so the migration surface
+previews every write exactly and the retry confirmation names the real action.
+The move-based path runs **only** through that explicit retry:
+it creates a dry-run manifest with content hashes. It includes an existing owner-authored
 `container.md` as a byte-preserving move, or binds exact generated content only when
 that legacy document is absent. It rejects collisions or ambiguous types before
 publication. Regular files are linked into authoritative names from opened,
@@ -399,8 +406,9 @@ drive, deleted Area folder) never aborts control-plane startup.
 Attention reason, `lstat`-based path states, conflicts, active-layout usability, and
 retry safety without changing the filesystem or following symlinks. The Project
 routes expose that projection for inspection and refresh. The retry route first
-requires a safe current projection, then delegates to the same hash-bound,
-same-filesystem migration routine used at startup. Immediately before every manifest
+requires a safe current projection, then delegates to the hash-bound,
+same-filesystem migration routine (`migrate_container_ops`) - the only caller
+allowed to plan moves. Immediately before every manifest
 application, that boundary rechecks current code-Area ownership plus path type,
 symlink, hash, and filesystem constraints, including ownership of the complete
 physical Ops root and an exact match for any existing manifest-bound
@@ -571,9 +579,11 @@ Canonical digest checks and last-good copying use descriptor snapshots bounded b
 `graph_max_bytes`, and publication never buffers the prior graph in the API
 process. Missing Graphify records an explicit `missing` state. A failed build
 records `failed` unless a newer durable intent keeps it `queued`, without
-affecting Tasks, Fleet, or Live state. Generated `graphify-out/` artifacts are
-treated as ignored build outputs inside the Area path unless a future project
-policy opts into version control.
+affecting Tasks, Fleet, or Live state. Canonical graphs live under Proxima's
+runtime dir (`<workspace_root>/graphs/container-<id>/knowledge|code-area-<id>/`)
+- never inside the Container or Area, and no ignore lines are written into the
+owner's repos (prune C2). Legacy in-Area `graphify-out/` leftovers are ignored
+by freshness fingerprints and knowledge walks.
 
 #### Code graph lifecycle (Group 10)
 

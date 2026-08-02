@@ -114,8 +114,10 @@ def test_link_detects_repo_at_root_and_ops_area(tmp_path: Path):
     p = _link(api, h, folder, "myrepo")
     assert [a["rel_path"] for a in p["code_areas"]] == ["."]
     assert p["code_areas"][0]["source"] == "auto"
-    assert p["ops_area"]["rel_path"] == "ops"
-    assert (folder / "ops" / "container.md").is_file()
+    # Linking never writes into the folder (prune C2): the Ops Area stays at
+    # the legacy "." layout until the owner opts into the previewed migration.
+    assert p["ops_area"]["rel_path"] == "."
+    assert not (folder / "ops").exists()
 
 
 def test_link_detects_multiple_sub_repos(tmp_path: Path):
@@ -158,7 +160,7 @@ def test_areas_surface_on_get_and_list(tmp_path: Path):
     assert [a["rel_path"] for a in mine["code_areas"]] == ["."]
     areas = api.get("/api/projects/repo/areas", headers=h).json()
     assert [a["rel_path"] for a in areas["code_areas"]] == ["."]
-    assert areas["ops_area"]["rel_path"] == "ops"
+    assert areas["ops_area"]["rel_path"] == "."
 
 
 def test_manual_add_of_non_repo_folder(tmp_path: Path):

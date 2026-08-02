@@ -2943,12 +2943,20 @@ def test_v28_migrates_schema_27_alpha_data_without_rewriting_backbone_rows(
         ).fetchone()["status"]
         == "open"
     )
+    # The settle sweep never moves files (prune C2): the legacy "." layout
+    # stays active and byte-identical until the owner opts into migration.
     assert (
         conn.execute(
             "SELECT rel_path FROM project_areas WHERE id = ?", (ops_area_id,)
         ).fetchone()["rel_path"]
-        == "ops"
+        == "."
     )
+    assert (root / "wiki" / "alpha.md").read_bytes() == b"alpha history bytes"
+    assert not (root / "ops").exists()
+    # The explicit opt-in migration still completes the physical move.
+    from proxima_api.container_registry import migrate_container_ops
+
+    assert migrate_container_ops(conn, container_id) is True
     assert (root / "ops" / "wiki" / "alpha.md").read_bytes() == b"alpha history bytes"
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
