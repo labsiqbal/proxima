@@ -221,6 +221,10 @@ Notes:
   corresponding comma-separated allowlist. Full inheritance is a compatibility escape
   hatch and should remain off when opening unfamiliar projects.
 - Uploads default to 100 MB per file; adjust `PROXIMA_MAX_UPLOAD_MB` if needed.
+- Service stops bound uvicorn's graceful shutdown to 10 seconds
+  (`PROXIMA_GRACEFUL_SHUTDOWN_SECONDS`), below the unit's `TimeoutStopSec=20s`,
+  so held-open SSE/poll connections cannot stall a restart until systemd
+  SIGKILLs the process.
 - `PROXIMA_PREVIEW_BIND` is the interface for per-app preview relay ports (Run &
   Preview from a remote browser without an apps domain). Default `auto`: one
   shared port binds separately on loopback and the Tailscale interface when the

@@ -184,4 +184,9 @@ if __name__ == "__main__":
         host=os.environ.get("PROXIMA_HOST", "127.0.0.1"),
         port=env_int("PROXIMA_PORT", 8765),
         log_config=uvicorn_log_config(),
+        # Without a bound, uvicorn waits forever for open connections (the UI
+        # keeps long-lived SSE/poll requests open), so every service stop hung
+        # until systemd's TimeoutStopSec SIGKILLed the process and lifespan
+        # shutdown never ran. Keep this below the unit's TimeoutStopSec (20s).
+        timeout_graceful_shutdown=env_int("PROXIMA_GRACEFUL_SHUTDOWN_SECONDS", 10),
     )
