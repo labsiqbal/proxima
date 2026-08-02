@@ -152,6 +152,20 @@ describe('GraphScreen editor autosave actions', () => {
     })
   })
 
+  // Open the inline rename editor, retrying the trigger click: an autosave or
+  // poll-driven re-render between click and commit can swallow the first
+  // click under CI load (CI run 30746494063 timed out on a single click).
+  const openRenameEditor = (buttonName: string) =>
+    waitFor(() => {
+      const existing = screen.queryByRole('textbox', { name: 'Workflow name' })
+      if (existing) return existing
+      const button = screen.queryByRole('button', { name: buttonName })
+      if (button) fireEvent.click(button)
+      const opened = screen.queryByRole('textbox', { name: 'Workflow name' })
+      if (!opened) throw new Error('rename editor is not open yet')
+      return opened
+    }, { timeout: 5000 })
+
   it('renames inline, autosaves passively, and renders exactly two draft footer actions', async () => {
     render(<GraphScreen {...props} />)
     await screen.findByRole('heading', { name: 'Untitled plan' })
@@ -165,8 +179,7 @@ describe('GraphScreen editor autosave actions', () => {
     expect(screen.queryByRole('button', { name: /Approve plan/i })).not.toBeInTheDocument()
     expect(screen.getByText('Saved ✓')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rename workflow Untitled plan' }))
-    const title = await screen.findByRole('textbox', { name: 'Workflow name' })
+    const title = await openRenameEditor('Rename workflow Untitled plan')
     fireEvent.change(title, { target: { value: 'Daily research' } })
 
     expect(screen.getByText('Saving…')).toBeInTheDocument()
@@ -581,9 +594,7 @@ describe('GraphScreen editor autosave actions', () => {
     })
 
     fireEvent.click(renameButton)
-    // Wait for the controlled input commit: review-stage polls can re-render the
-    // header between the click and the next assertion under CI load.
-    const nameInput = await screen.findByRole('textbox', { name: 'Workflow name' })
+    const nameInput = await openRenameEditor('Rename workflow Review plan')
     fireEvent.change(nameInput, { target: { value: 'Renamed review' } })
 
     fireEvent.click(screen.getByRole('button', { name: 'Select node' }))
