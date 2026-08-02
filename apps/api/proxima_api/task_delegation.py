@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping
 
-from . import features, workflows as wf, worktrees
+from . import workflows as wf, worktrees
 from .auth import iso_now
 from .graph import GraphValidationError, normalize_graph, repo_target_paths
 from .job_checkpoints import create_checkpoint
@@ -976,16 +976,6 @@ class TaskDelegationService:
             raise TaskDelegationError(
                 "task_not_found", f"Task {job_id} was not found", 404
             )
-        if job["origin_master_session_id"] is not None and not features.enabled(
-            self.app.state.config,
-            features.MASTER_ORCHESTRATOR,
-        ):
-            return DelegatedTask(
-                job=self._job_payload(conn, job_id),
-                created=created,
-                started=False,
-                blocked_reason=job["blocked_reason"],
-            )
         if job["origin_master_session_id"] is not None:
             self._validate_master_start_contract(conn, job)
         user_id = int(job["created_by"])
@@ -1158,13 +1148,12 @@ class TaskDelegationService:
             raise TaskDelegationError(
                 "task_not_startable", "Task has no runnable session or step", 409
             )
-        if features.enabled(self.app.state.config, features.REPO_WORKTREES):
-            try:
-                worktrees.ensure_job_worktree(conn, self.app.state.config, job)
-            except worktrees.WorktreeError as exc:
-                raise TaskDelegationError(
-                    "worktree_failed", f"Cannot start repo Task: {exc}", 409
-                ) from exc
+        try:
+            worktrees.ensure_job_worktree(conn, self.app.state.config, job)
+        except worktrees.WorktreeError as exc:
+            raise TaskDelegationError(
+                "worktree_failed", f"Cannot start repo Task: {exc}", 409
+            ) from exc
         delegation = conn.execute(
             "SELECT origin_session_id FROM task_delegations WHERE job_id = ?",
             (job["id"],),
@@ -1272,17 +1261,12 @@ class TaskDelegationService:
         recover_running: bool = False,
         supervisor_budget_turns: int | None = None,
     ) -> None:
-        if not features.enabled(self.app.state.config, features.WORKFLOW_GRAPH):
+        try:
+            worktrees.ensure_job_worktree(conn, self.app.state.config, job)
+        except worktrees.WorktreeError as exc:
             raise TaskDelegationError(
-                "graph_disabled", "Workflow graph feature is disabled", 409
-            )
-        if features.enabled(self.app.state.config, features.REPO_WORKTREES):
-            try:
-                worktrees.ensure_job_worktree(conn, self.app.state.config, job)
-            except worktrees.WorktreeError as exc:
-                raise TaskDelegationError(
-                    "worktree_failed", f"Cannot start repo Task: {exc}", 409
-                ) from exc
+                "worktree_failed", f"Cannot start repo Task: {exc}", 409
+            ) from exc
         delegation = conn.execute(
             "SELECT origin_session_id FROM task_delegations WHERE job_id = ?",
             (job["id"],),

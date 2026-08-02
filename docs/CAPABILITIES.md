@@ -272,11 +272,9 @@ live in the composer before a prompt is submitted.
 **Why:** the owner can either work hands-on in Chat or delegate an outcome to a
 built-in orchestrator without manually composing every worker task.
 
-> **Activation:** durable Master identity and compatibility migration are live.
-> The product runtime and UI are behind the server-owned
-> `feature_master_orchestrator` gate, which defaults on. Migration is
-> unconditional and safe with the flag in either state, while feature-off
-> startup and unrelated routes do not provision a Master runner home. Codex
+> **Activation:** durable Master identity and compatibility migration are live,
+> and the product runtime and UI are always on (the feature-flag system was
+> removed in prune A2, #129). Migration is unconditional. Codex
 > app-server 0.145.0 or newer is the one supported production Master adapter.
 > Every other adapter still fails closed before a turn starts. Runner discovery
 > publishes the static chat-only declaration plus dynamic host eligibility and
@@ -755,8 +753,7 @@ Workflow is an optional, separate one-click action (before or after the run). Sl
 single-flight on the button (double-click cannot start two promote runs), and the
 Recipes editor creates at most one graph job per draft object — React Strict Mode
 remounts reuse the in-flight create so Tasks does not list two identical queued plans.
-The feature flag remains an owner recovery switch; the legacy ordered-step path is
-retained only for existing data.
+The legacy ordered-step path is retained only for existing data.
 **Endpoints:** `POST /api/sessions/{id}/promote-workflow`.
 
 ## 7. Workflows (plans worth repeating) + schedules
@@ -831,8 +828,7 @@ and accepts `include_archived=true` for lifecycle management.
 `engine='graph'` job a manual create + start produces — including repo isolation
 (`target_area_id` + worktree cut via the shared `bind_graph_job_repo_worktree` path).
 A refused cut fails the scheduled job in place with an owner-facing reason rather than
-running unisolated against the live code area. With the graph feature flag off, a graph
-schedule is skipped with a logged warning rather than left as a job nothing will advance.
+running unisolated against the live code area.
 **Endpoints:** graph routes (§Graph workflow engine), `GET/POST /api/schedules`,
 `POST /api/schedules/{id}/run`; legacy linear rows keep `GET/PATCH /api/workflows/{id}`.
 
@@ -926,17 +922,15 @@ projection.
 **Why:** A job that touches a repo must never edit the primary tree directly (T1). It
 runs in a safe copy, the owner reviews the before/after diff, and approving merges the
 work **locally** into the branch it was cut from - no remote, no GitHub required
-(T1 local-first; the optional push-after-merge connector is the next section). **On by
-default since slice 4 shipped the
-review UI**; `feature_repo_worktrees` (`PROXIMA_FEATURE_REPO_WORKTREES`) remains the
-owner's escape hatch - while off, job behavior is exactly as above.
+(T1 local-first; the optional push-after-merge connector is the next section).
+Always on since the flag collapse (prune A2, #129).
 **How:** a job may carry `target_area_id` - the ONE container area it works against
 (T1: exactly one target; a code-area target = repo job). On start, `worktrees.py` cuts
 branch `proxima/job-<id>` from the target code area's repo into a worktree under
 `<workspace_root>/worktrees/job-<id>` - outside the container, so scans never see
 work-in-progress and the worktree's `.git` file can't register as a code area. The cut
 refuses loudly (409, job stays queued) on a dirty repo, detached HEAD, or no commits;
-crash leftovers are cleaned idempotently by job id. With the flag on, the run worker
+crash leftovers are cleaned idempotently by job id. The run worker
 sets the run's cwd to the active worktree (a missing worktree fails the run loudly -
 never a silent fallback to the primary tree). Diff and merge operate on commits:
 outstanding edits are snapshotted onto the job branch first, so partial work also
@@ -1602,13 +1596,7 @@ explicit accessible names (and keyboard activation on layer rows) so symbol-only
 controls are not just symbols. See [DESIGN-STUDIO.md](DESIGN-STUDIO.md) for the
 full contract.
 
-The server-owned flag `PROXIMA_FEATURE_DESIGN_STUDIO` gates it: on by default,
-with `proxima.env` as the owner opt-out (read at boot).
-`GET /api/config` publishes the effective flag. When disabled, the frontend omits its
-navigation, deep links, commands, settings, provider health checks, artifact bridge
-actions, and agent guidance, and backend guards return HTTP 503 with the
-`feature_disabled` payload before message creation, database writes, provider calls,
-file writes, subprocesses, or collaboration dispatch.
+Design Studio is always on (the feature-flag system was removed in prune A2, #129).
 Video Studio, editable video projects, and the `/video` generation surface were removed;
 ordinary video files remain readable and playable as generic artifacts.
 
@@ -1832,12 +1820,12 @@ owner with one password/session gate; legacy invite/member tables have been drop
 
 ## Single-workspace shell ("Deck", T3)
 
-+ **One workspace, no Ops/Code switch.** The header has a URL-durable **Work / Delegate** mode control. Work keeps the flow-ordered destinations Chat, Tasks, Workflows, Archive, Files, gated Design, and project-scoped recent chats; its sidebar owns the active-project switcher and the top bar does not. Delegate keeps that same persistent, collapsible sidebar and header language, but replaces Work navigation with global Master, Tasks, Archive, and Files (ADR-0040: Files is a destination in both modes, Work-scoped to the active Container and Delegate-global behind a head filter, always opening through the ArtifactViewer). It keeps the global header status cluster (`N tasks running` + Needs-you), since watching delegated work is the point of the mode; opening a Work-only target from there switches back to Work first. It has no project selector, project filter menu, ordinary Chat, Workflows, Design, tools, search, or popup surfaces; the account menu stays - it is the only route to Projects, Agents, Settings, and Log out - and each of those entries switches back to Work before opening; its Tasks and Archive views query across projects and their task and record deep links remain in Delegate. Opening a graph plan explicitly returns to Work, and Task workspace Design actions remain unavailable in Delegate. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. **Chrome Back** is always visible in Work (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach; Work Chat reload durability is under Chat above. Work/Chat is the default. Agents and Settings live in the Work profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle. Server feature flags remain authoritative; a disabled Master flag removes Delegate and makes a stale Delegate URL fall back to Work.
++ **One workspace, no Ops/Code switch.** The header has a URL-durable **Work / Delegate** mode control. Work keeps the flow-ordered destinations Chat, Tasks, Workflows, Archive, Files, Design, and project-scoped recent chats; its sidebar owns the active-project switcher and the top bar does not. Delegate keeps that same persistent, collapsible sidebar and header language, but replaces Work navigation with global Master, Tasks, Archive, and Files (ADR-0040: Files is a destination in both modes, Work-scoped to the active Container and Delegate-global behind a head filter, always opening through the ArtifactViewer). It keeps the global header status cluster (`N tasks running` + Needs-you), since watching delegated work is the point of the mode; opening a Work-only target from there switches back to Work first. It has no project selector, project filter menu, ordinary Chat, Workflows, Design, tools, search, or popup surfaces; the account menu stays - it is the only route to Projects, Agents, Settings, and Log out - and each of those entries switches back to Work before opening; its Tasks and Archive views query across projects and their task and record deep links remain in Delegate. Opening a graph plan explicitly returns to Work, and Task workspace Design actions remain unavailable in Delegate. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. **Chrome Back** is always visible in Work (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach; Work Chat reload durability is under Chat above. Work/Chat is the default. Agents and Settings live in the Work profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. Its header carries the session and agent; Work-sidebar project context remains outside the conversation. Its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults on, and unattended starts stay opt-in behind their own toggle; dynamically conforming Codex 0.145.0 or newer is supported, and every other or unavailable adapter fails closed.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). One reusable-workflow table shows workflow Availability separately from the joined schedule summary. Every row retains Edit, manual Run, Schedules, availability pause/resume, and archive actions. The schedule dialog owns timezone, five-field cron, durable input bindings, overlap, per-schedule On/Off, Run now, configure, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
-+ **Right tool rail** (`ToolDock`): Terminal and Preview open as overlay panels above the current screen, project-scoped when Project context is synchronized; the rail and panels stay suppressed during Task permalink resolution or any Task/Work Project mismatch. Files left the rail for its own destination (ADR-0040). The rail's gear opens Settings and Escape closes the panel. Terminal stays mounted after first open (shells survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate feature-gated canvas, with artifact source fallback when disabled.
++ **Right tool rail** (`ToolDock`): Terminal and Preview open as overlay panels above the current screen, project-scoped when Project context is synchronized; the rail and panels stay suppressed during Task permalink resolution or any Task/Work Project mismatch. Files left the rail for its own destination (ADR-0040). The rail's gear opens Settings and Escape closes the panel. Terminal stays mounted after first open (shells survive a closed panel); Preview unmounts because its dev server is a backend process. The Archive remains the destination for agent outputs; Design remains a separate canvas destination.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 
 Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it. Each invalid attempt focuses the corrective field and mounts one fresh assertive alert, even when the same values are submitted again. The gate keeps one main landmark, password-manager-compatible hidden owner metadata, and token-based text and focus contrast across every canonical theme.

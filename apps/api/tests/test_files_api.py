@@ -18,7 +18,6 @@ def client(tmp_path: Path) -> TestClient:
             "workspace_root": str(tmp_path / "ws"),
             "projectctl_path": "/usr/bin/true",
             "start_worker": False,
-            "feature_design_studio": True,
         }
     )
     return TestClient(app)

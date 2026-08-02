@@ -14,7 +14,7 @@ import sqlite3
 from collections.abc import Mapping
 from typing import Any
 
-from . import features, state
+from . import state
 from .graph import dependency_map, normalize_graph, ready_node_ids
 from .workflows import substitute
 
@@ -288,14 +288,11 @@ class GraphExecutor:
     def dispatch_ready(self, job_id: int) -> list[int]:
         """Queue every ready node for a running graph job, up to the budget.
 
-        Returning an empty list is an idempotent no-op: the feature is disabled,
-        the job is not running, the concurrency budget is full, or no dependencies
-        are currently satisfied. Resolving a trigger also returns no run ids, since
-        a trigger completes without a runner.
+        Returning an empty list is an idempotent no-op: the job is not running,
+        the concurrency budget is full, or no dependencies are currently
+        satisfied. Resolving a trigger also returns no run ids, since a trigger
+        completes without a runner.
         """
-        if not features.enabled(self.app.state.config, features.WORKFLOW_GRAPH):
-            return []
-
         db = self.app.state.worker_db
         queued: list[tuple[int, int, str, str]] = []
         with self.app.state.db_lock:

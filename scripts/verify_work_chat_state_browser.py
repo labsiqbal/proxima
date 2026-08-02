@@ -719,7 +719,6 @@ def _run(
             "PATH": f"{fixture / 'bin'}:/usr/local/bin:/usr/bin:/bin",
             "PROXIMA_CLAUDE_LIVE_HOME": "0",
             "PROXIMA_DB_PATH": str(fixture / "candidate.db"),
-            "PROXIMA_FEATURE_MASTER_ORCHESTRATOR": "1",
             "PROXIMA_HERMES_PROFILES_ROOT": str(fixture / "runner-home"),
             "PROXIMA_LINK_ROOTS": str(fixture / "workspace"),
             "PROXIMA_PORT": str(port),

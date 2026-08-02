@@ -34,7 +34,6 @@ from .. import auth_health as auth_health_mod
 from .. import container_registry
 from .. import design_scenes
 from .. import file_targets
-from .. import features
 from .. import kinds
 from .. import scripts_library
 from .. import state
@@ -142,7 +141,6 @@ async def _stream_session_events(
 def register(app, deps):
     db = deps["db"]
     cfg = deps["cfg"]
-    feature_cfg = cfg
     current_user = deps["current_user"]
     visible_project = deps["visible_project"]
 
@@ -233,17 +231,6 @@ def register(app, deps):
             )
         except HTTPException:
             return None
-
-    def _require_mode_feature(mode: str | None) -> None:
-        # Feature-blind gate: the registry owns the mode -> feature-flag mapping,
-        # so the chat gate never names "design"/DESIGN_STUDIO itself. A new gated
-        # session kind is added by registering it in kinds.py.
-        flag = kinds.feature_flag_for(mode)
-        if flag:
-            features.require(feature_cfg, flag)
-
-    def _require_session_features(session: dict[str, Any]) -> None:
-        _require_mode_feature(session.get("mode"))
 
     @app.get("/api/sessions")
     def list_sessions(user: dict[str, Any] = Depends(current_user)):
@@ -341,7 +328,6 @@ def register(app, deps):
             raise HTTPException(
                 status_code=422, detail="Master sessions are created by the Master desk"
             )
-        _require_mode_feature(payload.mode)
         profile = profile_for_user(payload.profile_id, user)
         project_id = None
         if payload.project_slug:
@@ -375,8 +361,7 @@ def register(app, deps):
 
     @app.get("/api/sessions/{session_id}")
     def get_session(session_id: int, user: dict[str, Any] = Depends(current_user)):
-        session = session_for_user(session_id, user)
-        _require_session_features(session)
+        session_for_user(session_id, user)  # ownership / 404 check
         row = (
             db()
             .execute(
@@ -643,9 +628,7 @@ def register(app, deps):
         payload: MessageCreateRequest,
         user: dict[str, Any] = Depends(current_user),
     ):
-        features.require_command(feature_cfg, payload.content)
         session = session_for_user(session_id, user)
-        _require_session_features(session)
         if session["mode"] == "master":
             raise HTTPException(
                 status_code=409, detail="Master messages must use /api/master/messages"
@@ -669,11 +652,7 @@ def register(app, deps):
         payload: RunCreateRequest,
         user: dict[str, Any] = Depends(current_user),
     ):
-        # Feature preflight must precede the user-message insert and collaboration
-        # dispatch. In particular, prompt modes must not bypass media command guards.
-        features.require_command(feature_cfg, payload.message)
         session = session_for_user(session_id, user)
-        _require_session_features(session)
         require_generic_run_mode(session.get("mode"))
         # Each collaborator runs with THEIR OWN profile (not the session creator's),
         # so a shared-project member can work in any task/chat with their own agent.
@@ -703,7 +682,6 @@ def register(app, deps):
                     skill_map = skill_command_map(
                         list(detected.get("skills") or []),
                         selection,
-                        config=feature_cfg,
                     )
         except Exception:
             skill_map = {}
@@ -889,9 +867,7 @@ def register(app, deps):
         payload: GoalRequest,
         user: dict[str, Any] = Depends(current_user),
     ):
-        features.require_command(feature_cfg, payload.objective)
         session = session_for_user(session_id, user)
-        _require_session_features(session)
         require_generic_run_mode(session.get("mode"))
         profile = profile_for_user(payload.profile_id, user)
         db().execute(
@@ -1014,7 +990,6 @@ def register(app, deps):
         user: dict[str, Any] = Depends(current_user),
     ):
         session = session_for_user(session_id, user)
-        _require_session_features(session)
         require_generic_run_mode(session.get("mode"))
         wiki_root = _session_wiki_root(session, user)
         if wiki_root is None:
@@ -1058,7 +1033,6 @@ def register(app, deps):
         user: dict[str, Any] = Depends(current_user),
     ):
         session = session_for_user(session_id, user)
-        _require_session_features(session)
         require_generic_run_mode(session.get("mode"))
         profile = profile_for_user(payload.profile_id, user)
         rows = (
@@ -1070,12 +1044,7 @@ def register(app, deps):
             .fetchall()
         )
         convo = "\n".join(f"{m['role']}: {m['content']}" for m in reversed(rows))
-        if payload.engine == "graph":
-            features.require(feature_cfg, features.WORKFLOW_GRAPH)
-        graph_planning = payload.engine == "graph" or (
-            payload.engine == "auto"
-            and features.enabled(feature_cfg, features.WORKFLOW_GRAPH)
-        )
+        graph_planning = payload.engine in ("graph", "auto")
         # Per-job targets (T1/T2): the slicer binds each job to a real container
         # area, so it must be told which ones exist. No project ⇒ no code areas
         # ⇒ every job targets ops.
@@ -1149,7 +1118,6 @@ def register(app, deps):
         user: dict[str, Any] = Depends(current_user),
     ):
         session = session_for_user(session_id, user)
-        _require_session_features(session)
         mutation = (
             container_registry.container_mutation_lock(db(), int(session["project_id"]))
             if session.get("project_id")
@@ -1668,7 +1636,6 @@ def register(app, deps):
         payload: ChatSendRequest | RunCreateRequest,
         user: dict[str, Any],
     ) -> dict[str, Any] | None:
-        features.require_command(feature_cfg, payload.message)
         media = _chat_media_kind(payload.message)
         if not media:
             return None
@@ -1744,9 +1711,7 @@ def register(app, deps):
                         target = target.parent / f"chat-{stamp}-{run_id}-{i}.png"
                         i += 1
                     target.write_bytes(raw)
-                actions = ["use-as-reference"]
-                if features.enabled(feature_cfg, features.DESIGN_STUDIO):
-                    actions.insert(0, "open-design-studio")
+                actions = ["open-design-studio", "use-as-reference"]
                 artifact = {
                     "type": "image",
                     "title": target.name,
@@ -1762,8 +1727,7 @@ def register(app, deps):
                     text += " Note: the attached image was not used as a reference — the selected image provider is text-to-image only. Pick a provider that supports image editing to compose with attachments."
                 elif sources:
                     text += f" Used {len(sources)} attached image(s) as reference."
-                if features.enabled(feature_cfg, features.DESIGN_STUDIO):
-                    text += " Open/Edit it in Design Studio or use it as a reference."
+                text += " Open/Edit it in Design Studio or use it as a reference."
                 return artifact, text
 
             return _start_media_run(session, payload, user, "image", generate_image)
@@ -1817,8 +1781,6 @@ def register(app, deps):
     def chat_send(
         payload: ChatSendRequest, user: dict[str, Any] = Depends(current_user)
     ):
-        # A rejected media command must not create an otherwise-empty chat.
-        features.require_command(feature_cfg, payload.message)
         if payload.session_id is None:
             created = create_session(
                 SessionCreateRequest(

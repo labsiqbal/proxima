@@ -23,7 +23,6 @@ def _app(tmp_path: Path, *, database_path: Path | None = None):
             "projectctl_path": "/usr/bin/true",
             "seed_users": [{"username": "owner", "os_user": "owner"}],
             "start_worker": False,
-            "feature_repo_worktrees": True,
         }
     )
 

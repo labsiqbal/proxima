@@ -783,8 +783,6 @@ def main() -> None:
             "PATH": f"{fake_bin}:/usr/local/bin:/usr/bin:/bin",
             "PROXIMA_CLAUDE_LIVE_HOME": "0",
             "PROXIMA_DB_PATH": str(fixture / "candidate.db"),
-            "PROXIMA_FEATURE_MASTER_ORCHESTRATOR": "1",
-            "PROXIMA_FEATURE_WORKFLOW_GRAPH": "1",
             "PROXIMA_HERMES_PROFILES_ROOT": str(runner_home),
             "PROXIMA_LINK_ROOTS": str(workspace),
             "PROXIMA_PORT": str(port),

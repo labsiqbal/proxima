@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from proxima_api import features, scripts_library
+from proxima_api import scripts_library
 from proxima_api.graph_executor import SCRIPT_NODE_RUN_KIND
 from proxima_api.main import create_app
 from project_test_utils import with_browse_root
@@ -27,7 +27,6 @@ def _app(tmp_path, **extra_config):
         "workspace_root": str(tmp_path / "ws"),
         "projectctl_path": "/usr/bin/true",
         "link_roots": [str(tmp_path)],
-        "feature_workflow_graph": True,
         "start_worker": False,
         **extra_config,
     }
@@ -150,8 +149,6 @@ def test_script_node_dispatches_as_a_script_run_not_an_agent_run(tmp_path):
     run = _run_row(app, node["run_id"])
     assert run["kind"] == SCRIPT_NODE_RUN_KIND
     assert run["prompt"] == "Run script: scripts/hello.py --fast"
-    # The queued-run feature gate must know the new kind.
-    assert features.queued_run_feature(run, "chat") == features.WORKFLOW_GRAPH
 
 
 # ── trust lifecycle ──────────────────────────────────────────────────────

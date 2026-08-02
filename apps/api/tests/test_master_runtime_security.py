@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from proxima_api import app_settings, master_focus
+from proxima_api import master_focus
 from proxima_api.main import create_app
 from proxima_api.master_runtime import (
     MASTER_INSTRUCTIONS,
@@ -32,7 +32,6 @@ def _client(tmp_path: Path):
             "projectctl_path": "/usr/bin/true",
             "seed_users": [{"username": "owner", "os_user": "owner"}],
             "start_worker": False,
-            "feature_master_orchestrator": True,
         }
     )
     client = TestClient(app)
@@ -88,92 +87,6 @@ def test_fresh_master_thread_receives_bounded_durable_history():
         },
     ]
     assert len(history.encode()) <= MASTER_HISTORY_BYTES
-
-
-def test_nonconforming_runner_is_rejected_before_master_turn_starts(tmp_path: Path):
-    app, client = _client(tmp_path)
-    app_settings.set_setting(app.state.db, "master.runner_id", "claude-code")
-
-    before_messages = app.state.db.execute(
-        "SELECT COUNT(*) FROM messages"
-    ).fetchone()[0]
-    before_runs = app.state.db.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
-
-    response = client.post(
-        "/api/master/messages",
-        json={"content": "Read the repository and tell me what you find"},
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == {
-        "code": "master_runner_not_conforming",
-        "message": (
-            "Claude Code cannot run Master because its adapter does not prove "
-            "the chat-only boundary"
-        ),
-    }
-    assert (
-        app.state.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-        == before_messages
-    )
-    assert app.state.db.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == before_runs
-
-
-def test_feature_off_startup_does_not_provision_master_runner_home(tmp_path: Path):
-    profiles_root = tmp_path / "managed-profiles"
-    app = create_app(
-        {
-            "database_path": str(tmp_path / "proxima.db"),
-            "workspace_root": str(tmp_path / "workspace"),
-            "hermes_profiles_root": str(profiles_root),
-            "projectctl_path": "/usr/bin/true",
-            "seed_users": [{"username": "owner", "os_user": "owner"}],
-            "start_worker": False,
-            "feature_master_orchestrator": False,
-        }
-    )
-    client = TestClient(app)
-
-    assert client.get("/api/health").status_code == 200
-    assert (
-        app.state.db.execute(
-            "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
-        ).fetchone()[0]
-        == 0
-    )
-    assert not any(
-        entry.name.startswith("master-system")
-        for entry in profiles_root.rglob("*")
-    )
-
-
-def test_feature_off_first_authenticated_route_stays_master_inert(tmp_path: Path):
-    profiles_root = tmp_path / "managed-profiles"
-    app = create_app(
-        {
-            "database_path": str(tmp_path / "proxima.db"),
-            "workspace_root": str(tmp_path / "workspace"),
-            "hermes_profiles_root": str(profiles_root),
-            "projectctl_path": "/usr/bin/true",
-            "start_worker": False,
-            "feature_master_orchestrator": False,
-        }
-    )
-    client = TestClient(app)
-
-    assert client.get("/api/profiles").status_code == 200
-    assert (
-        app.state.db.execute(
-            "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
-        ).fetchone()[0]
-        == 0
-    )
-    assert not any(
-        entry.name.startswith("master-system")
-        for entry in profiles_root.rglob("*")
-    )
-
-
 def test_master_runner_switch_persists_explicit_empty_capabilities(
     tmp_path: Path, monkeypatch
 ):

@@ -54,8 +54,6 @@ to one runner, weakens node isolation, or bypasses the review/correction protoco
 - A late stale callback cannot mutate current state.
 - Correcting or rerunning a node invalidates every transitive descendant.
 - Artifact paths resolve inside the job workspace and must already exist.
-- The master feature flag rejects routes and queued graph architect/`wf_node` work
-  before side effects.
 - The classic linear engine and its API/UI remain unchanged.
 
 ## Adding an execution node type
@@ -116,9 +114,8 @@ At minimum add tests for:
 - correction uses the same validator as runner output;
 - stale callback rejection after correction/rerun;
 - full transitive dirty propagation;
-- feature-off route and queued-run rejection;
 - classic linear job characterization;
-- frontend typecheck, layout/inspector behavior, and feature-gated navigation.
+- frontend typecheck, layout/inspector behavior, and navigation.
 
 If the contract produces artifacts, include a prompt-to-artifact test with an existing
 contained path and rejection cases for missing and escaping paths.

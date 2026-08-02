@@ -54,7 +54,6 @@ from .code_graph_lifecycle import CodeGraphLifecycle
 from .knowledge_graph_lifecycle import KnowledgeGraphLifecycle
 from .context_router import ContextRouter
 from .frontend_static import register_frontend
-from .features import public_flags
 from .route_deps import build_route_deps
 from .worker import RunWorker
 from .master_supervisor import MasterSupervisor
@@ -174,7 +173,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         registry_task = asyncio.create_task(_registry_loop())
     code_graph_task: asyncio.Task | None = None
     knowledge_graph_task: asyncio.Task | None = None
-    if cfg.get("start_worker", True) and cfg.get("feature_master_orchestrator", False):
+    if cfg.get("start_worker", True):
 
         async def _master_loop() -> None:
             while True:
@@ -329,14 +328,8 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         profile=str(cfg.get("preview_profile") or "direct"),
     )
     app.state.hub = EventHub()
-    if cfg.get("feature_master_orchestrator", False):
-        app.state.master_projection = MasterProjectionService(app)
-        app.state.master_supervisor = MasterSupervisor(app)
-    else:
-        # Explicitly absent operational services: persistence migration remains
-        # unconditional, but feature-off startup must not instantiate Master.
-        app.state.master_projection = None
-        app.state.master_supervisor = None
+    app.state.master_projection = MasterProjectionService(app)
+    app.state.master_supervisor = MasterSupervisor(app)
     app.state.updates = UpdateManager(cfg)
 
     register_frontend(
@@ -404,21 +397,17 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     for owner_row in app.state.db.execute("SELECT * FROM users ORDER BY id").fetchall():
         owner = dict(owner_row)
         _route_deps["ensure_default_profile"](owner)
-        # Persistence migration remains unconditional, but operational Master
-        # provisioning is inert while the feature is off. In particular, a
-        # disabled install must not create a runner home merely by starting.
-        if cfg.get("feature_master_orchestrator", False):
-            try:
-                ensure_master_identity(
-                    app.state.db,
-                    owner,
-                    create_profile_for=_route_deps["create_profile_for"],
-                    managed_profiles_root=cfg["hermes_profiles_root"],
-                )
-            except MasterPersistenceError:
-                raise
-            except Exception:
-                logger.exception("Master identity provisioning failed (non-fatal)")
+        try:
+            ensure_master_identity(
+                app.state.db,
+                owner,
+                create_profile_for=_route_deps["create_profile_for"],
+                managed_profiles_root=cfg["hermes_profiles_root"],
+            )
+        except MasterPersistenceError:
+            raise
+        except Exception:
+            logger.exception("Master identity provisioning failed (non-fatal)")
     current_user = _route_deps["current_user"]
 
     @app.get("/api/health", include_in_schema=False)
@@ -462,7 +451,6 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     def public_config():
         return {
             "apps_domain": cfg.get("apps_domain"),
-            "features": public_flags(cfg),
             "platform_support": support_payload(),
         }
 
@@ -698,22 +686,6 @@ def _config_from_env() -> dict[str, Any]:
         "update_token": os.environ.get("PROXIMA_UPDATE_TOKEN")
         or os.environ.get("GITHUB_TOKEN")
         or None,
-        "feature_design_studio": os.environ.get(
-            "PROXIMA_FEATURE_DESIGN_STUDIO", "1"
-        ).lower()
-        in ("1", "true", "yes", "on"),
-        "feature_workflow_graph": os.environ.get(
-            "PROXIMA_FEATURE_WORKFLOW_GRAPH", "1"
-        ).lower()
-        in ("1", "true", "yes", "on"),
-        "feature_repo_worktrees": os.environ.get(
-            "PROXIMA_FEATURE_REPO_WORKTREES", "1"
-        ).lower()
-        in ("1", "true", "yes", "on"),
-        "feature_master_orchestrator": os.environ.get(
-            "PROXIMA_FEATURE_MASTER_ORCHESTRATOR", "1"
-        ).lower()
-        in ("1", "true", "yes", "on"),
         # systemd --user unit Diagnostics reads via journalctl (see PROXIMA_SERVICE_NAME).
         "service_name": (
             os.environ.get("PROXIMA_SERVICE_NAME") or DEFAULT_CONFIG["service_name"]

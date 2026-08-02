@@ -51,7 +51,6 @@ def _api(tmp_path: Path, **config) -> tuple[TestClient, dict[str, str]]:
             "start_worker": False,
             "update_check": False,
             "container_registry_refresh_seconds": 0,
-            "feature_master_orchestrator": True,
             "code_graph_tick_seconds": 1,
             "code_graph_audit_seconds": 30,
             "code_graph_dirty_debounce_seconds": 1,

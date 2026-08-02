@@ -2,7 +2,7 @@
 
 Migration 31 converts the former Alpha orchestrator identity to the
 product-native Master without creating new history or parallel ledgers. It runs
-at startup regardless of `feature_master_orchestrator`.
+unconditionally at startup.
 
 ## Durable mapping
 
@@ -78,9 +78,8 @@ Migration 31 is transactional. A refusal rolls back the whole migration and does
 not record the schema version. The standard pre-migration `VACUUM INTO` backup
 remains available for operator recovery.
 
-Fresh provisioning creates no Master identity while the feature gate is off.
-After the feature is enabled, the first authenticated Master entry point creates
-exactly one hidden Master profile and one project-unbound Master session.
+The first authenticated Master entry point creates exactly one hidden Master
+profile and one project-unbound Master session.
 Repeated startup, migration re-run, runner switch, and partial identical-column
 recovery reuse those primary keys.
 
@@ -96,8 +95,7 @@ same rows with legacy mode, run, and origin field names. Legacy payload readers
 also accept the former turn-restore acknowledgement and stored desk keys.
 
 The compatibility aliases do not create an Alpha identity or duplicate rows.
-They are governed by the same server feature flag and authorization checks as
-the canonical routes. `alpha_supervisor.py` is an import-only alias to the one
+They are governed by the same authorization checks as the canonical routes. `alpha_supervisor.py` is an import-only alias to the one
 `MasterSupervisor`; it does not host another loop. New Task and Satpam projections
 append to the same migrated session and preserve the ordering and primary keys of
 the Alpha-era messages already there.

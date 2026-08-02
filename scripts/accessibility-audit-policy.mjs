@@ -178,11 +178,6 @@ function bootstrapResponse(method, pathname) {
       status: 200,
       body: {
         apps_domain: null,
-        features: {
-          design_studio: false,
-          workflow_graph: false,
-          master_orchestrator: false,
-        },
       },
     }
   }

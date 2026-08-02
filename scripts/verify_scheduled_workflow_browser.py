@@ -388,7 +388,6 @@ def main(screenshot_dir: Path | None = None) -> None:
             "LANG": "C.UTF-8",
             "PATH": f"{fake_bin}:/usr/local/bin:/usr/bin:/bin",
             "PROXIMA_DB_PATH": str(fixture / "candidate.db"),
-            "PROXIMA_FEATURE_REPO_WORKTREES": "0",
             "PROXIMA_HERMES_PROFILES_ROOT": str(runner_home),
             "PROXIMA_LINK_ROOTS": str(workspace),
             "PROXIMA_PORT": str(port),

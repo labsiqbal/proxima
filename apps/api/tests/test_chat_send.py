@@ -193,7 +193,6 @@ def test_main_chat_image_request_creates_artifact_first_result(tmp_path, monkeyp
             "projectctl_path": "/usr/bin/true",
             "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
             "start_worker": False,
-            "feature_design_studio": False,
         }
     )
     client = TestClient(app)
@@ -233,9 +232,9 @@ def test_main_chat_image_request_creates_artifact_first_result(tmp_path, monkeyp
     messages = client.get(
         f"/api/sessions/{body['session_id']}/messages", headers=headers
     ).json()["messages"]
-    assert "Design Studio" not in messages[-1]["content"]
     assert "Archive" in messages[-1]["content"]
-    assert links[0]["actions"] == ["use-as-reference"]
+    assert "Design Studio" in messages[-1]["content"]
+    assert links[0]["actions"] == ["open-design-studio", "use-as-reference"]
     # Media runs must feed the durable Archive registry (not only chat output_links).
     archive = client.get("/api/archive?type=image", headers=headers).json()
     assert archive["total"] >= 1
@@ -291,7 +290,6 @@ def test_thin_design_brief_asks_form_but_rich_brief_creates_draft(tmp_path):
             "workspace_root": str(tmp_path / "workspace"),
             "projectctl_path": "/usr/bin/true",
             "start_worker": False,
-            "feature_design_studio": True,
         }
     )
     client = TestClient(app)
@@ -1151,7 +1149,6 @@ def _media_app(tmp_path):
             "projectctl_path": "/usr/bin/true",
             "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
             "start_worker": False,
-            "feature_design_studio": True,
         }
     )
 

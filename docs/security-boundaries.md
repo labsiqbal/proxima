@@ -127,11 +127,9 @@ and refuses ambiguous identities, conflicting compatibility columns, malformed
 owned JSON payloads, or foreign-key violations. It does not create a parallel
 ledger or a second Master session.
 
-`feature_master_orchestrator` is server-owned and defaults on. Persistence
-migration and identity recovery still run while it is off, but canonical and
-deprecated compatibility routes reject use, the supervisor does not start, and
-the run worker leaves both Master turns and Master-owned Task runs queued. This
-gate limits activation only. It does not weaken migration checks or authorize a
+The Master runtime is always on (the feature-flag system was removed in prune
+A2, #129). Persistence migration and identity recovery run unconditionally.
+This does not weaken migration checks or authorize a
 runner.
 
 The temporary `/api/alpha` and `/api/settings/alpha` aliases are authenticated

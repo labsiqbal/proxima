@@ -19,7 +19,7 @@ from proxima_api.graph_executor import (  # pyright: ignore[reportMissingImports
 from proxima_api.main import create_app
 
 
-def _app(tmp_path, *, enabled: bool, concurrency: int | None = None):
+def _app(tmp_path, *, concurrency: int | None = None):
     config: dict[str, Any] = {
         "database_path": str(tmp_path / "proxima.db"),
         "workspace_root": str(tmp_path / "ws"),
@@ -27,7 +27,6 @@ def _app(tmp_path, *, enabled: bool, concurrency: int | None = None):
         "seed_users": [
             {"username": "bob", "role": "member", "os_user": "bob"}
         ],
-        "feature_workflow_graph": enabled,
         "start_worker": False,
     }
     if concurrency is not None:
@@ -125,7 +124,7 @@ def _complete_current_node(app, job_id: int, node_id: str, output: Any) -> None:
 
 
 def test_dispatch_creates_one_isolated_hidden_node_run(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job_id = _create_graph_job(app, _diamond_graph())
 
@@ -172,7 +171,7 @@ def _nodes_for_runs(app, run_ids: list[int]) -> set[str]:
 
 
 def test_diamond_branches_dispatch_in_parallel_with_fresh_sessions(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     job_id = _create_graph_job(app, _diamond_graph())
     executor: GraphExecutor = app.state.worker.graph_executor
@@ -212,7 +211,7 @@ def test_diamond_branches_dispatch_in_parallel_with_fresh_sessions(tmp_path):
 
 
 def test_cancel_of_a_graph_node_run_leaves_sibling_and_job_intact(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job_id = _create_graph_job(app, _diamond_graph())
     executor: GraphExecutor = app.state.worker.graph_executor
@@ -244,7 +243,7 @@ def test_cancel_of_a_graph_node_run_leaves_sibling_and_job_intact(tmp_path):
 
 
 def test_node_concurrency_budget_caps_a_fan_out(tmp_path):
-    app = _app(tmp_path, enabled=True, concurrency=1)
+    app = _app(tmp_path, concurrency=1)
     _client(app)
     job_id = _create_graph_job(app, _diamond_graph())
     executor: GraphExecutor = app.state.worker.graph_executor
@@ -258,7 +257,7 @@ def test_node_concurrency_budget_caps_a_fan_out(tmp_path):
 
 
 def test_node_prompt_carries_expected_output_and_rules(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     graph = normalize_graph({
         "nodes": [{
@@ -281,7 +280,7 @@ def test_node_prompt_carries_expected_output_and_rules(tmp_path):
 
 
 def test_node_prompt_omits_the_rules_heading_when_there_are_none(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     job_id = _create_graph_job(app, _single_node_graph())
 
@@ -296,7 +295,7 @@ def test_node_prompt_omits_the_rules_heading_when_there_are_none(tmp_path):
 
 
 def test_node_prompt_fills_declared_placeholders_from_the_job_input(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     graph = normalize_graph({
         "nodes": [{
@@ -323,7 +322,7 @@ def test_node_prompt_fills_declared_placeholders_from_the_job_input(tmp_path):
 
 
 def test_manual_trigger_resolves_to_job_input_without_a_run(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     graph = normalize_graph(
         {
@@ -367,7 +366,7 @@ def _second_profile(app) -> dict[str, Any]:
 
 
 def test_node_runs_against_its_own_agent(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     specialist = _second_profile(app)
     graph = normalize_graph(
@@ -393,7 +392,7 @@ def test_node_runs_against_its_own_agent(tmp_path):
 
 
 def test_node_naming_an_unavailable_agent_fails_loudly(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     graph = normalize_graph({"nodes": [{"id": "only", "name": "Only", "profile_id": 9999}]})
     job_id = _create_graph_job(app, graph)
@@ -413,7 +412,7 @@ def test_node_naming_an_unavailable_agent_fails_loudly(tmp_path):
 
 
 def test_sibling_result_survives_a_branch_pausing_the_job(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     graph = normalize_graph(
         {
@@ -447,31 +446,6 @@ def test_sibling_result_survives_a_branch_pausing_the_job(tmp_path):
     sibling = _state(app, job_id, "sibling")
     assert sibling["status"] == "done"
     assert _decode_json(sibling["output"]) == "sibling done"
-
-
-def test_dispatch_is_inert_when_graph_feature_is_off(tmp_path):
-    app = _app(tmp_path, enabled=False)
-    _client(app)
-    job_id = _create_graph_job(app, _diamond_graph())
-    before = {
-        table: app.state.worker_db.execute(
-            f"SELECT COUNT(*) AS c FROM {table}"  # noqa: S608 - test allowlist below
-        ).fetchone()["c"]
-        for table in ("node_states", "runs", "sessions")
-    }
-
-    run_ids = app.state.worker.graph_executor.dispatch_ready(job_id)
-
-    after = {
-        table: app.state.worker_db.execute(
-            f"SELECT COUNT(*) AS c FROM {table}"  # noqa: S608 - test allowlist below
-        ).fetchone()["c"]
-        for table in ("node_states", "runs", "sessions")
-    }
-    assert run_ids == []
-    assert after == before
-
-
 def _decode_json(value: Any) -> Any:
     try:
         return json.loads(value)
@@ -498,7 +472,7 @@ def _finish_run_row(app, run_id: int) -> dict[str, Any]:
 
 
 def test_graph_advancer_validates_output_and_dispatches_next_node(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     job_id = _create_graph_job(app, _diamond_graph())
     first_run_id = app.state.worker.graph_executor.dispatch_ready(job_id)[0]
@@ -517,7 +491,7 @@ def test_graph_advancer_validates_output_and_dispatches_next_node(tmp_path):
 
 
 def test_invalid_json_output_fails_node_and_pauses_job(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     graph = _single_node_graph(
         output_kind="json",
@@ -543,7 +517,7 @@ def test_invalid_json_output_fails_node_and_pauses_job(tmp_path):
 
 
 def test_final_node_completes_then_moves_job_to_final_review(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     job_id = _create_graph_job(app, _single_node_graph(output_kind="text"))
     run_id = app.state.worker.graph_executor.dispatch_ready(job_id)[0]
@@ -561,7 +535,7 @@ def test_final_node_completes_then_moves_job_to_final_review(tmp_path):
 
 
 def test_review_gate_persists_valid_output_without_dispatching(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     job_id = _create_graph_job(
         app, _single_node_graph(review_required=True, output_kind="text")
@@ -581,7 +555,7 @@ def test_review_gate_persists_valid_output_without_dispatching(tmp_path):
 
 
 def test_runner_failure_marks_current_graph_node_failed_and_reviewable(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     job_id = _create_graph_job(app, _single_node_graph())
     run_id = app.state.worker.graph_executor.dispatch_ready(job_id)[0]
@@ -604,7 +578,7 @@ def test_runner_failure_marks_current_graph_node_failed_and_reviewable(tmp_path)
 
 
 def test_prompt_to_artifact_graph_flow_reaches_final_review(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     graph = {
         "nodes": [
@@ -655,7 +629,7 @@ def test_prompt_to_artifact_graph_flow_reaches_final_review(tmp_path):
 
 
 def test_artifact_ref_contract_requires_existing_contained_paths(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     job_id = _create_graph_job(app, _single_node_graph(output_kind="artifact-ref"))
     root = (
@@ -684,7 +658,7 @@ def test_artifact_ref_contract_requires_existing_contained_paths(tmp_path):
 
 
 def test_linear_orphan_reaper_ignores_running_graph_jobs(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     job_id = _create_graph_job(app, _single_node_graph())
     app.state.worker.graph_executor.dispatch_ready(job_id)
@@ -699,7 +673,7 @@ def test_linear_orphan_reaper_ignores_running_graph_jobs(tmp_path):
 
 
 def test_node_prompt_suggests_the_node_skills(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     _client(app)
     graph = normalize_graph({
         "nodes": [{"id": "only", "name": "Only", "instruction": "Do it", "skill_ids": ["research", "seo"]}]

@@ -65,28 +65,6 @@ def _client(tmp_path, **overrides):
     tok = c.post("/auth/auto").json()["token"]
     c.headers.update({"Authorization": f"Bearer {tok}"})
     return c, app
-
-
-def test_promote_enqueues_legacy_workflow_draft_when_graph_recovery_switch_is_off(tmp_path):
-    c, app = _client(tmp_path, feature_workflow_graph=False)
-    # an ad-hoc job gives us a real session with a couple of messages
-    job = c.post("/api/jobs", json={"input": {"brief": "let's make an SEO article pipeline"}}).json()
-    sid = job["session_id"]
-    c.post(f"/api/sessions/{sid}/messages", json={"role": "user", "content": "keyword research then draft then schema"})
-
-    r = c.post(f"/api/sessions/{sid}/promote-workflow", json={})
-    assert r.status_code == 202, r.text
-    assert r.json()["status"] == "queued"
-    run = app.state.db.execute(
-        "SELECT kind FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1", (sid,)
-    ).fetchone()
-    assert run["kind"] == "workflow_draft"
-    prompt = app.state.db.execute(
-        "SELECT prompt FROM runs WHERE session_id = ? ORDER BY id DESC LIMIT 1", (sid,)
-    ).fetchone()["prompt"]
-    assert '"steps"' in prompt
-
-
 def test_promote_enqueues_graph_architect_run_by_default(tmp_path):
     c, app = _client(tmp_path)
     job = c.post("/api/jobs", json={"input": {"brief": "research then publish"}}).json()
@@ -107,8 +85,8 @@ def test_promote_enqueues_graph_architect_run_by_default(tmp_path):
     assert "review_required" in run["prompt"]
 
 
-def test_promote_can_force_linear_while_graph_feature_is_enabled(tmp_path):
-    c, app = _client(tmp_path, feature_workflow_graph=True)
+def test_promote_can_force_linear(tmp_path):
+    c, app = _client(tmp_path)
     job = c.post("/api/jobs", json={"input": {"brief": "revise this recipe"}}).json()
     sid = job["session_id"]
 

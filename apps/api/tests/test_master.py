@@ -34,7 +34,6 @@ def _client(tmp_path: Path):
             "projectctl_path": "/usr/bin/true",
             "seed_users": [{"username": "owner", "os_user": "owner"}],
             "start_worker": False,
-            "feature_master_orchestrator": True,
         }
     )
     client = TestClient(app)

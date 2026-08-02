@@ -34,7 +34,6 @@ def _app_and_client(
     tmp_path: Path,
     *,
     database_path: Path | None = None,
-    feature_enabled: bool = True,
     max_parallel: int = 3,
 ):
     app = create_app(
@@ -45,7 +44,6 @@ def _app_and_client(
             "link_roots": [str(tmp_path)],
             "seed_users": [{"username": "owner", "os_user": "owner"}],
             "start_worker": False,
-            "feature_master_orchestrator": feature_enabled,
             "master_max_parallel": max_parallel,
         }
     )
@@ -2207,7 +2205,6 @@ def test_restart_reconciliation_preserves_one_message_and_event(
             "projectctl_path": "/usr/bin/true",
             "seed_users": [{"username": "owner", "os_user": "owner"}],
             "start_worker": False,
-            "feature_master_orchestrator": True,
         }
     )
     for _ in range(3):
@@ -2494,24 +2491,6 @@ def test_task_projection_focus_survives_origin_run_deletion(
         "focus_epoch_id": focus["current_epoch_id"],
         "focus_container_id": project_id,
     }
-
-
-def test_feature_off_does_not_instantiate_or_project_master_services(
-    tmp_path: Path,
-):
-    app, client, _project = _app_and_client(
-        tmp_path,
-        feature_enabled=False,
-    )
-
-    assert app.state.master_supervisor is None
-    assert app.state.master_projection is None
-    assert client.get("/api/master/desk").status_code == 503
-    assert app.state.db.execute(
-        "SELECT COUNT(*) FROM master_projections"
-    ).fetchone()[0] == 0
-
-
 def test_projection_refuses_mismatched_master_owner(tmp_path: Path):
     app, client, _project = _app_and_client(tmp_path)
     desk = client.get("/api/master/desk").json()
@@ -3874,8 +3853,6 @@ def _repo_review_job(tmp_path: Path, *, key: str):
             "link_roots": [str(tmp_path)],
             "seed_users": [{"username": "owner", "os_user": "owner"}],
             "start_worker": False,
-            "feature_master_orchestrator": True,
-            "feature_repo_worktrees": True,
         }
     )
     client = TestClient(app)

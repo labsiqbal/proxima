@@ -4,12 +4,8 @@ AI-assisted, multi-surface design inside Proxima. The agent generates designs as
 **editable layered structures** (not flat images), and the human refines them on a
 canvas — direct manipulation (Figma-feel) + AI iteration (chat).
 
-> **Status:** shipped feature, on by default behind a server-owned flag (standing
-> decision 8). Owners can disable it with `PROXIMA_FEATURE_DESIGN_STUDIO=0` in
-> `~/.config/proxima/proxima.env` and a restart (the flag is read at boot). While the
-> flag is off, the backend answers 503 (`feature_disabled`) before any side effect and
-> the frontend omits Design navigation, commands, provider checks, and bridge actions.
-> Image generation is independent of this flag and always available.
+> **Status:** shipped feature, always on (standing decision 8; the feature-flag
+> system was removed in prune A2, #129). Image generation is always available.
 
 ## Why
 
@@ -173,8 +169,6 @@ source, optional note, and tags. Search and tag filters stay client-side.
   path. Local card images are merged into the run's existing `VISION` attachment marker,
   so the design agent receives the source URL/note/tags and can see the cached preview or
   screenshot. The selection is refreshed on later turns in an existing design session.
-
-The whole surface and all Moodboard routes use the Design Studio feature gate.
 
 ## `/design` from the main chat
 

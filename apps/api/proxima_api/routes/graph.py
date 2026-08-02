@@ -1,4 +1,4 @@
-"""Feature-gated graph workflow job and correction routes (ADR-0001)."""
+"""Graph workflow job and correction routes (ADR-0001)."""
 from __future__ import annotations
 
 import json
@@ -13,7 +13,6 @@ from .. import (
     artifact_registry,
     master_decisions,
     container_registry,
-    features,
     repo_remote,
     schedule_policy,
     satpam,
@@ -140,7 +139,6 @@ def _trigger_node(graph: Mapping[str, Any]) -> dict[str, Any] | None:
 
 def register(app, deps):
     db = deps["db"]
-    cfg = deps["cfg"]
     current_user = deps["current_user"]
     profile_for_user = deps["profile_for_user"]
     _can_access = deps["_can_access"]
@@ -151,9 +149,6 @@ def register(app, deps):
         projection = getattr(app.state, "master_projection", None)
         if outbox_id is not None and projection is not None:
             projection.safe_process_task_outbox(outbox_id)
-
-    def require_graph() -> None:
-        features.require(cfg, features.WORKFLOW_GRAPH)
 
     def graph_job_or_404(job_id: int, user: dict[str, Any]) -> sqlite3.Row:
         row = db().execute(
@@ -344,7 +339,6 @@ def register(app, deps):
         payload: GraphJobCreateRequest,
         user: dict[str, Any] = Depends(current_user),
     ):
-        require_graph()
         try:
             graph = normalize_graph(payload.graph)
         except GraphValidationError as exc:
@@ -414,7 +408,6 @@ def register(app, deps):
         project_slug: str | None = None,
         user: dict[str, Any] = Depends(current_user),
     ):
-        require_graph()
         resolved_project_id = (
             _member_project_id(project_id, project_slug, user)
             if project_id is not None or project_slug
@@ -445,7 +438,6 @@ def register(app, deps):
         include_archived: bool = False,
         user: dict[str, Any] = Depends(current_user),
     ):
-        require_graph()
         resolved_project_id = (
             _member_project_id(project_id, project_slug, user)
             if project_id is not None or project_slug
@@ -474,7 +466,6 @@ def register(app, deps):
     def get_graph_job(
         job_id: int, user: dict[str, Any] = Depends(current_user)
     ):
-        require_graph()
         return graph_job_payload(graph_job_or_404(job_id, user))
 
     @app.post("/api/graph/jobs/{job_id}/save-template", status_code=status.HTTP_201_CREATED)
@@ -483,7 +474,6 @@ def register(app, deps):
         payload: GraphTemplateSaveRequest,
         user: dict[str, Any] = Depends(current_user),
     ):
-        require_graph()
         job = graph_job_or_404(job_id, user)
         graph = normalize_graph(job["graph"] or "")
         trigger = _trigger_node(graph)
@@ -593,7 +583,6 @@ def register(app, deps):
         payload: GraphDefinitionUpdateRequest,
         user: dict[str, Any] = Depends(current_user),
     ):
-        require_graph()
         job = graph_job_or_404(job_id, user)
         if payload.graph is None and payload.title is None:
             raise HTTPException(status_code=422, detail="graph or title is required")
@@ -654,7 +643,6 @@ def register(app, deps):
         payload: GraphJobStartRequest | None = None,
         user: dict[str, Any] = Depends(current_user),
     ):
-        require_graph()
         job = graph_job_or_404(job_id, user)
         if job["status"] != "queued":
             return graph_job_payload(job)
@@ -755,7 +743,6 @@ def register(app, deps):
         payload: GraphNodeOutputEditRequest,
         user: dict[str, Any] = Depends(current_user),
     ):
-        require_graph()
         job = graph_job_or_404(job_id, user)
         ensure_correctable(job)
         graph = normalize_graph(job["graph"] or "")
@@ -809,7 +796,6 @@ def register(app, deps):
         node_id: str,
         user: dict[str, Any] = Depends(current_user),
     ):
-        require_graph()
         job = graph_job_or_404(job_id, user)
         ensure_correctable(job)
         graph = normalize_graph(job["graph"] or "")
@@ -861,7 +847,6 @@ def register(app, deps):
         node_id: str,
         user: dict[str, Any] = Depends(current_user),
     ):
-        require_graph()
         job = graph_job_or_404(job_id, user)
         ensure_correctable(job)
         conn = db()
@@ -918,7 +903,6 @@ def register(app, deps):
         stored and the node re-runs with the decision in its prompt. Unlike the
         correction routes this works while the plan is still RUNNING - that is
         the point: independent branches kept dispatching during the hold."""
-        require_graph()
         job = graph_job_or_404(job_id, user)
         graph = normalize_graph(job["graph"] or "")
         _graph_node(graph, node_id)
@@ -1004,7 +988,6 @@ def register(app, deps):
         and their sha256, read together, so the owner reviews the actual
         content — never just a filename. The returned sha256 is what the
         approve request must echo back."""
-        require_graph()
         job = graph_job_or_404(job_id, user)
         rel, data = _script_node_file(job, node_id)
         shown = data[:MAX_SCRIPT_PREVIEW_BYTES]
@@ -1035,7 +1018,6 @@ def register(app, deps):
         node reruns the same way an ordinary rerun does. Unchanged scripts
         never come back here; an edited script's hash mismatch does.
         """
-        require_graph()
         job = graph_job_or_404(job_id, user)
         ensure_correctable(job)
         rel, data = _script_node_file(job, node_id)
@@ -1136,7 +1118,6 @@ def register(app, deps):
     def approve_graph_job(
         job_id: int, user: dict[str, Any] = Depends(current_user)
     ):
-        require_graph()
         job = graph_job_or_404(job_id, user)
         pending_decision = master_decisions.pending_decision_for_job(db(), job_id)
         if pending_decision:
@@ -1153,15 +1134,13 @@ def register(app, deps):
         ).fetchone()
         if incomplete:
             raise HTTPException(status_code=409, detail="all graph nodes must be done")
-        # Repo plan (slice 2, flag-gated): claim a durable approval generation
+        # Repo plan (slice 2): claim a durable approval generation
         # before any Git side effect so decision creation cannot land mid-merge.
         # Never hold db_lock across external Git work. Same contract as linear.
-        wt = None
-        needs_git_merge = False
-        if features.enabled(app.state.config, features.REPO_WORKTREES):
-            wt = worktrees.job_worktree_row(db(), job_id)
-            if wt and wt["status"] in ("active", "conflict", "merging"):
-                needs_git_merge = True
+        wt = worktrees.job_worktree_row(db(), job_id)
+        needs_git_merge = bool(
+            wt and wt["status"] in ("active", "conflict", "merging")
+        )
         use_approval_intent = bool(
             wt is not None
             and wt["status"] in ("active", "conflict", "merging", "merged")

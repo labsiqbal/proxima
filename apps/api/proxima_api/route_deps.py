@@ -30,7 +30,7 @@ from .container_registry import (
 )
 from .profile_seed import seed_agent_home
 from .master_runtime import ensure_master_identity
-from . import features, master_decisions, master_focus
+from . import master_decisions, master_focus
 from .project_areas import areas_payload
 from .provisioning import provision_user_workspace
 from .runner_specs import default_runner, runner_spec
@@ -88,13 +88,12 @@ def build_route_deps(
         try:
             ensure_default_profile(user)
             provision_user_workspace(db(), cfg, user)
-            if features.enabled(cfg, features.MASTER_ORCHESTRATOR):
-                ensure_master_identity(
-                    db(),
-                    user,
-                    create_profile_for=create_profile_for,
-                    managed_profiles_root=cfg["hermes_profiles_root"],
-                )
+            ensure_master_identity(
+                db(),
+                user,
+                create_profile_for=create_profile_for,
+                managed_profiles_root=cfg["hermes_profiles_root"],
+            )
         except Exception:
             logger.exception("single-user owner provisioning failed (non-fatal)")
         return user

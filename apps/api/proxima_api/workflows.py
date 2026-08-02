@@ -163,20 +163,11 @@ knowledge is logged automatically).
 """
 
 
-_BASE_CAPABILITY_PREAMBLE = """# Proxima capabilities (available to you in this Proxima project)
-
-Your working directory IS the project root. Use the project's native features when relevant;
-otherwise produce the step's expected output as text.
-
-**Project files** — read existing files and save deliverables in the project so they show in the
-Files tab. **Wiki / memory** — consult the project wiki context provided above.
-"""
-
-def build_capability_preamble(*, include_design_studio: bool = False) -> str:
-    return _DESIGN_CAPABILITY_PREAMBLE if include_design_studio else _BASE_CAPABILITY_PREAMBLE
+def build_capability_preamble() -> str:
+    return _DESIGN_CAPABILITY_PREAMBLE
 
 
-def build_iteration_preamble(name: str, steps: list[dict[str, Any]], *, include_design_studio: bool = False) -> str:
+def build_iteration_preamble(name: str, steps: list[dict[str, Any]]) -> str:
     """Seed for a workflow's iterate/test chat: the current recipe + a sandbox brief.
     The capability preamble is appended separately so dry-tests produce real output."""
     lines = []
@@ -197,7 +188,7 @@ def build_iteration_preamble(name: str, steps: list[dict[str, Any]], *, include_
         f"CURRENT RECIPE:\n{recipe}\n\n"
         "How to help:\n"
         "- When the user asks, EXECUTE a step (or the whole recipe) and show the REAL output (you can "
-        + ("produce designs/files" if include_design_studio else "produce project files")
+        + "produce designs/files"
         + " — see capabilities below), so they can judge it.\n"
         "- Suggest concrete improvements to a step's instruction / expected output / rules.\n"
         "- Keep your replies focused on building the recipe. When the user is happy, they'll click "

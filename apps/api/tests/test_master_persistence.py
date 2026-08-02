@@ -254,7 +254,7 @@ def _alpha_v30_database(path: Path, workspace: Path) -> dict[str, int]:
     }
 
 
-def _app(path: Path, workspace: Path, *, enabled: bool = True):
+def _app(path: Path, workspace: Path):
     return create_app(
         {
             "database_path": str(path),
@@ -263,7 +263,6 @@ def _app(path: Path, workspace: Path, *, enabled: bool = True):
             "seed_users": [{"username": "owner", "os_user": "owner"}],
             "start_worker": False,
             "update_check": False,
-            "feature_master_orchestrator": enabled,
         }
     )
 
@@ -481,7 +480,7 @@ def test_current_alpha_database_migrates_in_place_through_master_and_alias_api(
     )
 
 
-def test_restart_runner_switch_and_feature_off_preserve_one_identity(
+def test_restart_and_runner_switch_preserve_one_identity(
     tmp_path: Path, monkeypatch
 ):
     monkeypatch.setitem(
@@ -530,27 +529,20 @@ def test_restart_runner_switch_and_feature_off_preserve_one_identity(
         == "master-fixture"
     )
 
-    disabled = _app(db_path, workspace, enabled=False)
-    disabled_client = TestClient(disabled)
-    disabled_token = disabled_client.post("/auth/auto").json()["token"]
-    disabled_client.headers.update({"Authorization": f"Bearer {disabled_token}"})
-    response = disabled_client.get("/api/master/desk")
-    assert response.status_code == 503
-    assert response.json()["detail"]["feature"] == "master_orchestrator"
     assert (
-        disabled.state.db.execute(
+        restarted.state.db.execute(
             "SELECT COUNT(*) FROM profiles WHERE system_kind = 'master'"
         ).fetchone()[0]
         == 1
     )
     assert (
-        disabled.state.db.execute(
+        restarted.state.db.execute(
             "SELECT COUNT(*) FROM sessions WHERE mode = 'master'"
         ).fetchone()[0]
         == 1
     )
     assert (
-        disabled.state.db.execute(
+        restarted.state.db.execute(
             "SELECT origin_master_session_id FROM jobs WHERE id = ?", (ids["job_id"],)
         ).fetchone()["origin_master_session_id"]
         == ids["session_id"]

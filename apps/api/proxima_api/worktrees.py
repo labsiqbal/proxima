@@ -27,9 +27,6 @@ bookkeeping, and a failing owner hook would wedge the review flow with a
 confusing error) before either. Partial work therefore also survives crashes
 and future continuation turns (T5).
 
-Everything here is gated behind ``feature_repo_worktrees`` (on by default
-since slice 4 shipped the review UI; the flag stays as an escape hatch); with
-the flag off no caller invokes this module and job execution is unchanged.
 State lives in the ``job_worktrees`` table, one row
 per job: status ``active`` (agent may work) -> ``merging`` (merge claimed) ->
 ``merged`` (landed on the base branch, worktree torn down) with ``conflict``
@@ -420,33 +417,28 @@ def bind_graph_job_repo_worktree(
 
     Shared by ``POST /api/graph/jobs/{id}/start`` and the scheduler's graph
     spawn so a cron / Run-now recipe cannot drift from a manual start and write
-    into the live code area. No worktree is cut when ``feature_repo_worktrees``
-    is off or the graph has no repo targets. Returns the ``job_worktrees`` row
-    when one was cut, else None.
+    into the live code area. No worktree is cut when the graph has no repo
+    targets. Returns the ``job_worktrees`` row when one was cut, else None.
 
     Raises ``WorktreeError`` with an owner-facing message when the plan cannot
     start safely (unresolved area, multi-area graph, missing area, dirty repo).
-    The unresolved-area refuse is flag-independent - it is checked before the
-    ``feature_repo_worktrees`` gate so an ambiguous plan never starts silently.
+    The unresolved-area refuse is checked before the project_id early-return so
+    an ambiguous plan never starts silently.
     """
-    from . import features
     from .graph import normalize_graph, repo_target_paths, unresolved_target_questions
 
     job_id = int(job["id"])
     graph = normalize_graph(job["graph"] or "")
-    # Ambiguous targets block start regardless of the feature_repo_worktrees
-    # flag and even when the plan has no project yet - it is a property of the
-    # plan, not of worktree isolation. Checking before the flag gate and the
+    # Ambiguous targets block start even when the plan has no project yet - it
+    # is a property of the plan, not of worktree isolation. Checking before the
     # project_id early-return keeps a project-less ambiguous plan from silently
-    # starting as a plain ops graph when the owner's escape-hatch flag is off.
+    # starting as a plain ops graph.
     questions = unresolved_target_questions(graph)
     if questions:
         raise WorktreeError(
             "this plan has an unresolved question - pick a work area first: "
             + "; ".join(questions)
         )
-    if not features.enabled(cfg, features.REPO_WORKTREES):
-        return None
     project_id = job["project_id"]
     if not project_id:
         return None

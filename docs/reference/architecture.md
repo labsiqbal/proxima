@@ -113,29 +113,18 @@ code never mixes with per-install state:
 > per-profile credential home there; the mechanism is fully runner-agnostic. The
 > schema/paths are intentionally not renamed.
 
-## Server-owned feature gates
+## Always-on product surface (no feature flags)
 
-```text
-PROXIMA_FEATURE_DESIGN_STUDIO ─────────┐
-PROXIMA_FEATURE_WORKFLOW_GRAPH=1 ──────┼─> GET /api/config ─> frontend capability map
-PROXIMA_FEATURE_REPO_WORKTREES=1 ──────┘─> route/run guards before side effects
-```
+The feature-flag system was removed (prune A2, #129): Design Studio, the graph
+workflow engine, repo-job worktrees, and the Master orchestrator are
+unconditional parts of the product. There is no `PROXIMA_FEATURE_*`
+configuration, no `features.py` registry, no web-side capability map, and
+`GET /api/config` no longer advertises a features payload. Video Studio and
+video generation are not product surfaces; existing media files—including video
+files—remain readable as ordinary artifacts.
 
-Design Studio is a shipped feature behind a server-owned flag, on by default;
-owners can disable it via `proxima.env` (the flag is read once at boot). The
-backend is authoritative: while disabled, requests return
-HTTP 503 with the consistent `feature_disabled` payload before creating messages,
-writing the database or files, calling providers, spawning processes, or
-dispatching collaboration, and the frontend uses the published flags to omit
-navigation, deep links, commands, settings, provider health checks, bridge
-actions, and agent guidance. Image generation is independent of the flag, and
-existing media files—including video files—remain readable as ordinary artifacts.
-Video Studio and video generation are not product surfaces.
-
-`PROXIMA_FEATURE_WORKFLOW_GRAPH` gates the graph workflow engine (ADR-0001) and
-defaults to **on**, because the graph canvas is the shipped authoring path. It remains
-a master recovery switch: setting it to `0` makes graph routes, worker paths, schedules,
-and UI inert while leaving legacy linear jobs readable. The pure
+The graph workflow engine (ADR-0001) is the shipped authoring path; legacy
+linear jobs remain readable. The pure
 `graph.py` boundary already normalizes planner/UI input to canonical edges, rejects
 cycles and invalid references, computes deterministic topological/ready sets, validates
 node `type`/`trigger_kind`/`profile_id`/`x`/`y` and the entry-point rules (at most one
@@ -154,12 +143,12 @@ is a first-class `target_ambiguous`/`target_question` state. `routes/graph.py` c
 targets against the project's registered areas at plan create/edit (422 on an unknown
 area); plan start refuses an unresolved target question (409 carrying the question) in
 the shared `bind_graph_job_repo_worktree` path, which checks ambiguity before the
-`feature_repo_worktrees` gate and the project binding — so a project-less ambiguous plan
+project binding — so a project-less ambiguous plan
 cannot start silently and the scheduler cannot skip the refuse. The target is pinned at
 slice time precisely so it cannot be discovered at runtime. The start route performs
 manual intake resolution before the worktree cut and commits the resolved JSON in the
 same guarded update that claims `running`; a rejected value or post-claim start failure
-leaves the queued job and its original input unchanged. The gated `graph_executor.py` adapter resolves any trigger node to the approved
+leaves the queued job and its original input unchanged. The `graph_executor.py` adapter resolves any trigger node to the approved
 job input without a runner, then dispatches **every** ready node up to
 `graph_node_concurrency`, snapshots explicit job/upstream data into a `wf_node` run
 against that node's own agent (`profile_id`, else the job's), and creates a fresh hidden
@@ -173,7 +162,7 @@ transition. Invalid/blocked/runner-failed nodes pause the job in `review`; valid
 dispatch whatever became ready, while review gates and the final node pause for human
 review. Because branches overlap, a paused (`review`) job still accepts results from
 nodes already in flight — rejecting them would drop finished work and strand the node —
-but only a still-`running` job pulls new work forward. Feature-gated `routes/graph.py` is the human
+but only a still-`running` job pulls new work forward. `routes/graph.py` is the human
 correction boundary: queued plans can be edited before start; a reviewed node can have
 its typed output replaced or be rerun; either action marks every transitive descendant
 `stale` and resumes deterministic execution. A gate is approved node-by-node, and a
@@ -199,13 +188,10 @@ surfaces: the script catalog is injected into every project run preamble
 (`wiki_memory.build_run_preamble`) and into the plan slicer's prompt
 (`workflows.architect_system`).
 
-`PROXIMA_FEATURE_REPO_WORKTREES` gates the repo-job worktree machinery (Phase-1
-slices 2+4, T1) and defaults to **on** since slice 4 shipped the diff-review UI;
-it remains the owner's escape hatch. While off, `worktrees.py` has no callers on
-the execution path, the `/api/jobs/{id}/diff` endpoint returns the standard 503
-`feature_disabled` payload, and job start/approve/cwd selection behave exactly as
-without the feature (the reject action still works - it is a review verdict, not
-worktree machinery). See flow 6b.
+The repo-job worktree machinery (Phase-1 slices 2+4, T1) is always on: a job
+whose target names a code area gets an isolated worktree, diff review, and a
+local merge on approve; an ops-targeted job never touches the machinery. The
+reject action is a review verdict, not worktree machinery. See flow 6b.
 
 ## Media provider setup
 
@@ -268,7 +254,7 @@ jobs (the old kanban `tasks` table was dropped by migration 17). `agent_sessions
 maps a chat to its per-home ACP session.
 A `job` carries an `engine` discriminator: `linear` (the classic `current_step_idx`
 and `steps_state` cursor) or `graph` (ADR-0001) — graph jobs keep durable per-node state
-in `node_states` instead, and are gated/inert behind `PROXIMA_FEATURE_WORKFLOW_GRAPH`.
+in `node_states` instead.
 A project row is the compatibility persistence record for a **Container**.
 `project_areas` records zero or more repo Areas (auto-detected from `.git` with manual
 override, where `.` means repo-at-root) and exactly one active Ops Area. Fresh
@@ -344,7 +330,7 @@ ownership modules do not depend on registry projection; `container_registry.py`
 orchestrates them while remaining the canonical root resolver.
 A `job` may bind to exactly one area via `target_area_id` (T1); a code-area target
 makes it a **repo job**, whose isolated worktree lifecycle lives in `job_worktrees`
-(slice 2, gated/inert behind `PROXIMA_FEATURE_REPO_WORKTREES` - see flow 6b).
+(slice 2 - see flow 6b).
 Scoped Work, Home, Master, and future orchestration creation share
 `TaskDelegationService`. `task_delegations` is the one-to-one origin, routing,
 idempotency, durable-start, and captured Master Focus audit for a job.
@@ -511,8 +497,8 @@ generation or releases an incomplete one.
 Settings under `master.*` hold unattended state, turn/wall/optional-token budgets, and
 core-tour completion. Startup asserts one project-unbound Master identity per owner
 and refuses ambiguous dual identities or conflicting old/new origin columns. The
-migration is transactional and idempotent, runs regardless of the runtime feature
-flag, and preserves messages, runs, events, checkpoints, budgets, attention,
+migration is transactional and idempotent, and preserves messages, runs,
+events, checkpoints, budgets, attention,
 delegations, and Task ownership. Deprecated Alpha routes and legacy payload readers
 project the same rows for one compatibility release. Stored payload normalization
 is ownership-scoped: unrelated Alpha-named business fields in ordinary jobs,
@@ -534,10 +520,8 @@ Full column-level detail: [database.md](database.md).
 
 ### Scoped graph state and Graphify adapter
 
-Migration 35 adds graph state independently of graph availability. When
-`feature_master_orchestrator` is off, the authenticated graph routes reject use and
-no build starts. When enabled, `GET /api/containers/{slug}/graphs` reads path-free
-state and `POST /api/containers/{slug}/graphs/rebuild` accepts only a typed
+Migration 35 adds graph state. `GET /api/containers/{slug}/graphs` reads
+path-free state and `POST /api/containers/{slug}/graphs/rebuild` accepts only a typed
 `knowledge` or `code` scope plus an optional registered Area id. Callers cannot
 provide a command, filesystem path, MCP project path, depth, timeout, result limit,
 or model setting.
@@ -736,12 +720,10 @@ ArtifactViewer render -> point notes / general note -> Add feedback to chat
 
 ### 1a. Master delegation and unattended queue
 
-Durable persistence migration always runs. Identity provisioning, the runtime, supervisor,
-routes, navigation, and settings surface require
-`feature_master_orchestrator`, which defaults off. With the flag off, startup and
-unrelated authenticated routes do not provision a Master runner home, queued Master
-turns and Master-owned Task runs remain queued, and Master operational failures
-cannot break unrelated routes. Migration ambiguity still fails closed.
+Durable persistence migration always runs, and the Master runtime, supervisor,
+routes, navigation, and settings surface are unconditional (the
+`feature_master_orchestrator` flag was removed in prune A2). Migration
+ambiguity still fails closed.
 
 ```text
 GET /api/runners/detect
@@ -1119,8 +1101,7 @@ Cancel with `/goal/cancel`.
   (preview) → `POST /.../wiki-note/commit` writes the markdown into the project's
   `wiki/` and rebuilds the index.
 + **Workflow:** `POST /.../promote-workflow` has an architect agent slice the
-  conversation. The legacy linear path emits ordered steps. When
-  `PROXIMA_FEATURE_WORKFLOW_GRAPH=1`, it instead emits a normalized typed DAG draft —
+  conversation into a normalized typed DAG draft —
   a **runnable plan**, not a template: the frontend materializes it as a queued graph
   job the owner can inspect/edit and start directly (run-first, T2). The architect
   prompt carries the project's registered code areas, and every sliced job arrives
@@ -1262,10 +1243,8 @@ never VACUUMs SQLite and never archives a project tree.
 
 ### 6b. Repo job: worktree → diff review → local merge (slices 2+4, live)
 
-Gated behind `PROXIMA_FEATURE_REPO_WORKTREES` (on by default since slice 4 shipped
-the review UI; off is the escape hatch = flow 6 exactly). A job whose
-`target_area_id` names a code area is a **repo job** and never edits the primary
-tree:
+A job whose `target_area_id` names a code area is a **repo job** and never
+edits the primary tree:
 
 ```text
 POST /api/jobs/{id}/start
@@ -1301,7 +1280,7 @@ POST /api/jobs/{id}/approve (final step)  →  claim job_final_approval_intents
        forced.
 POST /api/jobs/{id}/reject  {reason}  →  the other verdict door (slice 4, either
     engine): job → failed with jobs.rejected_reason recorded; the worktree is
-    discarded UNMERGED (flag-independent teardown, like delete) - the primary
+    discarded UNMERGED (teardown, like delete) - the primary
     tree never sees the change. A blank reason is refused (422).
 ```
 
@@ -1326,8 +1305,7 @@ flow 6c) consumes these same review states.
 **Graph plans reuse this same machinery per job-in-plan (slice 3).** Direct legacy
 plans keep the existing node-aware placement. Delegated graph Recipes inherit the
 Task's exact Area for every node, so one Task never crosses from a repo worktree into
-Ops. When the flag is
-on and a plan has repo jobs (nodes with `touches_repo`), `POST /api/graph/jobs/{id}/start`
+Ops. When a plan has repo jobs (nodes with `touches_repo`), `POST /api/graph/jobs/{id}/start`
 resolves their one code-area target to `jobs.target_area_id` and cuts the plan's
 worktree before claiming `running` — same loud-refusal ordering as the linear start. A
 plan's repo jobs must share ONE code area (Phase-1: one worktree row per job); a
@@ -1337,8 +1315,7 @@ worktree only when its node touches the repo, while Ops siblings use the physica
 Area. For a delegated Task, every node uses the selected repo worktree or selected
 physical Ops Area.
 The final `POST /api/graph/jobs/{id}/approve` is the merge point, with the identical
-guarded-merge/park-in-review contract as the linear approve. Flag off: none of this
-runs and target tags are inert metadata.
+guarded-merge/park-in-review contract as the linear approve.
 
 ### 6c. Satpam supervision loop (slice 12, T10, live)
 

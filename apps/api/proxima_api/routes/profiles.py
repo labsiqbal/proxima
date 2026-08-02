@@ -259,7 +259,7 @@ def register(app, deps):
         skills, selection, rid = _profile_skill_context(
             user, profile_id=profile_id, runner_id=runner_id, force_rescan=rescan
         )
-        catalog = command_catalog(cfg, skills=skills, selection=selection)
+        catalog = command_catalog(skills=skills, selection=selection)
         return {
             "user": user["username"],
             "profileId": profile_id,
@@ -276,14 +276,13 @@ def register(app, deps):
             profile_id=payload.profile_id,
             runner_id=payload.runner_id,
         )
-        skill_cmds = build_skill_slash_commands(skills, selection, config=cfg)
-        skill_map = skill_command_map(skills, selection, config=cfg)
+        skill_cmds = build_skill_slash_commands(skills, selection)
+        skill_map = skill_command_map(skills, selection)
         return execute_command(
             payload.command,
             user=user,
             project_slug=payload.project_slug,
             runner_id=payload.runner_id,
-            config=cfg,
             skill_map=skill_map,
             skill_commands=skill_cmds,
         )

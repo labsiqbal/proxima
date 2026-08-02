@@ -31,7 +31,6 @@ from . import wiki_memory
 from . import app_settings
 from . import file_targets
 from . import master_runtime
-from . import features
 from . import state
 from . import turn_restore
 from .artifacts import scan_project_artifacts
@@ -346,29 +345,9 @@ class RunWorker:
                             )
                         )
                       )
-                      AND (
-                        ? = 1
-                        OR NOT EXISTS (
-                          SELECT 1 FROM sessions ms
-                          LEFT JOIN jobs mj ON mj.id = ms.job_id
-                          WHERE ms.id = r.session_id
-                            AND (
-                              ms.mode = 'master'
-                              OR mj.origin_master_session_id IS NOT NULL
-                            )
-                        )
-                      )
                     ORDER BY r.id LIMIT 1
                     """,
-                    (
-                        master_parallel_limit(self.app.state.config),
-                        int(
-                            features.enabled(
-                                self.app.state.config,
-                                features.MASTER_ORCHESTRATOR,
-                            )
-                        ),
-                    ),
+                    (master_parallel_limit(self.app.state.config),),
                 ).fetchone()
                 if not row:
                     db.execute("COMMIT")
@@ -1459,24 +1438,6 @@ class RunWorker:
                 "SELECT mode FROM sessions WHERE id = ?", (session_id,)
             ).fetchone()
             session_mode = (mode_row["mode"] if mode_row else None) or "chat"
-            gated_feature = features.queued_run_feature(run, session_mode)
-            if gated_feature and not features.enabled(cfg, gated_feature):
-                error = f"feature_disabled:{gated_feature}"
-                with self.app.state.db_lock:
-                    db.execute(
-                        "UPDATE runs SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP "
-                        "WHERE id = ? AND status IN ('queued', 'running')",
-                        (error, run_id),
-                    )
-                    self.add_event(
-                        run_id,
-                        session_id,
-                        project_id,
-                        "run.failed",
-                        features.disabled_payload(gated_feature),
-                    )
-                self._fail_job(session_id, error, run_id)
-                return
             # Deterministic script step (T6): executed as a subprocess by the
             # script runner, never through a runner/ACP session. Everything
             # below this point is agent-session machinery it must not touch.
@@ -1595,12 +1556,11 @@ class RunWorker:
                     and project_ops is not None
                 ):
                     cwd = str(project_ops)
-            # Repo jobs (Phase-1 slice 2, flag-gated): a job with an active
-            # worktree runs THERE, never in the primary tree. Flag off ⇒ this
-            # block is skipped entirely and cwd selection is exactly as above.
-            # A worktree that vanished from disk fails the run loudly instead
-            # of silently falling back to (and editing) the primary tree.
-            if is_job and features.enabled(cfg, features.REPO_WORKTREES):
+            # Repo jobs (Phase-1 slice 2): a job with an active worktree runs
+            # THERE, never in the primary tree. A worktree that vanished from
+            # disk fails the run loudly instead of silently falling back to
+            # (and editing) the primary tree.
+            if is_job:
                 wt = db.execute(
                     "SELECT worktree_path FROM job_worktrees WHERE job_id = ? AND status = 'active'",
                     (jrow["job_id"],),
@@ -1991,7 +1951,6 @@ class RunWorker:
                     and is_job
                     and jrow
                     and jrow["target_kind"] == "code"
-                    and features.enabled(cfg, features.MASTER_ORCHESTRATOR)
                 ):
                     try:
                         area_row = db.execute(

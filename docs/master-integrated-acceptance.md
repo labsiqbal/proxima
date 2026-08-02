@@ -42,7 +42,7 @@ an earlier boundary.
 
 | Requirement | Direct evidence |
 | --- | --- |
-| A disabled Master stays inert | `DEFAULT_CONFIG`, `scripts/smoke-fresh`, and `test_feature_flags.py` assert the Master default true and feature-off routes inert before side effects. (The safe-update flag and stack this row also covered were removed entirely - prune A1, ADR-0041.) |
+| Master is always on | Historical gate: the row originally proved a disabled Master stayed inert. The feature-flag system was removed entirely (prune A2, #129), so Master is unconditional; `scripts/smoke-fresh` asserts the flag surface stays absent from `/api/config`. (The safe-update flag and stack this row also covered were removed in prune A1, ADR-0041.) |
 | Alpha-to-Master migration preserves identity and data | Migrations 31 and 33-42 plus `master_persistence.py` preserve primary keys and compatibility aliases. Persistence and migration tests cover fresh, upgrade, conflict, rerun, and historical attribution cases. |
 | Unsupported or unavailable runners are not selectable | `/api/runners/detect` publishes static `masterChatOnly` plus dynamic `masterEligible` and `masterUnavailableReason`, derived from `master_runner_conformance` on the server runtime path while admitted. Pending or active maintenance and ingress-unavailable fence transitions skip process probes and report Master ineligible; focused HTTP tests cover runner and dashboard reads through active-fence and fence-removal states. The UI enables only `masterEligible=true`; settings, message creation, and worker spawn repeat conformance. |
 | Master supervision does not duplicate Satpam authority | `MasterSupervisor` claims eligible queued Tasks only. Satpam remains the sole detector and recovery owner. Projection tests cover restart reconciliation, capacity, attribution, and idempotency. |
@@ -84,8 +84,8 @@ reviewable UI acceptance contract.
 ## Activation decision
 
 This matrix proves implementation and disposable-fixture coverage. The gates it
-records have passed, so Master ships on by default (ADR-0039); an operator who
-wants a cockpit without delegation sets `PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0`.
+records have passed, so Master shipped on by default (ADR-0039); the flag itself
+was later removed entirely (prune A2, #129), making Master unconditional.
 Enabling the surface is not the same as enabling autonomy: unattended starts
 remain a separate opt-in toggle, and delegation still fails closed without an
 authenticated Master-eligible runner. The safe-updater stack was later removed

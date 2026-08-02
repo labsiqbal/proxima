@@ -25,8 +25,8 @@ this order:
 1. backend suite and frontend production build
 2. `npm run smoke:fresh`, which boots the current checkout with temporary
    `HOME`/XDG config/data/workspace roots and proves first-boot auth, database,
-   project provisioning, Proxima identity, exact disabled feature flags, and no
-   retired-product config/path reads
+   project provisioning, Proxima identity, the absence of any feature-flag
+   surface, and no retired-product config/path reads
 3. `npm run smoke`, the live API plus desktop/mobile browser smoke against the
    already-running staging service on port `8767` by default
 

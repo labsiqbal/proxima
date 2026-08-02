@@ -16,7 +16,6 @@ from fastapi import Depends, Header, HTTPException
 
 from ..auth import iso_now
 from .. import artifact_registry
-from .. import features
 from .. import master_decisions
 from .. import repo_remote
 from .. import schedule_policy
@@ -524,7 +523,6 @@ def register(app, deps):
         """The repo job's before/after change (worktree branch vs its base):
         per-file status + unified patch, the shape the slice-4 review UI
         renders. After a merge, the same change read off the base branch."""
-        features.require(app.state.config, features.REPO_WORKTREES)
         _job_or_404(job_id, user)
         wt = worktrees.job_worktree_row(db(), job_id)
         if not wt or wt["status"] == "discarded":
@@ -548,7 +546,6 @@ def register(app, deps):
         push attempt was recorded (the blocker card's retry action) or the
         area's toggle is currently ON; a merged-locally job with the toggle
         off stays local - the guardrail is push only on explicit opt-in."""
-        features.require(app.state.config, features.REPO_WORKTREES)
         _job_or_404(job_id, user)
         wt = worktrees.job_worktree_row(db(), job_id)
         if not wt or wt["status"] != "merged":
@@ -632,16 +629,14 @@ def register(app, deps):
             _process_task_projection(task_event)
             app.state.worker.add_event(run_id, job["session_id"], job["project_id"], "run.queued", {"runner": profile["runner_id"], "job": job_id})
         else:
-            # Repo job (slice 2, flag-gated): the final approve is the merge
+            # Repo job (slice 2): the final approve is the merge
             # point (T1 local-first). Claim a durable approval generation before
             # any Git side effect so decision creation cannot land mid-merge;
             # never hold db_lock across external Git work.
-            wt = None
-            needs_git_merge = False
-            if features.enabled(app.state.config, features.REPO_WORKTREES):
-                wt = worktrees.job_worktree_row(db(), job_id)
-                if wt and wt["status"] in ("active", "conflict", "merging"):
-                    needs_git_merge = True
+            wt = worktrees.job_worktree_row(db(), job_id)
+            needs_git_merge = bool(
+                wt and wt["status"] in ("active", "conflict", "merging")
+            )
             # Any worktree-backed final approve takes a durable intent so merge
             # and decision creation stay mutually exclusive. Already-merged rows
             # resume finalize for the live generation without merging again.

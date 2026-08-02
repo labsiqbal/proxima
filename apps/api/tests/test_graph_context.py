@@ -17,13 +17,12 @@ from proxima_api.graph_context import (
     GraphTamperedError,
     _query_graph_data,
 )
-from proxima_api.main import create_app
+from proxima_api.main import _config_from_env, create_app
+from proxima_api.settings import normalize_config
 
 
 def _api(
     tmp_path: Path,
-    *,
-    feature_enabled: bool = True,
     **config,
 ) -> tuple[TestClient, dict[str, str]]:
     app = create_app(
@@ -36,7 +35,6 @@ def _api(
             "start_worker": False,
             "update_check": False,
             "container_registry_refresh_seconds": 0,
-            "feature_master_orchestrator": feature_enabled,
             **config,
         }
     )
@@ -95,23 +93,9 @@ def _rebuild_code(
     return response.json()
 
 
-def test_graph_routes_are_authenticated_feature_gated_and_path_free(
+def test_graph_routes_are_authenticated_and_path_free(
     tmp_path: Path,
 ):
-    disabled, disabled_headers = _api(
-        tmp_path / "disabled",
-        feature_enabled=False,
-    )
-    _container(disabled, disabled_headers, with_code=False)
-    off = disabled.get(
-        "/api/containers/graph-one/graphs",
-        headers=disabled_headers,
-    )
-    assert off.status_code == 503
-    assert disabled.app.state.db.execute(
-        "SELECT COUNT(*) FROM graph_states"
-    ).fetchone()[0] == 0
-
     api, headers = _api(tmp_path / "enabled")
     project, area_id = _container(api, headers)
     password = api.post(
@@ -1129,3 +1113,17 @@ def test_graph_semantic_egress_opt_in_is_refused_without_cloud_adapter(
     assert response.status_code == 409, response.text
     assert "not implemented" in response.text
     assert "graphify-out" not in response.text
+
+
+def test_graph_semantic_egress_defaults_off_and_requires_explicit_opt_in(
+    monkeypatch,
+):
+    monkeypatch.delenv("PROXIMA_GRAPH_SEMANTIC_EGRESS", raising=False)
+    assert _config_from_env()["graph_semantic_egress_enabled"] is False
+    assert normalize_config()["graph_semantic_egress_enabled"] is False
+
+    monkeypatch.setenv("PROXIMA_GRAPH_SEMANTIC_EGRESS", "1")
+    assert _config_from_env()["graph_semantic_egress_enabled"] is True
+    assert normalize_config(
+        {"graph_semantic_egress_enabled": "true"}
+    )["graph_semantic_egress_enabled"] is True

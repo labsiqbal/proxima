@@ -544,7 +544,7 @@ def _add_repo_job_worktrees(conn: sqlite3.Connection) -> None:
     """Worktree machinery for repo jobs, Phase-1 slice 2 (T1): bind a job to
     its target container area and track its isolated worktree.
 
-    Two additive pieces, both inert until ``feature_repo_worktrees`` is on:
+    Two additive pieces (both inert until the worktree machinery uses them):
 
     - ``jobs.target_area_id`` - the ONE area (T1: exactly one target) the job
       works against, set before it runs. Pointing at a code area is what makes

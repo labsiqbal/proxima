@@ -14,7 +14,6 @@ def _client(tmp_path: Path) -> tuple[TestClient, dict[str, str]]:
         "workspace_root": str(tmp_path / "ws"),
         "projectctl_path": "/usr/bin/true",
         "start_worker": False,
-        "feature_design_studio": True,
     })
     c = TestClient(app)
     token = c.post("/auth/auto").json()["token"]

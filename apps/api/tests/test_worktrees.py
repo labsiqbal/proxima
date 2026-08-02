@@ -5,11 +5,9 @@ root + subfolder repos, dirty-repo refusal, crash-leftover cleanup), the
 diff endpoint contract, merge success + conflict paths through approve,
 the reject path (slice 4: fail the job, record the why, tear the worktree
 down without merging), the full worktree -> diff -> approve -> merge
-lifecycle on the LIVE worker, and the flag-off regression: with
-``feature_repo_worktrees`` off (the slice-4 escape hatch) repo-targeted
-jobs behave exactly as before the machinery existed - including the
-worker's cwd selection, proven end-to-end with a real ACP subprocess
-that reports its own working directory.
+lifecycle on the LIVE worker, and the worker's cwd selection, proven
+end-to-end with a real ACP subprocess that reports its own working
+directory.
 """
 from __future__ import annotations
 
@@ -22,7 +20,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from proxima_api import features, runner_specs
+from proxima_api import runner_specs
 from proxima_api.main import create_app
 from proxima_api.runner_specs import RunnerSpec
 from project_test_utils import with_browse_root
@@ -265,7 +263,7 @@ def test_merge_refuses_dirty_repo_and_switched_branch(tmp_path: Path):
         merge_job_branch(repo, job_branch(10), "main", "m")
 
 
-# ── API contract (flag ON) ───────────────────────────────────────────────
+# ── API contract ─────────────────────────────────────────────────────────
 
 
 def _app(tmp_path: Path, **config):
@@ -302,7 +300,7 @@ def _repo_job(c: TestClient, slug: str, folder: Path, brief: str = "change the c
 def test_repo_job_start_diff_approve_merge_lifecycle(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "myrepo")
     base_sha = _git(repo, "rev-parse", "HEAD")
-    app = _app(tmp_path, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     c = _client(app)
     job = _repo_job(c, "myrepo", repo)
 
@@ -354,7 +352,7 @@ def test_repo_job_start_diff_approve_merge_lifecycle(tmp_path: Path):
 
 def test_autonomous_repo_task_still_stops_for_diff_review(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "autonomous-repo")
-    app = _app(tmp_path, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     client = _client(app)
     linked = client.post(
         "/api/projects/link",
@@ -395,7 +393,7 @@ def test_repo_job_worktree_cut_from_subfolder_area(tmp_path: Path):
     container = tmp_path / "container"
     (container / "reports").mkdir(parents=True)
     repo = _scratch_repo(container / "api")
-    app = _app(tmp_path, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     c = _client(app)
     job = _repo_job(c, "container", container)
 
@@ -410,7 +408,7 @@ def test_repo_job_worktree_cut_from_subfolder_area(tmp_path: Path):
 def test_start_refuses_dirty_target_repo_and_leaves_job_queued(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "myrepo")
     (repo / "README.md").write_text("owner wip\n", encoding="utf-8")
-    app = _app(tmp_path, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     c = _client(app)
     job = _repo_job(c, "myrepo", repo)
 
@@ -430,7 +428,7 @@ def test_start_refuses_dirty_target_repo_and_leaves_job_queued(tmp_path: Path):
 
 def test_approve_merge_conflict_parks_job_in_review_then_retry_succeeds(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "myrepo")
-    app = _app(tmp_path, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     c = _client(app)
     job = _repo_job(c, "myrepo", repo)
     assert c.post(f"/api/jobs/{job['id']}/start").status_code == 200
@@ -463,7 +461,7 @@ def test_approve_merge_conflict_parks_job_in_review_then_retry_succeeds(tmp_path
 
 def test_reject_fails_job_records_reason_and_discards_worktree(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "myrepo")
-    app = _app(tmp_path, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     c = _client(app)
     job = _repo_job(c, "myrepo", repo)
     assert c.post(f"/api/jobs/{job['id']}/start").status_code == 200
@@ -487,7 +485,7 @@ def test_reject_fails_job_records_reason_and_discards_worktree(tmp_path: Path):
 
 def test_reject_requires_a_reason_and_a_review_state(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "myrepo")
-    app = _app(tmp_path, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     c = _client(app)
     job = _repo_job(c, "myrepo", repo)
 
@@ -503,9 +501,9 @@ def test_reject_requires_a_reason_and_a_review_state(tmp_path: Path):
 
 
 def test_reject_is_a_review_verdict_not_worktree_machinery(tmp_path: Path):
-    # A plain (non-repo) job rejects the same way, flag on or off: failed +
-    # reason recorded, and no worktree key ever appears.
-    app = _app(tmp_path, feature_repo_worktrees=False)
+    # A plain (non-repo) job rejects the same way: failed + reason recorded,
+    # and no worktree key ever appears.
+    app = _app(tmp_path)
     c = _client(app)
     job = c.post("/api/jobs", json={"input": {"brief": "write a note"}}).json()
     app.state.db.execute("UPDATE jobs SET status='review' WHERE id=?", (job["id"],))
@@ -520,7 +518,7 @@ def test_reject_is_a_review_verdict_not_worktree_machinery(tmp_path: Path):
 def test_create_job_validates_target_area(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "myrepo")
     other = _scratch_repo(tmp_path / "other")
-    app = _app(tmp_path, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     c = _client(app)
     assert c.post(
         "/api/projects/link",
@@ -539,9 +537,9 @@ def test_create_job_validates_target_area(tmp_path: Path):
     assert projectless.status_code == 422
 
 
-def test_ops_targeted_job_gets_no_worktree_even_with_flag_on(tmp_path: Path):
+def test_ops_targeted_job_gets_no_worktree(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "myrepo")
-    app = _app(tmp_path, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     c = _client(app)
     p = c.post(
         "/api/projects/link",
@@ -556,7 +554,7 @@ def test_ops_targeted_job_gets_no_worktree_even_with_flag_on(tmp_path: Path):
 
 def test_delete_job_tears_down_worktree_and_branch(tmp_path: Path):
     repo = _scratch_repo(tmp_path / "myrepo")
-    app = _app(tmp_path, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     c = _client(app)
     job = _repo_job(c, "myrepo", repo)
     assert c.post(f"/api/jobs/{job['id']}/start").status_code == 200
@@ -574,7 +572,7 @@ def test_start_recuts_worktree_when_dir_vanished(tmp_path: Path):
     import shutil
 
     repo = _scratch_repo(tmp_path / "myrepo")
-    app = _app(tmp_path, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     c = _client(app)
     job = _repo_job(c, "myrepo", repo)
     assert c.post(f"/api/jobs/{job['id']}/start").status_code == 200
@@ -586,38 +584,6 @@ def test_start_recuts_worktree_when_dir_vanished(tmp_path: Path):
     again = c.get(f"/api/jobs/{job['id']}").json()["worktree"]
     assert again["status"] == "active"
     assert Path(again["worktree_path"]).is_dir()
-
-
-# ── flag OFF (the escape hatch): provably unchanged behavior ─────────────
-
-
-def test_flag_off_repo_targeted_job_runs_exactly_as_today(tmp_path: Path):
-    repo = _scratch_repo(tmp_path / "myrepo")
-    # The flag defaults ON since slice 4; off is the owner's escape hatch and
-    # must still behave exactly as before the machinery existed.
-    app = _app(tmp_path, feature_repo_worktrees=False)
-    c = _client(app)
-    job = _repo_job(c, "myrepo", repo)
-
-    started = c.post(f"/api/jobs/{job['id']}/start")
-    assert started.status_code == 200
-    # No worktree machinery ran: no row, no dir, no branch, payload unchanged.
-    assert "worktree" not in started.json()
-    assert app.state.db.execute("SELECT COUNT(*) FROM job_worktrees").fetchone()[0] == 0
-    assert not (tmp_path / "ws" / "worktrees").exists()
-    assert _git(repo, "branch", "--list", "proxima/*") == ""
-    assert _git(repo, "status", "--porcelain") == ""
-
-    # The diff endpoint is feature-gated like every disabled feature.
-    diff = c.get(f"/api/jobs/{job['id']}/diff")
-    assert diff.status_code == 503
-    assert diff.json() == {"detail": features.disabled_payload(features.REPO_WORKTREES)}
-
-    # Approve runs the classic path: review -> done, repo untouched.
-    app.state.db.execute("UPDATE jobs SET status='review' WHERE id=?", (job["id"],))
-    approved = c.post(f"/api/jobs/{job['id']}/approve")
-    assert approved.status_code == 200 and approved.json()["status"] == "done"
-    assert _git(repo, "log", "--oneline").count("\n") == 0  # still just the init commit
 
 
 # ── worker cwd seam, end-to-end (real ACP subprocess reports its cwd) ────
@@ -687,7 +653,7 @@ def _restore_fake_runner(saved_env, saved_spec):
         runner_specs.RUNNER_SPECS["fake-acp"] = saved_spec
 
 
-def _run_repo_job_and_capture_cwd(tmp_path: Path, repo_worktrees: bool) -> tuple[str, dict, Path]:
+def _run_repo_job_and_capture_cwd(tmp_path: Path) -> tuple[str, dict, Path]:
     """Drive one repo-targeted job through the LIVE worker + a real ACP
     subprocess; return (the cwd the agent actually ran in, the job payload,
     the repo path)."""
@@ -701,7 +667,6 @@ def _run_repo_job_and_capture_cwd(tmp_path: Path, repo_worktrees: bool) -> tuple
             start_worker=True,
             start_scheduler=False,
             run_worker_poll_interval_ms=20,
-            feature_repo_worktrees=repo_worktrees,
         )
         with TestClient(app) as c:
             tok = c.post("/auth/auto").json()["token"]
@@ -724,17 +689,11 @@ def _run_repo_job_and_capture_cwd(tmp_path: Path, repo_worktrees: bool) -> tuple
         _restore_fake_runner(*saved)
 
 
-def test_flag_on_run_executes_inside_the_worktree(tmp_path: Path):
-    cwd, payload, repo = _run_repo_job_and_capture_cwd(tmp_path, repo_worktrees=True)
+def test_repo_run_executes_inside_the_worktree(tmp_path: Path):
+    cwd, payload, repo = _run_repo_job_and_capture_cwd(tmp_path)
     wt_path = str(Path(payload["worktree"]["worktree_path"]).resolve())
     assert str(Path(cwd).resolve()) == wt_path
     assert not cwd.startswith(str(repo))
-
-
-def test_flag_off_run_executes_in_the_project_path_as_today(tmp_path: Path):
-    cwd, payload, repo = _run_repo_job_and_capture_cwd(tmp_path, repo_worktrees=False)
-    assert str(Path(cwd).resolve()) == str(repo.resolve())
-    assert "worktree" not in payload
 
 
 # Same JSON-RPC skeleton, but this agent EDITS its working directory - the
@@ -753,7 +712,7 @@ FAKE_EDIT_ACP_SCRIPT = FAKE_CWD_ACP_SCRIPT.replace(
 
 
 def test_repo_job_live_e2e_worktree_diff_approve_merge_lands_on_main(tmp_path: Path):
-    """The slice-4 E2E, on the DEFAULT config (flag on): a container project
+    """The slice-4 E2E: a container project
     with a scratch subfolder repo runs a repo job on the live worker + a real
     ACP subprocess whose edit happens in the isolated worktree, shows up in
     the review diff, and lands on the scratch repo's main line when the
@@ -767,8 +726,6 @@ def test_repo_job_live_e2e_worktree_diff_approve_merge_lands_on_main(tmp_path: P
     repo = _scratch_repo(container / "app")
     saved = _install_fake_runner(script)
     try:
-        # Deliberately no feature_repo_worktrees override: slice 4 turns the
-        # flag on by default, and this test proves that default path.
         app = _app(
             tmp_path,
             start_worker=True,
@@ -827,8 +784,6 @@ def test_graph_repo_node_runs_in_worktree_and_ops_node_in_ops_area(tmp_path: Pat
             start_worker=True,
             start_scheduler=False,
             run_worker_poll_interval_ms=20,
-            feature_repo_worktrees=True,
-            feature_workflow_graph=True,
         )
         with TestClient(app) as c:
             tok = c.post("/auth/auto").json()["token"]

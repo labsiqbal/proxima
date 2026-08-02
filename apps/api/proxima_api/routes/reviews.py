@@ -12,24 +12,15 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
-from .. import features
-from .. import kinds
 from ..message_reviews import build_source_merge_prompt, build_validate_prompt, review_payload
 from ..schemas import MessageReviewAskOriginalRequest, MessageReviewCreateRequest
 
 
 def register(app, deps):
     db = deps["db"]
-    cfg = deps["cfg"]
     current_user = deps["current_user"]
     require_generic_run_mode = deps["require_generic_run_mode"]
     profile_for_user = deps["profile_for_user"]
-
-    def _require_mode_feature(mode: str | None) -> None:
-        # Feature-blind gate via the registry (mirrors the chat gate).
-        flag = kinds.feature_flag_for(mode)
-        if flag:
-            features.require(cfg, flag)
 
     def _source_message_for_user(message_id: int, user: dict[str, Any]) -> dict[str, Any]:
         row = db().execute(
@@ -105,7 +96,6 @@ def register(app, deps):
     @app.post("/api/messages/{message_id}/reviews", status_code=202)
     def create_message_review(message_id: int, payload: MessageReviewCreateRequest, user: dict[str, Any] = Depends(current_user)):
         source = _source_message_for_user(message_id, user)
-        _require_mode_feature(source.get("session_mode"))
         require_generic_run_mode(source.get("session_mode"))
         reviewer = _pick_reviewer_profile(source.get("source_runner"), payload.reviewer_profile_id, user)
         reviewer_profiles = [{"id": reviewer["id"], "name": reviewer["name"], "runner_id": reviewer["runner_id"]}]
@@ -166,7 +156,6 @@ def register(app, deps):
     @app.post("/api/message-reviews/{review_id}/replace-answer")
     def replace_answer_with_review(review_id: int, user: dict[str, Any] = Depends(current_user)):
         review = _review_for_user(review_id, user)
-        _require_mode_feature(review.get("session_mode"))
         if review.get("status") != "done" or not review.get("revised_content"):
             raise HTTPException(status_code=400, detail="review has no revised content yet")
         original = review.get("source_original_content") or review.get("source_content") or ""
@@ -184,7 +173,6 @@ def register(app, deps):
     @app.post("/api/message-reviews/{review_id}/restore-original")
     def restore_original_answer(review_id: int, user: dict[str, Any] = Depends(current_user)):
         review = _review_for_user(review_id, user)
-        _require_mode_feature(review.get("session_mode"))
         original = review.get("source_original_content")
         if not original:
             raise HTTPException(status_code=400, detail="review has no stored original content")
@@ -199,7 +187,6 @@ def register(app, deps):
     @app.post("/api/message-reviews/{review_id}/ask-original", status_code=202)
     def ask_original_to_revise(review_id: int, payload: MessageReviewAskOriginalRequest, user: dict[str, Any] = Depends(current_user)):
         review = _review_for_user(review_id, user)
-        _require_mode_feature(review.get("session_mode"))
         require_generic_run_mode(review.get("session_mode"))
         profile = profile_for_user(review.get("source_profile_id"), user)
         prompt = build_source_merge_prompt(

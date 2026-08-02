@@ -160,10 +160,8 @@ GENERAL_GUIDE = (
 )
 
 
-def _general_guide(*, include_design_studio: bool) -> str:
-    outputs = ["documents/reports → a .md/.pdf/.html file under artifacts/", "runnable apps → their own folder with a package.json (auto-detected)"]
-    if include_design_studio:
-        outputs.insert(0, "designs → artifacts/design/<id>/scene.json")
+def _general_guide() -> str:
+    outputs = ["designs → artifacts/design/<id>/scene.json", "documents/reports → a .md/.pdf/.html file under artifacts/", "runnable apps → their own folder with a package.json (auto-detected)"]
     guidance = (
         "- User-facing deliverables belong under artifacts/ (or reports/ / exports/) so "
         f"Proxima surfaces them as result cards: {', '.join(outputs)}."
@@ -444,7 +442,6 @@ def build_run_preamble(
     project_slug: str | None,
     wiki_root: Path | None,
     *,
-    include_design_studio: bool = False,
     design_guidelines: str | None = None,
     moodboard_references: list[dict[str, Any]] | None = None,
     host_tools: list[dict[str, Any]] | None = None,
@@ -454,7 +451,7 @@ def build_run_preamble(
     consult the project's wiki memory. Runner-agnostic plain text. `host_tools` is
     the probed recommended-tools list (T8 detect-and-advertise): present tools get
     a one-liner so the agent knows they exist without a PATH hunt."""
-    general_guide = _general_guide(include_design_studio=include_design_studio)
+    general_guide = _general_guide()
     tools_block = recommended_tools.tools_preamble_block(
         [t for t in (host_tools or []) if t.get("present")])
     if tools_block:
@@ -470,26 +467,25 @@ def build_run_preamble(
         "",
         QFORM_GUIDE,
     ]
-    if include_design_studio:
-        lines += ["", DESIGN_GUIDE]
-        if design_guidelines:
-            # The project owner's brand direction — highest-priority design context,
-            # short of the user's explicit request this turn.
-            lines += [
-                "",
-                "### This project's brand guidelines (design.md)",
-                "The project owner wrote these design preferences. Treat them as the "
-                "DEFAULT brand direction for every design here — palette, type, tone, "
-                "do/don't — and follow them unless the user's request this turn overrides "
-                "a specific point. When they conflict with a generic instinct above, the "
-                "guidelines win.",
-                "```",
-                design_guidelines.strip()[:12000],
-                "```",
-            ]
-        moodboard_context = moodboard_reference_context(moodboard_references or [])
-        if moodboard_context:
-            lines += ["", moodboard_context]
+    lines += ["", DESIGN_GUIDE]
+    if design_guidelines:
+        # The project owner's brand direction — highest-priority design context,
+        # short of the user's explicit request this turn.
+        lines += [
+            "",
+            "### This project's brand guidelines (design.md)",
+            "The project owner wrote these design preferences. Treat them as the "
+            "DEFAULT brand direction for every design here — palette, type, tone, "
+            "do/don't — and follow them unless the user's request this turn overrides "
+            "a specific point. When they conflict with a generic instinct above, the "
+            "guidelines win.",
+            "```",
+            design_guidelines.strip()[:12000],
+            "```",
+        ]
+    moodboard_context = moodboard_reference_context(moodboard_references or [])
+    if moodboard_context:
+        lines += ["", moodboard_context]
     root = Path(wiki_root) if wiki_root is not None else None
     if root is not None and root.is_dir():
         lines += ["", "This project keeps durable memory as markdown notes in wiki/."]
@@ -531,7 +527,7 @@ def build_run_preamble(
     # Bridge the (separate) Design Studio chat → the main chat: list the project's
     # existing designs so the agent is aware of visuals built/edited there, and knows
     # to read the current layout before restyling or building pages from them.
-    if root is not None and include_design_studio:
+    if root is not None:
         designs = list_project_designs(root.parent)
         if designs:
             lines += ["", "## Designs in this project (Design Studio)",

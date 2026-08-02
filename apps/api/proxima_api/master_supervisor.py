@@ -10,7 +10,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from . import app_settings, features
+from . import app_settings
 from .master_runtime import (
     master_active_slots,
     master_capacity,
@@ -44,10 +44,6 @@ class MasterSupervisor:
             )
 
     def tick(self) -> dict[str, Any]:
-        if not features.enabled(
-            self.app.state.config, features.MASTER_ORCHESTRATOR
-        ):
-            return {"active": False, "started": []}
         if not self._tick_lock.acquire(blocking=False):
             return {"active": True, "started": [], "busy": True}
         try:

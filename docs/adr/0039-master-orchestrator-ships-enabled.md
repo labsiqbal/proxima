@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-08-01
+- Note (2026-08-02): the feature-flag system (including the
+  `PROXIMA_FEATURE_MASTER_ORCHESTRATOR` off switch this ADR retained) was
+  removed entirely in prune A2 (#129); Master is now unconditional.
 
 ## Context
 

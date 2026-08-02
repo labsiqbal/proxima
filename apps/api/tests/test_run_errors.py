@@ -248,7 +248,6 @@ def _project_session_run(
             "workspace_root": str(tmp_path / "ws"),
             "projectctl_path": "/usr/bin/true",
             "start_worker": False,
-            "feature_repo_worktrees": True,
         }
     )
     app.state.acp_manager = FakeAcpManager("stream")

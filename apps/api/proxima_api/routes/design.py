@@ -1,9 +1,9 @@
 """Design Studio image routes.
 
 Extracted from routes/files.py: the design-scene + image-generation endpoints are
-Design Studio's own surface (gated by PROXIMA_FEATURE_DESIGN_STUDIO). They reach
-the shared filesystem + provider settings, but live in their own module so the
-feature can be reasoned about (and eventually toggled) as a unit.
+Design Studio's own surface. They reach the shared filesystem + provider
+settings, but live in their own module so the feature can be reasoned about as
+a unit.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from .. import brand_extract
 from .. import container_registry
 from .. import design_scenes
 from .. import file_targets
-from .. import features
 from .. import fsapi
 from .. import image_providers
 from .. import media_settings
@@ -31,7 +30,6 @@ from ..schemas import ImageGenRequest
 
 def register(app, deps):
     db = deps["db"]
-    cfg = deps["cfg"]
     current_user = deps["current_user"]
     _ops_root = deps["_ops_root"]
     profile_for_user = deps["profile_for_user"]
@@ -52,7 +50,6 @@ def register(app, deps):
     @app.get("/api/projects/{slug}/design/moodboard")
     def list_moodboard(slug: str, user: dict[str, Any] = Depends(current_user)):
         """List this project's curated visual references."""
-        features.require(cfg, features.DESIGN_STUDIO)
         root = _ops_root(slug, user)
         return {"items": moodboard.read_items(root)}
 
@@ -67,7 +64,6 @@ def register(app, deps):
         URL preview fetches are best-effort. A reachable page without usable OG
         metadata, or a transient network failure, still produces a fallback card.
         """
-        features.require(cfg, features.DESIGN_STUDIO)
         data = payload or {}
         raw_url = str(data.get("url") or "").strip()
         image_path = str(data.get("imagePath") or "").strip()
@@ -159,7 +155,6 @@ def register(app, deps):
         user: dict[str, Any] = Depends(current_user),
     ):
         """Edit a Moodboard note/tags or select it for design-run context."""
-        features.require(cfg, features.DESIGN_STUDIO)
         data = payload or {}
         patch: dict[str, Any] = {}
         if "note" in data:
@@ -191,7 +186,6 @@ def register(app, deps):
         slug: str, item_id: str, user: dict[str, Any] = Depends(current_user)
     ):
         """Delete a Moodboard card and its private cached/uploaded image."""
-        features.require(cfg, features.DESIGN_STUDIO)
         with _project_mutation(slug, user):
             root = _ops_root(slug, user)
             item = moodboard.delete_item(root, item_id)
@@ -218,7 +212,6 @@ def register(app, deps):
         auto-injected into every future design run (see wiki_memory.read_design_guidelines).
         Async, like /design: returns {run_id, session_id}; the client watches the run
         and reloads design.md when it finishes."""
-        features.require(cfg, features.DESIGN_STUDIO)
         data = payload or {}
         urls = [
             u for u in (data.get("urls") or []) if isinstance(u, str) and u.strip()
@@ -328,7 +321,6 @@ def register(app, deps):
     ):
         """Seed a new Design Studio scene containing an existing project image as a
         full-bleed layer — the 'edit this image in Design Studio' bridge from chat."""
-        features.require(cfg, features.DESIGN_STUDIO)
         payload = payload or {}
         rel = str(payload.get("path") or "").strip()
         target = payload.get("target", "")
@@ -380,7 +372,6 @@ def register(app, deps):
         """Generate (text→image) or edit (image+prompt→image) via the configured
         provider (Settings); save the result into the project's shared design
         asset library and return its path."""
-        features.require(cfg, features.DESIGN_STUDIO)
         prov = media_settings.resolve_image_gen(db())
         # Source/reference images — the multi-image list wins over the single `image`.
         src_paths = (
@@ -476,7 +467,6 @@ def register(app, deps):
     def design_image_models(slug: str, user: dict[str, Any] = Depends(current_user)):
         """For the codex provider there's no static model list (login-based); for
         an openai-compatible endpoint we report configured + the saved model."""
-        features.require(cfg, features.DESIGN_STUDIO)
         prov = media_settings.resolve_image_gen(db())
         spec = image_providers.get_provider(prov["provider"])
         if spec.kind == "codex":

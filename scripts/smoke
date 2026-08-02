@@ -669,10 +669,9 @@ async function browserNavigationSmoke({ name, width, height, port, mobile, token
         async function checkDelegateShell() {
           const delegate = [...document.querySelectorAll('.shell-mode-switch button')]
             .find(node => (node.textContent || '').trim() === 'Delegate')
-          // Master remains feature-gated, so the standard smoke fixture normally
-          // has no Delegate control. Enabled installations get this browser-only
-          // navigation regression without changing the fixture's authority.
-          if (!delegate) return null
+          // Master is part of the always-on product surface, so every install
+          // must expose the Delegate control.
+          if (!delegate) throw new Error('Delegate mode switch is missing')
           delegate.click()
           for (let i = 0; i < 40; i += 1) {
             await wait(100)
@@ -681,7 +680,7 @@ async function browserNavigationSmoke({ name, width, height, port, mobile, token
           const nav = document.querySelector('[aria-label="Delegate navigation"]')
           if (!nav) throw new Error(`Delegate navigation did not open\\n${body().slice(0, 500)}`)
           const labels = [...nav.querySelectorAll('button')].map(node => (node.textContent || '').trim())
-          if (labels.join('|') !== 'Master|Tasks|Archive') throw new Error(`unexpected Delegate navigation: ${labels.join('|')}`)
+          if (labels.join('|') !== 'Master|Tasks|Archive|Files') throw new Error(`unexpected Delegate navigation: ${labels.join('|')}`)
           if (document.querySelector('[aria-label^="Active project:"]')) throw new Error('Delegate exposed a project selector')
           if (document.querySelector('[aria-label="Toggle sidebar"]')) throw new Error('Delegate exposed a sidebar collapse control')
           if (document.querySelector('[aria-label="Resize sidebar"]')) throw new Error('Delegate exposed a sidebar resize control')

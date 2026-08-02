@@ -1694,8 +1694,6 @@ def main() -> None:
             "PROXIMA_CLAUDE_LIVE_HOME": "0",
             "PROXIMA_APPS_DOMAIN": "preview.test",
             "PROXIMA_DB_PATH": str(database),
-            "PROXIMA_FEATURE_MASTER_ORCHESTRATOR": "0",
-            "PROXIMA_FEATURE_DESIGN_STUDIO": "1",
             "PROXIMA_HERMES_PROFILES_ROOT": str(runner_home),
             "PROXIMA_LINK_ROOTS": str(workspace),
             "PROXIMA_PORT": str(port),

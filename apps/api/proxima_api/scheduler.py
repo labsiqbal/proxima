@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from .auth import iso_now
-from . import features, schedule_policy, worktrees, workflows as wf
+from . import schedule_policy, worktrees, workflows as wf
 from .graph import normalize_graph
 
 
@@ -145,14 +145,6 @@ def _insert_scheduled_graph_job(
     run cannot drift apart.
     """
     db = app.state.worker_db
-    if not features.enabled(app.state.config, features.WORKFLOW_GRAPH):
-        # The master switch is off, so the executor would never dispatch this job. Skip
-        # rather than leave a 'running' job nothing will ever advance.
-        logging.getLogger("proxima.scheduler").warning(
-            "schedule %s targets a graph workflow while %s is off; skipped",
-            sched["id"], features.WORKFLOW_GRAPH,
-        )
-        return None
     try:
         graph = normalize_graph(wfrow["graph"] or "")
     except Exception:

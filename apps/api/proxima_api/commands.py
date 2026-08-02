@@ -4,7 +4,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from . import features
 from .runner_specs import default_runner
 
 
@@ -26,7 +25,6 @@ class CommandDefinition:
     group: str
     surface: str
     unavailable_message: str | None = None
-    feature: str | None = None
     skill_id: str | None = None
 
 
@@ -40,7 +38,7 @@ COMMANDS: tuple[CommandDefinition, ...] = (
     CommandDefinition("/goal", "Autonomous goal loop — agent works across turns until done", "Session", "proxima"),
     CommandDefinition("/masterplan", "Turn a product idea into an execution-ready masterplan package", "Planning", "proxima", skill_id=MASTERPLAN_SKILL_ID),
     CommandDefinition("/image", "Generate an image with the selected image provider (Settings → Image generation)", "Media", "proxima"),
-    CommandDefinition("/design", "Create a Design Studio draft from a brief", "Media", "proxima", feature=features.DESIGN_STUDIO),
+    CommandDefinition("/design", "Create a Design Studio draft from a brief", "Media", "proxima"),
     CommandDefinition("/model", "Open/select model via UI", "Runner", "ui-owned", "/model is managed by Proxima model picker, not raw chat."),
     CommandDefinition("/clear", "Terminal-only clear screen command", "Unavailable", "terminal-only", "/clear is terminal-only. Use /new or the Sessions sidebar in Proxima."),
     CommandDefinition("/tools", "Terminal-only toolset command", "Unavailable", "terminal-only", "/tools is terminal-only. Use Runners/Settings in Proxima."),
@@ -70,16 +68,12 @@ def normalize_command(raw: str) -> tuple[str, str, bool]:
     return name, arg.strip(), force_raw
 
 
-def reserved_command_names(config: dict[str, Any] | None = None) -> set[str]:
+def reserved_command_names() -> set[str]:
     """Built-in Proxima command names (+ aliases) that always win collisions."""
-    names = {cmd.name for cmd in _available_commands(config)}
+    names = {cmd.name for cmd in COMMANDS}
     names.update(ALIASES.keys())
     names.update(ALIASES.values())
     return names
-
-
-def _available_commands(config: dict[str, Any] | None) -> tuple[CommandDefinition, ...]:
-    return tuple(cmd for cmd in COMMANDS if not cmd.feature or features.enabled(config, cmd.feature))
 
 
 _LEAF_RE = re.compile(r"[^a-z0-9]+")
@@ -143,15 +137,13 @@ def enabled_skills(
 def build_skill_slash_commands(
     skills: list[dict[str, Any]],
     selection: dict[str, Any] | None = None,
-    *,
-    config: dict[str, Any] | None = None,
 ) -> list[CommandDefinition]:
     """Enabled skills → Proxima slash commands (not MCP).
 
     Naming: leaf; reserved built-ins win; collisions become group-leaf.
     `/masterplan` stays first-class and is not duplicated from the skill list.
     """
-    reserved = reserved_command_names(config)
+    reserved = reserved_command_names()
     # First-class skill slash names are reserved so the dynamic catalog skips them.
     reserved.update(FIRST_CLASS_SKILL_COMMANDS.values())
     used: set[str] = set()
@@ -189,30 +181,27 @@ def build_skill_slash_commands(
 def skill_command_map(
     skills: list[dict[str, Any]],
     selection: dict[str, Any] | None = None,
-    *,
-    config: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Map slash name → skill id for enabled skills (+ first-class masterplan)."""
     # FIRST_CLASS is skill_id → name; invert for the execute map.
     by_name = {name: sid for sid, name in FIRST_CLASS_SKILL_COMMANDS.items()}
-    for cmd in build_skill_slash_commands(skills, selection, config=config):
+    for cmd in build_skill_slash_commands(skills, selection):
         if cmd.skill_id:
             by_name[cmd.name] = cmd.skill_id
     return by_name
 
 
 def command_catalog(
-    config: dict[str, Any] | None = None,
     *,
     skills: list[dict[str, Any]] | None = None,
     selection: dict[str, Any] | None = None,
 ) -> dict:
     """Built-in commands plus optional per-profile skill slash entries."""
     groups: dict[str, list[dict]] = {}
-    for cmd in _available_commands(config):
+    for cmd in COMMANDS:
         groups.setdefault(cmd.group, []).append(_catalog_entry(cmd))
     if skills is not None:
-        for cmd in build_skill_slash_commands(skills, selection, config=config):
+        for cmd in build_skill_slash_commands(skills, selection):
             groups.setdefault(cmd.group, []).append(_catalog_entry(cmd))
     return {"groups": [{"label": label, "commands": commands} for label, commands in groups.items()]}
 
@@ -338,12 +327,10 @@ def execute_command(
     user: dict,
     project_slug: str | None = None,
     runner_id: str | None = None,
-    config: dict[str, Any] | None = None,
     skill_map: dict[str, str] | None = None,
     skill_commands: list[CommandDefinition] | None = None,
 ) -> dict:
     name, arg, force_raw = normalize_command(raw_command)
-    features.require_command(config, name)
 
     if force_raw:
         return {
@@ -375,7 +362,7 @@ def execute_command(
         }
 
     if name == "/help":
-        names = [c.name for c in _available_commands(config) if c.surface == "proxima"]
+        names = [c.name for c in COMMANDS if c.surface == "proxima"]
         if skill_commands:
             names.extend(c.name for c in skill_commands if c.surface == "proxima")
         return {

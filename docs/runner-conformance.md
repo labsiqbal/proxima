@@ -39,8 +39,7 @@ reported as `master_runner_not_conforming`; it never degrades to prompt-only tru
 Codex is the only selectable production Master runner in this release. Version
 0.145.0 is the minimum because the adapter depends on empty sticky environments,
 empty selected capability roots, and dynamic tools. Installed older or
-unparseable versions fail before a turn starts. `feature_master_orchestrator`
-remains off by default.
+unparseable versions fail before a turn starts.
 
 Runner discovery publishes the adapter's static `masterChatOnly` declaration and
 the host-specific `masterEligible` result plus `masterUnavailableReason`.

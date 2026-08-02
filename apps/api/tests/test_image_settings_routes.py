@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from proxima_api import image_providers
+from proxima_api import app_settings, image_providers
 from proxima_api.main import create_app
 
 
@@ -14,7 +14,6 @@ def _client(tmp_path):
         "workspace_root": str(tmp_path / "workspace"),
         "projectctl_path": "/usr/bin/true",
         "start_worker": False,
-        "feature_design_studio": True,
     })
     c = TestClient(app)
     tok = c.post("/auth/auto").json()["token"]
@@ -202,3 +201,24 @@ def test_design_image_edit_bad_source_returns_400(tmp_path, monkeypatch):
 
     assert missing.status_code == 400
     assert escaping.status_code == 400
+
+
+def test_higgsfield_image_settings_remain_available_without_exposing_video_controls(tmp_path):
+    client = _client(tmp_path)
+    app_settings.set_json(client.app.state.db, app_settings.HIGGSFIELD_KEY, {
+        "imagePolicy": "zero-credit-only",
+        "imageModel": "old-image",
+        "videoPolicy": "confirm-credits",
+        "videoModel": "legacy-video",
+    })
+
+    settings = client.get("/api/settings/higgsfield")
+    assert set(settings.json()["settings"]) == {"imagePolicy", "imageModel"}
+    saved = client.put(
+        "/api/settings/higgsfield",
+        json={"imagePolicy": "ask-before-credits", "imageModel": "nano-banana"},
+    )
+    assert saved.status_code == 200
+    assert set(saved.json()["settings"]) == {"imagePolicy", "imageModel"}
+    stored = app_settings.get_json(client.app.state.db, app_settings.HIGGSFIELD_KEY)
+    assert set(stored) == {"imagePolicy", "imageModel"}

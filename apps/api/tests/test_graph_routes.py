@@ -10,7 +10,7 @@ from proxima_api.main import create_app
 from project_test_utils import with_browse_root
 
 
-def _app(tmp_path, *, enabled: bool, **overrides):
+def _app(tmp_path, **overrides):
     config = {
         "database_path": str(tmp_path / "proxima.db"),
         "workspace_root": str(tmp_path / "ws"),
@@ -19,7 +19,6 @@ def _app(tmp_path, *, enabled: bool, **overrides):
         "seed_users": [
             {"username": "bob", "role": "member", "os_user": "bob"}
         ],
-        "feature_workflow_graph": enabled,
         "start_worker": False,
     }
     config.update(overrides)
@@ -92,7 +91,7 @@ def _states(client: TestClient, job_id: int) -> dict[str, dict[str, Any]]:
 
 
 def test_create_edit_plan_start_and_inspect_graph_job(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job = _create(client)
     job_id = job["id"]
@@ -134,7 +133,7 @@ def test_create_edit_plan_start_and_inspect_graph_job(tmp_path):
 
 
 def test_graph_job_api_returns_one_timezone_aware_failed_run_projection(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job = _create(client)
     app.state.db.execute(
@@ -161,7 +160,7 @@ def test_graph_job_api_returns_one_timezone_aware_failed_run_projection(tmp_path
 
 
 def test_graph_job_payload_includes_owning_project_name(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     assert (
         client.post(
@@ -188,7 +187,7 @@ def test_graph_job_payload_includes_owning_project_name(tmp_path):
 
 
 def test_plan_patch_autosaves_graph_and_title_then_keeps_title_renameable(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job = _create(client)
     revised = {
@@ -232,7 +231,7 @@ def test_plan_patch_autosaves_graph_and_title_then_keeps_title_renameable(tmp_pa
 
 
 def test_plan_patch_rejects_blank_title_and_empty_payload(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job = _create(client)
     endpoint = f"/api/graph/jobs/{job['id']}/graph"
@@ -247,7 +246,7 @@ def test_plan_patch_rejects_blank_title_and_empty_payload(tmp_path):
 
 
 def test_edit_upstream_output_marks_descendants_stale_and_reruns(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job = _create(client)
     job_id = job["id"]
@@ -275,7 +274,7 @@ def test_edit_upstream_output_marks_descendants_stale_and_reruns(tmp_path):
 
 
 def test_rerun_node_invalidates_downstream_and_uses_new_attempt(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job_id = _create(client)["id"]
     client.post(f"/api/graph/jobs/{job_id}/start")
@@ -304,7 +303,7 @@ def test_rerun_node_invalidates_downstream_and_uses_new_attempt(tmp_path):
 
 
 def test_gate_approval_then_final_job_approval(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     graph = {"nodes": [{"id": "gate", "name": "Gate", "review_required": True}]}
     job_id = _create(client, graph)["id"]
@@ -326,7 +325,7 @@ def test_gate_approval_then_final_job_approval(tmp_path):
 
 
 def test_save_reviewed_graph_as_reusable_template(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     linear = client.post(
         "/api/workflows",
@@ -400,7 +399,7 @@ def test_save_reviewed_graph_as_reusable_template(tmp_path):
 
 
 def test_legacy_template_inputs_hydrate_without_changing_workflow_availability(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job = _create(client)
     template = client.post(
@@ -437,7 +436,7 @@ def test_legacy_template_inputs_hydrate_without_changing_workflow_availability(t
 
 
 def test_scheduled_trigger_refuses_enablement_without_unattended_input(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     graph = _chain_graph()
     graph["nodes"].insert(
@@ -476,7 +475,7 @@ def test_scheduled_trigger_refuses_enablement_without_unattended_input(tmp_path)
 
 
 def test_omitted_trigger_schedule_enabled_defaults_off_on_save_template(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     graph = _chain_graph()
     graph["nodes"].insert(
@@ -507,7 +506,7 @@ def test_omitted_trigger_schedule_enabled_defaults_off_on_save_template(tmp_path
 
 def test_manual_trigger_kind_still_promotes_schedule_seed(tmp_path):
     """Inspector Manual/Schedule is an authoring view; seed promotion keys off the object."""
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     graph = _chain_graph()
     graph["nodes"].insert(
@@ -558,32 +557,10 @@ def test_manual_trigger_kind_still_promotes_schedule_seed(tmp_path):
     assert schedules[0]["enabled"] is False
     assert schedules[0]["ready"] is False
     assert schedules[0]["unresolved_inputs"] == ["topic"]
-
-
-def test_graph_routes_are_inert_while_feature_is_off(tmp_path):
-    app = _app(tmp_path, enabled=False)
-    client = _client(app)
-    before = app.state.db.execute(
-        "SELECT COUNT(*) AS c FROM jobs WHERE engine='graph'"
-    ).fetchone()["c"]
-
-    response = client.post(
-        "/api/graph/jobs",
-        json={"title": "blocked", "graph": {"nodes": [{"id": "x"}]}},
-    )
-
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "feature_disabled"
-    after = app.state.db.execute(
-        "SELECT COUNT(*) AS c FROM jobs WHERE engine='graph'"
-    ).fetchone()["c"]
-    assert after == before
-
-
 def test_deleting_a_graph_template_works_and_takes_its_schedules(tmp_path):
     """DELETE /api/workflows/{id} used to 404 for graph rows — the linear-only guard
     predates graph templates being deletable at all."""
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job = client.post("/api/graph/jobs", json={"title": "T", "graph": _chain_graph()}).json()
     template = client.post(
@@ -605,7 +582,7 @@ def test_deleting_a_graph_template_works_and_takes_its_schedules(tmp_path):
 def test_deleting_a_graph_job_sweeps_its_node_sessions(tmp_path):
     """Every node runs in its own session tied to the job by sessions.job_id, and that
     FK is ON DELETE SET NULL — an unswept delete leaves orphan threads in the sidebar."""
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job = client.post("/api/graph/jobs", json={"title": "D", "graph": _chain_graph()}).json()
     client.post(f"/api/graph/jobs/{job['id']}/start")
@@ -630,7 +607,7 @@ def test_deleting_a_graph_job_sweeps_its_node_sessions(tmp_path):
 def test_rerun_and_output_edit_still_work_after_final_approval(tmp_path):
     """'done' is just an approved review — a correction re-runs the affected slice the
     same way. Only the graph itself stays frozen after start, not its outputs."""
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job_id = _create(client)["id"]
     client.post(f"/api/graph/jobs/{job_id}/start")
@@ -661,7 +638,7 @@ def test_rerun_and_output_edit_still_work_after_final_approval(tmp_path):
 def test_template_status_can_toggle_but_authoring_fields_cannot(tmp_path):
     """PATCH /api/workflows is lifecycle-only for graph rows: pause/resume/archive.
     Steps and inputs are authored on the canvas, not through the linear editor route."""
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job = client.post("/api/graph/jobs", json={"title": "T", "graph": _chain_graph()}).json()
     template = client.post(
@@ -707,7 +684,7 @@ def test_template_status_can_toggle_but_authoring_fields_cannot(tmp_path):
 def test_archive_then_restore_reinstates_the_pre_archive_status(tmp_path):
     """A paused (draft) template archived and later restored comes back paused, so
     its still-existing schedules stay stopped rather than silently resuming."""
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job = client.post("/api/graph/jobs", json={"title": "T", "graph": _chain_graph()}).json()
     template = client.post(
@@ -743,7 +720,7 @@ def test_archive_then_restore_reinstates_the_pre_archive_status(tmp_path):
 def test_an_invalid_graph_is_a_422_not_a_500(tmp_path):
     """Found live: a cyclic graph in PATCH /graph crashed with an unhandled
     GraphValidationError. An invalid graph is the client's error."""
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     job = client.post("/api/graph/jobs", json={"title": "T", "graph": _chain_graph()}).json()
     cyclic = {"nodes": [{"id": "a", "depends_on": ["b"]}, {"id": "b", "depends_on": ["a"]}]}
@@ -757,7 +734,7 @@ def test_an_invalid_graph_is_a_422_not_a_500(tmp_path):
 
 
 def test_manual_intake_create_edit_delete_is_atomic_and_ids_survive_reload(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     graph = {
         "nodes": [
@@ -865,7 +842,7 @@ def test_manual_intake_create_edit_delete_is_atomic_and_ids_survive_reload(tmp_p
 
 
 def test_manual_start_requires_values_and_resolves_optional_defaults(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     graph = {
         "nodes": [
@@ -920,7 +897,7 @@ def test_manual_start_requires_values_and_resolves_optional_defaults(tmp_path):
 
 
 def test_manual_start_rejects_invalid_number_and_url_values_atomically(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     graph = {
         "nodes": [
@@ -995,7 +972,7 @@ def test_start_rejects_a_saved_graph_change_during_the_execution_claim(
 ):
     from proxima_api import worktrees
 
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     graph = {
         "nodes": [
@@ -1055,7 +1032,7 @@ def test_start_rejects_a_saved_graph_change_during_the_execution_claim(
 
 
 def test_start_dispatch_failure_restores_original_input(tmp_path, monkeypatch):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     graph = {
         "nodes": [
@@ -1116,7 +1093,7 @@ def test_start_dispatch_failure_restores_original_input(tmp_path, monkeypatch):
 
 
 def test_start_no_dispatchable_node_restores_original_input(tmp_path, monkeypatch):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     graph = {
         "nodes": [
@@ -1154,7 +1131,7 @@ def test_start_no_dispatchable_node_restores_original_input(tmp_path, monkeypatc
 
 
 def test_scheduled_start_preserves_trigger_owned_input(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     created = client.post(
         "/api/graph/jobs",
@@ -1242,7 +1219,7 @@ def _tagged_graph() -> dict[str, Any]:
 
 
 def test_plan_targets_are_validated_against_the_projects_areas(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     _scratch_repo(tmp_path / "myrepo")
     _link_project(client, tmp_path / "myrepo", "myrepo")
@@ -1275,7 +1252,7 @@ def test_plan_targets_are_validated_against_the_projects_areas(tmp_path):
 
 
 def test_ambiguous_target_blocks_start_with_the_owners_question(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     graph = {
         "nodes": [
@@ -1297,37 +1274,8 @@ def test_ambiguous_target_blocks_start_with_the_owners_question(tmp_path):
         f"/api/graph/jobs/{plan['id']}/graph", json={"graph": resolved}
     ).status_code == 200
     assert client.post(f"/api/graph/jobs/{plan['id']}/start").json()["status"] == "running"
-
-
-def test_flag_off_regression_repo_tagged_plan_runs_without_worktrees(tmp_path):
-    """feature_repo_worktrees off (the slice-4 escape hatch): a target-tagged
-    plan executes exactly as before slice 3 - no worktree row, no target
-    pinned on the job."""
-    app = _app(tmp_path, enabled=True, feature_repo_worktrees=False)
-    client = _client(app)
-    _scratch_repo(tmp_path / "myrepo")
-    _link_project(client, tmp_path / "myrepo", "myrepo")
-    plan = client.post(
-        "/api/graph/jobs",
-        json={"title": "Fix + report", "graph": _tagged_graph(), "project_slug": "myrepo"},
-    ).json()
-
-    started = client.post(f"/api/graph/jobs/{plan['id']}/start")
-
-    assert started.status_code == 200, started.text
-    assert started.json()["status"] == "running"
-    assert "worktree" not in started.json()
-    assert app.state.db.execute(
-        "SELECT 1 FROM job_worktrees WHERE job_id = ?", (plan["id"],)
-    ).fetchone() is None
-    job_row = app.state.db.execute(
-        "SELECT target_area_id FROM jobs WHERE id = ?", (plan["id"],)
-    ).fetchone()
-    assert job_row["target_area_id"] is None
-
-
 def test_repo_plan_reserves_its_worktree_and_merges_on_final_approve(tmp_path):
-    app = _app(tmp_path, enabled=True, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     client = _client(app)
     _scratch_repo(tmp_path / "myrepo")
     _link_project(client, tmp_path / "myrepo", "myrepo")
@@ -1368,7 +1316,7 @@ def test_repo_plan_reject_discards_worktree_and_records_reason(tmp_path):
     """The review surface's reject door works for plans too (shared /api/jobs
     reject): the plan fails with the owner's why and the isolated worktree is
     torn down unmerged - the primary tree never sees the discarded change."""
-    app = _app(tmp_path, enabled=True, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     client = _client(app)
     _scratch_repo(tmp_path / "myrepo")
     _link_project(client, tmp_path / "myrepo", "myrepo")
@@ -1396,7 +1344,7 @@ def test_repo_plan_reject_discards_worktree_and_records_reason(tmp_path):
 
 
 def test_repo_plan_with_two_code_areas_refuses_to_start(tmp_path):
-    app = _app(tmp_path, enabled=True, feature_repo_worktrees=True)
+    app = _app(tmp_path)
     client = _client(app)
     container = tmp_path / "container"
     _scratch_repo(container / "web")
@@ -1420,7 +1368,7 @@ def test_repo_plan_with_two_code_areas_refuses_to_start(tmp_path):
 
 
 def test_recipe_promotion_round_trip_keeps_job_targets(tmp_path):
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
     _scratch_repo(tmp_path / "myrepo")
     _link_project(client, tmp_path / "myrepo", "myrepo")
@@ -1506,7 +1454,7 @@ def test_authoring_chat_style_multi_node_graph_is_runnable(tmp_path):
             {"from": "post-li", "to": "bundle"},
         ],
     }
-    app = _app(tmp_path, enabled=True)
+    app = _app(tmp_path)
     client = _client(app)
 
     created = client.post(

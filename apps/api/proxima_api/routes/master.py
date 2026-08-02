@@ -10,7 +10,6 @@ from fastapi import Depends, HTTPException
 from .. import (
     app_settings,
     container_registry,
-    features,
     master_decisions,
     master_focus,
     satpam,
@@ -67,9 +66,6 @@ def register(app, deps):
     current_user = deps["current_user"]
     create_profile_for = deps["create_profile_for"]
     session_payload = deps["session_payload"]
-
-    def _require_master() -> None:
-        features.require(app.state.config, features.MASTER_ORCHESTRATOR)
 
     def _identity(user: dict[str, Any]):
         try:
@@ -252,7 +248,6 @@ def register(app, deps):
 
     @app.get("/api/master/desk")
     def get_master_desk(user: dict[str, Any] = Depends(current_user)):
-        _require_master()
         profile, session = _identity(user)
         event_cursor = (
             db()
@@ -322,7 +317,6 @@ def register(app, deps):
     def create_master_message(
         payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)
     ):
-        _require_master()
         profile, session = _identity(user)
         _require_conforming_runner(str(profile["runner_id"]))
         content = str(payload.get("content") or "").strip()
@@ -472,7 +466,6 @@ def register(app, deps):
     def put_master_focus(
         payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)
     ):
-        _require_master()
         _profile, session = _identity(user)
         if "version" not in payload:
             raise HTTPException(status_code=422, detail="Focus version is required")
@@ -556,7 +549,6 @@ def register(app, deps):
     @app.get("/api/settings/alpha", deprecated=True)
     @app.get("/api/settings/master")
     def get_master_settings(user: dict[str, Any] = Depends(current_user)):
-        _require_master()
         profile, _session = _identity(user)
         return {
             **app_settings.get_master_settings(db()),
@@ -570,7 +562,6 @@ def register(app, deps):
     def put_master_settings(
         payload: dict[str, Any], user: dict[str, Any] = Depends(current_user)
     ):
-        _require_master()
         runner_id = payload.get("runner_id")
         if runner_id is not None:
             if not isinstance(runner_id, str) or not runner_is_selectable(runner_id):
@@ -1052,7 +1043,6 @@ def register(app, deps):
         decision_id: int,
         user: dict[str, Any] = Depends(current_user),
     ):
-        _require_master()
         try:
             row = master_decisions.get_decision(db(), decision_id, _as_int(user["id"]))
         except master_decisions.MasterDecisionError as exc:
@@ -1065,7 +1055,6 @@ def register(app, deps):
         payload: dict[str, Any],
         user: dict[str, Any] = Depends(current_user),
     ):
-        _require_master()
         try:
             return master_decisions.defer_decision(
                 db(),
@@ -1083,7 +1072,6 @@ def register(app, deps):
         payload: dict[str, Any],
         user: dict[str, Any] = Depends(current_user),
     ):
-        _require_master()
         try:
             return master_decisions.resolve_decision(
                 db(),

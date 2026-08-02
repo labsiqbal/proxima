@@ -213,13 +213,12 @@ def test_read_design_guidelines_reads_project_design_md(tmp_path: Path):
     assert got is not None and "#FF6A00" in got
 
 
-def test_build_run_preamble_injects_design_guidelines_only_with_design_studio(tmp_path: Path):
+def test_build_run_preamble_injects_design_guidelines(tmp_path: Path):
     g = "- Primary #FF6A00\n- Font Space Grotesk"
-    with_ds = wiki_memory.build_run_preamble("Demo", "demo", tmp_path / "wiki", include_design_studio=True, design_guidelines=g)
-    assert "design.md" in with_ds and "#FF6A00" in with_ds
-    # Guidelines are design-scoped: a non-design run must not carry them.
-    without_ds = wiki_memory.build_run_preamble("Demo", "demo", tmp_path / "wiki", include_design_studio=False, design_guidelines=g)
-    assert "#FF6A00" not in (without_ds or "")
+    with_g = wiki_memory.build_run_preamble("Demo", "demo", tmp_path / "wiki", design_guidelines=g)
+    assert "design.md" in with_g and "#FF6A00" in with_g
+    without_g = wiki_memory.build_run_preamble("Demo", "demo", tmp_path / "wiki")
+    assert "#FF6A00" not in (without_g or "")
 
 
 def test_preamble_injects_the_script_library_catalog(tmp_path: Path):

@@ -481,14 +481,13 @@ def test_run_now_is_scoped_to_the_owner(tmp_path):
     assert c.post("/api/schedules/9999/run").status_code == 404
 
 
-def _graph_app(tmp_path, *, graph_enabled: bool = True):
+def _graph_app(tmp_path):
     return create_app(
         {
             "database_path": str(tmp_path / "proxima.db"),
             "workspace_root": str(tmp_path / "ws"),
             "projectctl_path": "/usr/bin/true",
             "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
-            "feature_workflow_graph": graph_enabled,
             "start_worker": False,
         }
     )
@@ -547,26 +546,6 @@ def test_scheduling_a_graph_workflow_spawns_a_graph_job(tmp_path):
     ).fetchone()
     assert run is not None, "the graph job spawned but no node was dispatched"
     assert "Do the launch" in run["prompt"]
-
-
-def test_scheduling_a_graph_is_skipped_when_the_feature_is_off(tmp_path):
-    """The master switch means the executor would never dispatch it — better to skip than
-    to leave a 'running' job nothing will advance."""
-    app = _graph_app(tmp_path, graph_enabled=False)
-    _client(app)
-    sched = _schedule_for(app, _graph_workflow(app))
-
-    job_id = _spawn_scheduled_job(app, sched, "2026-07-17T10:00")
-
-    assert job_id is None
-    assert app.state.worker_db.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()["c"] == 0
-    # The minute is still claimed, so a skipped graph does not retry every tick.
-    claimed = app.state.worker_db.execute(
-        "SELECT last_run_minute FROM schedules WHERE id = ?", (sched["id"],)
-    ).fetchone()["last_run_minute"]
-    assert claimed == "2026-07-17T10:00"
-
-
 def test_scheduling_a_linear_workflow_is_unchanged(tmp_path):
     app = _graph_app(tmp_path)
     c = _client(app)
@@ -634,8 +613,6 @@ def test_scheduled_repo_graph_binds_worktree_like_manual_start(tmp_path):
             "projectctl_path": "/usr/bin/true",
             "link_roots": [str(tmp_path)],
             "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
-            "feature_workflow_graph": True,
-            "feature_repo_worktrees": True,
             "start_worker": False,
         }
     )
@@ -698,8 +675,6 @@ def test_scheduled_repo_graph_fails_visibly_when_worktree_cut_refused(tmp_path):
             "projectctl_path": "/usr/bin/true",
             "link_roots": [str(tmp_path)],
             "seed_users": [{"username": "bob", "role": "member", "os_user": "bob"}],
-            "feature_workflow_graph": True,
-            "feature_repo_worktrees": True,
             "start_worker": False,
         }
     )

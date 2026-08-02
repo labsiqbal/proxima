@@ -69,7 +69,6 @@ PROXIMA_PORT=8765
 PROXIMA_SERVICE_NAME=proxima
 PROXIMA_UPDATE_CHECK=0
 PROXIMA_UPDATE_REPO=labsiqbal/proxima
-PROXIMA_FEATURE_DESIGN_STUDIO=0
 EOF
 sudo chown root:proxima /etc/proxima/proxima.env
 sudo chmod 0640 /etc/proxima/proxima.env
@@ -164,7 +163,6 @@ PROXIMA_PORT=8767
 PROXIMA_SERVICE_NAME=proxima-staging
 PROXIMA_UPDATE_CHECK=0
 PROXIMA_UPDATE_REPO=labsiqbal/proxima
-PROXIMA_FEATURE_DESIGN_STUDIO=0
 EOF
 sudo chown root:proxima /etc/proxima-staging/proxima.env
 sudo chmod 0640 /etc/proxima-staging/proxima.env

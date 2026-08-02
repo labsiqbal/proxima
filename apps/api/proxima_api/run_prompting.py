@@ -143,7 +143,6 @@ def extract_vision_images(
 
 
 from . import workflows as wf
-from . import features
 from .capabilities import (
     apply_capabilities,
     apply_fixed_code_graph_mcp,
@@ -430,7 +429,6 @@ class RunPrompting:
     ) -> str:
         db = self.app.state.worker_db
         cfg = self.app.state.config
-        include_design_studio = features.enabled(cfg, features.DESIGN_STUDIO)
         prompt_text = run["prompt"]
         if session_mode == "master":
             if is_fresh_session:
@@ -476,19 +474,18 @@ class RunPrompting:
                 # them so the design agent composes on-brand without a tool call.
                 design_guidelines = (
                     wiki_memory.read_design_guidelines(project_wiki.parent)
-                    if (include_design_studio and project_wiki is not None)
+                    if project_wiki is not None
                     else None
                 )
                 moodboard_references = (
                     wiki_memory.read_moodboard_references(project_wiki.parent)
-                    if (include_design_studio and project_wiki is not None)
+                    if project_wiki is not None
                     else []
                 )
                 preamble = wiki_memory.build_run_preamble(
                     project_name,
                     project_slug,
                     project_wiki,
-                    include_design_studio=include_design_studio,
                     design_guidelines=design_guidelines,
                     moodboard_references=moodboard_references,
                     # T8 detect-and-advertise: probe PATH for the bundle's
@@ -505,9 +502,7 @@ class RunPrompting:
                 # files, etc. — straight from the step's instruction (AI auto-detects).
                 if is_job:
                     prompt_text = (
-                        wf.build_capability_preamble(
-                            include_design_studio=include_design_studio,
-                        )
+                        wf.build_capability_preamble()
                         + "\n\n---\n\n"
                         + prompt_text
                     )
@@ -521,12 +516,9 @@ class RunPrompting:
                             wf.build_iteration_preamble(
                                 wfb["name"],
                                 json.loads(wfb["steps"] or "[]"),
-                                include_design_studio=include_design_studio,
                             )
                             + "\n"
-                            + wf.build_capability_preamble(
-                                include_design_studio=include_design_studio,
-                            )
+                            + wf.build_capability_preamble()
                             + "\n\n---\n\n"
                             + prompt_text
                         )
@@ -559,11 +551,7 @@ class RunPrompting:
         # what the client sent — keeps the agent editing the scene, never launching
         # workflows or unrelated tasks.
         if session_mode == "design":
-            if (
-                not moodboard_references
-                and include_design_studio
-                and project_wiki is not None
-            ):
+            if not moodboard_references and project_wiki is not None:
                 try:
                     moodboard_references = wiki_memory.read_moodboard_references(
                         project_wiki.parent

@@ -45,13 +45,12 @@ class _FakeClient:
         return self._responses.pop(0)
 
 
-def _client(tmp_path: Path, *, enabled: bool = True) -> tuple[object, TestClient, dict[str, str]]:
+def _client(tmp_path: Path) -> tuple[object, TestClient, dict[str, str]]:
     app = create_app({
         "database_path": str(tmp_path / "proxima.db"),
         "workspace_root": str(tmp_path / "workspace"),
         "projectctl_path": "/usr/bin/true",
         "start_worker": False,
-        "feature_design_studio": enabled,
     })
     client = TestClient(app)
     token = client.post("/auth/auto").json()["token"]
@@ -140,17 +139,6 @@ def test_moodboard_upload_and_failed_preview_fallback(tmp_path, monkeypatch):
     assert fallback.json()["item"]["imagePath"] is None
     assert len(client.get("/api/projects/demo/design/moodboard", headers=headers).json()["items"]) == 2
     app.state.db.close()
-
-
-def test_moodboard_routes_follow_design_studio_feature_gate(tmp_path):
-    app, client, headers = _client(tmp_path, enabled=False)
-    client.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"})
-    response = client.get("/api/projects/demo/design/moodboard", headers=headers)
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "feature_disabled"
-    app.state.db.close()
-
-
 def test_selected_moodboard_reference_uses_preamble_and_vision_path(tmp_path):
     project = tmp_path / "project"
     wiki = project / "wiki"
@@ -173,14 +161,13 @@ def test_selected_moodboard_reference_uses_preamble_and_vision_path(tmp_path):
         "Demo",
         "demo",
         wiki,
-        include_design_studio=True,
         moodboard_references=references,
     )
     assert "Selected Moodboard references" in preamble
     assert "Use the quiet spacing" in preamble
 
     prompting = run_prompting.RunPrompting(SimpleNamespace(state=SimpleNamespace(
-        config={"feature_design_studio": True},
+        config={},
         worker_db=None,
     )))
     prompt = prompting.build_prompt_text(

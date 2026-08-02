@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from . import features
 from .graph_context import (
     GraphBuildError,
     GraphContextError,
@@ -59,11 +58,6 @@ class KnowledgeGraphLifecycle:
     def config(self) -> dict[str, Any]:
         return getattr(self.app.state, "config", {}) or {}
 
-    def enabled(self) -> bool:
-        return bool(
-            features.enabled(self.config, features.MASTER_ORCHESTRATOR)
-        )
-
     def on_container_registered(
         self,
         *,
@@ -71,8 +65,6 @@ class KnowledgeGraphLifecycle:
         container_slug: str,
     ) -> None:
         """Ensure a Knowledge state row and enqueue the initial full build."""
-        if not self.enabled():
-            return
         try:
             self.graphs.enqueue_knowledge_rebuild(
                 owner_user_id=owner_user_id,
@@ -92,8 +84,6 @@ class KnowledgeGraphLifecycle:
             )
 
     def tick(self) -> None:
-        if not self.enabled():
-            return
         try:
             self._reclaim_abandoned_builds()
         except Exception:

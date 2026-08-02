@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from . import features
 from .graph_context import (
     GraphBuildError,
     GraphContextError,
@@ -55,11 +54,6 @@ class CodeGraphLifecycle:
     def config(self) -> dict[str, Any]:
         return getattr(self.app.state, "config", {}) or {}
 
-    def enabled(self) -> bool:
-        return bool(
-            features.enabled(self.config, features.MASTER_ORCHESTRATOR)
-        )
-
     def on_code_areas_registered(
         self,
         *,
@@ -67,7 +61,7 @@ class CodeGraphLifecycle:
         container_slug: str,
         area_ids: list[int],
     ) -> None:
-        if not self.enabled() or not area_ids:
+        if not area_ids:
             return
         for area_id in area_ids:
             try:
@@ -101,8 +95,6 @@ class CodeGraphLifecycle:
         merge_commit: str | None,
     ) -> None:
         """Mark the Task's Code graph stale immediately and enqueue rebuild."""
-        if not self.enabled():
-            return
         try:
             slug_row = self._db_factory().execute(
                 "SELECT slug FROM projects WHERE id = ? AND owner_user_id = ?",
@@ -132,8 +124,6 @@ class CodeGraphLifecycle:
             )
 
     def tick(self) -> None:
-        if not self.enabled():
-            return
         try:
             self._reclaim_abandoned_builds()
         except Exception:

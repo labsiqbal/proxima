@@ -1,16 +1,10 @@
 # Workflow Graph Engine
 
 The workflow graph engine is Proxima's runner-agnostic, reviewable orchestration
-path from [ADR-0001](adr/0001-workflow-execution-model.md). It coexists with the
-classic linear engine and is enabled by default behind:
-
-```bash
-PROXIMA_FEATURE_WORKFLOW_GRAPH=1
-```
-
-Set the value to `0` and restart the API only when a recovery/debug session needs to
-make graph planning, routes, schedules, and worker dispatch inert. Recipes normally
-opens the graph Editor directly.
+path from [ADR-0001](adr/0001-workflow-execution-model.md). It is always on
+(the feature-flag system was removed in prune A2, #129) and coexists with the
+classic linear engine for existing data. Recipes opens the graph Editor
+directly.
 
 ## What it provides
 
@@ -277,8 +271,7 @@ Enforcement lives at two gates:
   the question(s); the owner answers it by picking a target in the node inspector's
   **Works in** field (the answer clears the question — one act, no separate flag).
 
-With `PROXIMA_FEATURE_REPO_WORKTREES` **on** (the default since slice 4), start also
-reserves the repo jobs' path: the plan's single code-area target is pinned to
+Start also reserves the repo jobs' path: the plan's single code-area target is pinned to
 `jobs.target_area_id` and the slice-2 worktree is cut *before* the plan claims
 `running` (a refused cut — dirty repo, detached HEAD, no commits — is a 409 and the
 plan stays queued). Phase-1 keeps **one worktree per plan**, so all repo jobs of a
@@ -351,22 +344,21 @@ attempt cannot overwrite a corrected or rerun node.
 
 ## Using the canvas
 
-1. Enable the flag and restart Proxima.
-2. Open a chat and choose **To graph**. The architect result opens as a queued plan.
-3. Inspect each node. While queued, edit its name, instruction, **Works in** target
+1. Open a chat and choose **To graph**. The architect result opens as a queued plan.
+2. Inspect each node. While queued, edit its name, instruction, **Works in** target
    (the T1 binding; an open target question shows here and is answered by picking),
    **agent**, output contract, review gate, or dependencies; add/remove nodes; add a
    trigger; and drag nodes and connections. The draft autosaves, including layout.
-4. Optionally choose **Save as Workflow**. Promotion is one click because the inline
+3. Optionally choose **Save as Workflow**. Promotion is one click because the inline
    plan name and trigger contract already exist; category and description are optional
    metadata.
-5. Choose **Run**. It is disabled until the graph and intake contract are valid,
+4. Choose **Run**. It is disabled until the graph and intake contract are valid,
    accepted by the server, and free of pending edits. The shared Run dialog collects
    and validates declared manual values before the start request.
-6. Inspect live node state and validated outputs on the canvas.
-7. When paused in review, choose **Approve node**, **Save correction**, or
+5. Inspect live node state and validated outputs on the canvas.
+6. When paused in review, choose **Approve node**, **Save correction**, or
    **Rerun node**. Complete the final **Approve final result** action.
-8. Saved templates appear on the Workflows home. Manual Run opens the same validated
+7. Saved templates appear on the Workflows home. Manual Run opens the same validated
    dialog used by drafts, then creates the job and starts it with the resolved input.
 
 ### Canvas interaction
@@ -592,7 +584,7 @@ are:
 | Typed advancement | `graph_advancers.py`, `worker.py` |
 | Script library + deterministic execution (T6) | `scripts_library.py`, `script_runner.py` |
 | Lifecycle/correction API | `routes/graph.py`, `state.py` |
-| Repo-plan worktrees (flag-gated) | `worktrees.py`, `routes/graph.py`, `worker.py` |
+| Repo-plan worktrees | `worktrees.py`, `routes/graph.py`, `worker.py` |
 | Architect promotion | `routes/chat.py`, `run_drafts.py`, `workflows.py` |
 | Canvas | `apps/web/src/screens/GraphScreen.tsx`, `components/workflows/GraphCanvas.tsx`, `screens/graphLayout.ts` |
 | Tasks plan index | `apps/web/src/screens/ActivityScreen.tsx`, `components/tasks/planProjection.ts` |
@@ -647,11 +639,6 @@ job with its durable binding. CI runs this scenario assertion-only. Pass
 (`before-missing-binding`, `after-missing-binding-refusal`, `before-run-now`,
 `after-run-now-exact-job`) and validate each as a nonempty PNG; durable evidence lives
 under `docs/evidence/scheduled-workflow-trust/`.
-
-With `PROXIMA_FEATURE_WORKFLOW_GRAPH` off, a graph schedule is **skipped with a logged
-warning** and its minute is still claimed: the executor would never dispatch the job, so
-spawning one would leave a `running` job nothing advances, and not claiming the minute
-would retry the same dead schedule every tick.
 
 ## Compatibility boundary
 

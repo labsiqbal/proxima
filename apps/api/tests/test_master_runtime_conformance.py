@@ -158,7 +158,6 @@ def test_installed_codex_master_is_chat_only_on_real_message_path(
             "start_scheduler": False,
             "run_worker_poll_interval_ms": 20,
             "run_timeout_seconds": 180,
-            "feature_master_orchestrator": True,
         }
     )
 
@@ -329,7 +328,6 @@ def test_real_master_path_contains_hostile_fixture_runner(
             "start_worker": True,
             "start_scheduler": False,
             "run_worker_poll_interval_ms": 20,
-            "feature_master_orchestrator": True,
         }
     )
 

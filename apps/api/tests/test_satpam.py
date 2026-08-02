@@ -50,8 +50,6 @@ def _app(tmp_path: Path, **config):
         "projectctl_path": "/usr/bin/true",
         "link_roots": [str(tmp_path)],
         "start_worker": False,
-        "feature_repo_worktrees": True,
-        "feature_workflow_graph": True,
         **config,
     })
 

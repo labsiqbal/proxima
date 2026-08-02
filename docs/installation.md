@@ -173,9 +173,6 @@ PROXIMA_DEFAULT_RUNNER=claude-code
 PROXIMA_CLAUDE_LIVE_HOME=0
 PROXIMA_UPDATE_REPO=labsiqbal/proxima
 PROXIMA_SERVICE_NAME=proxima
-PROXIMA_FEATURE_DESIGN_STUDIO=1
-PROXIMA_FEATURE_WORKFLOW_GRAPH=1
-PROXIMA_FEATURE_MASTER_ORCHESTRATOR=1
 PROXIMA_MASTER_MAX_PARALLEL=3
 PROXIMA_GRAPH_SEMANTIC_EGRESS=0
 PROXIMA_RUNNER_ENV_ALLOWLIST=
@@ -192,19 +189,13 @@ Notes:
 - `PROXIMA_CLAUDE_LIVE_HOME=1` makes the Claude Code runner use the live
   `~/.claude` home. This is powerful and broad; the current handoff says whether
   it is enabled.
-- Design Studio is on by default (`PROXIMA_FEATURE_DESIGN_STUDIO=1` everywhere,
-  including installer-written env files) — set it to `0` and restart to disable it
-  as an owner escape hatch. Video Studio was removed. Image generation is always
-  available, independent of this flag.
-- Workflow Graph defaults to `1` because it is the current authoring UI. Set it to `0`
-  only as a recovery switch; the classic linear engine is unaffected either way.
-- Master persistence migration always runs. The Master runtime and UI default to
-  on; the product and host-runner gates in
-  [integrated acceptance](master-integrated-acceptance.md#activation-decision)
-  have passed. Set `PROXIMA_FEATURE_MASTER_ORCHESTRATOR=0` to run without the
-  Delegate surface -- the unattended supervisor then never starts. Delegation
-  still needs an authenticated Master-eligible runner; without one the surface
-  appears but every adapter fails closed.
+- Design Studio, the workflow graph engine, repo-job worktrees, and the Master
+  orchestrator are always on - the feature-flag system was removed (prune A2,
+  #129), and legacy `PROXIMA_FEATURE_*` keys in an existing env file are simply
+  ignored. Video Studio was removed; image generation is always available.
+- Master persistence migration always runs. Delegation still needs an
+  authenticated Master-eligible runner; without one the surface appears but
+  every adapter fails closed.
 - Graphify structural extraction for Code and allowlisted Ops Knowledge is local.
   Keep `PROXIMA_GRAPH_SEMANTIC_EGRESS=0`. Setting the reserved opt-in to `1` is
   visible in graph policy, state, and logs, but Knowledge rebuilds fail closed

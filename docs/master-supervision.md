@@ -10,9 +10,8 @@ There is no Master progress detector or recovery loop.
 
 ## Queue-start contract
 
-The supervisor is instantiated only when `feature_master_orchestrator` is enabled.
-The flag defaults off. A defensive feature check also makes a manually retained
-instance inert after the flag is disabled.
+The supervisor is always instantiated (the feature-flag system was removed in
+prune A2, #129).
 
 Each tick:
 

@@ -1,4 +1,4 @@
-"""Authenticated, feature-gated Graphify state and explicit rebuild routes."""
+"""Authenticated Graphify state and explicit rebuild routes."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,6 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
-from .. import features
 from ..graph_context import (
     GraphBuildError,
     GraphContextError,
@@ -23,9 +22,6 @@ def register(app, deps):
     db = deps["db"]
     current_user = deps["current_user"]
 
-    def _require_master() -> None:
-        features.require(app.state.config, features.MASTER_ORCHESTRATOR)
-
     def _detail(exc: GraphContextError) -> dict[str, str]:
         return {"code": exc.code, "message": str(exc)}
 
@@ -35,7 +31,6 @@ def register(app, deps):
         user: dict[str, Any] = Depends(current_user),
     ):
         """Read exact scoped graph freshness without exposing filesystem paths."""
-        _require_master()
         try:
             graphs = app.state.graph_context.list_states(
                 owner_user_id=int(user["id"]),
@@ -52,7 +47,6 @@ def register(app, deps):
         user: dict[str, Any] = Depends(current_user),
     ):
         """Run one bounded explicit build through the server-owned adapter."""
-        _require_master()
         try:
             result = app.state.graph_context.rebuild(
                 owner_user_id=int(user["id"]),

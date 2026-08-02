@@ -57,7 +57,6 @@ def _app(tmp_path: Path, **config):
         "projectctl_path": "/usr/bin/true",
         "link_roots": [str(tmp_path)],
         "start_worker": False,
-        "feature_repo_worktrees": True,
         **config,
     })
 
@@ -473,7 +472,7 @@ def test_graph_plan_approve_pushes_after_merge(tmp_path: Path):
     """Same lifecycle hook on the plan engine's approve door."""
     repo = _scratch_repo(tmp_path / "repo")
     bare = _bare_remote(repo, tmp_path / "bare.git")
-    app = _app(tmp_path, feature_workflow_graph=True)
+    app = _app(tmp_path)
     c = _client(app)
     p = c.post(
         "/api/projects/link",

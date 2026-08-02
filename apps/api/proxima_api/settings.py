@@ -46,21 +46,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "update_check": True,
     "update_repo": "labsiqbal/proxima",
     "update_token": None,
-    # Design Studio is part of the shipped product (standing decision 8): on by
-    # default; the switch stays as an owner escape hatch.
-    "feature_design_studio": True,
-    # Graph workflows are the shipped authoring path. Keep the switch as an owner
-    # recovery control, but default it on so Workflows is usable after install.
-    "feature_workflow_graph": True,
-    # Repo jobs in isolated git worktrees with diff review + local merge (Phase-1
-    # slices 2+4, T1). On by default since the review UI shipped (slice 4); the
-    # switch stays as an owner escape hatch - off = the machinery is inert and
-    # job execution matches the pre-worktree behavior.
-    "feature_repo_worktrees": True,
-    # Durable Master data is migrated unconditionally. Runtime behavior is on
-    # by default now that the integrated Master slices have passed their
-    # acceptance gate; the env var is the escape hatch.
-    "feature_master_orchestrator": True,
     # Maximum queued/running Task-agent runs owned by Master. The supervisor
     # and worker claim guard share this value.
     "master_max_parallel": 3,
@@ -137,12 +122,6 @@ def normalize_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
         Path(cfg.get("bundled_skills_dir") or repo_root() / "bundled-skills")
     )
     cfg["manage_os_acl"] = bool(cfg.get("manage_os_acl"))
-    cfg["feature_design_studio"] = _bool_flag(cfg.get("feature_design_studio"))
-    cfg["feature_workflow_graph"] = _bool_flag(cfg.get("feature_workflow_graph"))
-    cfg["feature_repo_worktrees"] = _bool_flag(cfg.get("feature_repo_worktrees"))
-    cfg["feature_master_orchestrator"] = _bool_flag(
-        cfg.get("feature_master_orchestrator")
-    )
     cfg["graph_semantic_egress_enabled"] = _bool_flag(
         cfg.get("graph_semantic_egress_enabled")
     )

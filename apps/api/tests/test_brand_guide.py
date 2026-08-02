@@ -47,7 +47,6 @@ def test_brand_guide_endpoint_queues_run_with_synthesis_prompt(tmp_path, monkeyp
         "workspace_root": str(tmp_path / "workspace"),
         "projectctl_path": "/usr/bin/true",
         "start_worker": False,
-        "feature_design_studio": True,
     })
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {client.post('/auth/auto').json()['token']}"}
@@ -72,7 +71,6 @@ def test_brand_guide_requires_some_input(tmp_path):
         "workspace_root": str(tmp_path / "workspace"),
         "projectctl_path": "/usr/bin/true",
         "start_worker": False,
-        "feature_design_studio": True,
     })
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {client.post('/auth/auto').json()['token']}"}

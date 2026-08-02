@@ -111,7 +111,7 @@ def test_linux_reinstall_preserves_existing_config(
     fake_bin.mkdir()
     config_file.parent.mkdir(parents=True)
     original = (
-        'PROXIMA_FEATURE_MASTER_ORCHESTRATOR="1"\n'
+        'PROXIMA_MASTER_MAX_PARALLEL="3"\n'
         'PROXIMA_PORT="18765"\n'
     )
     config_file.write_text(original, encoding="utf-8")

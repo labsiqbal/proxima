@@ -1,9 +1,8 @@
 # DESIGN_GUIDE v2 — the wired quality bar
 
-> **Release status:** retained for future reactivation. Design Studio is disabled by
-> default with `PROXIMA_FEATURE_DESIGN_STUDIO=0`; this guide must not be injected
-> while the feature is disabled. Image generation remains active without Studio
-> bridge actions.
+> **Release status:** live. Design Studio is always on (the feature-flag system
+> was removed in prune A2, #129), so this guide is injected into every design
+> run.
 
 > **Source status:** retained as `DESIGN_GUIDE` in
 > `apps/api/proxima_api/wiki_memory.py` — v2 rules + carried-over output contract

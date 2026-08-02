@@ -9,7 +9,7 @@ from typing import Any
 from jsonschema import exceptions as jsonschema_exceptions  # pyright: ignore[reportMissingModuleSource]
 from jsonschema import validators as jsonschema_validators  # pyright: ignore[reportMissingModuleSource]
 
-from . import features, satpam, state
+from . import satpam, state
 from .container_registry import ops_root
 from .graph import normalize_graph, parse_output_contract, ready_node_ids
 from .graph_executor import GraphExecutor  # pyright: ignore[reportMissingImports]
@@ -263,18 +263,6 @@ class GraphAdvancers:
                 ):
                     db.execute("COMMIT")
                     return False
-
-                if not features.enabled(
-                    self.app.state.config, features.WORKFLOW_GRAPH
-                ):
-                    error = "feature_disabled:workflow_graph"
-                    failed = self._pause_failed_attempt(attempt, run, error)
-                    db.execute("COMMIT")
-                    if failed:
-                        self._emit_update(
-                            run, attempt, "failed", add_event, error=error
-                        )
-                    return failed
 
                 graph = normalize_graph(attempt["job_graph"] or "")
                 node = _node_by_id(graph, str(attempt["node_id"]))
