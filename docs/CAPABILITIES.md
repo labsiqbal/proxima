@@ -1360,8 +1360,9 @@ files links fine and is identified by its own folder name.
 `resolve_container_identity` (`container_registry.py`) picks the first doc
 that yields anything; the projection records which doc won
 (`container_registry.identity_source`, also in the Fleet payload) and
-re-indexes only when the source hash changes (boot + 5s background cycle +
-immediately after link and after a Files-API write to any identity doc name).
+re-indexes only when the source hash changes (a 5-second background cycle,
+plus immediately after link and after a Files-API write to any identity doc
+name).
 Nothing generates `ops/container.md` anymore: fresh workspace Containers
 scaffold only starter dirs + README, and the explicit migration plans
 `container_doc: "none"` when no legacy root `container.md` exists (stored
