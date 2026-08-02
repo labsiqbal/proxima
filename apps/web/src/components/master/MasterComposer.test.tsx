@@ -99,6 +99,12 @@ describe('MasterComposer', () => {
     await waitFor(() => expect(send).toHaveBeenCalledTimes(1))
     expect(screen.getByText('report.pdf')).toBeInTheDocument()
 
+    // The button reads "Sending to Master..." until the rejected send settles
+    // back through the Composer's async submit handler - on a slow runner the
+    // label can lag the send() call, so wait for it instead of racing it.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Send to Master' })).toBeEnabled(),
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Send to Master' }))
     await waitFor(() => expect(send).toHaveBeenCalledTimes(2))
     expect(send).toHaveBeenLastCalledWith(
