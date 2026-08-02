@@ -252,7 +252,7 @@ cat <<EOF
 ✅ Proxima is installed and running as a service.
 
    Open:        http://127.0.0.1:$PORT      (first launch asks you to create the admin account)
-   Update:      unavailable         (safe updater activation is disabled)
+   Update:      git -C $ROOT pull && proxima restart
    Restart:     proxima restart
    Status:      proxima status
    Logs:        proxima logs

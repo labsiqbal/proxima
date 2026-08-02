@@ -86,7 +86,7 @@ $port = if ($env:PROXIMA_PORT) { $env:PROXIMA_PORT } elseif ($configPort) { $con
 Write-Host ""
 Write-Host "Proxima is installed and running (Scheduled Task '$TaskName')." -ForegroundColor Green
 Write-Host "   Open:     http://127.0.0.1:$port   (first launch asks you to create the admin account)"
-Write-Host "   Update:   unavailable   (safe updater activation is disabled)"
+Write-Host "   Update:   git pull in the checkout, then Restart below"
 Write-Host "   Config:   $ConfigFile"
 Write-Host "   Logs:     Get-Content `"$logDir\proxima.log`" -Wait"
 Write-Host "   Restart:  Stop-ScheduledTask -TaskName $TaskName; Start-ScheduledTask -TaskName $TaskName"

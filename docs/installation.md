@@ -262,9 +262,9 @@ git pull
 systemctl --user restart proxima
 ```
 
-The former safe-self-update pipeline is no longer part of the running app; its
-remaining on-disk code is unreferenced and scheduled for deletion (prune A1,
-ADR-0008).
+The former safe-self-update pipeline was removed entirely (prune A1,
+ADR-0041; ADR-0008 superseded): manual `git pull` + restart is the one
+update path.
 
 
 ### Code checkout vs data directory

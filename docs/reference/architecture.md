@@ -1546,11 +1546,11 @@ fails closed: updating is a manual `git pull` plus a service restart.
 
 The former safe-self-update pipeline (external updater authority, candidate
 sandbox, maintenance fence, ingress leases, `/api/self-updates/*`,
-`/api/maintenance`) has been unhooked from the running app; the remaining
-on-disk stack (`apps/safe_updater/`, `trusted-probes/safe-update/`,
-`infra/safe-updater/`) is unreferenced and scheduled for deletion (prune A1).
-See [ADR-0008](../adr/0008-external-safe-update-authority.md) for the
-historical decision.
+`/api/maintenance`) has been removed entirely: unhooked from the running app,
+then deleted from the repo (prune A1). See
+[ADR-0041](../adr/0041-updates-are-a-manual-git-pull.md) (and superseded
+[ADR-0008](../adr/0008-external-safe-update-authority.md)) for the decision
+trail.
 
 ## Runner abstraction
 

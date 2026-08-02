@@ -73,7 +73,7 @@ cat <<EOF
 ✅ Proxima is installed and running (launchd).
 
    Open:      http://127.0.0.1:$PORT      (first launch asks you to create the admin account)
-   Update:    unavailable                 (safe updater activation is disabled)
+   Update:    git pull in the checkout, then Restart below
    Logs:      tail -f ~/Library/Logs/proxima.log
    Restart:   launchctl unload "$PLIST" && launchctl load "$PLIST"
    Stop:      launchctl unload "$PLIST"

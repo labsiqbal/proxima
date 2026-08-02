@@ -2,7 +2,8 @@
 
 The single source of truth for the app version is the VERSION file at repo
 root. Everything else (FastAPI app version, /api/health, and the update check)
-reads it from here. Promotion belongs only to the external safe updater.
+reads it from here. This module only reports release availability; applying an
+update is a manual `git pull` plus a service restart (ADR-0041).
 """
 from __future__ import annotations
 

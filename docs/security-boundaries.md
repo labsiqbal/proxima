@@ -34,17 +34,16 @@ Anyone with physical access, SSH, AnyDesk, sudo, or direct filesystem access can
 inspect source code, runtime data, DB files, runner profile homes, and project
 files. This is outside Proxima app control.
 
-## Safe-update boundary (removed from the app)
+## Updating (manual, owner-performed)
 
-The app no longer self-updates and no longer carries any safe-update surface:
-the `/api/self-updates/*` and `/api/maintenance` routes, the
-`feature_safe_self_update` flag, the maintenance fence / ingress-lease plumbing,
-and candidate mode have all been removed from the running app (prune A1).
-Updating is a manual `git pull` plus a service restart. The remaining on-disk
-stack (`apps/safe_updater/`, `trusted-probes/safe-update/`,
-`infra/safe-updater/`) is unreferenced and scheduled for deletion; the
-historical design is recorded in
-[ADR-0008](adr/0008-external-safe-update-authority.md).
+The app does not self-update. Updating is a manual `git pull` plus a service
+restart, performed by the owner (for the root-owned layout, by an
+administrator - see `infra/systemd/README.md`). The application only checks
+release metadata; every in-app apply path is inert. There is no update
+authority, maintenance fence, or candidate mode in the codebase - the former
+safe-updater stack was removed entirely (prune A1). The design and its removal
+are recorded in [ADR-0008](adr/0008-external-safe-update-authority.md)
+(superseded) and [ADR-0041](adr/0041-updates-are-a-manual-git-pull.md).
 
 ## App Owner
 

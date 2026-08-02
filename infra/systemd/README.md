@@ -268,12 +268,7 @@ then refuses before any unit is replaced when an older app or broker survives. R
 the prior service on refusal. When production and staging share the service user, drain
 and verify both profiles first.
 
-The safe-updater foundation adds contract-only root-owned controller and candidate
-unit templates. The candidate template carries defence-in-depth systemd sandbox
-directives but still has `ExecStart=/bin/false`; it is not an enrollment artifact and
-must not be enabled. Do not make the `proxima` user own the checkout or grant it
-restart authority. A later administrator-only enrollment must qualify the
-external journal/pointer/fence roots, dedicated candidate sandbox, trusted release
-keys and probes, disk reserve, and stop/start verification before enabling any
-activation. See the
-[adapter qualification contract](../../docs/adding-safe-updater-adapter.md).
+Do not make the `proxima` user own the checkout or grant it restart authority:
+updating stays an administrator action (the sequence above). The former
+safe-updater unit templates were deleted with the rest of that stack
+(prune A1, [ADR-0041](../../docs/adr/0041-updates-are-a-manual-git-pull.md)).

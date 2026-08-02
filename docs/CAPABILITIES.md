@@ -1812,10 +1812,8 @@ application promote itself.
 **How:** `UpdateManager` may check GitHub release metadata every 6h, but its old
 live-checkout apply route and `proxima update` are inert: updating is a manual
 `git pull` plus a service restart. The former safe-self-update stack (external
-updater authority, candidate sandbox, maintenance fence, ingress leases) is no
-longer referenced by the running app; its remaining on-disk code
-(`apps/safe_updater/`, `trusted-probes/safe-update/`, `infra/safe-updater/`)
-is inert and scheduled for deletion (prune A1, ADR-0008).
+updater authority, candidate sandbox, maintenance fence, ingress leases) was
+removed entirely (prune A1, ADR-0041; ADR-0008 superseded).
 
 The update modal only reports availability; manual promotion remains unavailable.
 

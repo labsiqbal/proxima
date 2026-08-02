@@ -1,6 +1,6 @@
 # ADR-0008: Safe update authority stays outside candidate releases
 
-- Status: Accepted
+- Status: Superseded by ADR-0041
 - Date: 2026-07-29
 
 ## Context
@@ -100,7 +100,9 @@ Negative:
 
 ## Related
 
-- Adapter playbook: [`../adding-safe-updater-adapter.md`](../adding-safe-updater-adapter.md)
+- Superseded by: [`0041-updates-are-a-manual-git-pull.md`](0041-updates-are-a-manual-git-pull.md)
+  (the safe-updater stack was removed; updating is a manual `git pull` plus a
+  service restart)
 - Architecture flow: [`../reference/architecture.md`](../reference/architecture.md)
 - Security boundary: [`../security-boundaries.md`](../security-boundaries.md)
 - Installation contract: [`../installation.md`](../installation.md)

@@ -119,7 +119,7 @@ Larger capabilities that stand as modules. Target state: each touches core only 
 | Higgsfield Integration | active (opt-in) | `higgsfield.py`, `routes/files.py` (settings/higgsfield) | `SettingsScreen.tsx` | `app_settings` | image providers |
 | Settings Store | active | `app_settings.py`, `routes/files.py`, `settings.py` | `SettingsScreen.tsx` | `app_settings` | collab, permission, providers |
 | Permission Gating | active | `routes/chat.py`, `worker.py`, `acp.py` | `ApprovalCard`, `AttentionInbox`, `SettingsScreen` | `app_settings`, `events`, `attention_items` | ordinary ask; Master denies every native request; Task agents retain guarded/autonomous policy |
-| Safe self-update (unhooked) | dead - the live app no longer references the stack; `apps/safe_updater/`, `trusted-probes/safe-update/`, `infra/safe-updater/` remain on disk pending deletion (prune A1) | `apps/safe_updater/*` (unreferenced) | none | none - `self_update_runs` dropped by migration v57 (v43 stays in history) | ADR-0008 (historical) |
+| Safe self-update (removed) | removed - the stack was deleted entirely (prune A1); updating is a manual `git pull` + restart | none (git history only) | none | none - `self_update_runs` dropped by migration v57 (v43 stays in history) | ADR-0041 (supersedes ADR-0008) |
 | Readiness Health Dashboard | active | `auth_health.py`, `routes/chat.py` (dashboard) | `HomeScreen.tsx` (Connections) | `profiles`, `app_settings` | providers, runners |
 | Command palette / Search | active | `routes/chat.py` (search) | `SearchModal.tsx`, `api/search.ts` | `sessions`, `messages`, `projects` | visible Code sessions, projects |
 | PWA / Static serving | active | `frontend_static.py` | `src/pwa.ts`, `public/` | — | tab label |

@@ -65,7 +65,7 @@ Supersedes / superseded-by / links to feature docs.
 | [0005](0005-restricted-master-runtime-boundary.md) | Restricted Master runtime boundary | Accepted |
 | [0006](0006-master-context-is-layered-and-scoped.md) | Master context is layered and scoped | Accepted |
 | [0007](0007-master-focus-is-a-durable-execution-boundary.md) | Master Focus is a durable execution boundary | Accepted |
-| [0008](0008-external-safe-update-authority.md) | Safe update authority stays outside candidate releases | Accepted |
+| [0008](0008-external-safe-update-authority.md) | Safe update authority stays outside candidate releases | Superseded by ADR-0041 |
 | [0009](0009-one-durable-master-interface-state.md) | One durable Master interface state | Accepted |
 | [0010](0010-preview-authority-requires-verified-connections.md) | Preview authority requires verified managed connections | Superseded by ADR-0011 |
 | [0011](0011-preview-containment-membership-and-detached-output.md) | Preview containment membership and detached output | Superseded by ADR-0012 |
@@ -98,3 +98,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0038](0038-owner-safe-container-activity-boundaries.md) | Owner-safe Container activity boundaries | Accepted |
 | [0039](0039-master-orchestrator-ships-enabled.md) | Master orchestrator ships enabled | Accepted |
 | [0040](0040-files-is-a-destination.md) | Files is a destination, not a right-rail tool | Accepted |
+| [0041](0041-updates-are-a-manual-git-pull.md) | Updates are a manual git pull; the safe-updater stack is removed | Accepted |

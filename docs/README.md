@@ -37,7 +37,6 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [linux-daily-driver-acceptance.md](linux-daily-driver-acceptance.md) | Linux Mint server and CachyOS/Tailscale daily-driver support matrix | by hand |
 | [runner-conformance.md](runner-conformance.md) | Runner contracts and the fail-closed chat-only Master boundary | by hand |
 | [adding-workflow-node-type.md](adding-workflow-node-type.md) | Extension playbook and invariants for node execution/output contracts | by hand |
-| [adding-safe-updater-adapter.md](adding-safe-updater-adapter.md) | Qualification contract for the unhooked safe-updater stack (unreferenced; deletion pending, prune A1) | by hand |
 | [reference/feature-map.md](reference/feature-map.md) | Per-feature grid: where the code lives, tables/events touched, relations, status/flag | by hand |
 | [product/vision.md](product/vision.md) · [product/core-flows.md](product/core-flows.md) | Product direction + the intended user flows | by hand |
 | [security-boundaries.md](security-boundaries.md) · [prompt-injection-hardening.md](prompt-injection-hardening.md) | Threat model + hardening | by hand |
@@ -45,7 +44,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [../bundled-skills/README.md](../bundled-skills/README.md) | The shipped capability bundle: bundled skills, opt-out, recommended-tools list | by hand |
 | [tour.md](tour.md) | Visual tour — screenshots of every surface | by hand |
 | [evidence/auth-onboarding-accessibility/README.md](evidence/auth-onboarding-accessibility/README.md) | Disposable real-browser auth/onboarding pass, redacted GET-only Tailscale entry check, Lighthouse report, and before/after screenshots | `npm --prefix apps/web run test:accessibility` |
-| [evidence/linux-daily-driver/README.md](evidence/linux-daily-driver/README.md) | Disposable real-browser platform labels, Master/Safe-Update state, and validated PNG evidence | `scripts/capture-linux-daily-driver-evidence.mjs` |
+| [evidence/linux-daily-driver/README.md](evidence/linux-daily-driver/README.md) | Disposable real-browser platform labels, Master state, and validated PNG evidence | `scripts/capture-linux-daily-driver-evidence.mjs` |
 | [evidence/scheduled-workflow-trust/README.md](evidence/scheduled-workflow-trust/README.md) | Disposable real-browser scheduled-workflow trust pass with stable before/after PNGs (missing binding refusal and Run now exact job) | `npm run test:e2e:schedules` (assertions); add `--screenshots docs/evidence/scheduled-workflow-trust` to regenerate captures |
 
 **Operations & contributing:** [installation.md](installation.md) ·
@@ -118,7 +117,6 @@ docs/
 ├── CAPABILITIES.md        ← feature map (source of truth for "what does X do")
 ├── workflow-graph.md      ← graph workflow feature and operator guide
 ├── adding-workflow-node-type.md ← graph extension playbook
-├── adding-safe-updater-adapter.md ← external updater adapter playbook
 ├── product/               ← vision + core flows
 ├── *.md (ops/dev/security)← installation, backup, developing, security…
 ├── plans/                 ← pending design (meeting-mode)

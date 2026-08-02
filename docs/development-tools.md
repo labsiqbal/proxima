@@ -51,8 +51,8 @@ evidence live in [ui-shell.md](ui-shell.md#validation) and
 
 `scripts/linux-daily-driver-acceptance` is the isolated Linux support matrix (install,
 lifecycle, PTY, backup/restore, diagnostics, preview, access, upgrade readiness).
-It requires Linux and `apps/api/.venv`, enables Master and keeps Safe Self-Update
-off for that process only, and never targets the installed database or service.
+It requires Linux and `apps/api/.venv`, enables Master for that process only,
+and never targets the installed database or service.
 See [linux-daily-driver-acceptance.md](linux-daily-driver-acceptance.md).
 
 The preview browser verifier builds the web app, installs its pinned Astro

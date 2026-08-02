@@ -19,15 +19,15 @@ bash scripts/linux-daily-driver-acceptance
 ```
 
 The command exits zero only when every row below passes. It requires the existing
-`apps/api/.venv` development environment. It sets Master enabled and Safe
-Self-Update disabled for the acceptance process only.
+`apps/api/.venv` development environment. It sets Master enabled for the
+acceptance process only.
 
 ## Executable matrix
 
 | Row | End-user contract | Executable evidence |
 | --- | --- | --- |
 | Platform | The API and Diagnostics call Linux supported and macOS/Windows experimental. Unknown hosts never fall through to Linux. | `test_platform_support.py`, `SettingsScreen.platform.test.tsx` |
-| Install | `scripts/install-user` dry-runs without writes, installs into isolated XDG/HOME paths, preserves an existing Master-on/Safe-off config, and refuses a non-Linux host before dependency or service calls. | `test_install_user.py` |
+| Install | `scripts/install-user` dry-runs without writes, installs into isolated XDG/HOME paths, preserves an existing Master-on config, and refuses a non-Linux host before dependency or service calls. | `test_install_user.py` |
 | Service lifecycle | Status, restart, and stop select only the configured isolated systemd user unit. An unknown host stops before a service-manager call and explains the Linux path. | `test_linux_daily_driver_acceptance.py` |
 | PTY / Terminal | A real Linux PTY starts in the selected project, completes a shell round trip, and reaps its shell and descendants on close. | `test_linux_daily_driver_acceptance.py`, `test_terminal.py` |
 | Backup and restore | The online SQLite backup captures committed data, passes `PRAGMA integrity_check`, and restores into a separate target with the pre-backup value. | `test_linux_daily_driver_acceptance.py` |

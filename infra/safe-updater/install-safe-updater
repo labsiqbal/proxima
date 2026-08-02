@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-echo "Safe updater enrollment is not available in foundation group 14." >&2
-echo "No updater files, units, release pointers, or service state were changed." >&2
-exit 1
