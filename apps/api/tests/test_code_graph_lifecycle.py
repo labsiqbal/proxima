@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -121,6 +122,14 @@ def test_multiple_areas_receive_distinct_paths_state_and_generations(
     assert {item["scope"]["area_id"] for item in code} == set(area_ids)
     assert all(item["state"] == "queued" for item in code)
 
+    def _tree_mtimes(base: Path) -> dict[str, int]:
+        return {
+            path.relative_to(base).as_posix(): path.lstat().st_mtime_ns
+            for path in sorted(base.rglob("*"))
+        }
+
+    root = Path(project["path"])
+    before = _tree_mtimes(root)
     for area_id in area_ids:
         rebuilt = api.post(
             "/api/containers/life-one/graphs/rebuild",
@@ -143,7 +152,11 @@ def test_multiple_areas_receive_distinct_paths_state_and_generations(
     )
     assert all(int(row["generation"]) == 1 for row in rows)
     assert all(row["repo_head"] for row in rows)
-    root = Path(project["path"])
+    # Rebuilds mutate NOTHING inside the container - not even a transient
+    # .git/index.lock from an opportunistic `git status` refresh (the
+    # lifecycle runs git with GIT_OPTIONAL_LOCKS=0), so every path and
+    # mtime, .git internals included, is exactly as before (prune C2).
+    assert _tree_mtimes(root) == before
     runtime = tmp_path / "runtime"
     for index, row in enumerate(rows):
         graph_path = Path(row["graph_path"])
@@ -164,6 +177,40 @@ def test_multiple_areas_receive_distinct_paths_state_and_generations(
     serialized = json.dumps(public)
     assert project["path"] not in serialized
     assert "graphify-out" not in serialized
+
+
+def test_git_inspection_never_writes_into_the_repo(tmp_path: Path):
+    """Prune C2: background git inspection is strictly read-only.
+
+    A default `git status` opportunistically rewrites .git/index (through a
+    transient index.lock) when the stat cache is stale - a mutation inside
+    the owner's repo on every lifecycle tick. GIT_OPTIONAL_LOCKS=0 must keep
+    the whole .git directory byte- and mtime-identical."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    # Stale the index stat-cache so an optional-locks `git status` would
+    # refresh and rewrite .git/index.
+    future = time.time() + 5
+    os.utime(repo / "app.py", (future, future))
+    api, _headers = _api(tmp_path)
+    service = api.app.state.graph_context
+
+    git_meta = repo / ".git"
+    before = {
+        path.relative_to(git_meta).as_posix(): path.lstat().st_mtime_ns
+        for path in sorted(git_meta.rglob("*"))
+    }
+    dir_before = git_meta.lstat().st_mtime_ns
+
+    assert service.repo_head_sha(repo)
+    assert service.tracked_dirty_signature(repo) is None  # clean tracked tree
+
+    after = {
+        path.relative_to(git_meta).as_posix(): path.lstat().st_mtime_ns
+        for path in sorted(git_meta.rglob("*"))
+    }
+    assert after == before
+    assert git_meta.lstat().st_mtime_ns == dir_before
 
 
 def test_cross_area_symlink_escape_fails_closed(tmp_path: Path):

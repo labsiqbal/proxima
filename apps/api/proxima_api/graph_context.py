@@ -238,6 +238,10 @@ def _is_graphify_ignore_path(rel_path: str) -> bool:
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env["GIT_TERMINAL_PROMPT"] = "0"
+    # Background inspection must be strictly read-only inside the owner's
+    # repo (prune C2): without this, `git status` opportunistically rewrites
+    # .git/index through a transient index.lock on every lifecycle tick.
+    env["GIT_OPTIONAL_LOCKS"] = "0"
     try:
         res = subprocess.run(
             ["git", *args],
