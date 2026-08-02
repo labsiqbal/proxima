@@ -1810,10 +1810,25 @@ def test_owner_retry_recovers_verified_orphan_guardian(
     ):
         time.sleep(0.01)
 
+    # The sentinel may still be completing its first member observation, in
+    # which case fail-closed recovery reports the record as unresolved until
+    # identity is proven. Real callers re-run recovery; poll to the settled
+    # outcome instead of racing the observation.
     recovery = container_registry.recover_container_activity_guardians(
         conn,
         container_id,
     )
+    deadline = time.monotonic() + 5
+    while (
+        recovery.recovered == 0
+        and recovery.unresolved > 0
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.05)
+        recovery = container_registry.recover_container_activity_guardians(
+            conn,
+            container_id,
+        )
     assert recovery.active == 0
     assert recovery.recovered == 1
     assert recovery.unresolved == 0
