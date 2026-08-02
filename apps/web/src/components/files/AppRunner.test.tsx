@@ -236,6 +236,31 @@ describe('AppRunner collision feedback', () => {
     expect(frame).not.toHaveAttribute('src', expect.stringContaining('127.0.0.1:5180'))
   })
 
+  it('falls back to the same-origin appview proxy on an https origin', async () => {
+    // Tailscale Serve fronts the app with TLS, but relays are plain HTTP: an
+    // https iframe to the relay port fails its handshake and an http one is
+    // mixed content. The same-origin proxy rides the page's own TLS instead.
+    vi.stubGlobal('location', {
+      hostname: 'linc.example.ts.net',
+      protocol: 'https:',
+    })
+    vi.mocked(appStatus).mockResolvedValue({
+      state: 'ready',
+      running: true,
+      ready: true,
+      requested_port: 5180,
+      port: 5180,
+      preview_port: 43123,
+      command: 'npm run dev',
+      log: [],
+    })
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+
+    const frame = await screen.findByTitle('App preview')
+    expect(frame).toHaveAttribute('src', expect.stringContaining('/api/appview/demo/'))
+    expect(frame).not.toHaveAttribute('src', expect.stringContaining(':43123'))
+  })
+
   it('uses the capability relay from a Tailscale origin', async () => {
     vi.stubGlobal('location', {
       hostname: '100.101.102.103',

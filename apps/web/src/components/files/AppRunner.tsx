@@ -201,7 +201,14 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
   // isolated origin is available.
   const isRemote = location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'
   const subdomainUrl = appsDomain && isRemote && status.running && status.ready ? `${location.protocol}//preview-${slug}.${appsDomain}/` : ''
-  const relayUrl = !subdomainUrl && status.running && status.preview_port ? `${location.protocol}//${location.hostname}:${status.preview_port}/` : ''
+  // The relay speaks plain HTTP only. From an https page (Tailscale Serve, a
+  // fronting proxy) an https://host:relayPort iframe dies in the TLS handshake
+  // and an http:// one is blocked as mixed content — so https origins skip the
+  // relay and use the same-origin /api/appview proxy, which rides the page's own
+  // TLS. The relay stays preferred on http origins for its isolated origin.
+  const relayUrl = !subdomainUrl && status.running && status.preview_port && location.protocol === 'http:'
+    ? `http://${location.hostname}:${status.preview_port}/`
+    : ''
   // A freshly-provisioned preview subdomain can lag on DNS for a few seconds (and a
   // relay iframe can race the preview-auth cookie mint). Retry the frame ONLY while
   // it hasn't loaded yet — the iframe's onLoad clears this — so a preview that loads
