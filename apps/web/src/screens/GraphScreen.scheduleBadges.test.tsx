@@ -1848,7 +1848,7 @@ describe('GraphScreen how-it-runs badges', () => {
     const row = screen.getByText('Nightly publish').closest('[role="row"]') as HTMLElement
     fireEvent.click(within(row).getByRole('button', { name: 'Schedules' }))
     const dialog = await screen.findByRole('dialog', { name: 'Schedule Nightly publish' })
-    fireEvent.click(screen.getByRole('button', { name: 'Run now' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
     await waitFor(() => expect(runScheduleNow).toHaveBeenCalledTimes(1))
 
     fireEvent.click(dialog.parentElement as HTMLElement)
