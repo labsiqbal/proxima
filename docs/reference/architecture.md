@@ -362,8 +362,18 @@ failing the whole read; direct single-Container access still uses `ops_root` and
 stays fail-closed. The intentional repo-at-root plus `ops/` containment is permitted
 and `/ops/` is added to the root repo's local git exclude.
 
-Legacy Ops rows at `.` remain usable until migration succeeds. Startup creates a
-dry-run manifest with content hashes. It includes an existing owner-authored
+Legacy Ops rows at `.` remain usable until migration succeeds. Before any
+manifest is planned, a populated pre-existing `ops/` directory is **adopted
+as-is** (prune C1): the Ops row flips to `ops`, the marker completes with a
+`mode: "adopted"` manifest carrying a top-level inventory of the existing
+content, and no file is moved, generated, or rewritten - `container.md` is
+optional and only read if present. Adoption is skipped while a durable `moving`
+manifest exists (mid-move content is migration-owned) and stays fail-closed for
+a symlinked, non-directory, or unreadable `ops/` or one overlapping a repo Area.
+`inspect_ops_migration` mirrors the same predicate and reports `retry_action`
+(`adopt`/`migrate`/`revalidate`) so the retry confirmation names the real
+action. Only a missing or empty `ops/` proceeds to the move-based path: startup
+creates a dry-run manifest with content hashes. It includes an existing owner-authored
 `container.md` as a byte-preserving move, or binds exact generated content only when
 that legacy document is absent. It rejects collisions or ambiguous types before
 publication. Regular files are linked into authoritative names from opened,

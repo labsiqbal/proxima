@@ -49,6 +49,7 @@ const collision: Detail = {
   },
   conflicts: [{ path: 'wiki', reason: 'Both wiki and ops/wiki exist.' }],
   retry_safe: false,
+  retry_action: null,
   validation_reason: 'physical Ops root is not empty',
   what_remains_usable: {
     legacy_ops_active: true,
@@ -72,6 +73,7 @@ const collision: Detail = {
 const safe = {
   ...collision,
   retry_safe: true,
+  retry_action: 'migrate' as const,
   validation_reason: null,
   conflicts: [],
   legacy_owned_paths: [{
@@ -87,6 +89,7 @@ const complete: Detail = {
   phase: 'complete',
   active_ops_path: 'ops',
   retry_safe: false,
+  retry_action: null,
   validation_reason: 'Migration is already complete; no retry is needed.',
   legacy_owned_paths: [{
     ...safe.legacy_owned_paths[0],
@@ -249,6 +252,7 @@ describe('OpsMigrationDetail', () => {
     const repaired: Detail = {
       ...complete,
       retry_safe: true,
+      retry_action: 'revalidate',
       attention: { ...complete.attention, status: 'open', resolved_at: null },
       validation_reason: null,
     }
@@ -264,6 +268,25 @@ describe('OpsMigrationDetail', () => {
     expect(message).not.toContain('move only the planned Ops-owned paths')
   })
 
+  it('uses adopt-as-is confirmation copy when retry adopts a populated ops/', async () => {
+    const adoptable: Detail = {
+      ...collision,
+      retry_safe: true,
+      retry_action: 'adopt',
+      validation_reason: null,
+    }
+    vi.mocked(getOpsMigration).mockResolvedValue(adoptable)
+    const user = userEvent.setup()
+    render(<OpsMigrationDetail token="token" project={project} onBack={vi.fn()} onChanged={vi.fn()} />)
+
+    await user.click(await screen.findByRole('button', { name: 'Retry migration' }))
+    expect(confirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('adopt the existing ops/ content exactly as it is on disk'),
+    }))
+    const message = vi.mocked(confirmDialog).mock.calls[0]?.[0]?.message || ''
+    expect(message).not.toContain('move only the planned Ops-owned paths')
+  })
+
   it('ignores stale reload responses after a newer request starts', async () => {
     let resolveStale: ((value: Detail) => void) | undefined
     const stale = new Promise<Detail>((resolve) => { resolveStale = resolve })
@@ -272,6 +295,7 @@ describe('OpsMigrationDetail', () => {
       ...complete,
       project: { id: 12, slug: nextProject.slug, name: nextProject.name },
       retry_safe: true,
+      retry_action: 'revalidate',
       attention: { ...complete.attention, status: 'open', resolved_at: null },
       validation_reason: null,
     }

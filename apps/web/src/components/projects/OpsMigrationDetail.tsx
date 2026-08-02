@@ -8,19 +8,14 @@ const inspectableKind = (state: string): 'directory' | 'file' | null => (
   state === 'directory' || state === 'file' ? state : null
 )
 
-function retryMovesContent(detail: OpsMigrationDetailPayload): boolean {
-  if (detail.phase === 'complete' || detail.phase === 'not_required') return false
-  if (detail.active_ops_path === 'ops') return false
-  return detail.legacy_owned_paths.some((path) => (
-    path.legacy_state !== 'missing' && path.layout !== 'physical'
-  ))
-}
-
 function retryConfirmMessage(detail: OpsMigrationDetailPayload): string {
-  if (!retryMovesContent(detail)) {
-    return 'Validation is currently safe. Proxima will revalidate ownership and layout and resolve Attention without moving content.'
+  if (detail.retry_action === 'adopt') {
+    return 'Validation is currently safe. Proxima will adopt the existing ops/ content exactly as it is on disk - nothing is moved, copied, or rewritten.'
   }
-  return 'Validation is currently safe. Proxima will move only the planned Ops-owned paths on this filesystem and will stop if the layout changes.'
+  if (detail.retry_action === 'migrate') {
+    return 'Validation is currently safe. Proxima will move only the planned Ops-owned paths on this filesystem and will stop if the layout changes.'
+  }
+  return 'Validation is currently safe. Proxima will revalidate ownership and layout and resolve Attention without moving content.'
 }
 
 export function OpsMigrationDetail({ token, project, onBack, onChanged }: {

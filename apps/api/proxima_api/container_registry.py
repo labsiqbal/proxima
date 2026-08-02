@@ -1411,6 +1411,72 @@ def _build_manifest(
     }
 
 
+def _adoption_inventory(
+    conn: sqlite3.Connection,
+    container: Mapping[str, Any],
+) -> list[dict[str, str]] | None:
+    """Inventory a pre-existing populated ``ops/`` that can be adopted as-is.
+
+    A project is the folder as it exists on disk: when the owner links a
+    folder whose ``ops/`` already has content, Proxima adopts that content
+    instead of demanding an empty directory (prune C1). Returns the top-level
+    inventory when ``root/ops`` is a real populated directory; returns None
+    when there is nothing to adopt (``ops/`` missing or empty - those layouts
+    stay with the planned move-based migration). Raises for layouts that stay
+    fail-closed: a symlinked or non-directory ``ops/``, unreadable content,
+    or overlap with an active repo Area.
+    """
+    root = container_root(container)
+    physical = root / OPS_RELPATH
+    state = _path_state(physical)
+    if state == "missing":
+        return None
+    if state == "symlink":
+        raise OpsMigrationCollision("physical Ops root is a symlink")
+    if state != "directory":
+        raise OpsMigrationCollision("physical Ops root collides with a non-directory")
+    code_paths = {
+        str(row["rel_path"])
+        for row in conn.execute(
+            "SELECT rel_path FROM project_areas "
+            "WHERE project_id = ? AND kind = 'code' AND source != 'excluded'",
+            (container["id"],),
+        ).fetchall()
+    }
+    if any(
+        path == OPS_RELPATH or path.startswith(f"{OPS_RELPATH}/")
+        for path in code_paths
+    ):
+        raise OpsMigrationCollision(
+            "the requested physical Ops root is an active repo Area"
+        )
+    inventory = _physical_ops_state(physical)
+    if inventory["state"] == "empty":
+        return None
+    if inventory["state"] != "populated":
+        raise OpsMigrationCollision("physical Ops root cannot be inspected")
+    # The symlink policy is unchanged by adoption: any descendant symlink
+    # stays fail-closed (softening reads is prune step C7, not C1).
+    _reject_symlinks(physical)
+    return list(inventory["entries"])
+
+
+def _adoption_manifest(
+    container: Mapping[str, Any],
+    inventory: list[dict[str, str]],
+) -> dict[str, Any]:
+    """The durable record of an as-is adoption: what existed, nothing planned."""
+    root = container_root(container)
+    return {
+        "version": OPS_MIGRATION_VERSION,
+        "mode": "adopted",
+        "container_root": str(root),
+        "ops_root": str(root / OPS_RELPATH),
+        "entries": [],
+        "inventory": inventory,
+    }
+
+
 def _upsert_marker(
     conn: sqlite3.Connection,
     container_id: int,
@@ -3239,16 +3305,37 @@ def inspect_ops_migration(
         )
 
     retry_safe = False
+    retry_action: str | None = None
     validation_reason: str | None = None
     if root_error:
         validation_reason = root_error
     elif active_ops_path == ".":
-        try:
-            _validated_retry_manifest(conn, data, marker)
-        except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
-            validation_reason = str(exc)
-        else:
+        # Adoption never applies mid-move: a durable "moving" manifest means
+        # the migration owns whatever already sits inside ops/.
+        resuming = bool(
+            marker and marker.get("status") == "moving" and marker.get("manifest_json")
+        )
+        adoption: list[dict[str, str]] | None = None
+        adoption_error: str | None = None
+        if not resuming:
+            try:
+                adoption = _adoption_inventory(conn, data)
+            except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
+                adoption_error = str(exc)
+        if adoption is not None:
+            # A populated ops/ is adopted as-is on retry - nothing is moved.
             retry_safe = True
+            retry_action = "adopt"
+        elif adoption_error is not None:
+            validation_reason = adoption_error
+        else:
+            try:
+                _validated_retry_manifest(conn, data, marker)
+            except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
+                validation_reason = str(exc)
+            else:
+                retry_safe = True
+                retry_action = "migrate"
     elif active_ops_path == OPS_RELPATH:
         try:
             validated_area_roots(conn, data, deep_ops_scan=True)
@@ -3257,6 +3344,7 @@ def inspect_ops_migration(
         else:
             if attention_row is not None and attention_row["status"] == "open":
                 retry_safe = True
+                retry_action = "revalidate"
             else:
                 validation_reason = "Migration is already complete; no retry is needed."
     elif active_ops_path is None:
@@ -3326,6 +3414,7 @@ def inspect_ops_migration(
         },
         "conflicts": conflicts,
         "retry_safe": retry_safe,
+        "retry_action": retry_action,
         "validation_reason": validation_reason,
         "what_remains_usable": {
             "legacy_ops_active": legacy_active,
@@ -3397,6 +3486,45 @@ def _migrate_container_ops_locked(
     manifest: dict[str, Any] | None = None
     resuming = bool(marker and marker["status"] == "moving" and marker["manifest_json"])
     if not resuming:
+        # Adopt-as-is comes first (prune C1): a populated ops/ that already
+        # exists on disk is registered exactly as it is - no moves, no
+        # generated files - instead of colliding with the planned migration.
+        try:
+            adoption = _adoption_inventory(conn, data)
+        except (ContainerBoundaryError, OSError) as exc:
+            reason = str(exc)
+            _upsert_marker(conn, int(data["id"]), "attention", None, reason)
+            _attention(conn, data, reason)
+            return False
+        if adoption is not None:
+            try:
+                adopted_manifest = _adoption_manifest(data, adoption)
+                conn.execute("BEGIN")
+                try:
+                    conn.execute(
+                        "UPDATE project_areas SET rel_path = ?, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (OPS_RELPATH, row["id"]),
+                    )
+                    validated_area_roots(conn, data, deep_ops_scan=True)
+                    _upsert_marker(
+                        conn,
+                        int(data["id"]),
+                        "complete",
+                        adopted_manifest,
+                    )
+                    refresh_registry_projection(conn, data)
+                    _resolve_attention(conn, int(data["id"]))
+                    conn.execute("COMMIT")
+                except Exception:
+                    conn.execute("ROLLBACK")
+                    raise
+            except (ContainerBoundaryError, OSError, sqlite3.Error) as exc:
+                reason = str(exc)
+                _upsert_marker(conn, int(data["id"]), "attention", None, reason)
+                _attention(conn, data, reason)
+                return False
+            return True
         try:
             manifest = _build_manifest(conn, data)
         except (ContainerBoundaryError, OSError) as exc:

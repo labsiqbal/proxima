@@ -433,59 +433,118 @@ def test_legacy_owner_container_document_is_hash_bound_and_migrated(tmp_path: Pa
     )
 
 
-def test_collision_leaves_legacy_row_and_every_file_unchanged(tmp_path: Path):
+def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
+    """Every path under root: files map to exact bytes, directories to None."""
+    return {
+        path.relative_to(root).as_posix(): (
+            path.read_bytes() if path.is_file() else None
+        )
+        for path in root.rglob("*")
+    }
+
+
+def test_populated_ops_is_adopted_as_is_with_every_file_unchanged(tmp_path: Path):
+    """A pre-existing populated ops/ is adopted in place - no moves, no writes."""
     conn = _database(tmp_path)
-    root = tmp_path / "collision"
-    container_id = _legacy_container(conn, root, "collision")
+    root = tmp_path / "adopt"
+    container_id = _legacy_container(conn, root, "adopt")
     (root / "wiki").mkdir()
     (root / "wiki" / "keep.md").write_bytes(b"legacy bytes")
     (root / "ops" / "wiki").mkdir(parents=True)
-    (root / "ops" / "wiki" / "keep.md").write_bytes(b"new bytes")
-    before = {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
-    }
+    (root / "ops" / "wiki" / "keep.md").write_bytes(b"existing bytes")
+    (root / "ops" / "scripts").mkdir()
+    (root / "ops" / "scripts" / "deploy.sh").write_bytes(b"#!/bin/sh\n")
+    (root / "ops" / "stray.txt").write_bytes(b"loose file\n")
+    before = _tree_snapshot(root)
 
-    assert migrate_container_ops(conn, container_id) is False
+    assert migrate_container_ops(conn, container_id) is True
 
-    after = {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
-    }
-    assert after == before
+    # Adoption is read-only: nothing moved, nothing generated (no container.md).
+    assert _tree_snapshot(root) == before
     assert (
         conn.execute(
             "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
             (container_id,),
         ).fetchone()["rel_path"]
-        == "."
+        == "ops"
     )
+    marker = conn.execute(
+        "SELECT status, manifest_json FROM container_ops_migrations "
+        "WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    assert marker["status"] == "complete"
+    manifest = json.loads(marker["manifest_json"])
+    assert manifest["mode"] == "adopted"
+    inventoried = {entry["path"] for entry in manifest["inventory"]}
+    assert inventoried == {"ops/wiki", "ops/scripts", "ops/stray.txt"}
     attention = conn.execute(
-        "SELECT status, target_json FROM attention_items WHERE source_key = ?",
+        "SELECT status FROM attention_items WHERE source_key = ?",
         (f"container-ops-migration:{container_id}",),
     ).fetchone()
-    assert attention["status"] == "open"
-    assert (
-        "physical Ops root is not empty"
-        in json.loads(attention["target_json"])["reason"]
+    assert attention is None or attention["status"] == "resolved"
+
+    # Re-running the startup migration sweep stays green and changes nothing.
+    assert migrate_legacy_ops_containers(conn) == {"complete": 1, "attention": 0}
+    assert _tree_snapshot(root) == before
+    attention = conn.execute(
+        "SELECT status FROM attention_items WHERE source_key = ? AND status = 'open'",
+        (f"container-ops-migration:{container_id}",),
+    ).fetchone()
+    assert attention is None
+
+
+def test_stuck_populated_ops_attention_loop_resolves_by_adoption(tmp_path: Path):
+    """A container stuck on the legacy 'not empty' loop adopts on the next sweep."""
+    conn = _database(tmp_path)
+    root = tmp_path / "stuck"
+    container_id = _legacy_container(conn, root, "stuck")
+    (root / "ops" / "wiki").mkdir(parents=True)
+    (root / "ops" / "wiki" / "note.md").write_bytes(b"# note\n")
+    # Simulate the pre-adoption stuck state: attention marker + open item.
+    container_registry._upsert_marker(
+        conn,
+        container_id,
+        "attention",
+        None,
+        "physical Ops root is not empty",
     )
-    assert migrate_container_ops(conn, container_id) is False
-    rerun = {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
-    }
-    assert rerun == before
+    container_registry._attention(
+        conn,
+        container_registry.get_container(conn, container_id),
+        "physical Ops root is not empty",
+    )
+    before = _tree_snapshot(root)
+
+    assert migrate_legacy_ops_containers(conn) == {"complete": 1, "attention": 0}
+
+    assert _tree_snapshot(root) == before
+    attention = conn.execute(
+        "SELECT status FROM attention_items WHERE source_key = ?",
+        (f"container-ops-migration:{container_id}",),
+    ).fetchone()
+    assert attention["status"] == "resolved"
+    marker = conn.execute(
+        "SELECT status, manifest_json FROM container_ops_migrations "
+        "WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    assert marker["status"] == "complete"
+    assert json.loads(marker["manifest_json"])["mode"] == "adopted"
 
 
-def test_collision_recovery_detail_is_exact_and_read_only(tmp_path: Path):
-    root = tmp_path / "collision-detail"
+def test_link_adopts_populated_ops_as_is(tmp_path: Path):
+    """Linking a folder whose ops/ already has content succeeds without touching it."""
+    root = tmp_path / "client-folder"
     (root / "wiki").mkdir(parents=True)
     (root / "wiki" / "legacy.md").write_text("legacy", encoding="utf-8")
     (root / "ops" / "wiki").mkdir(parents=True)
     (root / "ops" / "wiki" / "physical.md").write_text("physical", encoding="utf-8")
+    (root / "ops" / "scripts").mkdir()
+    (root / "ops" / "scripts" / "deploy.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (root / "ops" / "stray.txt").write_text("loose", encoding="utf-8")
+    (root / "README.md").write_text("# client\n", encoding="utf-8")
+    before = _tree_snapshot(root)
     api, headers = _api(tmp_path)
 
     roots = api.get("/api/fs/dirs", headers=headers)
@@ -496,46 +555,140 @@ def test_collision_recovery_detail_is_exact_and_read_only(tmp_path: Path):
         json={
             "path": str(root),
             "root_id": roots.json()["root_id"],
-            "name": "Collision detail",
-            "slug": "collision-detail",
+            "name": "Client folder",
+            "slug": "client-folder",
         },
     )
     assert linked.status_code == 201, linked.text
-    before = {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
+
+    # Adoption is read-only: no moves, no generated container.md, no
+    # scaffolding. The only writes left at link time are the Knowledge-graph
+    # build artifacts (ops/graphify-out/, ops/.gitignore) - a #131-scope
+    # link-time mutation owned by the graph feature, not the migration.
+    graph_artifacts = {"ops/graphify-out", "ops/.gitignore"}
+
+    def _without_graph_artifacts(tree: dict[str, bytes | None]) -> dict:
+        return {
+            path: content
+            for path, content in tree.items()
+            if path not in graph_artifacts
+        }
+
+    assert _without_graph_artifacts(_tree_snapshot(root)) == before
+    conn = api.app.state.db
+    container_id = conn.execute(
+        "SELECT id FROM projects WHERE slug = 'client-folder'"
+    ).fetchone()["id"]
+    assert (
+        conn.execute(
+            "SELECT rel_path FROM project_areas WHERE project_id = ? AND kind = 'ops'",
+            (container_id,),
+        ).fetchone()["rel_path"]
+        == "ops"
+    )
+    marker = conn.execute(
+        "SELECT status, manifest_json FROM container_ops_migrations "
+        "WHERE container_id = ?",
+        (container_id,),
+    ).fetchone()
+    assert marker["status"] == "complete"
+    manifest = json.loads(marker["manifest_json"])
+    assert manifest["mode"] == "adopted"
+    assert {entry["path"] for entry in manifest["inventory"]} == {
+        "ops/wiki",
+        "ops/scripts",
+        "ops/stray.txt",
     }
+    open_items = conn.execute(
+        "SELECT COUNT(*) FROM attention_items "
+        "WHERE kind = 'container_ops_migration' AND status = 'open'"
+    ).fetchone()[0]
+    assert open_items == 0
 
     response = api.get(
-        "/api/projects/collision-detail/ops-migration",
+        "/api/projects/client-folder/ops-migration",
         headers=headers,
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["project"] == {
-        "id": body["project"]["id"],
-        "slug": "collision-detail",
-        "name": "Collision detail",
-    }
-    assert body["stored_reason"] == "physical Ops root is not empty"
-    assert body["phase"] == "attention"
-    assert body["active_ops_path"] == "."
+    assert body["phase"] == "complete"
+    assert body["active_ops_path"] == "ops"
     assert body["physical_ops"]["state"] == "populated"
     assert body["retry_safe"] is False
-    assert body["what_remains_usable"]["legacy_ops_active"] is True
+    assert body["retry_action"] is None
+    assert body["attention"]["status"] == "none"
+    assert body["what_remains_usable"]["physical_ops_active"] is True
+    # Both wiki and ops/wiki exist - reported for inspection, never acted on.
     assert {
         item["path"]: item["layout"]
         for item in body["legacy_owned_paths"]
         if item["path"] == "wiki"
     } == {"wiki": "both"}
 
-    after = {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
-    }
-    assert after == before
+    # The startup sweep re-validates without re-raising attention or touching files.
+    summary = migrate_legacy_ops_containers(conn)
+    assert summary["attention"] == 0
+    assert _without_graph_artifacts(_tree_snapshot(root)) == before
+
+    # Unlink and relink: adoption is repeatable against the same folder.
+    deleted = api.delete("/api/projects/client-folder", headers=headers)
+    assert deleted.status_code in (200, 204), deleted.text
+    relinked = api.post(
+        "/api/projects/link",
+        headers=headers,
+        json={
+            "path": str(root),
+            "root_id": roots.json()["root_id"],
+            "name": "Client folder",
+            "slug": "client-folder",
+        },
+    )
+    assert relinked.status_code == 201, relinked.text
+    assert _without_graph_artifacts(_tree_snapshot(root)) == before
+
+
+def test_stuck_populated_ops_retry_adopts_without_moving(tmp_path: Path):
+    """The owner-facing retry adopts a populated ops/ instead of demanding it empty."""
+    api, headers = _api(tmp_path)
+    root = tmp_path / "stuck-retry"
+    container_id = _owned_api_legacy(api, root, "stuck-retry")
+    (root / "ops" / "wiki").mkdir(parents=True)
+    (root / "ops" / "wiki" / "note.md").write_text("# note\n", encoding="utf-8")
+    conn = api.app.state.db
+    container_registry._upsert_marker(
+        conn,
+        container_id,
+        "attention",
+        None,
+        "physical Ops root is not empty",
+    )
+    container_registry._attention(
+        conn,
+        container_registry.get_container(conn, container_id),
+        "physical Ops root is not empty",
+    )
+    before = _tree_snapshot(root)
+
+    detail = api.get(
+        "/api/projects/stuck-retry/ops-migration",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["active_ops_path"] == "."
+    assert body["retry_safe"] is True
+    assert body["retry_action"] == "adopt"
+
+    retried = api.post(
+        "/api/projects/stuck-retry/ops-migration/retry",
+        headers=headers,
+    )
+    assert retried.status_code == 200, retried.text
+    resolved = retried.json()
+    assert resolved["phase"] == "complete"
+    assert resolved["active_ops_path"] == "ops"
+    assert resolved["attention"]["status"] == "resolved"
+    assert _tree_snapshot(root) == before
 
 
 def test_partial_move_recovers_from_durable_manifest(tmp_path: Path, monkeypatch):
@@ -4022,7 +4175,9 @@ def test_archive_list_survives_unavailable_container(tmp_path: Path):
     assert any(item["project_slug"] == "broken" for item in listing.json()["items"])
 
 
-def test_collision_container_keeps_legacy_ops_features_available(tmp_path: Path):
+def test_fail_closed_container_keeps_legacy_ops_features_available(tmp_path: Path):
+    """A container whose ops/ stays fail-closed (symlink inside - C7 scope,
+    not adopted by C1) keeps every legacy Ops feature usable at `.`."""
     db_path = tmp_path / "legacy.db"
     conn = connect(db_path)
     init_db(conn, [])
@@ -4044,6 +4199,9 @@ def test_collision_container_keeps_legacy_ops_features_available(tmp_path: Path)
     )
     (root / "ops" / "wiki").mkdir(parents=True)
     (root / "ops" / "wiki" / "collision.md").write_text("# Collision", encoding="utf-8")
+    outside = tmp_path / "outside-legacy-api"
+    outside.mkdir()
+    (root / "ops" / "linked").symlink_to(outside, target_is_directory=True)
     conn.close()
 
     api, headers = _api(tmp_path, db_path)

@@ -1279,8 +1279,22 @@ A repo at `.` is the one intentional containment case; its local git exclude kee
 cross-process lease, native identity, and descriptor publication boundaries. They
 do not depend on registry projection; `container_registry.py` orchestrates them.
 
-Existing Containers whose Ops row is `.` migrate at startup. The migration first
-builds and hashes a dry-run manifest. An owner-authored legacy `container.md` is
+Existing Containers whose Ops row is `.` migrate at startup. **Adoption comes
+first (prune C1):** when the folder already contains a real, populated `ops/`
+directory, Proxima adopts it exactly as it exists on disk - the Ops row flips to
+`ops`, the durable marker completes with a `mode: "adopted"` manifest holding a
+top-level inventory of the existing content, and nothing is moved, generated, or
+rewritten (no `container.md` is created; an existing one is simply read for the
+identity/summary projection). Linking a folder with a populated `ops/` therefore
+succeeds with zero Attention items, and the owner-facing retry adopts instead of
+demanding an empty directory (the migration detail reports
+`retry_action: "adopt" | "migrate" | "revalidate" | null` so the confirm copy
+matches what retry will actually do). Adoption never applies mid-move: a durable
+"moving" manifest means the migration owns whatever sits inside `ops/`. A
+symlinked, non-directory, or unreadable `ops/`, or one overlapping a repo Area,
+stays fail-closed with an Attention item (symlink softening is prune C7). Only a
+missing or empty `ops/` continues into the planned move-based migration. The
+migration first builds and hashes a dry-run manifest. An owner-authored legacy `container.md` is
 hash-bound and moved byte-for-byte; a generated document is planned only when the
 legacy document is absent. Atomic no-clobber publication through stable no-follow
 directory handles publishes only manifest-bound inodes for known Ops-owned paths.

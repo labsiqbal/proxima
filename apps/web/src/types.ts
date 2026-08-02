@@ -106,6 +106,7 @@ export type OpsMigrationDetail = {
 	};
 	conflicts: { path: string; reason: string }[];
 	retry_safe: boolean;
+	retry_action: "adopt" | "migrate" | "revalidate" | null;
 	validation_reason: string | null;
 	what_remains_usable: {
 		legacy_ops_active: boolean;
