@@ -829,7 +829,7 @@ SQLite (WAL mode). 57 tables. Applied migration version: **63**. This is the exa
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `updated_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 
-**Indexes:** `uq_task_recovery_corrections_active_job` - UNIQUE (job_id); `idx_task_recovery_corrections_state` - (state, id)
+**Indexes:** `idx_task_recovery_corrections_state` - (state, id); `uq_task_recovery_corrections_active_job` - UNIQUE (job_id)
 
 
 ### task_recovery_delivered_marker_staging
@@ -1032,4 +1032,4 @@ SQLite (WAL mode). 57 tables. Applied migration version: **63**. This is the exa
 
 
 ---
-_Generated 2026-08-03 15:03 UTC._
+_Generated 2026-08-03 16:51 UTC._

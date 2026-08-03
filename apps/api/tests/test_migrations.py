@@ -8,8 +8,10 @@ from pathlib import Path
 import pytest
 
 from proxima_api.db import (
+    _SCHEMA_INDEX_STATEMENTS,
     _SCHEMA_TRIGGER_STATEMENTS,
     SCHEMA,
+    SCHEMA_TABLES,
     connect,
     init_db,
 )
@@ -4154,6 +4156,115 @@ def test_deleting_a_task_that_already_has_a_tombstone_survives_a_restart(
         "task_recovery_history_tombstones WHERE job_id = 3"
     ).fetchone()
     assert (tombstone[0], tombstone[1]) == (7, "task_event")
+
+
+def test_schema_tables_carries_only_statements_an_old_database_can_take():
+    """The invariant, stated once: SCHEMA_TABLES runs *before* the migrations.
+
+    `init_db` applies it to existing databases too, where every table is still
+    on its pre-migration shape. `CREATE TABLE IF NOT EXISTS` is a harmless no-op
+    there, but an index or a trigger naming a column a pending migration has yet
+    to add is not - it aborts startup (index: hard error at CREATE; trigger: at
+    the next schema reparse). Both kinds are therefore split out and applied
+    after the tables have caught up. Anything else added to that script has to
+    be safe against a database from any earlier release.
+    """
+    kinds = re.findall(
+        r"^\s*CREATE\s+(TABLE|VIEW|INDEX|UNIQUE\s+INDEX|TRIGGER)\b",
+        SCHEMA_TABLES,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    assert sorted({" ".join(kind.upper().split()) for kind in kinds}) == ["TABLE"]
+
+
+def test_every_schema_index_is_managed_and_targets_a_real_table():
+    """No SCHEMA index may drop out of the set apply_schema_indexes manages."""
+    declared = re.findall(
+        r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?\s*([A-Za-z0-9_]+)",
+        SCHEMA,
+        re.IGNORECASE,
+    )
+    managed = {name for name, _, _ in _SCHEMA_INDEX_STATEMENTS}
+    tables = set(re.findall(r"CREATE TABLE IF NOT EXISTS ([A-Za-z0-9_]+)", SCHEMA))
+
+    assert sorted(managed) == sorted(declared)
+    assert [
+        name for name, table, _ in _SCHEMA_INDEX_STATEMENTS if table not in tables
+    ] == []
+
+
+def test_legacy_db_upgrades_despite_schema_index_ahead_of_its_column(
+    tmp_path: Path,
+):
+    """A pre-existing database must boot through an index on a new column.
+
+    This is the mirror of the trigger case above, and it took the live instance
+    down on deploy: #158 added `attention_items.item_key` in migration 63 and
+    declared `uq_attention_item_key` on it in SCHEMA. `init_db` runs SCHEMA
+    before `run_migrations`, so on any database that already existed the index
+    was created against a table without the column and startup died with
+    `no such column: item_key`. A fresh database never notices - it creates the
+    table with the column in the same script - which is why every disposable
+    fixture and CI run stayed green.
+    """
+    db_path = tmp_path / "legacy-index.db"
+    conn = connect(db_path)
+    init_db(conn, [], None, None)
+    run_migrations(conn, str(db_path))
+
+    # Rewind to a real pre-63 install: the ledger columns and the objects that
+    # depend on them are gone, and the chain is recorded one version short.
+    conn.execute("DROP TRIGGER IF EXISTS attention_items_item_key")
+    conn.execute("DROP INDEX IF EXISTS uq_attention_item_key")
+    conn.execute("DROP INDEX IF EXISTS idx_attention_unread")
+    for column in ("item_key", "severity", "body", "detail_json", "requires_action", "read_at"):
+        conn.execute(f"ALTER TABLE attention_items DROP COLUMN {column}")
+    conn.execute(
+        "INSERT INTO attention_items(kind, title, status, source_key) "
+        "VALUES ('master_budget', 'Master unattended work stopped', 'open', 'k')"
+    )
+    conn.execute("DELETE FROM schema_migrations WHERE version >= 63")
+    conn.close()
+
+    # Boot exactly the way the server does: reopen, init_db, then migrate.
+    conn = connect(db_path)
+    init_db(conn, [], None, None)
+    applied = run_migrations(conn, str(db_path))
+
+    assert 63 in applied
+    row = conn.execute("SELECT * FROM attention_items").fetchone()
+    assert row["item_key"] == f"attention:{row['id']}"
+    objects = {
+        str(name)
+        for (name,) in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('index', 'trigger')"
+        )
+    }
+    assert "uq_attention_item_key" in objects
+    assert "idx_attention_unread" in objects
+    assert "attention_items_item_key" in objects
+
+
+def test_a_booted_database_carries_every_index_schema_declares(tmp_path: Path):
+    """Deferring an index must never mean silently losing it.
+
+    Catches the other half of the class: an index that could not be created
+    before the migrations and is then never created after them either.
+    """
+    db_path = tmp_path / "indexes.db"
+    conn = connect(db_path)
+    init_db(conn, [], None, None)
+    run_migrations(conn, str(db_path))
+
+    present = {
+        str(name)
+        for (name,) in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name IS NOT NULL"
+        )
+    }
+    declared = {name for name, _, _ in _SCHEMA_INDEX_STATEMENTS}
+
+    assert declared - present == set()
 
 
 def test_every_schema_trigger_is_managed_and_targets_a_real_table():

@@ -28,6 +28,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .db import (
+    apply_schema_indexes,
     backfill_project_path_identities,
     prune_unparseable_schema_triggers,
     restore_schema_triggers,
@@ -6994,6 +6995,10 @@ def run_migrations(
     cur = current_version(conn)
     pending = [m for m in migs if m[0] > cur]
     if not pending:
+        # Still worth a pass: an index SCHEMA declares on a column an *earlier*
+        # migration added may have been deferred by an init_db that ran before
+        # that migration, and there is no other moment that would create it.
+        apply_schema_indexes(conn)
         return []
 
     if db_path:
@@ -7024,6 +7029,9 @@ def run_migrations(
         conn.execute(f"PRAGMA legacy_alter_table = {int(legacy_alter)}")
 
     restore_schema_triggers(conn, withheld_triggers)
+    # The tables are current now, so anything init_db had to defer - an index on
+    # a column one of the migrations above just added - can finally be created.
+    apply_schema_indexes(conn)
     return applied
 
 

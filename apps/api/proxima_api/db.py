@@ -1633,9 +1633,26 @@ _TRIGGER_HEAD = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+_INDEX_HEAD = re.compile(
+    r"^(?:\s*--[^\n]*\n)*\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+"
+    r"(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z0-9_]+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
 _TRIGGER_TARGET = re.compile(r"\bON\s+([A-Za-z0-9_]+)", re.IGNORECASE)
 
 _SQL_LINE_COMMENT = re.compile(r"^\s*--[^\n]*$", re.MULTILINE)
+
+
+def _index_target_table(statement: str) -> str:
+    """The table a CREATE INDEX statement is declared on.
+
+    Same comment-stripping care as the trigger case: prose above the header is
+    English, and a stray "on" in it would otherwise be read as the target.
+    """
+    header = re.split(r"\bWHERE\b", statement, maxsplit=1, flags=re.IGNORECASE)[0]
+    match = _TRIGGER_TARGET.search(_SQL_LINE_COMMENT.sub("", header))
+    return match.group(1) if match else ""
 
 
 def _trigger_target_table(statement: str) -> str:
@@ -1660,21 +1677,44 @@ _SCHEMA_TRIGGER_STATEMENTS = [
     if match is not None
 ]
 
-# The table/index/view half of SCHEMA, split out from the trigger half. SCHEMA
-# is applied wholesale to *existing* databases too, where `CREATE TABLE IF NOT
-# EXISTS` is a no-op and the tables therefore stay on their pre-migration shape
-# until run_migrations catches them up. A trigger whose body names a column that
-# a pending migration has yet to add is still accepted at CREATE time, but it
-# makes SQLite fail the next schema reparse — i.e. the very first ALTER TABLE a
-# migration runs — which aborted startup on every legacy database. Triggers are
-# therefore installed through apply_schema_triggers, which only creates the ones
-# the current tables can actually satisfy.
+_SCHEMA_INDEX_STATEMENTS = [
+    (match.group(1), _index_target_table(statement), statement)
+    for statement, match in (
+        (statement, _INDEX_HEAD.match(statement)) for statement in _SCHEMA_STATEMENTS
+    )
+    if match is not None
+]
+
+# ── The invariant every future migration author has to keep ──────────────────
+#
+# SCHEMA_TABLES is applied by init_db *before* run_migrations, and it is applied
+# to **existing** databases too, where every table is still on its pre-migration
+# shape. So only statements that are harmless against a database from any
+# earlier release may live in it. `CREATE TABLE IF NOT EXISTS` qualifies; the
+# two other kinds do not, and each failed in its own way:
+#
+#   * a **trigger** whose body names a not-yet-added column is accepted at
+#     CREATE time and then fails the next schema reparse — the first ALTER TABLE
+#     a migration runs — which aborted startup on every legacy database (#149);
+#   * an **index** on a not-yet-added column fails immediately and much louder,
+#     with `no such column`, taking startup down before anything can repair it
+#     (#158: `uq_attention_item_key` on a column migration 63 adds).
+#
+# Both kinds are therefore split out here and applied *after* the tables have
+# caught up: apply_schema_indexes / apply_schema_triggers install only what the
+# current tables can satisfy, and run_migrations runs both again at the end so
+# whatever had to be deferred is created as soon as its column exists.
+#
+# If you add anything else to SCHEMA that is not a bare CREATE TABLE, split it
+# out the same way. test_schema_tables_carries_only_statements_an_old_database_
+# can_take enforces this.
 SCHEMA_TABLES = "".join(
     statement
     for statement in _SCHEMA_STATEMENTS
-    if _TRIGGER_HEAD.match(statement) is None
+    if _TRIGGER_HEAD.match(statement) is None and _INDEX_HEAD.match(statement) is None
 )
 SCHEMA_TRIGGER_NAMES = tuple(name for name, _, _ in _SCHEMA_TRIGGER_STATEMENTS)
+SCHEMA_INDEX_NAMES = tuple(name for name, _, _ in _SCHEMA_INDEX_STATEMENTS)
 
 def _schema_reparses(conn: sqlite3.Connection) -> bool:
     """Whether SQLite can still reparse the whole schema.
@@ -1801,6 +1841,52 @@ def apply_schema_triggers(conn: sqlite3.Connection) -> None:
     """
     _install_all_schema_triggers(conn)
     prune_unparseable_schema_triggers(conn)
+
+
+# A missing column or table is the one failure that means "a migration has not
+# run yet", which is exactly the state this function exists to tolerate. Every
+# other OperationalError is a real schema bug and must stay loud.
+_DEFERRABLE_INDEX_ERROR = re.compile(
+    r"^no such (column|table)\b", re.IGNORECASE
+)
+
+
+def apply_schema_indexes(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """Create SCHEMA's indexes, deferring any whose column does not exist yet.
+
+    Called once by ``init_db`` (before the migrations, so a fresh database gets
+    everything immediately) and again by ``run_migrations`` once the tables have
+    caught up. Returns the names it had to defer, so a caller can tell the
+    difference between "not needed" and "not possible yet".
+
+    Deferring rather than failing is what keeps an existing database bootable:
+    ``init_db`` runs on every start, long before the migration that adds the
+    column an index names. See the invariant above SCHEMA_TABLES.
+    """
+    deferred: list[str] = []
+    for name, table, statement in _SCHEMA_INDEX_STATEMENTS:
+        if not _table_exists(conn, table):
+            deferred.append(name)
+            continue
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as exc:
+            if not _DEFERRABLE_INDEX_ERROR.match(str(exc)):
+                raise
+            deferred.append(name)
+    return tuple(deferred)
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    if not table:
+        return False
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        is not None
+    )
 
 
 def connect(
@@ -2183,8 +2269,13 @@ def init_db(
     hermes_home_factory: Any | None = None,
     source_hermes_home: str | None = None,
 ) -> None:
+    # Tables first (safe on any database), then the additive column backfill,
+    # then the objects that can depend on migration-introduced columns. Both of
+    # those defer whatever this database cannot satisfy yet; run_migrations
+    # applies them again once it has caught the tables up.
     conn.executescript(SCHEMA_TABLES)
     migrate_existing(conn)
+    apply_schema_indexes(conn)
     apply_schema_triggers(conn)
     from .auth import hash_password, iso_now
 

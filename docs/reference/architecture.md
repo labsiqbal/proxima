@@ -228,9 +228,23 @@ submits a job and polls it (`POST {base}/videos/generations` → `{request_id}` 
 Startup runs `init_db` (applies `db.SCHEMA`, the current-shape declaration) and then
 `run_migrations` (the versioned chain). On a *fresh* database SCHEMA creates everything;
 on an *existing* one every `CREATE ... IF NOT EXISTS` is a no-op, so its tables stay on
-their old shape until the migration chain catches them up. Two consequences shape how
+their old shape until the migration chain catches them up. Three consequences shape how
 `db.py` and `migrations.py` are written:
 
+- **`SCHEMA_TABLES` may contain nothing but `CREATE TABLE`.** That is the invariant, and
+  both other object kinds broke it in turn. It is enforced by a test, and the reasoning
+  lives beside the constant in `db.py` so the next migration author meets it.
+- **Indexes are applied separately from tables.** An index on a column a pending
+  migration has yet to add fails *immediately* with `no such column`, taking startup
+  down before anything can repair it — which is exactly what a `UNIQUE INDEX` declared
+  on the Inbox ledger's new `item_key` did to the live instance on deploy. SCHEMA's
+  indexes are split out alongside the triggers; `apply_schema_indexes` creates the ones
+  the current tables can satisfy and *defers* the rest instead of raising (only
+  `no such column` / `no such table` is treated that way — any other error is a real
+  schema bug and stays loud). `init_db` calls it after the additive column backfill, and
+  `run_migrations` calls it again at the end of the chain — including on the
+  nothing-pending path, since an index deferred by an earlier boot has no other moment
+  to be created.
 - **Triggers are applied separately from tables.** SQLite accepts a `CREATE TRIGGER`
   whose body names a column that does not exist, then fails the *next* schema reparse —
   i.e. the first `ALTER TABLE` a migration runs. Installing SCHEMA's triggers wholesale
