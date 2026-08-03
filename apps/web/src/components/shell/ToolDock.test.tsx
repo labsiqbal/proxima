@@ -97,6 +97,24 @@ describe('ToolDock', () => {
     expect(screen.getByTestId('terminal-stub')).not.toBeVisible()
   })
 
+  it('leaves Escape to the topmost overlay while a modal is open', async () => {
+    const user = userEvent.setup()
+    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
+    const rail = screen.getByRole('complementary', { name: 'Tools' })
+    await user.click(rail.querySelector('[aria-label="Terminal"]') as HTMLElement)
+    expect(await screen.findByTestId('terminal-stub')).toBeVisible()
+    // A file opened from the dock lands in a modal viewer; one Escape must
+    // close that viewer, not the panel the owner was browsing in.
+    const modal = document.createElement('div')
+    modal.setAttribute('aria-modal', 'true')
+    document.body.appendChild(modal)
+    await user.keyboard('{Escape}')
+    expect(screen.getByTestId('terminal-stub')).toBeVisible()
+    modal.remove()
+    await user.keyboard('{Escape}')
+    expect(screen.getByTestId('terminal-stub')).not.toBeVisible()
+  })
+
   it('asks for a project before Preview can work', async () => {
     const user = userEvent.setup()
     render(<ToolDock token="t" project={null} onOpenSettings={vi.fn()} />)

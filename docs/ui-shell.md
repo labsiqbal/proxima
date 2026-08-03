@@ -230,7 +230,7 @@ Project agree, preventing Preview from presenting stale Work context.
   stops the status polling. The deliverable record page and the recipe test bench keep their own
   Preview entry points for app-type artifacts.
 
-The rail's bottom gear opens Settings. Escape closes the panel, and picking a tool by hand ends any reveal detour, so Files returns to the active project. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
+The rail's bottom gear opens Settings. Escape closes the panel unless a modal overlay is open - the topmost overlay owns the key, so closing a handed-off file's viewer does not also close the tree behind it. Picking a tool by hand ends any reveal detour, so Files returns to the active project. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
 
 ## Chrome Back, project lock, and multitask keep-alive
 

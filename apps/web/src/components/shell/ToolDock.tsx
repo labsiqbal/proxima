@@ -63,9 +63,16 @@ export function ToolDock({ token, project, projects = [], available = true, onOp
     setOpen(current => toggle && current === tool ? null : tool)
   }
 
+  // Escape closes the topmost overlay, not everything at once: a modal opened
+  // from the dock (the viewer a handed-off file lands in) owns the key until it
+  // is gone, otherwise one press dismisses both and loses the owner's place.
   React.useEffect(() => {
     if (!open) return
-    const dismiss = (event: KeyboardEvent) => { if (event.key === 'Escape') closePanel() }
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (document.querySelector('[aria-modal="true"]')) return
+      closePanel()
+    }
     window.addEventListener('keydown', dismiss)
     return () => window.removeEventListener('keydown', dismiss)
   }, [closePanel, open])
