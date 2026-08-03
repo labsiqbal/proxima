@@ -50,6 +50,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [evidence/collapsed-sidebar-rail/README.md](evidence/collapsed-sidebar-rail/README.md) | Disposable real-browser before/after for the collapsed Work sidebar becoming one tile column, with measured geometry, in three themes (#153) | by hand (recipe in that README) |
 | [evidence/mobile-shell-and-composer/README.md](evidence/mobile-shell-and-composer/README.md) | Disposable real-browser before/after for Delegate collapse parity, the ten-item 390px phone inventory in both modes, and the floating Master trigger clearing the composer, with measured geometry (#154) | by hand (recipe in that README) |
 | [evidence/artifact-toolbar-back/README.md](evidence/artifact-toolbar-back/README.md) | Disposable real-browser before/after for the artifact editor's way back moving to the head of its toolbar, with the app-wide back-placement survey (#159) | by hand (recipe in that README) |
+| [evidence/tool-dock-collapse-and-phone/README.md](evidence/tool-dock-collapse-and-phone/README.md) | Disposable real-browser before/after for the right dock's header collapse control, its removal at phone width, and the Preview tool's duplicate close button, with measured geometry in both themes (#160/#156/#161) | by hand (recipe in that README) |
 
 **Operations & contributing:** [installation.md](installation.md) ·
 [backup.md](backup.md) · [development-tools.md](development-tools.md) ·
