@@ -14373,7 +14373,13 @@ button.moodboard-add-method:hover {
 	.av-title { flex: 1 1 100%; }
 	.av-actions { width: 100%; min-width: 0; overflow-x: auto; }
 	.av-stage { min-height: 0; padding-inline: var(--space-4); }
-	.av-stage.fill:not(.walkable) { padding-inline: 0; }
+	/* A phone has no width to spend on a gutter: a full-bleed page keeps all of
+	   it and the ←/→ arrows float over its edges, the way they already do over a
+	   zoomed image. The desktop gutter would cost a third of the viewport.
+	   Both selectors are spelled out because a media query adds no specificity -
+	   `.fill` alone loses to the `.fill.walkable` rule above. */
+	.av-stage.fill,
+	.av-stage.fill.walkable { padding-inline: 0; }
 }
 
 .remote-guide {
