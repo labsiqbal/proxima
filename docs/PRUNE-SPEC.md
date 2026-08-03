@@ -1,6 +1,6 @@
 # Prune Spec - Proxima to Minimal
 
-- Status: ready to execute (pending owner sign-off)
+- Status: EXECUTED - all 7 stages landed as tickets #123-#142 (closed 2026-08-02/03); this document is now the historical record of the plan
 - Date: 2026-08-02
 - Provenance: wayfinder map [#113](https://github.com/labsiqbal/proxima/issues/113); decisions locked in tickets #114-#118, #120-#122. Each section links its source ticket - the detail lives there.
 
