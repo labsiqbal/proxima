@@ -15749,6 +15749,14 @@ button.moodboard-add-method:hover {
 	bottom: var(--master-popup-bottom);
 	z-index: var(--z-master-popup);
 }
+/* Resting, the trigger sits above whatever composer the surface docks at the
+   bottom, so Send is never underneath it at any width (#154). The clearance is
+   measured from the dock itself (MasterPopup), and `max()` means a surface with
+   no dock keeps the plain corner offset. The open panel is anchored to this same
+   root, so only the resting state lifts. */
+.master-popup-root.is-resting {
+	bottom: max(var(--master-popup-bottom), var(--master-popup-clearance, 0px));
+}
 .master-popup-root.corner-right { right: var(--master-popup-tool-clearance); }
 .master-popup-root.corner-left { left: calc(var(--left-w) + var(--master-popup-edge)); }
 .master-popup-trigger {
@@ -16165,9 +16173,17 @@ button.moodboard-add-method:hover {
 		align-items: flex-start;
 		flex-wrap: wrap;
 	}
-	.master-popup-root.corner-left,
-	.master-popup-root.corner-right {
+	/* Open, the popup is a sheet under the mobile top bar. Resting, the root is
+	   only the trigger's anchor, so it keeps the corner offset and the composer
+	   clearance instead of stretching across the screen (#154). */
+	.master-popup-root.is-open.corner-left,
+	.master-popup-root.is-open.corner-right {
 		inset: var(--mobile-topbar-h) var(--toolrail-w) 0 0;
+	}
+	/* The sidebar is an off-canvas drawer here, so the left corner is the screen
+	   edge — not the (still 294px wide) sidebar's edge. */
+	.master-popup-root.corner-left {
+		left: var(--master-popup-edge);
 	}
 	.master-popup-head {
 		display: grid;
@@ -16185,15 +16201,6 @@ button.moodboard-add-method:hover {
 		height: 100%;
 		border-width: 1px 0 0;
 		border-radius: 0;
-	}
-	.master-popup-trigger {
-		position: fixed;
-		right: var(--master-popup-tool-clearance);
-		bottom: var(--master-popup-bottom);
-	}
-	.master-popup-root.corner-left .master-popup-trigger {
-		right: auto;
-		left: var(--master-popup-edge);
 	}
 	.toast-region.at-top-right {
 		top: calc(var(--mobile-topbar-h) + var(--space-2) + env(safe-area-inset-top));

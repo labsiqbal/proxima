@@ -474,6 +474,9 @@ export function Composer({
 	return (
 		<form
 			className="composer"
+			// Every composer is a surface's primary action: the shell's floating
+			// Master trigger rises above it rather than covering Send (#154).
+			data-composer-dock
 			onSubmit={submit}
 			onDragOver={(e) => {
 				if (slug) e.preventDefault();

@@ -823,7 +823,10 @@ export function ChatScreen(props: {
 				surfaceActive={props.active !== false}
 			/>
 			{error && <div className="error-bar">{error}</div>}
-			<div className="chat-dock">
+			{/* The whole dock, not just the composer: the controls row above it
+			    holds right-edge actions the floating Master trigger would cover on a
+			    phone (#154). */}
+			<div className="chat-dock" data-composer-dock>
 				{controls}
 				<Composer
 					disabled={!props.activeProfile}

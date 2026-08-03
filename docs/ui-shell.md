@@ -156,6 +156,21 @@ Normal authenticated surfaces show a labeled floating Master trigger with the
 `Ctrl`/`Command` + `Shift` + `M` shortcut. The popup persists at the bottom-left or
 bottom-right, avoids shell tools and safe areas, and becomes a sheet on narrow
 screens. It traps focus, closes with Escape, and returns focus to its trigger.
+
+**The trigger yields to the composer** (#154). At rest it measures every element
+marked `data-composer-dock` — the shared `Composer`, and Work Chat's whole dock so
+its controls row counts too — keeps the ones anchored to the bottom of the
+viewport that share its horizontal band, and rises a token's gap above the tallest.
+The clearance is published as `--master-popup-clearance` and CSS takes
+`max(resting offset, clearance)`, so a surface with no composer keeps the plain
+corner and a chat panel in another column never moves it. This is measured rather
+than tokenized because a composer's height is content: it grows with the text,
+attachments, and its controls row, and any fixed guess is wrong the moment it does.
+The alternative shapes were rejected for a reason: docking the trigger into the top
+bar has nowhere to go at 390px (Menu, Back, the mode switch, Search, and New chat
+already fill that row), and hiding it on composer focus leaves Send covered while
+the composer is merely idle - which is how the owner found it.
+`triggerClearance.ts` owns the calculation and is unit-tested on rects alone.
 Auth, onboarding, the full Master home, update application, drawers, search,
 account menus, and ToolDock panels suppress it. Durable conversation messages stay
 the completion/failure/review/Attention/Satpam truth; named durable transitions may

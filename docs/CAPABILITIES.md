@@ -314,7 +314,9 @@ crosses an owner transition.
 The popup is available from normal authenticated shell surfaces through a labeled
 floating trigger and `Ctrl`/`Command` + `Shift` + `M`. It can persist at either
 bottom corner, avoids the tool dock, drawers, mobile chrome, safe areas, and toast
-region, and becomes a full-height sheet on narrow screens. Its modal dialog traps
+region, and becomes a full-height sheet on narrow screens. At rest the trigger also
+**clears the surface's composer**: it measures any bottom-docked composer it would
+cover and rises above it, so Send is never underneath it at any width (#154). Its modal dialog traps
 keyboard focus, closes with Escape, and returns focus to the trigger. Opening the
 full Master home closes only the presentation layer.
 

@@ -14,6 +14,10 @@ import {
   IconHome,
   IconSparkle,
 } from '../shell/icons'
+import {
+  COMPOSER_DOCK_SELECTOR,
+  masterTriggerClearance,
+} from './triggerClearance'
 
 const FOCUSABLE = [
   'a[href]',
@@ -32,6 +36,60 @@ function focusableIn(root: HTMLElement | null): HTMLElement[] {
       && style.visibility !== 'hidden'
       && element.getAttribute('aria-hidden') !== 'true'
   })
+}
+
+/**
+ * Keep the resting trigger above whatever composer the current surface docks at
+ * the bottom (#154). Only runs while the trigger is on screen: an open popup
+ * covers the surface anyway, and its panel is anchored to the same root.
+ */
+function useComposerClearance(
+  active: boolean,
+  triggerRef: React.RefObject<HTMLButtonElement | null>,
+): number {
+  const [clearance, setClearance] = React.useState(0)
+  React.useEffect(() => {
+    if (!active || typeof window === 'undefined') {
+      setClearance(0)
+      return
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const measure = () => {
+      const trigger = triggerRef.current
+      const docks = [...document.querySelectorAll<HTMLElement>(COMPOSER_DOCK_SELECTOR)]
+      setClearance(masterTriggerClearance({
+        trigger: trigger ? trigger.getBoundingClientRect() : null,
+        docks: docks.map(dock => dock.getBoundingClientRect()),
+        viewportHeight: window.innerHeight,
+      }))
+    }
+    // Trailing debounce: a composer that grows as you type, a surface swap, or a
+    // rotation all settle within a frame or two, and the trigger moving a beat
+    // later is imperceptible — measuring on every mutation is not.
+    const schedule = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(measure, 100)
+    }
+    measure()
+    window.addEventListener('resize', schedule)
+    const observers: { disconnect: () => void }[] = []
+    if (typeof ResizeObserver !== 'undefined') {
+      const resize = new ResizeObserver(schedule)
+      resize.observe(document.documentElement)
+      observers.push(resize)
+    }
+    if (typeof MutationObserver !== 'undefined') {
+      const mutation = new MutationObserver(schedule)
+      mutation.observe(document.body, { childList: true, subtree: true })
+      observers.push(mutation)
+    }
+    return () => {
+      if (timer) clearTimeout(timer)
+      window.removeEventListener('resize', schedule)
+      for (const observer of observers) observer.disconnect()
+    }
+  }, [active, triggerRef])
+  return clearance
 }
 
 export function MasterPopup({
@@ -57,6 +115,7 @@ export function MasterPopup({
   const dialogRef = React.useRef<HTMLElement>(null)
   const wasOpenRef = React.useRef(false)
   const visible = enabled && available
+  const clearance = useComposerClearance(visible && !popup.open, triggerRef)
 
   React.useEffect(() => {
     if (!visible && popup.open) closePopup()
@@ -146,7 +205,10 @@ export function MasterPopup({
     : 'Move popup to bottom right'
 
   return (
-    <div className={`master-popup-root corner-${popup.preferredCorner}`}>
+    <div
+      className={`master-popup-root corner-${popup.preferredCorner} ${popup.open ? 'is-open' : 'is-resting'}`}
+      style={{ ['--master-popup-clearance']: `${clearance}px` } as React.CSSProperties}
+    >
       {!popup.open && (
         <button
           ref={triggerRef}
