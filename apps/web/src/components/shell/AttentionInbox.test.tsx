@@ -12,6 +12,7 @@ import {
 } from '../../api/master'
 import { FRESH_FAILED_REVIEW_ATTENTION } from '../../testFixtures/failedReviewRun'
 
+vi.mock('../../api/inbox', () => ({ dismissAttention: vi.fn().mockResolvedValue({ ok: true, id: '' }) }))
 vi.mock('../../api/master', () => ({
   getAttention: vi.fn(),
   actAttention: vi.fn(),
@@ -93,16 +94,16 @@ describe('AttentionInbox', () => {
 
   it('hides the trigger when the inbox is empty so it does not look like an active alarm', async () => {
     vi.mocked(getAttention).mockResolvedValue({ items: [], count: 0 })
-    const { container } = render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
+    const { container } = render(<AttentionInbox token="token" onOpenTarget={vi.fn()} onOpenInbox={vi.fn()} />)
     await waitFor(() => expect(getAttention).toHaveBeenCalled())
     expect(container.querySelector('.attention-inbox')).toBeNull()
-    expect(screen.queryByRole('button', { name: /attention item/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /unread notification/ })).not.toBeInTheDocument()
     expect(screen.queryByText('!')).not.toBeInTheDocument()
   })
 
   it('shows a needs-you trigger with count when there are open items', async () => {
-    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
-    const trigger = await screen.findByRole('button', { name: '1 attention item' })
+    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} onOpenInbox={vi.fn()} />)
+    const trigger = await screen.findByRole('button', { name: '1 unread notification' })
     expect(trigger).toHaveClass('has-attention')
     expect(trigger).toHaveTextContent('!')
     expect(trigger.querySelector('b')).toHaveTextContent('1')
@@ -111,9 +112,9 @@ describe('AttentionInbox', () => {
   it('deep-links every item and restricts inline controls to supplied actions', async () => {
     const user = userEvent.setup()
     const openTarget = vi.fn()
-    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
-    await waitFor(() => expect(screen.getByRole('button', { name: '1 attention item' })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: '1 attention item' }))
+    render(<AttentionInbox token="token" onOpenTarget={openTarget} onOpenInbox={vi.fn()} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: '1 unread notification' })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: '1 unread notification' }))
 
     expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Release needs review/ }))
@@ -139,9 +140,9 @@ describe('AttentionInbox', () => {
     })
     const user = userEvent.setup()
     const openTarget = vi.fn()
-    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
+    render(<AttentionInbox token="token" onOpenTarget={openTarget} onOpenInbox={vi.fn()} />)
 
-    await user.click(await screen.findByRole('button', { name: '1 attention item' }))
+    await user.click(await screen.findByRole('button', { name: '1 unread notification' }))
     expect(screen.getByText('physical Ops root is not empty')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Inspect Ops migration/ }))
     expect(openTarget).toHaveBeenCalledWith(expect.objectContaining({
@@ -151,8 +152,8 @@ describe('AttentionInbox', () => {
 
   it('runs a safe inline action once and refreshes the inbox', async () => {
     const user = userEvent.setup()
-    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
-    await user.click(await screen.findByRole('button', { name: '1 attention item' }))
+    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} onOpenInbox={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: '1 unread notification' }))
     await user.click(screen.getByRole('button', { name: 'Approve' }))
 
     expect(actAttention).toHaveBeenCalledWith('token', 'job:4', 'approve')
@@ -165,9 +166,9 @@ describe('AttentionInbox', () => {
       count: 1,
     })
     const user = userEvent.setup()
-    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
+    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} onOpenInbox={vi.fn()} />)
 
-    await user.click(await screen.findByRole('button', { name: '1 attention item' }))
+    await user.click(await screen.findByRole('button', { name: '1 unread notification' }))
 
     expect(screen.getByText(/Failed · Just now/)).toBeInTheDocument()
     expect(screen.queryByText(/Review ·/)).not.toBeInTheDocument()
@@ -180,9 +181,9 @@ describe('AttentionInbox', () => {
     })
     const user = userEvent.setup()
     const openTarget = vi.fn()
-    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
+    render(<AttentionInbox token="token" onOpenTarget={openTarget} onOpenInbox={vi.fn()} />)
     await user.click(
-      await screen.findByRole('button', { name: '1 attention item' }),
+      await screen.findByRole('button', { name: '1 unread notification' }),
     )
 
     expect(screen.getByText(decision.prompt)).toBeInTheDocument()
@@ -213,9 +214,9 @@ describe('AttentionInbox', () => {
     })
     const user = userEvent.setup()
     const openTarget = vi.fn()
-    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
+    render(<AttentionInbox token="token" onOpenTarget={openTarget} onOpenInbox={vi.fn()} />)
     await user.click(
-      await screen.findByRole('button', { name: '1 attention item' }),
+      await screen.findByRole('button', { name: '1 unread notification' }),
     )
     await user.click(
       screen.getByRole('button', { name: 'Open Master conversation' }),
@@ -243,9 +244,9 @@ describe('AttentionInbox', () => {
     })
     const user = userEvent.setup()
     const openTarget = vi.fn()
-    render(<AttentionInbox token="token" onOpenTarget={openTarget} />)
+    render(<AttentionInbox token="token" onOpenTarget={openTarget} onOpenInbox={vi.fn()} />)
     await user.click(
-      await screen.findByRole('button', { name: '1 attention item' }),
+      await screen.findByRole('button', { name: '1 unread notification' }),
     )
 
     expect(
@@ -264,9 +265,9 @@ describe('AttentionInbox', () => {
       count: 1,
     })
     const user = userEvent.setup()
-    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} />)
+    render(<AttentionInbox token="token" onOpenTarget={vi.fn()} onOpenInbox={vi.fn()} />)
     await user.click(
-      await screen.findByRole('button', { name: '1 attention item' }),
+      await screen.findByRole('button', { name: '1 unread notification' }),
     )
     await user.click(screen.getByRole('button', { name: 'Decide later' }))
 

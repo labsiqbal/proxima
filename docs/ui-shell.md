@@ -66,7 +66,7 @@ the shell back to Work before opening.
 
 Delegate presents Master as a first-class desk, not a Chat tab or Tasks filter. It keeps
 the shared, persisted sidebar panel but replaces Work navigation with **Master**,
-**Tasks**, and **Artifacts**. Those destinations are global: they do not show
+**Tasks**, **Artifacts**, and **Inbox**. Those destinations are global: they do not show
 a project switcher, recent chat history, project filter menu, ordinary Work Chat,
 Workflows, Design, search, tool rail, or popup. The account menu stays - it is the
 only route to Projects, Agents, Settings, and Log out - and each of those entries
@@ -367,6 +367,33 @@ in the same main-window surfaces Artifacts opens (#146). Unsupported binary or
 directory-like paths show a download fallback immediately rather than remaining in a
 loading state.
 
+## Notifications: the ephemeral header and the Inbox destination
+
+Notifications have two surfaces over one ledger (#158). The **header** is ephemeral,
+like a phone's: it lists only what the owner has not seen, the badge counts exactly
+that, and touching an item - opening it, dismissing it, or acting on it - marks it read
+so it leaves. Every row also carries an explicit **Dismiss**, which is what makes
+navigate-only kinds such as Master budget clearable at all (#157); the footer says
+where they go and links straight there. Removal is optimistic, so the badge never lags
+a click; a failed dismiss surfaces as the ordinary retryable error and the next poll
+restores the row.
+
+**Inbox** is a sidebar destination in **both** Work and Delegate. That is deliberate:
+notifications are global - a Task that finished, a Master budget stop, a failed
+workflow - and the header that emits them already renders in both modes, so an Inbox in
+only one would strand half of them behind a mode switch. It is a destination rather
+than a larger popover because most of what the system emits is *reading*, not deciding:
+errors with their diagnostic, finished work, budget stops. The header is the
+interruption; the Inbox is the record, which is what lets the header be ruthless.
+
+The Inbox lists every notification newest-first with an All / Unread filter, **Mark all
+read**, a per-row read toggle, and a **Load older** cursor. Unread is signalled by one
+dot and a weight change; severity by one hairline accent and a quiet label, never a
+wall of coloured cards. An item that still needs a decision keeps its inline actions
+there, so dismissing from the header defers the decision without hiding it. Errors
+carry their full detail - the diagnosis and the step that clears it - in the entry
+itself, so a failed Task is diagnosable without opening the run.
+
 ## Global attention, running work, and account surfaces
 
 The shell-level **Attention** badge persists across destinations and polls one unified
@@ -376,7 +403,8 @@ beside the link; diff review and Master budget items navigate instead. Non-appro
 Master decisions render their full resolve/defer form inline in the inbox (same card as
 Master Decisions and the Task workspace). The popover has loading, empty,
 populated, and persistent retryable-error states, closes on Escape/outside click, and
-becomes a viewport-bounded sheet on narrow screens.
+becomes a viewport-bounded sheet on narrow screens. It now shows the *unread* slice of
+the Inbox ledger rather than every open item, and its badge counts unread rows (#158).
 
 Next to Attention, a **Running** text pill polls `GET /api/runs/active` plus running jobs
 and shows only while work is in flight (`1 task running` / `N tasks running`; mobile may
@@ -385,7 +413,7 @@ header). The popover lists de-duplicated tasks and chat sessions with deep-links
 workspace / chat / Tasks index), matching Attention's open/refresh/empty/error affordances.
 Attention stays a separate `!` control and remains hidden when empty.
 
-Agents and Settings live in the Work profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The Work top bar owns the brand mark, mode switch, sidebar collapse toggle, search, Running + Attention, and account menu; its sidebar owns the active-project switcher. On mobile that switcher stays in the Work drawer and the mode control remains in the compact header. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
+**Inbox** closes both navigations - see the notifications section above. Agents and Settings live in the Work profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The Work top bar owns the brand mark, mode switch, sidebar collapse toggle, search, Running + Attention, and account menu; its sidebar owns the active-project switcher. On mobile that switcher stays in the Work drawer and the mode control remains in the compact header. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 
 Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Artifacts, and ordinary Design entry) keep that contract. Opening Design from a Task binds the studio to that Task's owning Project without adopting it as the Work selection, and returning to the Task restamps the in-app preserve-work policy. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Deliverable records and Designs remain owned by their Project. Delegate has no project selector or project filter: its Tasks and Artifacts indices are global, while Master Focus and explicit target controls remain its own bounded context.
 

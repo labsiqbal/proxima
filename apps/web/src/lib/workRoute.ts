@@ -7,11 +7,13 @@ const WORK_VIEWS = new Set<View>([
 	"workflows",
 	"artifacts",
 	"design",
+	"inbox",
 ]);
 const DELEGATE_VIEWS = new Set<View>([
 	"master",
 	"activity",
 	"artifacts",
+	"inbox",
 ]);
 // Artifacts replaced the Files destination (ADR-0043); a bookmark or a restored
 // tab still carrying the old name lands on its successor instead of the default.

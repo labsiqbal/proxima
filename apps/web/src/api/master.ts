@@ -92,6 +92,13 @@ export type AttentionItem = {
   created_at?: string
   run_projection?: RunProjection
   decision?: MasterDecision
+  // Inbox ledger fields (#158). Present on every row the server sends today;
+  // optional so the Master desk's own attention list can stay a plain subset.
+  severity?: 'info' | 'success' | 'warning' | 'error' | 'action'
+  /** The diagnosis, and the step that clears it. */
+  body?: string
+  requires_action?: boolean
+  read?: boolean
 }
 export type MasterDesk = {
   session: ChatSession

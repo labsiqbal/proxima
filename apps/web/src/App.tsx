@@ -60,6 +60,7 @@ const IterateStage = React.lazy(() => import('./screens/IterateStage').then(m =>
 const DesignStudio = React.lazy(() => import('./screens/DesignStudio').then(m => ({ default: m.DesignStudio })))
 const WikiScreen = React.lazy(() => import('./screens/WikiScreen').then(m => ({ default: m.WikiScreen })))
 const ArtifactsScreen = React.lazy(() => import('./screens/ArtifactsScreen').then(m => ({ default: m.ArtifactsScreen })))
+const InboxScreen = React.lazy(() => import('./screens/InboxScreen').then(m => ({ default: m.InboxScreen })))
 const WorkflowsScreen = React.lazy(() => import('./screens/WorkflowsScreen').then(m => ({ default: m.WorkflowsScreen })))
 const ActivityScreen = React.lazy(() => import('./screens/ActivityScreen').then(m => ({ default: m.ActivityScreen })))
 const MasterScreen = React.lazy(() => import('./screens/MasterScreen').then(m => ({ default: m.MasterScreen })))
@@ -349,7 +350,7 @@ export function projectForShellScope(args: {
 
 /** Delegate owns only its global desk and its cross-project review destinations. */
 export function isDelegateDestination(view: View): boolean {
-  return view === 'master' || view === 'activity' || view === 'artifacts' || view === 'task'
+  return view === 'master' || view === 'activity' || view === 'artifacts' || view === 'inbox' || view === 'task'
 }
 
 /** Plan Work-mode Open Master conversation: always enter Delegate, then focus. */
@@ -826,7 +827,8 @@ export function App() {
       return
     }
     if (target.view === 'settings') { clearPendingNavigation(); clearDeepStack(); setView('settings'); return }
-    if (target.view === 'activity') { clearPendingNavigation(); clearDeepStack(); setView('activity') }
+    if (target.view === 'activity') { clearPendingNavigation(); clearDeepStack(); setView('activity'); return }
+    if (target.view === 'inbox') { clearPendingNavigation(); clearDeepStack(); setView('inbox') }
   }, [clearPendingNavigation, clearDeepStack, openJobByEngine, openMasterConversation, openOpsMigration, view])
   const goView = (v: View) => {
     if (v === 'master') {
@@ -1648,6 +1650,7 @@ export function App() {
           : chat
         return pane('chat', chatActive, body)
       })()}
+      {view === 'inbox' && <React.Suspense fallback={<ViewFallback label="Loading inbox..." />}><InboxScreen token={token} onOpenTarget={openAttentionTarget} /></React.Suspense>}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
       {keep('artifacts') && pane('artifacts', artifactsActive, <React.Suspense fallback={<ViewFallback label="Loading artifacts..." />}><ArtifactsScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} pendingApp={pendingApp} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onPendingAppConsumed={() => setPendingApp(null)} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={delegateActive ? undefined : openSessionById} designStudioEnabled={!delegateActive} onOpenDesign={delegateActive ? undefined : id => { openDesignById(id, 'artifacts') }} /></React.Suspense>)}
       {keep('workflows') && pane('workflows', workflowsActive, <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen graphContent={<GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} backNonce={graphBackNonce} />} /></React.Suspense>)}

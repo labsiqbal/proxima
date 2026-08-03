@@ -287,7 +287,13 @@ export function AppShell(props: {
           onOpenSession={openInWork(props.onOpenRunningSession)}
           onOpenTasks={() => props.onSelectView('activity')}
         />
-        <AttentionInbox token={props.token} onOpenTarget={openInWork(props.onOpenAttentionTarget)} />
+        {/* Inbox is a destination in both modes, so opening it never forces a
+            mode switch the way a Work-only target does. */}
+        <AttentionInbox
+          token={props.token}
+          onOpenTarget={openInWork(props.onOpenAttentionTarget)}
+          onOpenInbox={() => props.onSelectView('inbox')}
+        />
       </div>
       {!delegateMode ? <MobileTopbar
         activeProject={props.activeProject}

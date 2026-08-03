@@ -46,6 +46,8 @@ export function viewOriginLabel(view: View): string {
       return 'Artifacts'
     case 'design':
       return 'Design'
+    case 'inbox':
+      return 'Inbox'
     case 'settings':
     case 'projects':
       return 'Settings'

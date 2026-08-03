@@ -679,6 +679,7 @@ export type View =
 	| "task"
 	| "graph"
 	| "design"
+	| "inbox"
 	| "profiles"
 	| "runners"
 	| "settings";

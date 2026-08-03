@@ -15,7 +15,7 @@ describe('Sidebar single-workspace IA', () => {
     const labels = () => Array.from(document.querySelectorAll('.primary-nav > .nav-item strong')).map(node => node.textContent)
     // Destinations only - blank session lives on Chat header / mobile topbar / `/new`.
     // Project switch is the Work sidebar; project manage is Settings → Projects.
-    expect(labels()).toEqual(['Chat', 'Tasks', 'Workflows', 'Artifacts', 'Design'])
+    expect(labels()).toEqual(['Chat', 'Tasks', 'Workflows', 'Artifacts', 'Design', 'Inbox'])
     expect(screen.queryByRole('button', { name: 'New chat' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Projects' })).not.toBeInTheDocument()
     // No workspace switch, and Terminal/Files/Preview stay right-rail tools.
@@ -76,7 +76,7 @@ describe('Sidebar single-workspace IA', () => {
     const user = userEvent.setup()
     const { rerender } = render(<Sidebar {...base} currentView="master" delegate />)
     const labels = () => Array.from(document.querySelectorAll('.primary-nav > .nav-item strong')).map(node => node.textContent)
-    expect(labels()).toEqual(['Master', 'Tasks', 'Artifacts'])
+    expect(labels()).toEqual(['Master', 'Tasks', 'Artifacts', 'Inbox'])
     expect(screen.queryByRole('button', { name: 'Files' })).not.toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: 'Delegate navigation' })).toBeInTheDocument()
     expect(screen.queryByText('Work project')).not.toBeInTheDocument()
@@ -88,5 +88,22 @@ describe('Sidebar single-workspace IA', () => {
     expect(base.onSelectView).toHaveBeenCalledWith('activity')
     rerender(<Sidebar {...base} currentView="activity" delegate />)
     expect(screen.getByRole('button', { name: 'Tasks' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  // Notifications are global and the header badge renders in both modes, so an
+  // Inbox in only one would strand half of them behind a mode switch (#158).
+  it('reaches the Inbox from both navigations and marks it active', async () => {
+    const user = userEvent.setup()
+    for (const delegate of [false, true]) {
+      const onSelectView = vi.fn()
+      const { rerender, unmount } = render(
+        <Sidebar {...base} onSelectView={onSelectView} currentView={delegate ? 'master' : 'chat'} delegate={delegate} />,
+      )
+      await user.click(screen.getByRole('button', { name: 'Inbox' }))
+      expect(onSelectView).toHaveBeenCalledWith('inbox')
+      rerender(<Sidebar {...base} onSelectView={onSelectView} currentView="inbox" delegate={delegate} />)
+      expect(screen.getByRole('button', { name: 'Inbox' })).toHaveAttribute('aria-current', 'page')
+      unmount()
+    }
   })
 })

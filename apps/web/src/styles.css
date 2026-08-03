@@ -16089,6 +16089,78 @@ button.moodboard-add-method:hover {
 .attention-state p { margin: 0; color: var(--ui-text-tertiary); font-size: var(--text-xs); line-height: 1.55; }
 .attention-error { margin: var(--space-3); border: 1px solid var(--ui-danger-border); border-radius: var(--radius-md); padding: var(--space-3); background: var(--ui-danger-bg); color: var(--ui-danger-text); }
 .attention-error p { font-size: var(--text-xs); }
+/* The reason line carries the diagnosis; it wraps rather than truncating so an
+   error is readable without leaving the header (#158). */
+.attention-reason { color: var(--ui-text-secondary); line-height: 1.55; }
+/* Dismiss is always available - even for navigate-only kinds that /act refuses
+   (#157) - and sits after any real action so it never wins a fast click. */
+.attention-actions .attention-dismiss { margin-left: auto; border-color: var(--ui-stroke-tertiary); color: var(--ui-text-tertiary); }
+.attention-actions .attention-dismiss:hover { color: var(--ui-text-primary); }
+/* The footer is the promise the ephemeral header depends on: dismissing loses
+   nothing, because the Inbox still has it. */
+.attention-foot { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); border-top: 1px solid var(--ui-stroke-tertiary); padding: var(--space-3) var(--space-4); background: var(--ui-surface-translucent); backdrop-filter: blur(var(--space-2)); }
+.attention-foot small { color: var(--ui-text-tertiary); font-size: var(--text-2xs); }
+
+/* Inbox destination (#158) - the persistent record behind the ephemeral header.
+   Severity is carried by one hairline accent per row plus a quiet label, so a
+   long list still reads as one column and never as a wall of coloured cards.
+   Every colour is mixed from a base token, which keeps both themes correct
+   without touching the un-overridden *-bg surface tokens. */
+.inbox-view { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.inbox-head { display: flex; align-items: flex-end; gap: var(--space-4); border-bottom: 1px solid var(--ui-stroke-tertiary); padding: var(--space-4) var(--space-5); }
+.inbox-head-title h1 { margin: 0; font-size: var(--text-xl); }
+.inbox-head-title .eyebrow { margin: 0 0 var(--space-1); }
+.inbox-head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--space-3); }
+.inbox-filter { display: flex; align-items: center; gap: var(--space-2); }
+.inbox-filter button { padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-stroke-secondary); border-radius: var(--radius-full); background: var(--ui-surface); color: var(--ui-text-secondary); font-size: var(--text-sm); cursor: pointer; transition: border-color var(--t) var(--ease), color var(--t) var(--ease), background var(--t) var(--ease); }
+.inbox-filter button:hover { border-color: var(--ui-stroke-primary); color: var(--ui-text-primary); }
+.inbox-filter button[aria-pressed='true'] { border-color: var(--ui-accent); color: var(--ui-accent); background: var(--ui-focus-ring); }
+.inbox-body { flex: 1; min-height: 0; overflow-y: auto; }
+.inbox-list { list-style: none; margin: 0; padding: 0; }
+.inbox-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--space-3); border-bottom: 1px solid var(--ui-stroke-tertiary); border-left: var(--space-1) solid transparent; padding-right: var(--space-5); transition: background var(--t-fast) var(--ease); }
+.inbox-item:hover { background: var(--ui-row-hover-background); }
+.inbox-item.is-read { border-left-color: transparent; }
+.inbox-item.is-read .inbox-title { font-weight: 500; color: var(--ui-text-secondary); }
+.inbox-item.is-unread .inbox-title { font-weight: 650; }
+.inbox-item.severity-error { border-left-color: var(--ui-danger); }
+.inbox-item.severity-warning { border-left-color: var(--ui-warning); }
+.inbox-item.severity-success { border-left-color: var(--ui-success); }
+.inbox-item.severity-action { border-left-color: var(--ui-accent); }
+.inbox-item.severity-info { border-left-color: var(--ui-stroke-secondary); }
+.inbox-item.is-read { border-left-color: color-mix(in srgb, var(--ui-stroke-secondary) 60%, transparent); }
+.inbox-entry { position: relative; display: grid; gap: var(--space-1); width: 100%; border: 0; padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5); background: transparent; color: var(--ui-text-primary); text-align: left; cursor: pointer; }
+/* The unread dot is the only "new" signal - no bold-everything, no red count
+   repeated per row. It keeps its space when read so rows never shift. */
+.inbox-dot { position: absolute; inset-inline-start: var(--space-2); inset-block-start: calc(var(--space-4) + var(--space-1)); width: var(--space-2); height: var(--space-2); border-radius: var(--radius-full); background: var(--ui-accent); }
+.inbox-item.is-read .inbox-dot { background: transparent; }
+.inbox-entry-head { display: flex; align-items: baseline; gap: var(--space-2); }
+.inbox-kind { color: var(--ui-accent); font-size: var(--text-2xs); font-weight: 750; letter-spacing: var(--ui-letter-wide); text-transform: uppercase; }
+.inbox-severity { color: var(--ui-text-tertiary); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: var(--ui-letter-wide); }
+.inbox-item.severity-error .inbox-severity { color: var(--ui-danger); }
+.inbox-item.severity-warning .inbox-severity { color: var(--ui-warning); }
+.inbox-item.severity-success .inbox-severity { color: var(--ui-success); }
+.inbox-when { margin-left: auto; color: var(--ui-text-tertiary); font-size: var(--text-2xs); }
+.inbox-title { font-size: var(--text-sm); }
+.inbox-detail { margin: 0; color: var(--ui-text-secondary); font-size: var(--text-xs); line-height: 1.6; white-space: pre-wrap; }
+.inbox-item-actions { display: flex; align-items: center; gap: var(--space-2); padding-top: var(--space-4); }
+.inbox-item-actions button { min-height: var(--master-control-height); border: 1px solid var(--ui-stroke-secondary); border-radius: var(--radius-sm); padding: 0 var(--space-3); background: var(--ui-surface); color: var(--ui-text-secondary); font-size: var(--text-xs); cursor: pointer; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+.inbox-item-actions button:hover:not(:disabled) { background: var(--ui-row-hover-background); color: var(--ui-text-primary); }
+.inbox-item-actions button:disabled { cursor: wait; opacity: 0.6; }
+.inbox-item-actions .inbox-approve { border-color: color-mix(in srgb, var(--ui-accent) 35%, var(--ui-stroke-secondary)); color: var(--ui-accent); }
+.inbox-item-actions .inbox-read-toggle { border-color: transparent; color: var(--ui-text-tertiary); }
+.inbox-state { display: grid; place-items: center; gap: var(--space-2); padding: var(--space-8); text-align: center; }
+.inbox-state p { margin: 0; color: var(--ui-text-tertiary); font-size: var(--text-xs); line-height: 1.55; }
+.inbox-error { margin: var(--space-4) var(--space-5); border: 1px solid var(--ui-danger-border); border-radius: var(--radius-md); padding: var(--space-3); background: color-mix(in srgb, var(--ui-danger) 10%, var(--ui-surface)); color: var(--ui-text-primary); }
+.inbox-error p { margin: var(--space-1) 0 var(--space-2); font-size: var(--text-xs); }
+.inbox-error button { min-height: var(--master-control-height); border: 1px solid var(--ui-stroke-secondary); border-radius: var(--radius-sm); padding: 0 var(--space-3); background: var(--ui-surface); color: var(--ui-text-primary); cursor: pointer; }
+.inbox-more { display: block; width: 100%; padding: var(--space-4); }
+/* Phone width: the actions drop under the entry instead of squeezing it. */
+@media (max-width: 640px) {
+	.inbox-head { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+	.inbox-head-actions { margin-left: 0; justify-content: space-between; }
+	.inbox-item { grid-template-columns: minmax(0, 1fr); padding-right: 0; }
+	.inbox-item-actions { padding: 0 var(--space-4) var(--space-4) var(--space-5); flex-wrap: wrap; }
+}
 
 .turn-restore { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
 .turn-restore .text-button { min-height: var(--master-control-height); padding-inline: var(--space-2); }

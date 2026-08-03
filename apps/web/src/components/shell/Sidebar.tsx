@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from 'react'
 import type { ChatSession, Profile, Project, User, View } from '../../types'
-import { IconChat, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout, IconSparkle } from './icons'
+import { IconChat, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout, IconSparkle, IconInbox } from './icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
 import { ProjectSwitcher } from './ProjectSwitcher'
@@ -13,6 +13,13 @@ import { ProjectSwitcher } from './ProjectSwitcher'
 // deliverable ledger as its Deliverables and History tabs (#139). Work scopes
 // it to the active Container, Delegate goes global like Tasks. Terminal and
 // Preview stay right-rail tools; Agents/Settings stay in the account menu.
+//
+// Inbox sits last in both navigations (#158). It is a destination rather than a
+// bigger popover because most notifications are reading, not deciding, and the
+// header only shows the unread slice. It appears in *both* modes deliberately:
+// notifications are global (a finished Task, a Master budget stop, a failed
+// workflow) and the header badge that produces them renders in both modes, so
+// an Inbox in only one would strand half of them behind a mode switch.
 type Destination = { id: View; label: string; icon: ComponentType<{ size?: number }> }
 const primary: Destination[] = [
   { id: 'chat', label: 'Chat', icon: IconChat },
@@ -20,11 +27,13 @@ const primary: Destination[] = [
   { id: 'workflows', label: 'Workflows', icon: IconWorkflows },
   { id: 'artifacts', label: 'Artifacts', icon: IconArtifacts },
   { id: 'design', label: 'Design', icon: IconDesign },
+  { id: 'inbox', label: 'Inbox', icon: IconInbox },
 ]
 const delegatePrimary: Destination[] = [
   { id: 'master', label: 'Master', icon: IconSparkle },
   { id: 'activity', label: 'Tasks', icon: IconTasks },
   { id: 'artifacts', label: 'Artifacts', icon: IconArtifacts },
+  { id: 'inbox', label: 'Inbox', icon: IconInbox },
 ]
 export function Sidebar(props: {
   activeProfile: Profile | null; activeProject: Project | null; activeSession: ChatSession | null; currentView: View

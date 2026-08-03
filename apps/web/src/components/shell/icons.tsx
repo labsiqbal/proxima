@@ -273,6 +273,13 @@ export const IconArtifacts = ({ size }: IconProps) => (
 	</Svg>
 );
 
+export const IconInbox = ({ size }: IconProps) => (
+	<Svg size={size}>
+		<path d="M4 13h4l2 3h4l2-3h4" />
+		<path d="M5.5 5h13l2.5 8v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4l2.5-8z" />
+	</Svg>
+);
+
 export const IconWiki = ({ size }: IconProps) => (
 	<Svg size={size}>
 		<rect x="5" y="3.5" width="14" height="17" rx="2" />

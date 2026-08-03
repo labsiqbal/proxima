@@ -1,15 +1,21 @@
 import React from 'react'
 import { actAttention, getAttention, type AttentionItem } from '../../api/master'
+import { dismissAttention } from '../../api/inbox'
 import { formatRunAge, runStatusLabel } from '../../lib/runProjection'
 import { MasterDecisionCard } from '../master/MasterDecisionCard'
 
-const labelForKind = (kind: string) => ({
+// Header notifications are ephemeral, like a phone's (#158). The list is the
+// *unread* slice of the Inbox ledger, and touching an item - opening it,
+// dismissing it, acting on it - marks it read so it leaves the header. Nothing
+// is destroyed: the same row keeps its status, its actions and its full detail
+// in the Inbox destination, which is one click away in the footer.
+export const labelForKind = (kind: string) => ({
   job_review: 'Review', job_diff: 'Changes', satpam_restart: 'Watchdog', script_trust: 'Script',
   permission_job: 'Permission', master_decision: 'Master', master_budget: 'Master budget', settings_confirm: 'Settings',
-  container_ops_migration: 'Ops migration',
+  container_ops_migration: 'Ops migration', task_outcome: 'Task',
 }[kind] || 'Attention')
 
-const helperForItem = (item: AttentionItem) => {
+export const helperForItem = (item: AttentionItem) => {
   if (item.kind === 'container_ops_migration') return 'Inspect Ops migration'
   if (item.run_projection) {
     return `${runStatusLabel(item.run_projection.status)} · ${formatRunAge(item.run_projection, item.created_at)}`
@@ -17,13 +23,20 @@ const helperForItem = (item: AttentionItem) => {
   return 'Open linked workspace'
 }
 
-const reasonForItem = (item: AttentionItem) =>
-  item.kind === 'container_ops_migration' && typeof item.target.reason === 'string'
+const reasonForItem = (item: AttentionItem) => {
+  if (typeof item.body === 'string' && item.body) return item.body
+  return item.kind === 'container_ops_migration' && typeof item.target.reason === 'string'
     ? item.target.reason
     : null
+}
 
-export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenTarget: (target: AttentionItem['target']) => void }) {
+export function AttentionInbox({ token, onOpenTarget, onOpenInbox }: {
+  token: string
+  onOpenTarget: (target: AttentionItem['target']) => void
+  onOpenInbox: () => void
+}) {
   const [items, setItems] = React.useState<AttentionItem[]>([])
+  const [count, setCount] = React.useState(0)
   const [open, setOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
   const [busy, setBusy] = React.useState('')
@@ -31,7 +44,10 @@ export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenT
   const root = React.useRef<HTMLDivElement>(null)
 
   const load = React.useCallback(async () => {
-    try { const body = await getAttention(token); setItems(body.items); setError('') }
+    try {
+      const body = await getAttention(token)
+      setItems(body.items); setCount(body.count ?? body.items.length); setError('')
+    }
     catch (err) { setError(err instanceof Error ? err.message : String(err)) }
     finally { setLoading(false) }
   }, [token])
@@ -47,6 +63,17 @@ export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenT
     window.addEventListener('mousedown', dismiss); window.addEventListener('keydown', key)
     return () => { window.removeEventListener('mousedown', dismiss); window.removeEventListener('keydown', key) }
   }, [open])
+
+  // Optimistic: the row leaves the header immediately, then the server is told.
+  // A failed dismiss surfaces as the ordinary retryable error and the next poll
+  // brings the row back, so the badge can never lie for longer than one tick.
+  const handled = React.useCallback(async (item: AttentionItem) => {
+    setItems(current => current.filter(entry => entry.id !== item.id))
+    setCount(current => Math.max(0, current - 1))
+    try { await dismissAttention(token, item.id) }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); await load() }
+  }, [token, load])
+
   const act = async (item: AttentionItem, action: string) => {
     const key = `${item.id}:${action}`
     if (busy) return
@@ -55,19 +82,25 @@ export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenT
     catch (err) { setError(err instanceof Error ? err.message : String(err)) }
     finally { setBusy('') }
   }
-  const go = (item: AttentionItem) => { setOpen(false); onOpenTarget(item.target) }
+  const go = (item: AttentionItem) => {
+    setOpen(false)
+    void handled(item)
+    onOpenTarget(item.target)
+  }
 
   // Hide when empty so a permanent "!" does not read as an alarm next to running work.
-  if (items.length === 0) return null
+  if (count === 0 && items.length === 0) return null
 
+  const badge = count || items.length
   return <div className="attention-inbox" ref={root}>
-    <button type="button" className={`attention-trigger has-attention ${open ? 'active' : ''}`} onClick={() => setOpen(value => !value)} aria-haspopup="dialog" aria-expanded={open} aria-label={`${items.length} attention item${items.length === 1 ? '' : 's'}`}>
-      <span aria-hidden="true">!</span><b>{items.length > 99 ? '99+' : items.length}</b>
+    <button type="button" className={`attention-trigger has-attention ${open ? 'active' : ''}`} onClick={() => setOpen(value => !value)} aria-haspopup="dialog" aria-expanded={open} aria-label={`${badge} unread notification${badge === 1 ? '' : 's'}`}>
+      <span aria-hidden="true">!</span><b>{badge > 99 ? '99+' : badge}</b>
     </button>
-    {open && <section className="attention-popover" role="dialog" aria-modal="false" aria-label="Attention inbox">
-      <header><div><span className="eyebrow">Needs you</span><h2>Attention</h2></div><button type="button" className="text-button" disabled={loading} onClick={() => void load()}>{loading ? 'Refreshing…' : 'Refresh'}</button></header>
-      {error && <div className="attention-error" role="alert"><strong>Inbox could not update</strong><p>{error}</p><button type="button" onClick={() => void load()}>Try again</button></div>}
-      {loading ? <div className="attention-state" role="status"><span className="ui-spinner" /> Loading attention…</div>
+    {open && <section className="attention-popover" role="dialog" aria-modal="false" aria-label="Notifications">
+      <header><div><span className="eyebrow">Needs you</span><h2>Notifications</h2></div><button type="button" className="text-button" disabled={loading} onClick={() => void load()}>{loading ? 'Refreshing…' : 'Refresh'}</button></header>
+      {error && <div className="attention-error" role="alert"><strong>Notifications could not update</strong><p>{error}</p><button type="button" onClick={() => void load()}>Try again</button></div>}
+      {loading ? <div className="attention-state" role="status"><span className="ui-spinner" /> Loading notifications…</div>
+        : items.length === 0 ? <div className="attention-state" role="status">You are all caught up.</div>
         : <ul className="attention-list">{items.map(item => <li key={item.id}>
             {item.kind === 'master_decision' && item.decision ? (
               <MasterDecisionCard
@@ -77,10 +110,12 @@ export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenT
                 onChanged={load}
                 onOpenJob={(jobId, engine) => {
                   setOpen(false)
+                  void handled(item)
                   onOpenTarget({ view: 'task', job_id: jobId, engine })
                 }}
                 onOpenMaster={originMessageId => {
                   setOpen(false)
+                  void handled(item)
                   onOpenTarget({
                     view: 'master',
                     origin_message_id: originMessageId ?? undefined,
@@ -90,10 +125,17 @@ export function AttentionInbox({ token, onOpenTarget }: { token: string; onOpenT
             ) : (
               <>
                 <button type="button" className="attention-main" onClick={() => go(item)}><span>{labelForKind(item.kind)}</span><strong>{item.title}</strong>{reasonForItem(item) && <small className="attention-reason">{reasonForItem(item)}</small>}<small>{helperForItem(item)}</small></button>
-                {item.inline_ok && item.actions.length > 0 && <div className="attention-actions">{item.actions.map(action => <button type="button" key={action} disabled={!!busy} className={action === 'approve' ? 'attention-approve' : ''} onClick={() => void act(item, action)}>{busy === `${item.id}:${action}` ? 'Working…' : action.charAt(0).toUpperCase() + action.slice(1)}</button>)}</div>}
+                <div className="attention-actions">
+                  {item.inline_ok && item.actions.length > 0 && item.actions.map(action => <button type="button" key={action} disabled={!!busy} className={action === 'approve' ? 'attention-approve' : ''} onClick={() => void act(item, action)}>{busy === `${item.id}:${action}` ? 'Working…' : action.charAt(0).toUpperCase() + action.slice(1)}</button>)}
+                  <button type="button" className="attention-dismiss" onClick={() => void handled(item)}>Dismiss</button>
+                </div>
               </>
             )}
           </li>)}</ul>}
+      <footer className="attention-foot">
+        <button type="button" className="text-button" onClick={() => { setOpen(false); onOpenInbox() }}>Open Inbox</button>
+        <small>Dismissed notifications stay in the Inbox.</small>
+      </footer>
     </section>}
   </div>
 }
