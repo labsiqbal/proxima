@@ -1,0 +1,159 @@
+<!doctype html>
+<html data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>#155 semantic surface sweep</title>
+<link rel="stylesheet" href="STYLES.css">
+<style>
+  html { font-size: 14px; }
+  body { background: var(--ui-chat-surface-background); color: var(--ui-text-primary); padding: 20px; font-family: var(--font-sans); }
+  .sweep { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 18px; align-items: start; }
+  .cell { border: 1px dashed var(--ui-stroke-tertiary); border-radius: 8px; padding: 10px; background: var(--ui-surface); min-width: 0; }
+  .cell > h4 { margin: 0 0 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ui-text-tertiary); font-weight: 700; }
+  h1 { font-size: 18px; margin: 0 0 14px; }
+  .cell .stack { display: grid; gap: 8px; }
+</style>
+</head>
+<body>
+<h1>#155 — danger / warning / success surfaces (theme: <span id="tname"></span>)</h1>
+<div class="sweep">
+
+  <div class="cell"><h4>Master error + load error</h4><div class="stack">
+    <div class="master-error"><span>Master could not reach the runner.</span><button class="ghost-button">Retry</button></div>
+    <div class="master-load-error"><p>Failed to load the Master thread. The server returned 503.</p></div>
+  </div></div>
+
+  <div class="cell"><h4>Toasts</h4><div class="stack">
+    <div class="toast danger"><div class="toast-content"><strong>Run failed</strong><small>hermes exited with code 1</small><span class="toast-count">×3</span></div></div>
+    <div class="toast warning"><div class="toast-content"><strong>Folder moved</strong><small>Relink the project to continue.</small></div></div>
+    <div class="toast success"><div class="toast-content"><strong>Saved</strong><small>Workflow written to disk.</small></div></div>
+  </div></div>
+
+  <div class="cell"><h4>Refusal cards (app runner)</h4><div class="stack">
+    <div class="app-state-card danger"><h3>Port already claimed</h3><p>Another process claimed port 5173. Proxima did not open, proxy, or stop it.</p><p class="app-next-step">Free the port, then run again.</p></div>
+    <div class="app-state-card warning"><h3>App is stopped</h3><p>Its most recent bounded log buffer is still available.</p></div>
+  </div></div>
+
+  <div class="cell"><h4>Chat error line + error bar</h4><div class="stack">
+    <div class="chat-line error"><strong>Error</strong><span>ECONNREFUSED 127.0.0.1:8765</span></div>
+    <div class="error-bar">The session expired. Sign in again to continue.</div>
+    <p class="error-text">Could not read that file.</p>
+    <p class="auth-error">Wrong password.</p>
+    <p class="tree-error">Workspace unavailable.</p>
+  </div></div>
+
+  <div class="cell"><h4>Job pills / review status</h4><div class="stack">
+    <div><span class="job-pill review">review</span> <span class="job-pill done">done</span> <span class="job-pill failed">failed</span></div>
+    <div><span class="review-status done">done</span> <span class="review-status failed">failed</span> <span class="review-status running">running</span></div>
+    <div><span class="pill ready">ready</span> <span class="pill pill-warn">folder moved</span></div>
+  </div></div>
+
+  <div class="cell"><h4>Graph / save status</h4><div class="stack">
+    <div><span class="graph-status st-review">review</span> <span class="graph-status st-done">done</span> <span class="graph-status st-failed">failed</span></div>
+    <div><span class="graph-save-status is-saved">saved</span> <span class="graph-save-status is-error">save failed</span></div>
+    <div><span class="workflow-home-status st-review">review</span> <span class="workflow-home-status st-done">done</span> <span class="workflow-home-status st-failed">failed</span></div>
+  </div></div>
+
+  <div class="cell"><h4>Changes review / diff</h4><div class="stack">
+    <div><span class="changes-file-status is-added">added</span> <span class="changes-file-status is-removed">removed</span></div>
+    <div class="diff-line is-add">+ added line of code</div>
+    <div class="diff-line is-del">- removed line of code</div>
+    <div class="changes-push-failed">Push failed: remote rejected.</div>
+    <div class="changes-conflict">Merge conflict in apps/web/src/styles.css</div>
+    <p class="changes-note is-merged">merged</p><p class="changes-note is-failed">failed</p>
+  </div></div>
+
+  <div class="cell"><h4>Ops migration</h4><div class="stack">
+    <div class="ops-migration-message is-error">Migration blocked: the database is owned by another user.</div>
+    <div class="ops-migration-message is-success">Migration applied.</div>
+    <div class="ops-migration-phase needs-attention">needs attention</div>
+    <div class="ops-migration-phase is-safe">safe</div>
+    <div class="ops-migration-reason"><p>The schema is ahead of this build.</p></div>
+  </div></div>
+
+  <div class="cell"><h4>Satpam / approvals</h4><div class="stack">
+    <div class="satpam-pending"><p class="satpam-kicker">Waiting on you</p><p class="satpam-reason">The watchdog wants to restart the repo runner.</p></div>
+    <div class="approval-error">The approval was refused by the server.</div>
+    <button class="approval-btn danger">Deny</button>
+  </div></div>
+
+  <div class="cell"><h4>Debug panel</h4><div class="stack">
+    <div class="debug-stat danger"><span>Failed runs</span><strong>7</strong><small>last 24h</small></div>
+    <div class="debug-stale-action"><p class="error-text">3 stale runs are still marked running.</p><button class="ghost-button">Clear</button></div>
+  </div></div>
+
+  <div class="cell"><h4>Destructive buttons</h4><div class="stack">
+    <div><button class="primary-button danger">Delete project</button> <button class="ghost-button danger">Discard</button></div>
+    <div><button class="row-action danger">✕</button> <button class="user-menu-item danger">Sign out everywhere</button></div>
+    <div><span class="toggle-pill blocked"><span class="toggle-knob"></span></span> blocked</div>
+  </div></div>
+
+  <div class="cell"><h4>App runner badges</h4><div class="stack">
+    <div><span class="app-ready-badge ready">ready</span> <span class="app-ready-badge starting">starting</span> <span class="app-ready-badge failed">failed</span></div>
+    <div class="app-exit-note fail"><strong>exit 1</strong> the process stopped on its own</div>
+    <div class="app-bind-warning">The app bound to 0.0.0.0 — reachable beyond this machine.</div>
+  </div></div>
+
+  <div class="cell"><h4>Attention / inbox</h4><div class="stack">
+    <div class="attention-error">Could not load attention items.</div>
+    <div class="inbox-error">The inbox request failed.</div>
+    <button class="attention-trigger has-attention">2 need you</button>
+  </div></div>
+
+  <div class="cell"><h4>Master decisions / work</h4><div class="stack">
+    <div><span class="master-decision-state">waiting</span> <span class="master-decision-state resolved">resolved</span></div>
+    <p class="master-decision-error">The decision could not be recorded.</p>
+    <div class="master-decision-response">Approved: continue with the rebase.</div>
+    <p class="master-target-warning">This target is outside the linked folder.</p>
+    <p class="master-target-error">This target does not exist.</p>
+    <p class="master-tool-unreadable">Tool output was not readable.</p>
+    <p class="master-work-count failed">failed <b>2</b></p>
+    <p class="master-work-count running">running <b>1</b></p>
+  </div></div>
+
+  <div class="cell"><h4>Collab / run cards</h4><div class="stack">
+    <div class="collab-card failed"><div class="collab-card-head"><strong>reviewer</strong> <em>failed</em></div><p class="collab-card-error">The reviewer never answered.</p></div>
+    <div class="collab-card done"><div class="collab-card-head"><strong>builder</strong> <em>done</em></div></div>
+    <div class="run-result-card failed">The run failed after 12s.</div>
+  </div></div>
+
+  <div class="cell"><h4>Banners / notices</h4><div class="stack">
+    <div class="file-editor-retain-banner">Unsaved changes are retained for this file.</div>
+    <div class="av-whiteboard-notice">This whiteboard is read-only in preview.</div>
+    <div class="hermes-banner">The Hermes runner is not installed.</div>
+    <div class="project-fallback-notice"><span>No project is linked — using the fallback workspace.</span><button class="text-button">Link</button></div>
+    <div class="task-project-context"><div><strong>proxima</strong><small>~/dev/proxima</small></div><div class="task-project-lock"><strong>locked</strong></div></div>
+  </div></div>
+
+  <div class="cell"><h4>Terminal / forms</h4><div class="stack">
+    <div class="terminal-status open">connected</div>
+    <div class="terminal-status closed">disconnected</div>
+    <p class="qform-sent">Sent</p>
+    <p class="qform-label">Repository <span class="qform-req">*</span></p>
+    <p class="wf-field-error">This field is required.</p>
+    <p class="fl-override">Overriding the server's refusal.</p>
+  </div></div>
+
+  <div class="cell"><h4>Archive / artifacts</h4><div class="stack">
+    <div><span class="archive-pill review">review</span> <span class="archive-pill approved">approved</span> <span class="archive-pill draft">draft</span></div>
+    <div><span class="artifacts-badge" data-status="approved">approved</span> <span class="artifacts-badge" data-status="review">review</span></div>
+    <div><span class="archive-chip" data-status="review"><span class="dot"></span> review</span> <span class="archive-chip" data-status="approved"><span class="dot"></span> approved</span></div>
+    <div><span class="status-dot unread"></span> unread dot</div>
+    <div><span class="stream-dot on"></span> streaming</div>
+  </div></div>
+
+  <div class="cell"><h4>Wiki / kanban / misc</h4><div class="stack">
+    <div class="wiki-conflict">This page changed on disk since you opened it.</div>
+    <a class="wikilink missing" href="#">Missing page</a>
+    <div class="kanban-card"><strong>Card</strong> <button class="kanban-del">✕</button></div>
+    <div class="update-error">Update check failed.</div>
+    <div class="plan-job-error">The plan step failed.</div>
+    <div class="goal-banner blocked"><span class="goal-dot"></span><span class="goal-text"><strong>Blocked</strong> waiting on approval</span></div>
+  </div></div>
+
+</div>
+<script>
+  document.getElementById('tname').textContent = document.documentElement.getAttribute('data-theme')
+</script>
+</body>
+</html>
