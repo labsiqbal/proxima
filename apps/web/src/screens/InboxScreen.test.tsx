@@ -12,7 +12,12 @@ vi.mock('../api/inbox', () => ({
   setInboxRead: vi.fn(),
   dismissAttention: vi.fn(),
 }))
-vi.mock('../api/master', () => ({ actAttention: vi.fn() }))
+vi.mock('../api/master', () => ({
+  actAttention: vi.fn(),
+  getMasterDecision: vi.fn(),
+  deferMasterDecision: vi.fn(),
+  resolveMasterDecision: vi.fn(),
+}))
 
 const failure = {
   id: 'task:9:failed', seq: 12, kind: 'task_outcome', title: 'Nightly build failed',
@@ -100,5 +105,46 @@ describe('Inbox destination', () => {
     render(<InboxScreen token="t" onOpenTarget={vi.fn()} />)
 
     expect(await screen.findByText(/Nothing here yet/i)).toBeInTheDocument()
+  })
+
+  // #158: "Attention items that genuinely need a decision keep their actionable
+  // affordances inside the Inbox entry" - so the one kind with a real decision
+  // form must not degrade to an Open button here.
+  it('asks a Master decision in full rather than linking away', async () => {
+    vi.mocked(getInbox).mockResolvedValue({
+      items: [{
+        ...review, id: 'attention:8', kind: 'master_decision', inline_ok: false, actions: [],
+        title: 'Choose rollout window', read: false,
+        decision: {
+          id: 8, attention_item_id: 8, master_session_id: 3, origin_message_id: 21,
+          requesting_job_id: 4, title: 'Choose rollout window',
+          prompt: 'Which rollout window should the release use?',
+          context: 'Both choices include two hours of planned downtime.',
+          response_shape: { type: 'choice', choices: [{ id: 'sunday', label: 'Sunday 02:00 UTC' }] },
+          state: 'pending', response: null, version: 1,
+          created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00',
+          legacy_without_task: false, task: null,
+        },
+      }],
+      unread: 1, next_before: null,
+    } as never)
+    render(<InboxScreen token="t" onOpenTarget={vi.fn()} />)
+
+    expect(await screen.findByText('Which rollout window should the release use?')).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Sunday 02:00 UTC' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open' })).not.toBeInTheDocument()
+  })
+
+  it('walks older pages with the server cursor', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getInbox)
+      .mockResolvedValueOnce(page({ next_before: 11 }) as never)
+      .mockResolvedValueOnce({ items: [], unread: 1, next_before: null })
+    render(<InboxScreen token="t" onOpenTarget={vi.fn()} />)
+    await screen.findByText('Nightly build failed')
+
+    await user.click(screen.getByRole('button', { name: 'Load older' }))
+
+    expect(vi.mocked(getInbox).mock.calls.at(-1)?.[1]).toMatchObject({ before: 11 })
   })
 })

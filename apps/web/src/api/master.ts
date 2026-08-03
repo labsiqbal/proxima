@@ -81,6 +81,13 @@ export type MasterDecision = {
     project_slug?: string | null
   } | null
 }
+/** How loudly a notification reads. Declared once; the Inbox reuses it. */
+export type NotificationSeverity =
+  | 'info'
+  | 'success'
+  | 'warning'
+  | 'error'
+  | 'action'
 export type AttentionItem = {
   id: string
   kind: string
@@ -94,7 +101,7 @@ export type AttentionItem = {
   decision?: MasterDecision
   // Inbox ledger fields (#158). Present on every row the server sends today;
   // optional so the Master desk's own attention list can stay a plain subset.
-  severity?: 'info' | 'success' | 'warning' | 'error' | 'action'
+  severity?: NotificationSeverity
   /** The diagnosis, and the step that clears it. */
   body?: string
   requires_action?: boolean

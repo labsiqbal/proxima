@@ -1106,10 +1106,14 @@ def register(app, deps):
             before=before,
         )
         items = _ledger_payload(rows, live)
+        # Compared against the *served* page size: a caller asking for 1000 gets
+        # 200, and comparing to 1000 would report no next page and strand the
+        # rest of the history.
+        served = notifications.bounded_limit(limit)
         return {
             "items": items,
             "unread": notifications.unread_count(db()),
-            "next_before": items[-1]["seq"] if len(items) >= max(1, limit) else None,
+            "next_before": items[-1]["seq"] if len(items) >= served else None,
         }
 
     @app.post("/api/inbox/{item_id:path}/read")
@@ -1125,27 +1129,45 @@ def register(app, deps):
         return {"ok": True, "id": item_id, "read": wanted}
 
     @app.post("/api/inbox/read-all")
-    def read_all_inbox(
-        payload: dict[str, Any] | None = None,
-        user: dict[str, Any] = Depends(current_user),
-    ):
+    def read_all_inbox(user: dict[str, Any] = Depends(current_user)):
         """Clear the unread badge without discarding a single notification."""
         return {"ok": True, "read": notifications.mark_all_read(db())}
+
+    @app.post("/api/inbox/client-error")
+    def record_client_error(
+        payload: dict[str, Any],
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """Keep an error the owner saw in the browser after the toast is gone.
+
+        The global error surface is ephemeral by design; this gives its
+        diagnostic a durable home. Bounded and rate-limited server-side - the
+        browser can file news, never work.
+        """
+        item_key = notifications.record_client_error(
+            db(),
+            key=str(payload.get("key") or ""),
+            title=str(payload.get("title") or ""),
+            detail=str(payload.get("detail") or ""),
+            target=payload.get("target") if isinstance(payload.get("target"), dict) else None,
+        )
+        return {"ok": item_key is not None, "id": item_key}
 
     @app.post("/api/attention/{item_id:path}/dismiss")
     def dismiss_attention(
         item_id: str,
-        payload: dict[str, Any] | None = None,
         user: dict[str, Any] = Depends(current_user),
     ):
         """Acknowledge a header item (#157).
 
-        Dismissing is *seen*, not *done*: navigate-only items (Master budget,
-        Ops migration) leave the header immediately, and anything that still
-        needs a decision keeps its open status and its actions in the Inbox.
+        Dismissing is *seen*: the row leaves the header and keeps its status,
+        its actions and its place in the Inbox. For a pure notice - one with no
+        decision behind it, listed in ``ACKNOWLEDGEABLE_KINDS`` - it is also
+        *done*, so a Master budget notice does not linger on the Master desk
+        after the owner has acknowledged it.
         """
         _refresh_ledger(user)
-        if not notifications.set_read(db(), item_id, True):
+        if not notifications.acknowledge(db(), item_id):
             raise HTTPException(status_code=404, detail="attention item not found")
         return {"ok": True, "id": item_id}
 

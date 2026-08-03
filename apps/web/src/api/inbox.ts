@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { AttentionItem } from './master'
+import type { AttentionItem, NotificationSeverity } from './master'
 
 /**
  * The Inbox is the persistent home for notifications; the header popover is the
@@ -9,7 +9,7 @@ import type { AttentionItem } from './master'
 export type InboxItem = AttentionItem & {
   /** Row id, used as the pagination cursor. */
   seq: number
-  severity: 'info' | 'success' | 'warning' | 'error' | 'action'
+  severity: NotificationSeverity
   /** Full human detail: the diagnosis, and the step that clears it. */
   body: string
   detail: Record<string, unknown>
@@ -57,5 +57,23 @@ export const readAllInbox = (token: string) =>
 export const dismissAttention = (token: string, id: string) =>
   api<{ ok: boolean; id: string }>(`/api/attention/${q(id)}/dismiss`, token, {
     method: 'POST',
-    body: JSON.stringify({}),
   })
+
+/**
+ * File a browser-side failure so its diagnostic survives the toast (#158).
+ *
+ * Deliberately raw `fetch` rather than the shared client: the client reports
+ * its own failures to the error surface, which is what called this - routing it
+ * through would let one unreachable server become an infinite loop. A failure
+ * here is silent; the toast the owner is already looking at is the fallback.
+ */
+export function fileClientError(
+  token: string,
+  entry: { key: string; title: string; detail: string },
+): void {
+  void fetch('/api/inbox/client-error', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(entry),
+  }).catch(() => {})
+}

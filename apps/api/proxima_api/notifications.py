@@ -59,6 +59,12 @@ _TASK_OUTCOME_SEVERITY = {
 
 _TERMINAL_TASK_STATUSES = tuple(_TASK_OUTCOME_SEVERITY)
 
+# Kinds whose whole content is a notice: there is no decision waiting behind
+# them, so the owner acknowledging one from the header settles it (#157).
+# Everything else keeps dismiss meaning *seen*, never *done* - dismissing an Ops
+# migration must not claim the migration succeeded.
+ACKNOWLEDGEABLE_KINDS = frozenset({"master_budget"})
+
 _DEFAULT_INBOX_LIMIT = 60
 _MAX_INBOX_LIMIT = 200
 _MAX_BODY = 2000
@@ -141,6 +147,15 @@ def unread_count(conn) -> int:
     return int(row["n"] if row else 0)
 
 
+def bounded_limit(limit: int | None) -> int:
+    """The page size actually served, which is what pagination must compare to.
+
+    A caller asking for 1000 gets 200; comparing the returned count against the
+    *requested* 1000 would decide there is no next page and strand the rest.
+    """
+    return max(1, min(int(limit or _DEFAULT_INBOX_LIMIT), _MAX_INBOX_LIMIT))
+
+
 def list_items(
     conn,
     *,
@@ -148,7 +163,7 @@ def list_items(
     limit: int = _DEFAULT_INBOX_LIMIT,
     before: int | None = None,
 ) -> list[dict[str, Any]]:
-    bounded = max(1, min(int(limit or _DEFAULT_INBOX_LIMIT), _MAX_INBOX_LIMIT))
+    bounded = bounded_limit(limit)
     clauses: list[str] = []
     params: list[Any] = []
     if unread_only:
@@ -157,9 +172,13 @@ def list_items(
         clauses.append("id < ?")
         params.append(int(before))
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    # Ordered by id, not created_at, because the cursor *is* the id: a projected
+    # Task outcome carries the moment the work finished, which can be older than
+    # a row recorded before it, and mixing the two would let "Load older" skip
+    # rows. Insertion order is also the honest reading of "newest first" here -
+    # it is the order the owner learned about things.
     rows = conn.execute(
-        f"SELECT * FROM attention_items {where} ORDER BY created_at DESC, id DESC "
-        "LIMIT ?",
+        f"SELECT * FROM attention_items {where} ORDER BY id DESC LIMIT ?",
         (*params, bounded),
     ).fetchall()
     return [_row_payload(row) for row in rows]
@@ -182,6 +201,25 @@ def set_read(conn, item_key: str, read: bool) -> bool:
         (item_key,),
     )
     return cursor.rowcount > 0
+
+
+def acknowledge(conn, item_key: str) -> bool:
+    """Dismiss from the header: always *seen*, and *done* for a pure notice.
+
+    A Master budget notice has no decision behind it, so leaving it ``open``
+    after the owner acknowledged it would keep it on the Master desk's work
+    panel forever - the exact defect #157 reports, moved one surface across.
+    """
+    if not set_read(conn, item_key, True):
+        return False
+    conn.execute(
+        "UPDATE attention_items SET status = 'resolved', "
+        "resolved_at = CURRENT_TIMESTAMP "
+        f"WHERE item_key = ? AND status = 'open' AND kind IN "
+        f"({', '.join('?' for _ in ACKNOWLEDGEABLE_KINDS)})",
+        (item_key, *sorted(ACKNOWLEDGEABLE_KINDS)),
+    )
+    return True
 
 
 def mark_all_read(conn) -> int:
@@ -353,6 +391,48 @@ def ensure_task_outcome_watermark(conn) -> str:
     now = str(row["now"])
     app_settings.set_setting(conn, TASK_OUTCOME_WATERMARK_KEY, now)
     return now
+
+
+MAX_CLIENT_ERROR_TITLE = 160
+MAX_CLIENT_ERRORS_PER_DAY = 50
+
+
+def record_client_error(
+    conn, *, key: str, title: str, detail: str, target: Mapping[str, Any] | None = None
+) -> str | None:
+    """Give an error the owner actually saw a home it survives a reload in.
+
+    The global error surface raises API failures, unhandled rejections and
+    stale-chunk failures as toasts and then forgets them, which is exactly the
+    diagnostic the Inbox is supposed to keep (#158). The browser is not trusted
+    to say anything else: the text is bounded, stored as an informational row
+    that can never carry an action, and the whole channel is capped per day so a
+    render loop cannot fill the ledger. ``item_key`` UNIQUE means the surface's
+    own repeat collapsing (one toast, xN) writes one row.
+    """
+    cleaned = " ".join(str(title or "").split())[:MAX_CLIENT_ERROR_TITLE]
+    if not cleaned or not str(key or "").strip():
+        return None
+    recent = conn.execute(
+        "SELECT COUNT(*) AS n FROM attention_items WHERE kind = 'client_error' "
+        "AND created_at >= datetime('now', '-1 day')"
+    ).fetchone()
+    if int(recent["n"] if recent else 0) >= MAX_CLIENT_ERRORS_PER_DAY:
+        return None
+    item_key = f"client-error:{str(key).strip()[:120]}"
+    conn.execute(
+        "INSERT OR IGNORE INTO attention_items(kind, title, target_json, inline_ok, "
+        "actions_json, status, item_key, severity, body, detail_json, "
+        "requires_action) VALUES ('client_error', ?, ?, 0, '[]', 'resolved', ?, "
+        "'error', ?, '{}', 0)",
+        (
+            cleaned,
+            json.dumps(dict(target or {})),
+            item_key,
+            str(detail or "")[:_MAX_BODY],
+        ),
+    )
+    return item_key
 
 
 def _task_outcome_title(title: str, status: str) -> str:

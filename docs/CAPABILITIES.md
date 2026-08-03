@@ -595,7 +595,17 @@ destination (everything, with `?unread=1`, `limit`, and a `before` cursor).
 `POST /api/inbox/{id}/read` toggles one row, `POST /api/inbox/read-all` clears the
 badge, and `POST /api/attention/{id}/dismiss` acknowledges a header item - including
 navigate-only kinds like Master budget that `/act` refuses. Dismissing is *seen*, not
-*done*: the row keeps its open status, its actions, and its place in the Inbox.
+*done*: the row keeps its open status, its actions, and its place in the Inbox. The
+exception is a **pure notice** - a kind with no decision behind it, listed in
+`ACKNOWLEDGEABLE_KINDS` (today: `master_budget`) - where acknowledging also resolves
+it, so it does not linger on the Master desk's work panel after the owner has seen it.
+`POST /api/inbox/client-error` gives a browser-side failure a durable home: the global
+error toast is ephemeral by design, so a *new* toast (never a repeat - those already
+collapse) files its diagnostic as an informational `client_error` row. The text is
+bounded, the row can never carry an action, and the channel is capped per day, so the
+browser can file news but never work. The Inbox pages by row id rather than
+`created_at`, because a projected Task outcome carries the moment the work finished and
+mixing the two orders would let the cursor skip rows.
 Acting on an item marks it read too. Items the attention route derives from other
 tables (job reviews, node-script trust, satpam restarts) are mirrored into the ledger
 under the same `job:`/`script:`/`satpam:` ids, so the Inbox is a strict superset of
@@ -614,9 +624,9 @@ every row an explicit **Dismiss** plus a footer link to the Inbox; removal is op
 so the badge never lags a click, and a failed dismiss falls back to the ordinary
 retryable error. The **Inbox** destination lists everything newest-first with an
 All / Unread filter, mark-all-read, a per-row read toggle, a Load-older cursor, inline
-actions for anything that still needs a decision, and the full error detail on the entry
-so a failed Task is diagnosable without opening its run. It renders in both Work and
-Delegate. See [UI shell](ui-shell.md#notifications-the-ephemeral-header-and-the-inbox-destination).
+actions for anything that still needs a decision (a Master decision renders its full
+resolve/defer form, not a link away), and the full error detail on the entry so a failed
+Task is diagnosable without opening its run. It renders in both Work and Delegate. See [UI shell](ui-shell.md#notifications-the-ephemeral-header-and-the-inbox-destination).
 
 **Attention:** the shell badge calls one `/api/attention` shape spanning simple final
 job reviews, complex diff reviews, pending satpam restarts, durable tool permissions,

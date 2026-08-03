@@ -151,7 +151,13 @@ def test_navigate_only_attention_item_can_be_dismissed_from_the_header(
 
 def test_dismissing_does_not_resolve_work_that_still_needs_the_owner(tmp_path: Path):
     app, client = _client(tmp_path)
-    _insert_attention(app)
+    _insert_attention(
+        app,
+        kind="container_ops_migration",
+        title="Container Ops migration needs attention",
+        target={"container_slug": "legacy", "reason": "physical Ops root is not empty"},
+        source_key="container-ops-migration:1",
+    )
     item = client.get("/api/attention").json()["items"][0]
 
     client.post(f"/api/attention/{item['id']}/dismiss", json={})
@@ -159,6 +165,21 @@ def test_dismissing_does_not_resolve_work_that_still_needs_the_owner(tmp_path: P
     stored = client.get("/api/inbox").json()["items"][0]
     assert stored["status"] == "open"
     assert stored["requires_action"] is True
+
+
+def test_acknowledging_a_pure_notice_settles_it(tmp_path: Path):
+    """A Master budget notice has no decision behind it, so acknowledging it in
+    the header must also clear it from the Master desk's work panel (#157)."""
+    app, client = _client(tmp_path)
+    _insert_attention(app)
+    item = client.get("/api/attention").json()["items"][0]
+
+    client.post(f"/api/attention/{item['id']}/dismiss", json={})
+
+    stored = client.get("/api/inbox").json()["items"][0]
+    assert stored["status"] == "resolved"
+    assert stored["read"] is True
+    assert client.get("/api/attention").json()["count"] == 0
 
 
 def test_dismiss_rejects_an_unknown_item(tmp_path: Path):
@@ -280,6 +301,83 @@ def test_task_outcome_is_recorded_once_and_stays_read(tmp_path: Path):
         i for i in client.get("/api/inbox").json()["items"] if i["kind"] == "task_outcome"
     ]
     assert len(entries) == 1
+
+
+def test_browser_errors_reach_the_inbox_with_their_detail(tmp_path: Path):
+    _, client = _client(tmp_path)
+
+    filed = client.post(
+        "/api/inbox/client-error",
+        json={
+            "key": "api:/api/jobs:500",
+            "title": "Failed to start the Task (500)",
+            "detail": "TypeError: cannot read property 'id' of undefined",
+        },
+    )
+
+    assert filed.status_code == 200 and filed.json()["ok"] is True
+    entry = next(
+        i for i in client.get("/api/inbox").json()["items"] if i["kind"] == "client_error"
+    )
+    assert entry["severity"] == "error"
+    assert entry["requires_action"] is False
+    assert "cannot read property" in entry["body"]
+
+
+def test_repeat_browser_errors_collapse_onto_one_row(tmp_path: Path):
+    _, client = _client(tmp_path)
+    body = {"key": "chunk-load", "title": "Reload Proxima", "detail": "stale chunk"}
+
+    for _ in range(3):
+        client.post("/api/inbox/client-error", json=body)
+
+    entries = [
+        i for i in client.get("/api/inbox").json()["items"] if i["kind"] == "client_error"
+    ]
+    assert len(entries) == 1
+
+
+def test_browser_errors_cannot_flood_the_ledger(tmp_path: Path):
+    _, client = _client(tmp_path)
+
+    for index in range(60):
+        client.post(
+            "/api/inbox/client-error",
+            json={"key": f"loop-{index}", "title": f"Render loop {index}", "detail": "x"},
+        )
+
+    entries = [
+        i
+        for i in client.get("/api/inbox?limit=200").json()["items"]
+        if i["kind"] == "client_error"
+    ]
+    assert len(entries) == 50
+
+
+def test_inbox_pages_older_notifications_without_skipping_any(tmp_path: Path):
+    app, client = _client(tmp_path)
+    for index in range(5):
+        _insert_attention(app, title=f"Notice {index}", source_key=f"notice-{index}")
+
+    first = client.get("/api/inbox?limit=2").json()
+    second = client.get(f"/api/inbox?limit=2&before={first['next_before']}").json()
+    third = client.get(f"/api/inbox?limit=2&before={second['next_before']}").json()
+
+    seen = [item["title"] for item in first["items"] + second["items"] + third["items"]]
+    assert seen == [f"Notice {index}" for index in reversed(range(5))]
+
+
+def test_an_oversized_page_request_still_reports_its_next_cursor(tmp_path: Path):
+    app, client = _client(tmp_path)
+    for index in range(3):
+        _insert_attention(app, title=f"Notice {index}", source_key=f"notice-{index}")
+
+    page = client.get("/api/inbox?limit=100000").json()
+
+    # The server serves its own bound; it must not claim there is nothing more
+    # simply because it returned fewer rows than the caller asked for.
+    assert len(page["items"]) == 3
+    assert page["next_before"] is None
 
 
 def test_work_that_finished_before_the_inbox_existed_is_not_replayed(tmp_path: Path):

@@ -101,3 +101,4 @@ Supersedes / superseded-by / links to feature docs.
 | [0041](0041-updates-are-a-manual-git-pull.md) | Updates are a manual git pull; the safe-updater stack is removed | Accepted |
 | [0042](0042-file-preview-is-a-sandboxed-iframe.md) | File preview is one sandboxed iframe on Proxima's origin | Accepted |
 | [0043](0043-artifacts-is-the-destination.md) | Artifacts is the destination; the gallery is the main window | Accepted |
+| [0044](0044-one-notification-ledger-two-surfaces.md) | One notification ledger, two surfaces: ephemeral header + persistent Inbox | Accepted |

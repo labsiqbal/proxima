@@ -6,6 +6,8 @@ import { listSessions, renameSession, deleteSession } from './api/sessions'
 import { activeRuns, createRun } from './api/runs'
 import { createJob, deleteJob, getJob, linkJobRun, startJob } from './api/jobs'
 import { api } from './api/client'
+import { fileClientError } from './api/inbox'
+import { setErrorArchive } from './lib/errorSurface'
 import type { ChatSession, FileTarget, GraphWorkflowDraft, OutputLink, Profile, Project, Runner, User, View } from './types'
 import { AppShell } from './components/shell/AppShell'
 import { AuthGate } from './screens/AuthGate'
@@ -453,6 +455,18 @@ export function App() {
     setActiveProjectState(update)
   }, [])
   const [projectFallbackNotice, setProjectFallbackNotice] = React.useState('')
+  // The global error toast is ephemeral; its diagnostic belongs in the Inbox
+  // (#158). Wired here because the session token lives here - the toast surface
+  // itself mounts outside the app root so it survives a crash of this tree.
+  React.useEffect(() => {
+    if (!token) return
+    setErrorArchive(entry => fileClientError(token, {
+      key: entry.key,
+      title: entry.title,
+      detail: entry.detail || entry.body,
+    }))
+    return () => { setErrorArchive(null) }
+  }, [token])
   React.useEffect(() => { if (view === 'settings') void updates.refresh() }, [view, updates.refresh])
   const [activeTaskId, setActiveTaskId] = React.useState<number | null>(null)
   const initialTaskPermalink = React.useMemo(

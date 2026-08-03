@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-204 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+205 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -17,7 +17,7 @@
 - [`routes/files.py`](#routes-files-py) - 37 endpoints
 - [`routes/graph.py`](#routes-graph-py) - 15 endpoints
 - [`routes/graphs.py`](#routes-graphs-py) - 2 endpoints
-- [`routes/master.py`](#routes-master-py) - 24 endpoints
+- [`routes/master.py`](#routes-master-py) - 25 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) - 12 endpoints
 - [`routes/projects.py`](#routes-projects-py) - 19 endpoints
 - [`routes/reviews.py`](#routes-reviews-py) - 6 endpoints
@@ -199,6 +199,7 @@
 | GET | `/api/chat/messages/{message_id}/restore-turn` | `preview_turn_restore` |  |
 | POST | `/api/chat/messages/{message_id}/restore-turn` | `restore_chat_turn` |  |
 | GET | `/api/inbox` | `get_inbox` | The Inbox destination: every notification, read and unread. |
+| POST | `/api/inbox/client-error` | `record_client_error` | Keep an error the owner saw in the browser after the toast is gone. |
 | POST | `/api/inbox/read-all` | `read_all_inbox` | Clear the unread badge without discarding a single notification. |
 | POST | `/api/inbox/{item_id:path}/read` | `set_inbox_read` | Mark one notification read or unread. The row itself never moves. |
 | POST | `/api/jobs/{job_id}/checkpoint/restore` | `restore_job_checkpoint` |  |
@@ -334,4 +335,4 @@
 
 
 ---
-_Generated 2026-08-03 15:03 UTC._
+_Generated 2026-08-03 16:04 UTC._

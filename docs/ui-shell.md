@@ -426,10 +426,17 @@ interruption; the Inbox is the record, which is what lets the header be ruthless
 The Inbox lists every notification newest-first with an All / Unread filter, **Mark all
 read**, a per-row read toggle, and a **Load older** cursor. Unread is signalled by one
 dot and a weight change; severity by one hairline accent and a quiet label, never a
-wall of coloured cards. An item that still needs a decision keeps its inline actions
-there, so dismissing from the header defers the decision without hiding it. Errors
-carry their full detail - the diagnosis and the step that clears it - in the entry
-itself, so a failed Task is diagnosable without opening the run.
+wall of coloured cards. An item that still needs a decision keeps its affordances
+there - inline approve/reject for `inline_ok` kinds, and a **Master decision** renders
+its full resolve/defer form, the same card the header and the Master desk use - so
+dismissing from the header defers the decision without hiding it. Errors carry their
+full detail - the diagnosis and the step that clears it - in the entry itself, so a
+failed Task is diagnosable without opening the run, and a browser-side failure the
+global error toast raised is filed there too rather than vanishing on reload.
+
+The header popover is bounded at thirty rows while the badge counts every unread one;
+when the two differ the footer says so ("Showing 30 of 42 unread") rather than letting
+them disagree in silence.
 
 ## Global attention, running work, and account surfaces
 
@@ -464,7 +471,11 @@ a `×N` count and at most three are visible at once, and an unreachable-server t
 retires itself once a call succeeds again; 4xx refusals stay with the flow that raised
 them, so a screen with its own error state never gets a duplicate toast. The
 surface is mounted outside the render error boundary, so it also works on the auth gate,
-in Delegate, and after a render crash.
+in Delegate, and after a render crash. A **new** toast also files its diagnostic into
+the Inbox (`POST /api/inbox/client-error`), so the detail survives the reload that
+clears the toast; repeats do not, because they already collapse into that one toast and
+the ledger keys on the same identity. Filing is best-effort and can never throw into
+the surface that reports breakage, and it is off entirely until a session exists.
 
 The Work selection persists per owner across a full browser refresh. Boot validates
 the saved Project before applying it. A missing saved Project falls back to an

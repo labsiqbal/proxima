@@ -5,8 +5,9 @@ import {
   setInboxRead,
   type InboxItem,
 } from '../api/inbox'
-import { actAttention, type AttentionItem } from '../api/master'
-import { labelForKind } from '../components/shell/AttentionInbox'
+import type { AttentionItem } from '../api/master'
+import { actionLabel, labelForKind, useAttentionActions } from '../lib/notifications'
+import { MasterDecisionCard } from '../components/master/MasterDecisionCard'
 
 /**
  * The Inbox destination (#158) - the persistent home for every notification.
@@ -33,6 +34,12 @@ const SEVERITY_LABEL: Record<string, string> = {
   action: 'Needs you',
 }
 
+/** The severity eyebrow, unless the kind already said it (a client error). */
+export function severityLabel(item: { kind: string; severity: string }): string {
+  const label = SEVERITY_LABEL[item.severity] || 'Update'
+  return label.toLowerCase() === labelForKind(item.kind).toLowerCase() ? '' : label
+}
+
 /** Recency in words - the exact stamp stays on the row's title attribute. */
 export function inboxWhen(created: string | undefined, now: number): string {
   if (!created) return ''
@@ -56,7 +63,6 @@ export function InboxScreen({ token, onOpenTarget }: {
   const [nextBefore, setNextBefore] = React.useState<number | null>(null)
   const [unreadOnly, setUnreadOnly] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
-  const [busy, setBusy] = React.useState('')
   const [error, setError] = React.useState('')
 
   const load = React.useCallback(async (onlyUnread: boolean) => {
@@ -104,14 +110,8 @@ export function InboxScreen({ token, onOpenTarget }: {
     onOpenTarget(item.target)
   }
 
-  const act = async (item: InboxItem, action: string) => {
-    const key = `${item.id}:${action}`
-    if (busy) return
-    setBusy(key); setError('')
-    try { await actAttention(token, item.id, action); await load(unreadOnly) }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-    finally { setBusy('') }
-  }
+  const reload = React.useCallback(() => load(unreadOnly), [load, unreadOnly])
+  const { busy, act, isBusy } = useAttentionActions(token, reload, setError)
 
   const now = Date.now()
   return <section className="inbox-view">
@@ -145,12 +145,28 @@ export function InboxScreen({ token, onOpenTarget }: {
         : <div className="inbox-body">
           <ul className="inbox-list">{items.map(item => {
             const actionable = item.requires_action && item.status === 'open'
+            // A Master decision carries a real question with a bounded answer.
+            // The header renders its full form; the Inbox is where it is meant
+            // to be *answered*, so it must not degrade to an Open button here
+            // (#158: actionable affordances live inside the Inbox entry).
+            if (item.kind === 'master_decision' && item.decision) {
+              return <li key={item.id} className={`inbox-item ${item.read ? 'is-read' : 'is-unread'} severity-${item.severity} is-decision`}>
+                <MasterDecisionCard
+                  token={token}
+                  decision={item.decision}
+                  onChanged={reload}
+                  onOpenJob={(jobId, engine) => { void markRead(item, true); onOpenTarget({ view: 'task', job_id: jobId, engine }) }}
+                  onOpenMaster={originMessageId => { void markRead(item, true); onOpenTarget({ view: 'master', origin_message_id: originMessageId ?? undefined }) }}
+                />
+              </li>
+            }
             return <li key={item.id} className={`inbox-item ${item.read ? 'is-read' : 'is-unread'} severity-${item.severity}`}>
               <button type="button" className="inbox-entry" onClick={() => open(item)} title={item.created_at}>
                 <span className="inbox-dot" aria-hidden="true" />
                 <span className="inbox-entry-head">
                   <span className="inbox-kind">{labelForKind(item.kind)}</span>
-                  <span className="inbox-severity">{SEVERITY_LABEL[item.severity] || 'Update'}</span>
+                  {/* A client_error's kind and severity are the same word; say it once. */}
+                  {severityLabel(item) && <span className="inbox-severity">{severityLabel(item)}</span>}
                   <span className="inbox-when">{inboxWhen(item.created_at, now)}</span>
                 </span>
                 <strong className="inbox-title">{item.title}</strong>
@@ -159,7 +175,7 @@ export function InboxScreen({ token, onOpenTarget }: {
               <div className="inbox-item-actions">
                 {actionable && item.inline_ok && item.actions.map(action =>
                   <button type="button" key={action} disabled={!!busy} className={action === 'approve' ? 'inbox-approve' : ''} onClick={() => void act(item, action)}>
-                    {busy === `${item.id}:${action}` ? 'Working…' : action.charAt(0).toUpperCase() + action.slice(1)}
+                    {actionLabel(action, isBusy(item, action))}
                   </button>)}
                 {actionable && !item.inline_ok && <button type="button" onClick={() => open(item)}>Open</button>}
                 <button type="button" className="inbox-read-toggle" onClick={() => void markRead(item, !item.read)}>

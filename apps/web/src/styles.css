@@ -107,8 +107,9 @@
 	--toast-top: calc(var(--topbar-h) + var(--space-4) + env(safe-area-inset-top));
 	--z-master-popup-scrim: 58;
 	--z-master-popup: 59;
-	/* Notifications sit under toasts (an error toast must never be buried) and
-	   above the Master popup, which is a corner trigger the sheet can cover. */
+	/* Notifications sit under toasts - an error toast must never be buried - and
+	   in the same band as the Master popup, which they cannot both occupy at
+	   once (opening either closes the other by outside-click). */
 	--z-attention-popover: 59;
 	--z-toast: 60;
 	--attention-width: 24rem;
@@ -16158,7 +16159,6 @@ button.moodboard-add-method:hover {
 .inbox-list li:last-child { border-bottom: 0; }
 .inbox-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--space-3); border-bottom: 1px solid var(--ui-stroke-tertiary); border-left: var(--space-1) solid transparent; padding-right: var(--space-5); transition: background var(--t-fast) var(--ease); }
 .inbox-item:hover { background: var(--ui-row-hover-background); }
-.inbox-item.is-read { border-left-color: transparent; }
 .inbox-item.is-read .inbox-title { font-weight: 500; color: var(--ui-text-secondary); }
 .inbox-item.is-unread .inbox-title { font-weight: 650; }
 .inbox-item.severity-error { border-left-color: var(--ui-danger); }
@@ -16166,7 +16166,12 @@ button.moodboard-add-method:hover {
 .inbox-item.severity-success { border-left-color: var(--ui-success); }
 .inbox-item.severity-action { border-left-color: var(--ui-accent); }
 .inbox-item.severity-info { border-left-color: var(--ui-stroke-secondary); }
+/* Read rows keep the accent's *position* but drop its voice, so the column stays
+   aligned and only unread work carries colour. Last, so it wins over the
+   severity rules above. */
 .inbox-item.is-read { border-left-color: color-mix(in srgb, var(--ui-stroke-secondary) 60%, transparent); }
+/* A Master decision brings its own card chrome; the row is only its container. */
+.inbox-item.is-decision { grid-template-columns: minmax(0, 1fr); padding: var(--space-4) var(--space-5); }
 .inbox-entry { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); width: 100%; border: 0; padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5); background: transparent; color: var(--ui-text-primary); text-align: left; cursor: pointer; }
 /* The unread dot is the only "new" signal - no bold-everything, no red count
    repeated per row. It keeps its space when read so rows never shift. */

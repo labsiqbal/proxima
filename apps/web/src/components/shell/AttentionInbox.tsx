@@ -1,6 +1,7 @@
 import React from 'react'
-import { actAttention, getAttention, type AttentionItem } from '../../api/master'
+import { getAttention, type AttentionItem } from '../../api/master'
 import { dismissAttention } from '../../api/inbox'
+import { actionLabel, labelForKind, useAttentionActions } from '../../lib/notifications'
 import { formatRunAge, runStatusLabel } from '../../lib/runProjection'
 import { MasterDecisionCard } from '../master/MasterDecisionCard'
 
@@ -9,13 +10,7 @@ import { MasterDecisionCard } from '../master/MasterDecisionCard'
 // dismissing it, acting on it - marks it read so it leaves the header. Nothing
 // is destroyed: the same row keeps its status, its actions and its full detail
 // in the Inbox destination, which is one click away in the footer.
-export const labelForKind = (kind: string) => ({
-  job_review: 'Review', job_diff: 'Changes', satpam_restart: 'Watchdog', script_trust: 'Script',
-  permission_job: 'Permission', master_decision: 'Master', master_budget: 'Master budget', settings_confirm: 'Settings',
-  container_ops_migration: 'Ops migration', task_outcome: 'Task',
-}[kind] || 'Attention')
-
-export const helperForItem = (item: AttentionItem) => {
+const helperForItem = (item: AttentionItem) => {
   if (item.kind === 'container_ops_migration') return 'Inspect Ops migration'
   if (item.run_projection) {
     return `${runStatusLabel(item.run_projection.status)} · ${formatRunAge(item.run_projection, item.created_at)}`
@@ -26,7 +21,7 @@ export const helperForItem = (item: AttentionItem) => {
 // The header shows the diagnosis only. The instruction that follows it is a
 // second paragraph in the same body, and the Inbox is where it is read in full -
 // a popover row that reflows into a paragraph stops being scannable.
-export const reasonForItem = (item: AttentionItem) => {
+const reasonForItem = (item: AttentionItem) => {
   if (typeof item.body === 'string' && item.body) return item.body.split('\n\n')[0]
   return item.kind === 'container_ops_migration' && typeof item.target.reason === 'string'
     ? item.target.reason
@@ -42,7 +37,6 @@ export function AttentionInbox({ token, onOpenTarget, onOpenInbox }: {
   const [count, setCount] = React.useState(0)
   const [open, setOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
-  const [busy, setBusy] = React.useState('')
   const [error, setError] = React.useState('')
   const root = React.useRef<HTMLDivElement>(null)
 
@@ -77,14 +71,7 @@ export function AttentionInbox({ token, onOpenTarget, onOpenInbox }: {
     catch (err) { setError(err instanceof Error ? err.message : String(err)); await load() }
   }, [token, load])
 
-  const act = async (item: AttentionItem, action: string) => {
-    const key = `${item.id}:${action}`
-    if (busy) return
-    setBusy(key); setError('')
-    try { await actAttention(token, item.id, action); await load() }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-    finally { setBusy('') }
-  }
+  const { busy, act, isBusy } = useAttentionActions(token, load, setError)
   const go = (item: AttentionItem) => {
     setOpen(false)
     void handled(item)
@@ -132,7 +119,7 @@ export function AttentionInbox({ token, onOpenTarget, onOpenInbox }: {
               <>
                 <button type="button" className="attention-main" onClick={() => go(item)}><span>{labelForKind(item.kind)}</span><strong>{item.title}</strong>{reasonForItem(item) && <small className="attention-reason">{reasonForItem(item)}</small>}<small>{helperForItem(item)}</small></button>
                 <div className="attention-actions">
-                  {item.inline_ok && item.actions.length > 0 && item.actions.map(action => <button type="button" key={action} disabled={!!busy} className={action === 'approve' ? 'attention-approve' : ''} onClick={() => void act(item, action)}>{busy === `${item.id}:${action}` ? 'Working…' : action.charAt(0).toUpperCase() + action.slice(1)}</button>)}
+                  {item.inline_ok && item.actions.length > 0 && item.actions.map(action => <button type="button" key={action} disabled={!!busy} className={action === 'approve' ? 'attention-approve' : ''} onClick={() => void act(item, action)}>{actionLabel(action, isBusy(item, action))}</button>)}
                   <button type="button" className="attention-dismiss" onClick={() => void handled(item)}>Dismiss</button>
                 </div>
               </>
@@ -140,7 +127,11 @@ export function AttentionInbox({ token, onOpenTarget, onOpenInbox }: {
           </li>)}</ul>}
       <footer className="attention-foot">
         <button type="button" className="text-button" onClick={() => { setOpen(false); onOpenInbox() }}>Open Inbox</button>
-        <small>Dismissed notifications stay in the Inbox.</small>
+        {/* The badge counts every unread row; the popover is bounded. Say so
+            rather than letting the two disagree in silence. */}
+        <small>{count > items.length
+          ? `Showing ${items.length} of ${count} unread.`
+          : 'Dismissed notifications stay in the Inbox.'}</small>
       </footer>
     </section>}
   </div>

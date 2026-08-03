@@ -8,6 +8,7 @@ import {
   noteApiSuccess,
   reportApiFailure,
   reportAppError,
+  setErrorArchive,
   subscribeAppErrors,
 } from './errorSurface'
 
@@ -177,5 +178,41 @@ describe('errorSurface', () => {
     dispatchError(new Error('after uninstall'))
     dispatchRejection(new Error('after uninstall too'))
     expect(appErrorSnapshot()).toHaveLength(0)
+  })
+})
+
+describe('errors are archived into the Inbox (#158)', () => {
+  beforeEach(() => { clearAppErrors(); setErrorArchive(null) })
+
+  it('files a new failure once, and never a repeat of it', () => {
+    const filed: string[] = []
+    setErrorArchive(entry => { filed.push(entry.key) })
+
+    reportAppError('error', new Error('exploded'))
+    reportAppError('error', new Error('exploded'))
+
+    // The toast collapses repeats into one row with a count; the ledger keys on
+    // the same identity, so a render loop must not become a wall of rows.
+    expect(filed).toHaveLength(1)
+    expect(appErrorSnapshot()[0].count).toBe(2)
+  })
+
+  it('keeps the toast when filing throws', () => {
+    setErrorArchive(() => { throw new Error('inbox unreachable') })
+
+    reportAppError('error', new Error('still visible'))
+
+    expect(appErrorSnapshot()).toHaveLength(1)
+  })
+
+  it('files nothing once the archive is torn down', () => {
+    const filed: string[] = []
+    setErrorArchive(entry => { filed.push(entry.key) })
+    setErrorArchive(null)
+
+    reportAppError('error', new Error('after logout'))
+
+    expect(filed).toHaveLength(0)
+    expect(appErrorSnapshot()).toHaveLength(1)
   })
 })

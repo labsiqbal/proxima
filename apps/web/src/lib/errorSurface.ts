@@ -117,6 +117,23 @@ const buildDetail = (cause: unknown, message: string): string => {
   return [head, ...frames].join('\n')
 }
 
+/**
+ * Where a toast goes to be remembered (#158). The toast itself is ephemeral by
+ * design, but its diagnostic is exactly what the Inbox exists to keep, so a
+ * *new* failure is also filed there. Repeats are not: they already collapse
+ * into one toast, and the ledger keys on the same identity.
+ *
+ * Installed by the app once a session token exists; unset means "nowhere to
+ * file it", which is the correct state on the auth screen.
+ */
+let archive: ((entry: Omit<AppErrorEntry, 'id' | 'count'>) => void) | null = null
+
+export function setErrorArchive(
+  sink: ((entry: Omit<AppErrorEntry, 'id' | 'count'>) => void) | null,
+): void {
+  archive = sink
+}
+
 function push(entry: Omit<AppErrorEntry, 'id' | 'count'>): void {
   if (unloading) return
   const existing = entries.find(item => item.key === entry.key)
@@ -129,6 +146,9 @@ function push(entry: Omit<AppErrorEntry, 'id' | 'count'>): void {
   // Newest failures win: the one that just broke is the one worth reading.
   entries = next.slice(-APP_ERROR_LIMIT)
   emit()
+  // After emit, and never allowed to throw: filing the record must not be able
+  // to break the surface that reports breakage.
+  try { archive?.(entry) } catch { /* the toast is the fallback */ }
 }
 
 /**
