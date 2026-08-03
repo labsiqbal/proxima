@@ -187,6 +187,15 @@
 	--brand-mark-size-lg: 56px;
 	--brand-mark-orbit-stroke: 2;
 	--brand-mark-hairline: 1px;
+	/* Collapsed sidebar rail (#153): one tile footprint for everything that
+	   stays in it - the project affordance, every nav destination, the update
+	   pill - and one gutter used as both the side margin and the gap between
+	   tiles, so the rail is an evenly spaced column. The width is derived from
+	   the two, so the column and its tiles can never drift apart. Fixed px, like
+	   the tool rail opposite it: both rails hold fixed-size icons. */
+	--rail-tile-size: 36px;
+	--rail-gutter: var(--space-2);
+	--rail-w: calc(var(--rail-tile-size) + (2 * var(--rail-gutter)));
 	--ui-code-bg: #f1f3f5;
 	--ui-code-fg: #1f2937;
 	--ui-scrim: rgba(15, 23, 42, 0.24);
@@ -320,7 +329,7 @@ button:disabled {
 	border-radius: var(--radius-md);
 	background: var(--ui-surface-subtle);
 }
-.sidebar-work-context > span {
+.sidebar-work-eyebrow {
 	color: var(--ui-text-tertiary);
 	font-size: var(--text-2xs);
 	font-weight: 700;
@@ -2306,24 +2315,67 @@ button:disabled {
 	.app-shell.left-rail .resize-left {
 		display: none;
 	}
-	/* Sidebar collapsed to a slim icon rail (stays visible & clickable). */
+	/* Sidebar collapsed to a slim icon rail (stays visible & clickable).
+	   The rail is one column of equal tiles: project identity first, then the
+	   destinations. Its gutter is the token the width is derived from, so the
+	   tiles are always centred. */
 	.app-shell.left-rail .sidebar-inner {
-		padding: 12px 7px;
+		padding: var(--space-3) var(--rail-gutter);
 	}
 	.app-shell.left-rail .sidebar-head {
 		justify-content: center;
 	}
+	/* Nothing in the rail may wrap: every label steps aside (the nav labels come
+	   back as hover tooltips, the project name as the tile's title + popover),
+	   and the work-context card drops its chrome so the project tile is not a
+	   box inside a box. */
 	.app-shell.left-rail .brand-row strong,
 	.app-shell.left-rail .eyebrow,
+	.app-shell.left-rail .sidebar-work-eyebrow,
+	.app-shell.left-rail .project-switcher-name,
+	.app-shell.left-rail .project-switcher-caret,
+	.app-shell.left-rail .sidebar-update-label,
 	.app-shell.left-rail .group-toggle,
 	.app-shell.left-rail .session-row {
 		display: none;
 	}
-	.app-shell.left-rail .nav-item {
-		justify-content: center;
+	.app-shell.left-rail .sidebar-work-context {
+		justify-items: center;
+		gap: 0;
+		border: 0;
 		padding: 0;
-		height: 42px;
+		background: transparent;
+	}
+	.app-shell.left-rail .project-switcher-initial {
+		display: block;
+	}
+	/* One footprint for every tile in the rail, active or not: the fill changes,
+	   the geometry never does. Same square-and-radius-sm language as the tool
+	   rail on the opposite edge, and the same shape a nav row already has when
+	   the sidebar is expanded. */
+	.app-shell.left-rail .nav-item,
+	.app-shell.left-rail .sidebar-work-context .project-switcher-btn,
+	.app-shell.left-rail .sidebar-update-pill {
+		justify-content: center;
+		gap: 0;
+		width: var(--rail-tile-size);
+		height: var(--rail-tile-size);
+		margin-inline: auto;
+		padding: 0;
+		border-radius: var(--radius-sm);
+	}
+	/* One gutter vertically as well as horizontally, so the rail reads as an
+	   evenly spaced column rather than two differently packed groups. The
+	   group's 2px inset belongs to a separator this rail does not draw. */
+	.app-shell.left-rail .nav-group {
+		gap: var(--rail-gutter);
+		padding-top: 0;
+	}
+	.app-shell.left-rail .nav-item {
 		position: relative;
+	}
+	.app-shell.left-rail .sidebar-update-pill {
+		margin-block: 0;
 	}
 	/* Collapsed rail: the hidden label returns as a hover tooltip. Premium reveal —
      delay-in / quick-out, slide + scale + blur from the icon, spring settle (§5.6). */
@@ -3636,6 +3688,20 @@ button:disabled {
 .project-switcher-btn:disabled {
 	opacity: 0.55;
 	cursor: default;
+}
+/* The compact form of the switcher: one identifying letter, shown only where a
+   text pill cannot fit (the collapsed rail). The full name stays one hover
+   (title) or one click (popover) away. */
+.project-switcher-initial {
+	display: none;
+	font-size: var(--text-sm);
+	font-weight: 700;
+	line-height: 1;
+	color: var(--ui-text-primary);
+}
+.project-switcher-btn:hover:not(:disabled) .project-switcher-initial,
+.project-switcher-btn.active .project-switcher-initial {
+	color: var(--ui-accent);
 }
 .project-switcher-name {
 	min-width: 0;

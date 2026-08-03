@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { renameProject } from '../../api/projects'
 import { promptDialog } from '../ui/Dialog'
-import { ProjectSwitcher } from './ProjectSwitcher'
+import { ProjectSwitcher, firstLetter } from './ProjectSwitcher'
 
 vi.mock('../../api/projects', () => ({
   renameProject: vi.fn(),
@@ -34,6 +34,43 @@ describe('ProjectSwitcher', () => {
     const trigger = screen.getByRole('button', { name: 'Active project: Demo' })
     expect(trigger).toHaveTextContent('Demo')
     expect(trigger.querySelector('.project-switcher-caret')).toBeInTheDocument()
+  })
+
+  it('carries a compact initial for the collapsed rail without losing the full name', () => {
+    render(
+      <ProjectSwitcher
+        projects={projects}
+        activeProject={projects[0]}
+        onSelectProject={vi.fn()}
+      />,
+    )
+    // The rail hides the name and shows this letter (#153): never an
+    // over-truncated "D…" pill. The full name stays on title/aria-label (hover)
+    // and in the popover, so nothing is lost when the text is hidden.
+    const trigger = screen.getByRole('button', { name: 'Active project: Demo' })
+    const initial = trigger.querySelector('.project-switcher-initial')
+    expect(initial).toHaveTextContent('D')
+    expect(initial).toHaveAttribute('aria-hidden', 'true')
+    expect(trigger).toHaveAttribute('title', 'Demo')
+  })
+
+  it('keeps the initial neutral when no project is active', () => {
+    render(
+      <ProjectSwitcher projects={projects} activeProject={null} onSelectProject={vi.fn()} />,
+    )
+    // "Select project" must not become an "S" tile naming a project that does
+    // not exist.
+    const trigger = screen.getByRole('button', { name: 'Active project: Select project' })
+    expect(trigger.querySelector('.project-switcher-initial')).toHaveTextContent('·')
+  })
+
+  it('takes the first letter or digit of a name, code point safe', () => {
+    expect(firstLetter('minarflow')).toBe('M')
+    expect(firstLetter('(internal) atlas')).toBe('I')
+    expect(firstLetter('2fa rework')).toBe('2')
+    expect(firstLetter('🚀 launch')).toBe('L')
+    expect(firstLetter('')).toBe('·')
+    expect(firstLetter(null)).toBe('·')
   })
 
   it('switches the global active project from the list', async () => {

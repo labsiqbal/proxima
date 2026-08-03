@@ -213,7 +213,9 @@ export function AppShell(props: {
   // Delegate keeps its three global destinations visible. The Work preference to
   // collapse its navigation never hides this bounded navigation surface.
   const effectiveLeftCollapsed = !delegateMode && leftCollapsed
-  const shellStyle = { ['--left-w']: effectiveLeftCollapsed ? '58px' : `${leftWidth}px` } as React.CSSProperties
+  // Collapsed, the sidebar's width is the rail token (tile + two gutters), so the
+  // column and the tiles inside it can never drift apart. See --rail-w.
+  const shellStyle = { ['--left-w']: effectiveLeftCollapsed ? 'var(--rail-w)' : `${leftWidth}px` } as React.CSSProperties
 
   // Account menu "Projects" opens Settings → Projects manage (not a primary nav destination).
   const openProjectsManage = () => {

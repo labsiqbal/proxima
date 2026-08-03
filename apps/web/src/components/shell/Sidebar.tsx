@@ -67,7 +67,10 @@ export function Sidebar(props: {
   return <div className={`sidebar-inner${props.delegate ? ' delegate-sidebar' : ''}`}>
     <div className="sidebar-head"><div className="brand-row"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div><button className="icon-button mobile-only" onClick={props.onClose} aria-label="Close menu"><IconClose size={18} /></button></div>
     {!props.delegate && <div className="sidebar-work-context">
-      <span>Work project</span>
+      {/* Collapsed to a rail this label has no room to sit on one line, so it
+          steps aside there (styles.css) rather than wrapping into two cramped
+          lines - the switcher tile carries the meaning via its title/popover. */}
+      <span className="sidebar-work-eyebrow">Work project</span>
       <ProjectSwitcher projects={props.projects} activeProject={props.activeProject} onSelectProject={props.onSelectProject} token={props.token} onProjectRenamed={props.onProjectRenamed} locked={props.projectLocked} lockedReason={props.projectLockedReason} />
     </div>}
 
@@ -80,7 +83,9 @@ export function Sidebar(props: {
     </nav>
     {!props.delegate && <SessionGroups {...props} />}
 
-    {!props.delegate && props.updateVersion && props.onUpdateClick && <button type="button" className="sidebar-update-pill" onClick={() => { props.onUpdateClick?.(); props.onClose() }}><span className="update-dot" aria-hidden="true" />Update available · v{props.updateVersion}</button>}
+    {/* The label steps aside in the collapsed rail too (title keeps it reachable),
+        so the pill becomes another tile instead of wrapping to three lines. */}
+    {!props.delegate && props.updateVersion && props.onUpdateClick && <button type="button" className="sidebar-update-pill" title={`Update available · v${props.updateVersion}`} onClick={() => { props.onUpdateClick?.(); props.onClose() }}><span className="update-dot" aria-hidden="true" /><span className="sidebar-update-label">Update available · v{props.updateVersion}</span></button>}
     {!props.delegate && <div className="sidebar-user">
       <button className="su-id" onClick={() => setAcctOpen(value => !value)} aria-expanded={acctOpen}><span className="avatar">{props.user.username[0]?.toUpperCase()}</span><div><strong>{props.user.username}</strong><small>{props.activeProfile?.name || ''}</small></div><span className={`chevron ${acctOpen ? 'open' : ''}`}>▸</span></button>
       {acctOpen && <div className="su-menu"><button className="nav-item" onClick={() => go('profiles')}><span className="nav-icon"><IconAgents /></span><strong>Agents</strong></button><button className="nav-item" onClick={() => go('settings')}><span className="nav-icon"><IconGear /></span><strong>Settings</strong></button><button className="nav-item su-logout" onClick={props.onLogout}><span className="nav-icon"><IconLogout /></span><strong>Log out</strong></button></div>}

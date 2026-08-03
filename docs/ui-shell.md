@@ -218,6 +218,36 @@ Schedule inputs mirror each workflow's declared definitions, validate required v
 
 Every schedule row offers **Run now**, which fires it immediately and opens the task it spawned. It exists so a schedule can be trusted before it is left alone: the run goes through the scheduler's own spawn, so what executes is what the cron would have executed — same recipe, project, agent profile and stored input — rather than a lookalike. A manual run deliberately does **not** claim the scheduler's minute, and it works on a disabled schedule, since `enabled` governs the tick and trying a schedule out is exactly when it is still switched off. The stored overlap policy is honoured but never silently: a `skip` schedule with a run already in flight reports that instead of appearing to do nothing.
 
+## Collapsed left rail
+
+Collapsing the Work sidebar (top-bar toggle, persisted locally) turns it into a
+**rail**: one column of equal tiles and nothing else. Its width is not a chosen
+number — it is derived from the tile (`--rail-w = --rail-tile-size + 2 ×
+--rail-gutter`), and the same gutter is used between tiles, so the column is
+evenly spaced by construction and the shell can never disagree with what is
+inside it. Rail tiles are square and use the same radius as the tool rail on the
+opposite edge, and as a nav row when the sidebar is expanded: collapsing squares
+the footprint, it does not restyle the shape. Active and inactive tiles are the
+same size and shape — only the fill changes.
+
+Nothing in the rail is allowed to wrap, so every label steps aside and keeps a
+second way to be read (#153):
+
+- the **Work project** eyebrow is dropped (there is no honest one-line form of it
+  at rail width),
+- the **project switcher** becomes a tile carrying the project's first letter or
+  digit, with the full name on the tile's title (hover) and in its popover, which
+  still lists every project by name and slug. It is never a name truncated to a
+  meaningless letter-and-ellipsis pill. With no active project the tile shows a
+  neutral dot rather than a letter borrowed from "Select project",
+- **destination labels** return as the hover tooltip beside their tile,
+- the **update pill** keeps its dot and moves its text to a title,
+- recent chats and their group headers are hidden entirely; expanding brings them
+  back.
+
+Nothing else changes: the same destinations, the same project switching, the same
+accessible names. The expanded sidebar is untouched by the rail's rules.
+
 ## Right tool rail — Terminal, Files, Preview
 
 Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, scoped to the active project when Project context is available. Browsing left the rail for a destination in ADR-0040 and came back to it in #145: the destination is Artifacts (ADR-0043), a gallery of produced work, while "where is that file on disk" is the utility you open next to it. Opening one lands in that destination's main window (#146).

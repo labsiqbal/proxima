@@ -4,6 +4,17 @@ import { renameProject } from '../../api/projects'
 import { promptDialog } from '../ui/Dialog'
 import { IconChevronRight, IconPencil } from './icons'
 
+/** First letter or digit of a project name, for the rail's compact tile.
+ *
+ * Walks code points rather than UTF-16 units so an astral first character is
+ * never halved, and skips anything that is not a letter or digit so a name that
+ * opens with "(", "@" or an emoji still shows a readable glyph. Falls back to a
+ * neutral dot: with no project name there is nothing honest to abbreviate. */
+export function firstLetter(name: string | null | undefined): string {
+  const glyph = Array.from(name || '').find(character => /\p{L}|\p{N}/u.test(character))
+  return glyph ? glyph.toUpperCase() : '·'
+}
+
 /** Global active-project control for the shell top bar (text + chevron, not icon-only). */
 export function ProjectSwitcher({
   projects,
@@ -56,6 +67,11 @@ export function ProjectSwitcher({
   }, [locked])
 
   const label = activeProject?.name || (projects.length ? 'Select project' : 'No projects')
+  // Compact form for the collapsed rail (#153): one identifying letter instead
+  // of a name truncated to a meaningless "m…". Only a real project earns a
+  // letter - "Select project" would render a misleading "S" - so the empty
+  // state keeps a neutral dot and the label lives on the title/popover.
+  const initial = firstLetter(activeProject?.name)
   const disabled = projects.length === 0 || locked
   const title = locked ? lockedReason : label
   const canRename = Boolean(token && onProjectRenamed)
@@ -96,6 +112,7 @@ export function ProjectSwitcher({
         aria-label={locked ? `Active project: ${label} (locked)` : `Active project: ${label}`}
         title={title}
       >
+        <span className="project-switcher-initial" aria-hidden="true">{initial}</span>
         <span className="project-switcher-name">{label}</span>
         <span className="project-switcher-caret" aria-hidden="true">
           <IconChevronRight size={12} />
