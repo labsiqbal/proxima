@@ -600,6 +600,33 @@ Primary screens (Chat, Tasks, Workflows, Artifacts, the task workspace, the shel
 
 ## Responsive and accessibility behavior
 
+### Phone width (~390px)
+
+The shell's bar row is a **grid**, not an overlay stack: the mobile top bar takes
+one cell and the status cluster (Running + Needs-you) takes an auto-sized cell
+beside it, collapsing to nothing when both are empty. As a fixed overlay the
+cluster covered Search and, with the drawer open, the drawer's own Close button
+(#154). The rest of the phone contract:
+
+- **Tool dock** — the panel is a sheet flush against the rail, and the surface
+  behind it reserves only the rail's width. Reserving the panel's width (74% of
+  the pane, the desktop behaviour) squeezed the screen behind into a
+  one-word-per-line strip. The panel's tab row scrolls so its Close button keeps
+  its place inside the panel.
+- **Artifacts** — the head wraps: title and scope control on one line, the
+  All / Deliverables / History tabs on their own scrolling line instead of being
+  clipped at the screen edge. A document opens **inside** the main window, with
+  the top bar and tool rail still there; the full-screen sheet treatment belongs
+  to the Wiki destination, which shares the same `WikiNote` component.
+- **Master desk** — keeps the sub-900px single-document stack (#152); the one
+  control whose value is a sentence (Backing runner) takes the full row rather
+  than truncating, and the popup's thread fills its sheet instead of leaving the
+  composer floating in dead space.
+- **Composer** — clears the home indicator, and the floating Master trigger
+  clears the composer (see [Master](#master)).
+
+### General
+
 The left navigation width persists locally in both modes. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses the same focus-managed drawer in both modes; Work's tool rail pins to the right edge, while Delegate keeps its global Master, Tasks, and Artifacts navigation. The Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics in Work. Escape dismisses transient Work overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
 
 The setup and returning-owner password gates each expose exactly one `main` landmark.

@@ -2043,10 +2043,35 @@ button:disabled {
 		overflow-x: hidden;
 		max-width: 100vw;
 	}
-	.app-shell {
-		display: flex;
-		flex-direction: column;
+	/* Phone shell: one bar row, one content row. The status cluster gets its own
+	   auto-sized cell in the bar instead of floating over it — as an overlay it
+	   sat on top of Search and, with the drawer open, on top of the drawer's own
+	   Close button (#154). The mode classes are matched here so their desktop
+	   column templates cannot outrank this one. */
+	.app-shell,
+	.app-shell.delegate-mode,
+	.app-shell.project-tools-suppressed {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-rows: auto minmax(0, 1fr);
 		height: 100dvh;
+	}
+	.app-shell > .mobile-topbar {
+		grid-column: 1;
+		grid-row: 1;
+	}
+	.app-shell > .header-status-cluster {
+		grid-column: 2;
+		grid-row: 1;
+	}
+	/* The mode variants each pin the pane to their own desktop column, so they are
+	   matched here too — otherwise the pane lands in the status cell and squeezes
+	   the bar to zero width. */
+	.app-shell > .main-pane,
+	.app-shell.delegate-mode > .main-pane,
+	.app-shell.project-tools-suppressed > .main-pane {
+		grid-column: 1 / -1;
+		grid-row: 2;
 	}
 	.mobile-topbar {
 		display: flex;
@@ -2120,7 +2145,27 @@ button:disabled {
 	.tool-panel {
 		position: fixed;
 		top: var(--mobile-topbar-h);
-		width: min(var(--toolpanel-w), calc(100vw - var(--toolrail-w) - var(--space-4)));
+		/* Flush against the rail: on a phone the panel is the screen, and the
+		   sliver of surface it used to leave read as a rendering slip. */
+		width: calc(100vw - var(--toolrail-w));
+	}
+	/* Three labelled tabs are wider than a phone-width panel, and they were
+	   pushing the panel's own Close button out past its right edge onto the rail
+	   (#154). The row scrolls; Close keeps its place. */
+	.tool-panel-tabs {
+		min-width: 0;
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+	.tool-panel-tabs::-webkit-scrollbar {
+		display: none;
+	}
+	.tool-panel-tab {
+		flex: 0 0 auto;
+		padding-inline: var(--space-2);
+	}
+	.tool-panel-head > .icon-button {
+		flex: 0 0 auto;
 	}
 	.thread {
 		padding: 18px 14px 48px;
@@ -2131,7 +2176,8 @@ button:disabled {
 	}
 	.composer {
 		width: calc(100% - 18px);
-		margin-bottom: 9px;
+		/* Clear the home indicator / gesture bar, or Send sits under it. */
+		margin-bottom: calc(9px + env(safe-area-inset-bottom));
 		border-radius: var(--radius-lg);
 	}
 }
@@ -4856,7 +4902,11 @@ button:disabled {
 	.wiki-placeholder {
 		display: none;
 	}
-	.wiki-note {
+	/* Scoped to the Wiki destination, where the note is a sheet over the tree.
+	   `WikiNote` is also the Artifacts document viewer, and unscoped this made a
+	   markdown artifact a viewport-wide overlay that covered the shell's own top
+	   bar and tool rail — the "← Gallery" button was the only way back (#154). */
+	.wiki-main .wiki-note {
 		position: fixed;
 		inset: 0;
 		z-index: 50;
@@ -5847,6 +5897,43 @@ div.result-media {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-6);
+}
+/* Phone: the head stops trying to be one row. The title keeps the scope control
+   beside it, the tabs take their own full-width line, and that line scrolls
+   rather than clipping "History" off the edge of the screen (#154). */
+@media (max-width: 767px) {
+	.artifacts-head {
+		flex-wrap: wrap;
+		gap: var(--space-2) var(--space-3);
+		padding: var(--space-3) var(--space-4);
+	}
+	.artifacts-head > div:first-child {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.artifacts-head h1 {
+		margin: 0;
+	}
+	.artifacts-head-controls {
+		flex: 0 0 auto;
+	}
+	.artifacts-tabs {
+		order: 1;
+		flex: 1 0 100%;
+		overflow-x: auto;
+		scrollbar-width: none;
+		/* A tab never shrinks into an unreadable chip; the row scrolls instead. */
+		padding-bottom: var(--space-1);
+	}
+	.artifacts-tabs::-webkit-scrollbar {
+		display: none;
+	}
+	.artifacts-tabs button {
+		flex: 0 0 auto;
+	}
+	.artifacts-body {
+		padding: var(--space-4);
+	}
 }
 /* A document opened from the gallery takes the whole main window and holds the
    editor (#146). Both editors position themselves absolutely inside their pane,
@@ -15778,8 +15865,14 @@ button.moodboard-add-method:hover {
 	overflow: hidden;
 }
 .master-popup-conversation .master-thread {
+	/* The popup is its own scrollport at every width. The desk's narrow-width
+	   rule (#152) bounds the thread so the page can scroll around it; inside the
+	   popup that left the composer floating mid-panel with dead space under it
+	   on a phone (#154). */
+	flex: 1 1 auto;
 	min-height: 0;
 	max-height: none;
+	border-bottom: 0;
 	padding: var(--space-3);
 }
 .master-popup-conversation .master-empty {
@@ -16110,13 +16203,22 @@ button.moodboard-add-method:hover {
 	.toast-region.at-top-center {
 		top: calc(var(--mobile-topbar-h) + var(--space-2) + env(safe-area-inset-top));
 	}
+	/* In the bar's own row, not over it: the cluster carries the bar's chrome so
+	   the two read as one surface, and collapses to nothing when neither Running
+	   nor Attention has anything to say (both render null when empty). */
 	.header-status-cluster {
-		position: fixed;
-		top: calc((var(--mobile-topbar-h) - var(--attention-trigger-size)) / 2);
-		right: calc(var(--space-4) + var(--master-control-height));
-		/* Leave room for New chat + Search on the mobile topbar. */
+		position: static;
+		/* A grid item honours z-index even unpositioned: drop the desktop overlay
+		   rank so the open drawer covers the bar instead of the pill floating on
+		   top of the drawer's own Close button. */
+		z-index: auto;
 		max-width: min(42vw, 11rem);
+		border-bottom: 1px solid var(--ui-stroke-secondary);
+		background: var(--ui-surface-translucent, var(--ui-surface));
+		backdrop-filter: blur(var(--space-2));
+		padding-inline-end: var(--space-2);
 	}
+	.header-status-cluster:empty { display: none; }
 	.running-pill-full { display: none; }
 	.running-pill-short { display: inline; }
 	.mobile-context {
@@ -16136,6 +16238,11 @@ button.moodboard-add-method:hover {
 	.delegate-mobile-topbar { justify-content: center; }
 	.app-shell.delegate-mode .main-pane { padding-right: 0; }
 	.app-shell.project-tools-suppressed .main-pane { padding-right: 0; }
+	/* A tool panel is a full-height sheet on a phone, not a second column beside
+	   the surface. Reserving 74% of the pane for it squeezed the screen behind
+	   into a one-word-per-line strip (#154); here the rail keeps its lane and the
+	   panel simply overlays. */
+	.app-shell.tool-open > .main-pane { padding-right: var(--toolrail-w); }
 	.master-body { padding: var(--space-3); }
 	.master-capacity {
 		display: grid;
@@ -16172,7 +16279,16 @@ button.moodboard-add-method:hover {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr);
 	}
-	.master-controls { align-items: stretch; flex-direction: column; }
+	/* The head is a two-up grid from 900px down (#152). At phone width the one
+	   control whose value is a sentence — the backing runner — takes the whole
+	   row instead of truncating to "Claude Code (adapter does n…" (#154). The
+	   short controls stay paired, so the head does not become six stacked rows
+	   on an 844px-tall screen. */
+	/* The label is `display: contents`, so its select is the grid item. */
+	.master-controls .master-runner-label .ui-select {
+		grid-column: 1 / -1;
+		width: 100%;
+	}
 	/* Keep chip-row wrap on narrow viewports — do not force full-width grid stack. */
 	.master-examples { justify-content: center; }
 	.master-example-chip { max-width: min(14rem, 100%); }
