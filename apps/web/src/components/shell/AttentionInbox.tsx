@@ -10,12 +10,17 @@ import { MasterDecisionCard } from '../master/MasterDecisionCard'
 // dismissing it, acting on it - marks it read so it leaves the header. Nothing
 // is destroyed: the same row keeps its status, its actions and its full detail
 // in the Inbox destination, which is one click away in the footer.
-const helperForItem = (item: AttentionItem) => {
+/** Where clicking this row goes - and honestly, when it goes nowhere. */
+export const helperForItem = (item: AttentionItem) => {
   if (item.kind === 'container_ops_migration') return 'Inspect Ops migration'
   if (item.run_projection) {
     return `${runStatusLabel(item.run_projection.status)} · ${formatRunAge(item.run_projection, item.created_at)}`
   }
-  return 'Open linked workspace'
+  // A browser failure has no surface to open. Promising one is a small lie, and
+  // the row is still worth clicking: it clears the header and keeps the record.
+  const target = item.target || {}
+  const navigable = target.view || target.job_id != null || target.container_slug
+  return navigable ? 'Open linked workspace' : 'Keep in the Inbox'
 }
 
 // The header shows the diagnosis only. The instruction that follows it is a

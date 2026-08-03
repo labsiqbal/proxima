@@ -95,6 +95,22 @@ describe('Header notifications are ephemeral (#157/#158)', () => {
     expect(screen.queryByText(/Open the Task to read/)).not.toBeInTheDocument()
   })
 
+  it('does not promise a surface a browser failure cannot open', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getAttention).mockResolvedValue({
+      items: [{
+        ...budget, id: 'client-error:api', kind: 'client_error', target: {},
+        requires_action: false, severity: 'error', body: 'TypeError: undefined',
+      }],
+      count: 1,
+    } as never)
+    render(<AttentionInbox token="t" onOpenTarget={vi.fn()} onOpenInbox={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: /1 unread notification/ }))
+
+    expect(screen.getByText('Keep in the Inbox')).toBeInTheDocument()
+    expect(screen.queryByText('Open linked workspace')).not.toBeInTheDocument()
+  })
+
   // A pile of "your Task finished" must not paint the header red.
   it('keeps alarm chrome for work that needs a decision, not for news', async () => {
     vi.mocked(getAttention).mockResolvedValue({
