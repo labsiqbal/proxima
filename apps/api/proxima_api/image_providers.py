@@ -29,6 +29,7 @@ from typing import Any
 import httpx
 
 from . import higgsfield
+from . import media_providers
 
 
 class ImageProviderError(RuntimeError):
@@ -255,7 +256,7 @@ def generate(
         return _gen_http(
             provider, token,
             prompt=prompt, model=model, size=size, image_bytes=image_bytes, image_mime=image_mime,
-            base_url=(base_url or provider.default_base_url).rstrip("/"), timeout=timeout,
+            base_url=media_providers.normalize_base_url(base_url, provider.default_base_url), timeout=timeout,
         )
     if provider.kind == "higgsfield":
         try:
@@ -273,7 +274,7 @@ def generate(
     return _gen_http(
         provider, key,
         prompt=prompt, model=model, size=size, image_bytes=image_bytes, image_mime=image_mime,
-        base_url=(base_url or provider.default_base_url).rstrip("/"), timeout=timeout,
+        base_url=media_providers.normalize_base_url(base_url, provider.default_base_url), timeout=timeout,
     )
 
 
@@ -299,29 +300,11 @@ def test_connection(provider_id: str, key: str | None, *, base_url: str | None =
     if provider.kind == "higgsfield":
         hstatus = higgsfield.status()
         return {"ok": bool(hstatus.get("ready")), "detail": hstatus.get("detail") or "Higgsfield status unknown.", "higgsfield": hstatus}
-    if not key:
-        return {"ok": False, "detail": "Missing API key."}
-    base = (base_url or provider.default_base_url).rstrip("/")
     # Probe with a tiny request so we surface auth/format errors before a real
-    # generation. Most gateways return 400/401 quickly; 4xx here just tells us
-    # the endpoint is reachable and the key shape was accepted.
-    try:
-        with httpx.Client(timeout=20) as cx:
-            r = cx.get(f"{base}/models", headers={"Authorization": f"Bearer {key}"})
-            if r.status_code in (401, 403):
-                return {"ok": False, "detail": f"Key rejected ({r.status_code})."}
-            if r.status_code >= 500:
-                return {"ok": False, "detail": f"Endpoint error ({r.status_code})."}
-            n = 0
-            try:
-                n = len((r.json().get("data") or []))
-            except Exception:
-                pass
-            return {"ok": True, "detail": f"Endpoint reachable — {n} models listed." if n else "Endpoint reachable."}
-    except httpx.HTTPError as exc:
-        return {"ok": False, "detail": f"Network error: {exc}"}
-    except Exception as exc:
-        return {"ok": False, "detail": f"Unexpected: {exc}"}
+    # generation. Shared with video generation so the two cannot drift.
+    return media_providers.probe_models_endpoint(
+        base_url, key, default_base_url=provider.default_base_url
+    )
 
 
 # ── codex generation ───────────────────────────────────────────────────────
@@ -576,7 +559,11 @@ def _gen_http(provider, key, *, prompt, model, size, image_bytes, image_mime, ba
             with httpx.Client(timeout=timeout) as cx:
                 r = cx.post(f"{base_url}/images/generations", headers=headers, json=body)
         if r.status_code >= 400:
-            raise ImageProviderError(f"Endpoint error ({r.status_code}): {r.text[:300]}")
+            # An HTML answer means the base URL is wrong; the shared detail says so
+            # instead of pasting a rendered 404 page into the chat.
+            raise ImageProviderError(
+                f"Endpoint error ({r.status_code}): {media_providers.response_error_detail(r)}"
+            )
         d = (r.json().get("data") or [{}])[0]
         if d.get("b64_json"):
             return base64.b64decode(d["b64_json"])

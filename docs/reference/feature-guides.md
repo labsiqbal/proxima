@@ -5,9 +5,9 @@
 > Hermes / Pi) produces good output on the first try - even when the user gives minimal
 > direction.
 
-> **Current release:** image generation and Design Studio are always active (the
-> feature-flag system was removed in prune A2, #129). Video Studio is not a
-> product surface.
+> **Current release:** image generation, video generation, and Design Studio are
+> always active (the feature-flag system was removed in prune A2, #129). Video
+> Studio - the editable video project - is not a product surface.
 
 This doc defines **how those guides are written** (the authoring standard) and **how they
 are wired** (the registry). It is the source of truth for adding or upgrading a guide.

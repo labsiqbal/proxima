@@ -87,7 +87,9 @@ queue starter), `graph_context.py` (scoped Graphify adapter),
 `apprunner.py` + `preview_proxy.py` + `preview_output.py` (project generations,
 proxy, reconnectable supervisor client, and delta log protocol) with
 `preview_output_broker.py` as the per-app launch/output supervisor,
-`image_providers.py` (image backend registry),
+`image_providers.py` / `video_providers.py` (the media-provider family: image and
+video backend registries) over `media_providers.py` (shared base-URL join, endpoint
+probe, and error-message shaping),
 `auth_health.py` (cached background auth/readiness
 checks for the Home banner), `logging_config.py` (query-token redaction across
 Uvicorn HTTP and WebSocket handlers), `run_prompting.py` (prompt framing plus jailed,
@@ -119,8 +121,9 @@ The feature-flag system was removed (prune A2, #129): Design Studio, the graph
 workflow engine, repo-job worktrees, and the Master orchestrator are
 unconditional parts of the product. There is no `PROXIMA_FEATURE_*`
 configuration, no `features.py` registry, no web-side capability map, and
-`GET /api/config` no longer advertises a features payload. Video Studio and
-video generation are not product surfaces; existing media files—including video
+`GET /api/config` no longer advertises a features payload. *Video Studio* - the
+editable video project with a timeline - is not a product surface; video
+**generation** is (`/video`, #148), and existing media files—including video
 files—remain readable as ordinary artifacts.
 
 The graph workflow engine (ADR-0001) is the shipped authoring path; legacy
@@ -201,16 +204,24 @@ Active image generation is deliberately separate and chosen from Settings:
 + **Image generation:** Codex/ChatGPT OAuth, xAI OAuth via the Grok runner
   (`grok login` → `~/.grok/auth.json` or `$GROK_HOME/auth.json`), Higgsfield
   zero-credit CLI, or an OpenAI-compatible endpoint.
++ **Video generation:** an OpenAI-compatible video endpoint (`video_gen`, its own
+  settings row so it cannot disturb `image_gen`).
 
 The settings APIs store only provider/model/policy plus optional endpoint keys for
-OpenAI-compatible image endpoints; OAuth providers read existing local auth stores and
-never return tokens to the frontend.
+OpenAI-compatible image and video endpoints; OAuth providers read existing local auth
+stores and never return tokens to the frontend. Both media families share one base-URL
+rule: the stored value is the API **root** (no endpoint path) and the client appends
+`/images/generations`, `/videos/generations`, … itself.
 
-Main-chat image generation is **artifact-first**: `/image` / `/gambar` results appear
-as chat result cards and are saved under `artifacts/media/images/`. Studio bridge
-actions are omitted while the corresponding feature is disabled. Video Studio and
-video-provider modules were removed; rendered video files remain generic playable
-artifacts.
+Main-chat media generation is **artifact-first**: `/image` / `/gambar` results appear
+as chat result cards saved under `artifacts/media/images/`, and `/video` / `/klip`
+results under `artifacts/media/videos/`. Studio bridge actions are omitted while the
+corresponding feature is disabled. The old *Video Studio* (an editable video project
+with a timeline) stays removed - `/video` generates a clip, it does not restore an
+editor. Video generation is asynchronous at every provider, so `video_providers`
+submits a job and polls it (`POST {base}/videos/generations` → `{request_id}` with
+`GET {base}/videos/{id}`, falling back to the OpenAI Sora `POST {base}/videos` +
+`/content` shape on 404) inside the same background media run that `/image` uses.
 
 ## Schema bootstrap contract
 

@@ -212,7 +212,7 @@ export function TaskComposer({
 					placeholder="Describe the outcome you want…"
 					textareaLabel="Task brief"
 					promptModes={false}
-					generateKinds={["image", "design"]}
+					generateKinds={["image", "video", "design"]}
 					combinedActions
 					submitIconOnly
 					submitLabel="Start task"

@@ -12,6 +12,7 @@ from typing import Any
 from . import app_settings
 from . import higgsfield
 from . import image_providers
+from . import video_providers
 
 
 def resolve_image_gen(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -20,6 +21,25 @@ def resolve_image_gen(conn: sqlite3.Connection) -> dict[str, Any]:
     if cfg and isinstance(cfg, dict) and cfg.get("provider") in image_providers.IMAGE_PROVIDER_IDS:
         return cfg
     return {"provider": image_providers.DEFAULT_PROVIDER, "apiKey": None, "baseUrl": None, "model": None}
+
+
+def resolve_video_gen(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Active video provider config from Settings.
+
+    Unlike image generation there is no key-less fallback: video always needs an
+    endpoint + key, so an unconfigured install resolves to the openai-compatible
+    provider with its default base URL and no credentials.
+    """
+    cfg = app_settings.get_json(conn, app_settings.VIDEO_GEN_KEY)
+    if cfg and isinstance(cfg, dict) and cfg.get("provider") in video_providers.VIDEO_PROVIDER_IDS:
+        return cfg
+    spec = video_providers.get_provider(video_providers.DEFAULT_PROVIDER)
+    return {
+        "provider": spec.id,
+        "apiKey": None,
+        "baseUrl": spec.default_base_url or None,
+        "model": None,
+    }
 
 
 def resolve_higgsfield_settings(conn: sqlite3.Connection) -> dict[str, Any]:

@@ -38,6 +38,7 @@ COMMANDS: tuple[CommandDefinition, ...] = (
     CommandDefinition("/goal", "Autonomous goal loop — agent works across turns until done", "Session", "proxima"),
     CommandDefinition("/masterplan", "Turn a product idea into an execution-ready masterplan package", "Planning", "proxima", skill_id=MASTERPLAN_SKILL_ID),
     CommandDefinition("/image", "Generate an image with the selected image provider (Settings → Image generation)", "Media", "proxima"),
+    CommandDefinition("/video", "Generate a video with the selected video provider (Settings → Video generation)", "Media", "proxima"),
     CommandDefinition("/design", "Create a Design Studio draft from a brief", "Media", "proxima"),
     CommandDefinition("/model", "Open/select model via UI", "Runner", "ui-owned", "/model is managed by Proxima model picker, not raw chat."),
     CommandDefinition("/clear", "Terminal-only clear screen command", "Unavailable", "terminal-only", "/clear is terminal-only. Use /new or the Sessions sidebar in Proxima."),
@@ -48,6 +49,7 @@ ALIASES = {
     "/reset": "/new",
     "/runners": "/runner",
     "/gambar": "/image",
+    "/klip": "/video",
     "/image-studio": "/design",
     "/design-studio": "/design",
 }

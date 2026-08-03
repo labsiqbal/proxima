@@ -38,6 +38,13 @@ export const IconDesign = ({ size }: IconProps) => (
 	</Svg>
 );
 
+export const IconVideo = ({ size }: IconProps) => (
+	<Svg size={size}>
+		<rect x="3" y="6" width="12" height="12" rx="2.5" />
+		<path d="M15 10.5l5-3v9l-5-3z" />
+	</Svg>
+);
+
 export const IconNewChat = ({ size }: IconProps) => (
 	<Svg size={size}>
 		<path d="M20 11.5V17a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h5.5" />

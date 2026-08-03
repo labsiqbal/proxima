@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-196 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+199 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -14,7 +14,7 @@
 - [`routes/chat.py`](#routes-chat-py) - 25 endpoints
 - [`routes/containers.py`](#routes-containers-py) - 3 endpoints
 - [`routes/design.py`](#routes-design-py) - 8 endpoints
-- [`routes/files.py`](#routes-files-py) - 34 endpoints
+- [`routes/files.py`](#routes-files-py) - 37 endpoints
 - [`routes/graph.py`](#routes-graph-py) - 14 endpoints
 - [`routes/graphs.py`](#routes-graphs-py) - 2 endpoints
 - [`routes/master.py`](#routes-master-py) - 20 endpoints
@@ -152,6 +152,9 @@
 | PUT | `/api/settings/runs` | `set_run_settings` |  |
 | GET | `/api/settings/satpam` | `get_satpam_settings` | Satpam supervision thresholds (slice 12, T10): N consecutive |
 | PUT | `/api/settings/satpam` | `set_satpam_settings` |  |
+| GET | `/api/settings/video-gen` | `get_video_gen_settings` | The saved video-gen config + provider metadata (never the key itself). |
+| PUT | `/api/settings/video-gen` | `put_video_gen_settings` | Save the video-gen provider/model/key/baseUrl. An empty apiKey keeps the |
+| POST | `/api/settings/video-gen/test` | `test_video_gen` | Probe the configured video endpoint. Uses the submitted key/baseUrl |
 | GET | `/api/target-preview/{slug}/{area_kind}/{area_id}/{file_path:path}` | `project_target_preview` |  |
 
 
@@ -326,4 +329,4 @@
 
 
 ---
-_Generated 2026-08-02 20:13 UTC._
+_Generated 2026-08-03 07:39 UTC._

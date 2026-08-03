@@ -2,7 +2,8 @@ import { api } from './client'
 
 export type MediaCapabilities = Record<string, boolean>
 
-export type ImageProviderMeta = {
+/** Image and video generation are one provider family - same metadata shape. */
+export type MediaProviderMeta = {
   id: string
   displayName: string
   requiresKey: boolean
@@ -11,6 +12,8 @@ export type ImageProviderMeta = {
   defaultBaseUrl?: string
   capabilities?: MediaCapabilities
 }
+
+export type ImageProviderMeta = MediaProviderMeta
 
 export type CodexReady = { ready: boolean; detail: string; binary?: string }
 export type HiggsfieldStatus = {
@@ -24,23 +27,39 @@ export type HiggsfieldStatus = {
   workspace?: unknown
 }
 
-export type ImageGenSettings = {
+/** The settings row every media provider family shares (never carries the key). */
+export type MediaGenSettings = {
   provider: string
   model?: string | null
   baseUrl?: string | null
   hasApiKey: boolean
-  providers: ImageProviderMeta[]
+  providers: MediaProviderMeta[]
   defaultProvider: string
+}
+
+export type ImageGenSettings = MediaGenSettings & {
   codexReady?: CodexReady | null
   higgsfieldReady?: HiggsfieldStatus | null
   xaiOauthReady?: { ready: boolean; detail?: string } | null
 }
 
-export type ImageGenSettingsUpdate = {
+export type VideoGenSettings = MediaGenSettings
+
+export type MediaGenSettingsUpdate = {
   provider: string
   model?: string | null
   baseUrl?: string | null
   apiKey?: string | null
+}
+
+export type ImageGenSettingsUpdate = MediaGenSettingsUpdate
+
+export type MediaGenTestResult = {
+  ok?: boolean
+  ready?: boolean
+  detail: string
+  higgsfield?: HiggsfieldStatus
+  codex?: CodexReady
 }
 
 export const getPermissionSettings = (token: string) =>
@@ -96,7 +115,18 @@ export const saveImageGenSettings = (token: string, body: ImageGenSettingsUpdate
   api<{ ok: boolean; provider: string; model?: string | null; hasApiKey: boolean }>('/api/settings/image-gen', token, { method: 'PUT', body: JSON.stringify(body) })
 
 export const testImageGenSettings = (token: string, body: ImageGenSettingsUpdate) =>
-  api<{ ok?: boolean; ready?: boolean; detail: string; higgsfield?: HiggsfieldStatus; codex?: CodexReady }>('/api/settings/image-gen/test', token, { method: 'POST', body: JSON.stringify(body) })
+  api<MediaGenTestResult>('/api/settings/image-gen/test', token, { method: 'POST', body: JSON.stringify(body) })
+
+// Video generation: the sibling row of image-gen. Same base-URL semantics -
+// the API root, no endpoint path; the server appends /videos/generations.
+export const getVideoGenSettings = (token: string) =>
+  api<VideoGenSettings>('/api/settings/video-gen', token)
+
+export const saveVideoGenSettings = (token: string, body: MediaGenSettingsUpdate) =>
+  api<{ ok: boolean; provider: string; model?: string | null; hasApiKey: boolean }>('/api/settings/video-gen', token, { method: 'PUT', body: JSON.stringify(body) })
+
+export const testVideoGenSettings = (token: string, body: MediaGenSettingsUpdate) =>
+  api<MediaGenTestResult>('/api/settings/video-gen/test', token, { method: 'POST', body: JSON.stringify(body) })
 
 // Capability bundle (T8): recommended host tools, PATH-probed server-side.
 // Advisory only - Proxima never installs binaries.

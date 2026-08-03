@@ -192,7 +192,8 @@ Notes:
 - Design Studio, the workflow graph engine, repo-job worktrees, and the Master
   orchestrator are always on - the feature-flag system was removed (prune A2,
   #129), and legacy `PROXIMA_FEATURE_*` keys in an existing env file are simply
-  ignored. Video Studio was removed; image generation is always available.
+  ignored. Video Studio (the editable video project) was removed; image and video
+  generation are always available - each needs a provider configured in Settings.
 - Master persistence migration always runs. Delegation still needs an
   authenticated Master-eligible runner; without one the surface appears but
   every adapter fails closed.

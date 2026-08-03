@@ -20,6 +20,7 @@ import {
 	IconSend,
 	IconSparkle,
 	IconUsers,
+	IconVideo,
 } from "../shell/icons";
 
 const isImg = (n: string) => /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(n);
@@ -137,7 +138,7 @@ export function Composer({
 	// Studio chats turn this off — they are single-agent
 	// scene-editing sessions where neither collaboration modes nor media commands apply.
 	promptModes?: boolean;
-	generateKinds?: Array<"image" | "design">;
+	generateKinds?: Array<"image" | "video" | "design">;
 	combinedActions?: boolean;
 	submitIconOnly?: boolean;
 	submitLabel?: string;
@@ -183,7 +184,7 @@ export function Composer({
 		[controlledMode, onModeChange],
 	);
 	const [genOpen, setGenOpen] = React.useState(false);
-	const mediaKinds = generateKinds ?? (promptModes ? ["image", "design"] as const : []);
+	const mediaKinds = generateKinds ?? (promptModes ? ["image", "video", "design"] as const : []);
 	const genRef = React.useRef<HTMLDivElement>(null);
 
 	React.useEffect(() => {
@@ -204,9 +205,9 @@ export function Composer({
 
 	// Prefix the draft with the media command; whatever the user types next is the
 	// generation prompt. Swaps an existing media-command prefix instead of stacking.
-	const pickGenerate = (command: "/image" | "/design") => {
+	const pickGenerate = (command: "/image" | "/video" | "/design") => {
 		setGenOpen(false);
-		setDraft((d) => `${command} ${d.replace(/^\/(image|gambar|design|image-studio|design-studio)\b\s*/i, "")}`);
+		setDraft((d) => `${command} ${d.replace(/^\/(image|gambar|video|klip|design|image-studio|design-studio)\b\s*/i, "")}`);
 		taRef.current?.focus();
 	};
 	const [commands, setCommands] = React.useState<CatalogCommand[]>([]);
@@ -739,6 +740,10 @@ export function Composer({
 							{mediaKinds.includes("image") && <button type="button" role="menuitem" onClick={() => pickGenerate("/image")}>
 								<IconSparkle size={15} /> Image
 								<span className="composer-gen-hint">/image</span>
+							</button>}
+							{mediaKinds.includes("video") && <button type="button" role="menuitem" onClick={() => pickGenerate("/video")}>
+								<IconVideo size={15} /> Video
+								<span className="composer-gen-hint">/video</span>
 							</button>}
 								{mediaKinds.includes("design") && <button type="button" role="menuitem" onClick={() => pickGenerate("/design")}>
 									<IconDesign size={15} /> Design draft

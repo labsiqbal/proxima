@@ -247,9 +247,10 @@ def set_alpha_settings(conn, **kwargs: Any) -> dict[str, Any]:
     return set_master_settings(conn, **kwargs)
 
 
-# ── image-generation config ────────────────────────────────────────────────
+# ── media-generation config (image + video are siblings) ───────────────────
 
 IMAGE_GEN_KEY = "image_gen"
+VIDEO_GEN_KEY = "video_gen"
 HIGGSFIELD_KEY = "higgsfield"
 COLLABORATION_BRAINSTORM_AGENTS_KEY = "collaboration_brainstorm_agents"
 COLLABORATION_DEBATE_ROUNDS_KEY = "collaboration_debate_rounds"
@@ -283,6 +284,7 @@ def set_collaboration_settings(conn, brainstorm_agents: int, debate_rounds: int)
 def get_image_gen_config(conn) -> dict[str, Any]:
     """The saved image-gen provider config, or None if unset."""
     return get_json(conn, IMAGE_GEN_KEY)
+
 
 
 # ── custom skill roots (global; multi-root skill scan) ─────────────────────

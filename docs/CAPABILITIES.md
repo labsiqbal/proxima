@@ -1759,7 +1759,7 @@ later supervisor disconnect preserves fail-closed authority.
 
 **Endpoints:** `/api/projects/{slug}/app/start|stop|status`, `/apps`.
 
-## 13. Image generation and Design Studio
+## 13. Image generation, video generation, and Design Studio
 
 **Active:** image generation remains available through `/image` (alias `/gambar`).
 It uses the image provider selected in Settings, saves output under the project's
@@ -1778,10 +1778,11 @@ the prompt so the model gets clean instructions. If the provider is text-to-imag
 the attachments are ignored and the reply says so. Existing image and media files remain
 readable through the normal artifact/file surfaces.
 
-**Clarify-on-thin-brief:** when a `/image` or `/design` command carries almost no
-direction (no attached image and fewer than 3 words after the command), the backend does
+**Clarify-on-thin-brief:** when a `/image`, `/video`, or `/design` command carries almost
+no direction (no attached image and fewer than 3 words after the command), the backend does
 NOT generate/draft something generic — it replies in the same chat with a compact
-`<question-form>` (image: subject/style/aspect; design: goal/format/audience/mood/copy).
+`<question-form>` (image: subject/style/aspect; video: subject/style/format; design:
+goal/format/audience/mood/copy).
 The form carries a `submit-as` attribute, so answering re-issues the original command with
 the answers as an enriched brief, and the same media path runs again — now with enough to
 act on. A brief that already has ≥3 words (or an attached image) skips the form and runs
@@ -1832,8 +1833,61 @@ controls are not just symbols. See [DESIGN-STUDIO.md](DESIGN-STUDIO.md) for the
 full contract.
 
 Design Studio is always on (the feature-flag system was removed in prune A2, #129).
-Video Studio, editable video projects, and the `/video` generation surface were removed;
-ordinary video files remain readable and playable as generic artifacts.
+The old **Video Studio** (editable video projects with an authorable timeline) stays
+removed; ordinary video files remain readable and playable as generic artifacts. The
+`/video` **generation** command was re-introduced in #148 as the sibling of `/image` -
+see "Video generation" below. It generates a clip; it does not restore an editor.
+
+### Video generation (`/video`, alias `/klip`) - LIVE (#148)
+
+**What:** the exact sibling of image generation. `/video <brief>` in chat generates a
+clip with the provider selected in **Settings → Media → Video generation**, saves it
+under the project's mapped artifacts folder at `<artifacts>/media/videos/`
+(`ops/artifacts/...` for a detected Ops layout), returns a **`video-file`** artifact in
+the originating chat - the app-wide vocabulary for a playable clip, so the chat result
+card gets an inline `<video>` player and the Archive/Artifacts "Video" filter and badge
+list it - and feeds the same durable deliverable registry as agent runs. The composer's **Generate** menu offers
+Image / Video / Design draft. A thin brief (fewer than 3 words) gets the same
+clarify-first `<question-form>` treatment as `/image` (subject / style / format), so a
+vague command never spends credits.
+
+**How the code works:** `video_providers.py` mirrors `image_providers.py`; the shared
+family plumbing lives in `media_providers.py` (base-URL join, the `GET {base}/models`
+"Test connection" probe, and `response_error_detail`, which turns a wrong-base-URL HTML
+404 into a sentence instead of pasted markup). `media_settings.resolve_video_gen`
+resolves the `video_gen` app-settings row - a **separate row** from `image_gen`, so
+saving video can never disturb a working image configuration. `routes/chat.py` runs
+`/video` through the same `_start_media_run` background machinery and the same
+`_save_chat_media` write seam as `/image`
+(heartbeats while the provider works, artifact + assistant message on completion,
+provider error text surfaced in chat on failure).
+
+**Client contract (probed against the owner's gateway, not guessed):** the base URL is
+the API **root** with no endpoint path (e.g. `https://api.linc.id/v1`); the client
+appends the path itself - identical semantics to image generation. Two async job shapes
+are supported, tried in order:
+
+1. `POST {base}/videos/generations` → `{"request_id": "…"}`, then
+   `GET {base}/videos/{id}` → `202 {"status":"pending","progress":N}` … →
+   `200 {"status":"done","video":{"url":…,"duration":8}}`, then the URL is downloaded.
+   (Verified live against `api.linc.id` with `xai/grok-imagine-video`.)
+2. When (1) answers `404`, the OpenAI **Sora** contract: `POST {base}/videos` →
+   `{"id":"video_…","status":"queued"}`, poll `GET {base}/videos/{id}` until
+   `completed`, then `GET {base}/videos/{id}/content` for the bytes.
+
+A gateway that answers the submit synchronously (a URL or inline `b64_json`)
+short-circuits polling. Polling defaults to 5s intervals with a 900s ceiling, inside the
+1800s chat media-run budget. The API key is sent to the provider host only, never to a
+CDN download URL.
+
+**Why it is built this way:** video generation is asynchronous everywhere, and gateways
+disagree about the submit path, so the client detects the shape instead of forcing the
+owner to configure it. Provider families stay separate modules with shared plumbing
+rather than one branching module, so a video change cannot regress the image path.
+
+**Endpoints:** `GET/PUT /api/settings/video-gen`, `POST /api/settings/video-gen/test`.
+A configured video endpoint also appears as a Home Connections readiness check
+(`auth_health`); an unconfigured one stays silent rather than reporting a false fault.
 
 ## 14. Deliverables: the durable record ledger, a tab on Artifacts (T4; merged into one destination by prune Part D, #139; that destination is Artifacts per ADR-0043 - LIVE)
 
@@ -2190,7 +2244,7 @@ or the HttpOnly `proxima_session` cookie.
 + **One workspace, no Ops/Code switch.** The header has a URL-durable **Work / Delegate** mode control. Work keeps the flow-ordered destinations Chat, Tasks, Workflows, Artifacts, Design, and project-scoped recent chats; its sidebar owns the active-project switcher and the top bar does not. Delegate keeps that same persistent, collapsible sidebar and header language, but replaces Work navigation with global Master, Tasks, and Artifacts (ADR-0043, replacing the Files destination of ADR-0040: Artifacts is a destination in both modes - a produced-work gallery with All / Deliverables / History tabs, Work-scoped to the active Container and Delegate-global behind a head filter, artifacts open in the main window - documents in the editor, everything else in the inline viewer, #146). It keeps the global header status cluster (`N tasks running` + Needs-you), since watching delegated work is the point of the mode; opening a Work-only target from there switches back to Work first. It has no project selector, project filter menu, ordinary Chat, Workflows, Design, tools, search, or popup surfaces; the account menu stays - it is the only route to Projects, Agents, Settings, and Log out - and each of those entries switches back to Work before opening; its Tasks and Artifacts views query across projects and their task and record deep links remain in Delegate. Opening a graph plan explicitly returns to Work, and Task workspace Design actions remain unavailable in Delegate. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. **Chrome Back** is always visible in Work (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach; Work Chat reload durability is under Chat above. Work/Chat is the default. Agents and Settings live in the Work profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. Its header carries the session and agent; Work-sidebar project context remains outside the conversation. Its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults on, and unattended starts stay opt-in behind their own toggle; dynamically conforming Codex 0.145.0 or newer is supported, and every other or unavailable adapter fails closed.
-+ **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
++ **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/video/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). One reusable-workflow table shows workflow Availability separately from the joined schedule summary. Every row retains Edit, manual Run, Schedules, availability pause/resume, and archive actions. The schedule dialog owns timezone, five-field cron, durable input bindings, overlap, per-schedule On/Off, Run now, configure, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
 + **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped when Project context is synchronized; the rail and panels stay suppressed during Task permalink resolution or any Task/Work Project mismatch. Browsing left the rail for a destination in ADR-0040 and came back to it in #145, so no navigation offers a Files destination and a bookmarked `?view=files` URL lands on Artifacts. The rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells survive a closed panel, and the tree keeps its place); Preview unmounts because its dev server is a backend process. Agent outputs live on Artifacts (the gallery plus the Deliverables tab, #139/#144); Design remains a separate canvas destination.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.

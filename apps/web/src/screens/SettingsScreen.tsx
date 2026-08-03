@@ -10,10 +10,17 @@ import { getPlatformSupport, type PlatformSupport } from '../api/platformSupport
 import {
   getCollaborationSettings,
   getImageGenSettings,
+  getVideoGenSettings,
   saveCollaborationSettings,
   saveImageGenSettings,
+  saveVideoGenSettings,
   testImageGenSettings,
+  testVideoGenSettings,
   type ImageGenSettings,
+  type MediaGenSettings,
+  type VideoGenSettings,
+  type MediaGenSettingsUpdate,
+  type MediaGenTestResult,
   getPermissionSettings,
   savePermissionSettings,
   getRunSettings,
@@ -269,7 +276,7 @@ export const SETTINGS_SECTIONS: { key: SettingsSectionKey; label: string; hint: 
   { key: 'agents', label: 'Agents', hint: 'Runners, goals and prompt modes' },
   { key: 'master', label: 'Master', hint: 'Unattended budgets and orchestration limits' },
   { key: 'knowledge', label: 'Knowledge', hint: 'Project notes, links, graph and search' },
-  { key: 'media', label: 'Media', hint: 'Image generation backend' },
+  { key: 'media', label: 'Media', hint: 'Image and video generation backends' },
   { key: 'remote', label: 'Remote', hint: 'Tailscale and Cloudflare setup' },
   { key: 'account', label: 'Account', hint: 'Account, appearance and notifications' },
   { key: 'diagnostics', label: 'Diagnostics', hint: 'Updates, debug logs and audit history' },
@@ -518,9 +525,62 @@ function AuditPanel({ token }: { token: string }) {
   </div>
 }
 
-function ImageGenerationPanel({ token }: { token: string }) {
-  const [cfg, setCfg] = React.useState<ImageGenSettings | null>(null)
-  const [provider, setProvider] = React.useState('codex')
+/** Image and video generation are one provider family: identical fields (provider,
+ * endpoint base URL, API key, model), identical base-URL semantics (the API root,
+ * no endpoint path), identical save/test round-trip. One card component serves
+ * both so the two can never drift apart. */
+type MediaPanelSpec<T extends MediaGenSettings = MediaGenSettings> = {
+  title: string
+  blurb: string
+  defaultProvider: string
+  endpointPlaceholder: string
+  modelPlaceholder: (provider: string) => string
+  load: (token: string) => Promise<T>
+  save: (token: string, body: MediaGenSettingsUpdate) => Promise<unknown>
+  test: (token: string, body: MediaGenSettingsUpdate) => Promise<MediaGenTestResult>
+  /** Status line shown right after loading (before any test) - e.g. Codex login. */
+  loadedStatus?: (cfg: T) => string
+}
+
+const IMAGE_PANEL: MediaPanelSpec<ImageGenSettings> = {
+  title: 'Image generation',
+  blurb: 'Image generation can use Codex/ChatGPT OAuth, xAI OAuth, Higgsfield, or an OpenAI-compatible endpoint. Chat stays on ACP; this only changes the image backend.',
+  defaultProvider: 'codex',
+  endpointPlaceholder: 'https://api.openai.com/v1',
+  modelPlaceholder: provider => provider === 'xai-oauth'
+    ? 'grok-2-image or provider default'
+    : provider === 'higgsfield' ? 'nano_banana_2' : 'gpt-image-1 or provider model id',
+  load: getImageGenSettings,
+  save: saveImageGenSettings,
+  test: testImageGenSettings,
+  loadedStatus: cfg => {
+    const cr = cfg.codexReady
+    return cr ? (cr.ready ? 'Codex ready — logged in.' : cr.detail) : ''
+  },
+}
+
+const VIDEO_PANEL: MediaPanelSpec<VideoGenSettings> = {
+  title: 'Video generation',
+  blurb: 'Video generation uses an OpenAI-compatible video endpoint. Paste the API root only - e.g. https://api.linc.id/v1 - with no path after it; Proxima appends /videos/generations and polls the job until the clip is ready. Use /video in chat to generate one.',
+  defaultProvider: 'openai-compatible',
+  endpointPlaceholder: 'https://api.openai.com/v1',
+  modelPlaceholder: () => 'sora-2, xai/grok-imagine-video, or provider model id',
+  load: getVideoGenSettings,
+  save: saveVideoGenSettings,
+  test: testVideoGenSettings,
+}
+
+/** Settings → Media: the Video generation card sits directly below Image generation. */
+export function MediaGenerationPanels({ token }: { token: string }) {
+  return <>
+    <MediaGenerationPanel token={token} spec={IMAGE_PANEL} />
+    <MediaGenerationPanel token={token} spec={VIDEO_PANEL} />
+  </>
+}
+
+function MediaGenerationPanel<T extends MediaGenSettings>({ token, spec }: { token: string; spec: MediaPanelSpec<T> }) {
+  const [cfg, setCfg] = React.useState<T | null>(null)
+  const [provider, setProvider] = React.useState(spec.defaultProvider)
   const [baseUrl, setBaseUrl] = React.useState('')
   const [model, setModel] = React.useState('')
   const [apiKey, setApiKey] = React.useState('')
@@ -542,25 +602,24 @@ function ImageGenerationPanel({ token }: { token: string }) {
     const seq = ++requestSeq.current
     setBusy('load'); setErr('')
     try {
-      const c = await getImageGenSettings(token)
+      const c = await spec.load(token)
       if (!mountedRef.current || seq !== requestSeq.current) return
-      setCfg(c); setProvider(c.provider || c.defaultProvider || 'codex'); setBaseUrl(c.baseUrl || ''); setModel(c.model || ''); setApiKey('')
-      const cr = c.codexReady
-      setStatus(cr ? (cr.ready ? 'Codex ready — logged in.' : cr.detail) : '')
+      setCfg(c); setProvider(c.provider || c.defaultProvider || spec.defaultProvider); setBaseUrl(c.baseUrl || ''); setModel(c.model || ''); setApiKey('')
+      setStatus(spec.loadedStatus?.(c) || '')
     } catch (e) { if (mountedRef.current && seq === requestSeq.current) setErr(String(e)) } finally { if (mountedRef.current && seq === requestSeq.current) setBusy(null) }
-  }, [token])
+  }, [token, spec])
   React.useEffect(() => { void load() }, [load])
 
   const selected = cfg?.providers.find(p => p.id === provider)
-  const isCodex = selected?.kind === 'codex'
   const isHttp = selected?.kind === 'http'
+  // Login-based kinds ('codex', 'auto') pick their own model; the rest take an id.
   const showModel = selected?.kind === 'http' || selected?.kind === 'oauth' || selected?.kind === 'higgsfield'
   const needsKey = !!selected?.requiresKey
   const save = async () => {
     const seq = ++requestSeq.current
     setBusy('save'); setErr('')
     try {
-      await saveImageGenSettings(token, { provider, baseUrl: isHttp ? baseUrl.trim() : null, model: showModel ? model.trim() : null, apiKey: needsKey ? apiKey.trim() || null : null })
+      await spec.save(token, { provider, baseUrl: isHttp ? baseUrl.trim() : null, model: showModel ? model.trim() : null, apiKey: needsKey ? apiKey.trim() || null : null })
       if (!mountedRef.current || seq !== requestSeq.current) return
       setStatus('Saved.'); setApiKey('')
       await load()
@@ -570,7 +629,7 @@ function ImageGenerationPanel({ token }: { token: string }) {
     const seq = ++requestSeq.current
     setBusy('test'); setErr(''); setStatus('')
     try {
-      const r = await testImageGenSettings(token, { provider, baseUrl: isHttp ? baseUrl.trim() : null, model: showModel ? model.trim() : null, apiKey: needsKey ? apiKey.trim() || null : null })
+      const r = await spec.test(token, { provider, baseUrl: isHttp ? baseUrl.trim() : null, model: showModel ? model.trim() : null, apiKey: needsKey ? apiKey.trim() || null : null })
       if (!mountedRef.current || seq !== requestSeq.current) return
       const ok = r.ok ?? r.ready ?? false
       setStatus(`${ok ? 'Ready' : 'Not ready'} — ${r.detail}`)
@@ -578,8 +637,8 @@ function ImageGenerationPanel({ token }: { token: string }) {
   }
 
   return <div className="panel">
-    <div className="panel-head"><h3>Image generation</h3><span>{selected?.displayName || (isCodex ? 'codex' : 'endpoint')}</span></div>
-    <p className="muted">Image generation can use Codex/ChatGPT OAuth, xAI OAuth, Higgsfield, or an OpenAI-compatible endpoint. Chat stays on ACP; this only changes the image backend.</p>
+    <div className="panel-head"><h3>{spec.title}</h3><span>{selected?.displayName || 'endpoint'}</span></div>
+    <p className="muted">{spec.blurb}</p>
     {busy === 'load' && <p className="muted">Loading…</p>}
     {cfg && <div className="settings-rows">
       <span className="srow-label">Provider</span>
@@ -588,11 +647,11 @@ function ImageGenerationPanel({ token }: { token: string }) {
       <span className={status.startsWith('Ready') || status.includes('ready') ? 'ok-text' : 'muted'}>{status || (cfg.hasApiKey ? 'API key saved.' : 'Not tested yet.')}</span>
       {isHttp && <>
         <span className="srow-label">Endpoint</span>
-        <input className="ui-select" placeholder="https://api.openai.com/v1" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
+        <input className="ui-select" placeholder={spec.endpointPlaceholder} value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
       </>}
       {showModel && <>
         <span className="srow-label">Model</span>
-        <input className="ui-select" placeholder={provider === 'xai-oauth' ? 'grok-2-image or provider default' : provider === 'higgsfield' ? 'nano_banana_2' : 'gpt-image-1 or provider model id'} value={model} onChange={e => setModel(e.target.value)} />
+        <input className="ui-select" placeholder={spec.modelPlaceholder(provider)} value={model} onChange={e => setModel(e.target.value)} />
       </>}
       {needsKey && <>
         <span className="srow-label">API key</span>
@@ -839,7 +898,7 @@ export function SettingsScreen({ token, user, profiles, projects, activeProject,
       : effectiveSection === 'knowledge'
         ? <WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={onActiveProject} />
         : effectiveSection === 'media'
-        ? <ImageGenerationPanel token={token} />
+        ? <MediaGenerationPanels token={token} />
         : effectiveSection === 'remote'
           ? <RemoteAccessGuide />
           : effectiveSection === 'help'

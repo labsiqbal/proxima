@@ -26,6 +26,7 @@ from .. import higgsfield
 from .. import image_providers
 from .. import media_settings
 from .. import refusals
+from .. import video_providers
 from .. import cf_hostnames
 from ..auth import hash_token, iso_now
 from ..artifacts import scan_project_artifacts, update_produced_artifacts
@@ -666,6 +667,113 @@ def register(app, deps):
             {
                 "provider": provider_id,
                 "status": status,
+            },
+        )
+        return result
+
+    # ── Video-generation provider settings (sibling of image-gen) ─────────
+    #
+    # Same shape, same base-URL semantics, separate app_settings row so saving
+    # video can never disturb a working image configuration.
+
+    @app.get("/api/settings/video-gen")
+    def get_video_gen_settings(user: dict[str, Any] = Depends(current_user)):
+        """The saved video-gen config + provider metadata (never the key itself)."""
+        cfg = media_settings.resolve_video_gen(db())
+        spec = video_providers.get_provider(cfg["provider"])
+        return {
+            "provider": cfg["provider"],
+            "model": cfg.get("model"),
+            "baseUrl": cfg.get("baseUrl") or spec.default_base_url or None,
+            "hasApiKey": bool(cfg.get("apiKey")),
+            "providers": video_providers.provider_list(),
+            "defaultProvider": video_providers.DEFAULT_PROVIDER,
+        }
+
+    @app.put("/api/settings/video-gen")
+    def put_video_gen_settings(
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """Save the video-gen provider/model/key/baseUrl. An empty apiKey keeps the
+        existing key (so a UI round-trip never erases it)."""
+        payload = payload or {}
+        provider_id = payload.get("provider")
+        if provider_id and provider_id not in video_providers.VIDEO_PROVIDER_IDS:
+            raise HTTPException(
+                status_code=400, detail=f"unknown provider: {provider_id}"
+            )
+        current = app_settings.get_json(db(), app_settings.VIDEO_GEN_KEY) or {}
+        effective_provider = (
+            provider_id or current.get("provider") or video_providers.DEFAULT_PROVIDER
+        )
+        spec = video_providers.get_provider(effective_provider)
+        provider_changed = bool(provider_id and provider_id != current.get("provider"))
+        key = payload.get("apiKey")
+        if key in (None, ""):
+            key = current.get("apiKey")  # preserve existing key on empty submit
+        if "model" in payload:
+            model = payload.get("model") or None
+        else:
+            model = None if provider_changed else current.get("model")
+        if "baseUrl" in payload:
+            base_url = payload.get("baseUrl") or spec.default_base_url or None
+        elif provider_changed:
+            base_url = spec.default_base_url or None
+        else:
+            base_url = current.get("baseUrl") or spec.default_base_url or None
+        cfg = {
+            "provider": effective_provider,
+            "model": model,
+            "baseUrl": base_url,
+            "apiKey": key,
+        }
+        app_settings.set_json(db(), app_settings.VIDEO_GEN_KEY, cfg)
+        auth_health.invalidate()  # Home Connections card re-checks on its next poll
+        _audit(
+            user,
+            "settings.video_gen",
+            "settings",
+            "video_gen",
+            {
+                "provider": cfg["provider"],
+                "model": cfg["model"],
+                "baseUrl": cfg["baseUrl"],
+                "key_set": bool(cfg["apiKey"]),
+            },
+        )
+        return {
+            "ok": True,
+            "provider": cfg["provider"],
+            "model": cfg["model"],
+            "hasApiKey": bool(cfg["apiKey"]),
+        }
+
+    @app.post("/api/settings/video-gen/test")
+    def test_video_gen(
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """Probe the configured video endpoint. Uses the submitted key/baseUrl
+        directly (no save needed)."""
+        payload = payload or {}
+        provider_id = payload.get("provider") or video_providers.DEFAULT_PROVIDER
+        if provider_id not in video_providers.VIDEO_PROVIDER_IDS:
+            raise HTTPException(
+                status_code=400, detail=f"unknown provider: {provider_id}"
+            )
+        current = app_settings.get_json(db(), app_settings.VIDEO_GEN_KEY) or {}
+        key = payload.get("apiKey") or current.get("apiKey")
+        base_url = payload.get("baseUrl") or current.get("baseUrl")
+        result = video_providers.test_connection(provider_id, key, base_url=base_url)
+        _audit(
+            user,
+            "settings.video_gen.test",
+            "settings",
+            "video_gen",
+            {
+                "provider": provider_id,
+                "status": "ok" if result.get("ok") else "fail",
             },
         )
         return result

@@ -39,6 +39,8 @@ from .. import layout_map
 from .. import scripts_library
 from .. import state
 from .. import image_providers
+from .. import media_settings
+from .. import video_providers
 from .. import master_focus
 from .. import wiki_memory
 from .. import workflows as wf
@@ -1177,7 +1179,7 @@ def register(app, deps):
 
     def _chat_media_kind(message: str) -> tuple[str, str] | None:
         """Command-only by owner decision: generation costs credits, so only an
-        explicit /image, /gambar, or /design command triggers it."""
+        explicit /image, /gambar, /video, /klip, or /design command triggers it."""
         text = (message or "").strip()
         low = text.lower()
         command = low.split(maxsplit=1)[0] if low else ""
@@ -1186,6 +1188,8 @@ def register(app, deps):
             return "image-studio", arg or "Create a Design Studio draft."
         if command in {"/image", "/gambar"}:
             return "image", arg or "Generate an image."
+        if command in {"/video", "/klip"}:
+            return "video", arg or "Generate a video."
         return None
 
     def _project_slug_for_session(session: sqlite3.Row | dict[str, Any]) -> str | None:
@@ -1226,6 +1230,38 @@ def register(app, deps):
                 "apiKey": None,
             }
         return cfg
+
+    def _save_chat_media(
+        slug: str,
+        user: dict[str, Any],
+        run_id: int,
+        *,
+        subdir: str,
+        extension: str,
+        data: bytes,
+    ) -> tuple[Path, str]:
+        """Write generated media into the project's mapped artifacts folder.
+
+        The save location follows the layout map and the returned record path is
+        the same container-relative path (#139). Shared by every chat media kind
+        so image and video cannot drift on where deliverables land.
+        """
+        project = visible_project(slug, user)
+        with container_registry.container_mutation_lock(db(), project):
+            layout = layout_map.project_layout(db(), project)
+            media_rel = f"{layout.rel_paths['artifacts']}/media/{subdir}"
+            stamp = _as_int(time.time())
+            target = fsapi.resolve_in_project(
+                layout.container_root,
+                f"{media_rel}/chat-{stamp}-{run_id}{extension}",
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            i = 1
+            while target.exists():
+                target = target.parent / f"chat-{stamp}-{run_id}-{i}{extension}"
+                i += 1
+            target.write_bytes(data)
+            return target, target.relative_to(layout.container_root).as_posix()
 
     def _complete_media_run(session: sqlite3.Row | dict[str, Any], payload: ChatSendRequest | RunCreateRequest, user: dict[str, Any], kind: str, artifact: dict[str, Any], text: str) -> dict[str, Any]:
         try:
@@ -1385,6 +1421,16 @@ def register(app, deps):
             '  {"id":"subject","label":"What should the image show?","type":"text","required":true,"placeholder":"e.g. an orange cat asleep on a sofa"},\n'
             '  {"id":"style","label":"Style / mood","type":"text","placeholder":"e.g. photographic, cinematic, flat illustration"},\n'
             '  {"id":"aspect","label":"Size / aspect","type":"radio","options":[{"value":"square 1:1","label":"Square 1:1"},{"value":"portrait 4:5","label":"Portrait 4:5"},{"value":"story 9:16","label":"Story 9:16"},{"value":"landscape 16:9","label":"Landscape 16:9"}]}\n'
+            "]}\n"
+            "</question-form>"
+        ),
+        "video": (
+            "Before I generate - a couple of quick things so the clip lands right:\n"
+            '<question-form id="video-brief" title="What should the video show?" submit-as="/video">\n'
+            '{"questions":[\n'
+            '  {"id":"subject","label":"What happens in the clip?","type":"text","required":true,"placeholder":"e.g. an orange cat stretching on a sunlit sofa"},\n'
+            '  {"id":"style","label":"Style / mood","type":"text","placeholder":"e.g. cinematic, handheld documentary, 3D animation"},\n'
+            '  {"id":"aspect","label":"Format","type":"radio","options":[{"value":"landscape 16:9","label":"Landscape 16:9"},{"value":"vertical 9:16","label":"Vertical 9:16"},{"value":"square 1:1","label":"Square 1:1"}]}\n'
             "]}\n"
             "</question-form>"
         ),
@@ -1715,27 +1761,9 @@ def register(app, deps):
                     extra_images=extra_images,
                     base_url=cfg.get("baseUrl"),
                 )
-                project = visible_project(slug, user)
-                with container_registry.container_mutation_lock(db(), project):
-                    # The save location follows the project's mapped artifacts
-                    # folder (layout map); the artifact record speaks the same
-                    # container-relative path (#139).
-                    layout = layout_map.project_layout(db(), project)
-                    media_rel = f"{layout.rel_paths['artifacts']}/media/images"
-                    stamp = _as_int(time.time())
-                    target = fsapi.resolve_in_project(
-                        layout.container_root,
-                        f"{media_rel}/chat-{stamp}-{run_id}.png",
-                    )
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    i = 1
-                    while target.exists():
-                        target = target.parent / f"chat-{stamp}-{run_id}-{i}.png"
-                        i += 1
-                    target.write_bytes(raw)
-                    container_rel = target.relative_to(
-                        layout.container_root
-                    ).as_posix()
+                target, container_rel = _save_chat_media(
+                    slug, user, run_id, subdir="images", extension=".png", data=raw
+                )
                 actions = ["open-design-studio", "use-as-reference"]
                 artifact = {
                     "type": "image",
@@ -1756,6 +1784,65 @@ def register(app, deps):
                 return artifact, text
 
             return _start_media_run(session, payload, user, "image", generate_image)
+        if kind == "video":
+            # Same run/artifact machinery as /image - only the provider family and
+            # the media folder differ. Video jobs are async at the provider, so the
+            # client polls inside this background media run (heartbeats keep the
+            # stale-run reaper away).
+            cfg = media_settings.resolve_video_gen(db())
+            provider = video_providers.get_provider(cfg.get("provider"))
+            model = payload.model or cfg.get("model")
+            # Attachments are not reference frames yet (no provider here advertises
+            # imageToVideo), so strip the markdown refs from the brief.
+            ref_paths = markdown_image_paths(prompt)
+            clean_prompt = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", prompt).strip()
+            # An attachment-only brief must never ship the raw ![](path) markdown
+            # to the provider as the prompt (the image branch guards this too).
+            gen_prompt = clean_prompt or (
+                "Generate a short video inspired by the attached reference image(s)."
+                if ref_paths
+                else prompt
+            )
+
+            def generate_video(run_id: int) -> tuple[dict[str, Any], str]:
+                result = video_providers.generate(
+                    provider.id,
+                    cfg.get("apiKey"),
+                    prompt=gen_prompt,
+                    model=model,
+                    base_url=cfg.get("baseUrl"),
+                )
+                target, container_rel = _save_chat_media(
+                    slug,
+                    user,
+                    run_id,
+                    subdir="videos",
+                    extension=result.extension or ".mp4",
+                    data=result.data,
+                )
+                artifact = {
+                    # "video-file" is the app-wide vocabulary for a playable clip
+                    # (Archive type filter, chat result card <video>, gallery badge).
+                    "type": "video-file",
+                    "title": target.name,
+                    "path": container_rel,
+                    "project_slug": slug,
+                    "actions": [],
+                }
+                length = (
+                    f" ({int(result.duration_seconds)}s)"
+                    if result.duration_seconds
+                    else ""
+                )
+                text = (
+                    f"Generated video artifact{length}: `{container_rel}`. "
+                    "Saved to the project Archive as a reusable deliverable."
+                )
+                if ref_paths:
+                    text += " Note: attached images were not used - the selected video provider is text-to-video only."
+                return artifact, text
+
+            return _start_media_run(session, payload, user, "video", generate_video)
         if kind == "image-studio":
             # Seed a shell scene, then let the DESIGN AGENT compose it from the brief in
             # a linked design session — the draft arrives designed, not blank. Design

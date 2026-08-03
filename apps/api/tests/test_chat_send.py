@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from proxima_api import container_registry, design_scenes, image_providers
+from proxima_api import container_registry, design_scenes, image_providers, video_providers
 from proxima_api.run_prompting import extract_vision_images
 from proxima_api.main import create_app
 from proxima_api.routes import chat as chat_routes
@@ -241,6 +241,136 @@ def test_main_chat_image_request_creates_artifact_first_result(tmp_path, monkeyp
     assert archive["total"] >= 1
     assert any(item["path"] == links[0]["path"] for item in archive["items"])
     assert archive["counts"]["by_type"].get("image", 0) >= 1
+
+
+def test_main_chat_video_request_creates_a_video_artifact(tmp_path, monkeypatch):
+    """/video mirrors /image: a queued media run that lands an mp4 artifact in the
+    project's mapped artifacts folder and in the durable Archive."""
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "projectctl_path": "/usr/bin/true",
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
+            "start_worker": False,
+        }
+    )
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    client.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"})
+    client.put(
+        "/api/settings/video-gen",
+        headers=headers,
+        json={
+            "provider": "openai-compatible",
+            "baseUrl": "https://api.linc.id/v1",
+            "model": "xai/grok-imagine-video",
+            "apiKey": "sk-video",
+        },
+    )
+
+    captured = {}
+
+    def fake_generate(provider_id, key, **kwargs):
+        captured.update(provider_id=provider_id, key=key, **kwargs)
+        return video_providers.VideoResult(data=b"MP4", duration_seconds=8)
+
+    monkeypatch.setattr(video_providers, "generate", fake_generate)
+    res = client.post(
+        "/api/chat/send",
+        headers=headers,
+        json={"project_slug": "demo", "message": "/video a neon robot mascot waving"},
+    )
+    assert res.status_code == 202, res.text
+    body = res.json()
+    assert body["status"] == "queued"
+    assert body["media_action"] == "video"
+    assert wait_media_run(app, body["run_id"]) == "completed"
+
+    # The saved settings row - not the image one - drives the request.
+    assert captured["model"] == "xai/grok-imagine-video"
+    assert captured["base_url"] == "https://api.linc.id/v1"
+    assert captured["key"] == "sk-video"
+    assert captured["prompt"] == "a neon robot mascot waving"
+
+    events = client.get(
+        f"/api/sessions/{body['session_id']}/events", headers=headers
+    ).json()["events"]
+    complete = [e for e in events if e["type"] == "message.complete"][-1]
+    links = complete["payload"]["output_links"]
+    assert links[0]["type"] == "video-file"
+    assert links[0]["path"].startswith("ops/artifacts/media/videos/")
+    assert links[0]["path"].endswith(".mp4")
+    archive = client.get("/api/archive?type=video-file", headers=headers).json()
+    assert any(item["path"] == links[0]["path"] for item in archive["items"])
+
+
+def test_thin_video_brief_asks_question_form_instead_of_generating(tmp_path, monkeypatch):
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "projectctl_path": "/usr/bin/true",
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
+            "start_worker": False,
+        }
+    )
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    client.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"})
+
+    def boom(*a, **k):
+        raise AssertionError("a thin brief must not spend credits")
+
+    monkeypatch.setattr(video_providers, "generate", boom)
+    res = client.post(
+        "/api/chat/send", headers=headers, json={"project_slug": "demo", "message": "/video"}
+    )
+    assert res.status_code == 202, res.text
+    assert res.json()["media_action"] == "video_ask"
+    messages = client.get(
+        f"/api/sessions/{res.json()['session_id']}/messages", headers=headers
+    ).json()["messages"]
+    assert '<question-form' in messages[-1]["content"]
+    assert 'submit-as="/video"' in messages[-1]["content"]
+
+
+def test_video_provider_failure_surfaces_in_chat(tmp_path, monkeypatch):
+    app = create_app(
+        {
+            "database_path": str(tmp_path / "proxima.db"),
+            "workspace_root": str(tmp_path / "workspace"),
+            "projectctl_path": "/usr/bin/true",
+            "seed_users": [{"username": "bob", "os_user": "bob"}],
+            "start_worker": False,
+        }
+    )
+    client = TestClient(app)
+    token = client.post("/auth/auto").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    client.post("/api/projects", headers=headers, json={"slug": "demo", "name": "Demo"})
+
+    def boom(*a, **k):
+        raise video_providers.VideoProviderError(
+            "Video request failed (404): the endpoint returned an HTML page, not JSON "
+            "(HTTP 404) - check the base URL"
+        )
+
+    monkeypatch.setattr(video_providers, "generate", boom)
+    res = client.post(
+        "/api/chat/send",
+        headers=headers,
+        json={"project_slug": "demo", "message": "/video a cinematic product teaser"},
+    )
+    assert res.status_code == 202, res.text
+    body = res.json()
+    assert wait_media_run(app, body["run_id"]) == "failed"
+    messages = client.get(
+        f"/api/sessions/{body['session_id']}/messages", headers=headers
+    ).json()["messages"]
+    assert "check the base URL" in messages[-1]["content"]
 
 
 def test_thin_image_brief_asks_question_form_instead_of_generating(
