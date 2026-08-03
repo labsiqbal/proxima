@@ -64,7 +64,6 @@ The web UI has a centralized design system — keep it that way:
 - **Style via CSS classes in `styles.css`, not inline `style={{}}`.** Inline styles are only for truly dynamic values (drag positions, computed sizes). Add new classes under the matching `/* section */` comment, prefixed by feature (`wiki-*`, `kanban-*`, `composer-*`, …) in kebab-case.
 - **Themes**: a theme is a ~10-line `:root[data-theme="..."]` variable override in the "Theme presets" section of `styles.css` plus one entry in `apps/web/src/theme.ts` (`THEMES`). Never branch on theme in component code — components read tokens, tokens change per theme.
 - **Fonts / font sizes** are handled the same way (`FONTS` + the font-size slider bounds in `theme.ts`; the UI is rem-based, so root font-size scales everything). Don't set fixed `px` font sizes in components.
-- Vendored UI (`apps/web/src/vendor/`) maps its own tokens onto the app tokens (see `studio-theme.css`) — preserve that mapping when touching vendor styles.
 
 ## Maintaining this file
 
