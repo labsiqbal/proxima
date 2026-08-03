@@ -102,7 +102,9 @@ describe('ArtifactViewer v2 review flow', () => {
   // A design has no bytes to preview; without its artboard the stage would be an
   // unsupported-file dead end, which is exactly what Delegate would show (#146).
   it('draws a design from its artboard instead of the unsupported fallback', async () => {
-    fsRead.mockResolvedValue({ content: JSON.stringify({ artboards: [{ id: 'a', w: 100, h: 100, nodes: [] }] }) })
+    fsRead.mockResolvedValue({ content: JSON.stringify({
+      artboards: [{ id: 'a', width: 1080, height: 1080, background: '#fff', layers: [] }],
+    }) })
     render(<ArtifactViewer
       token="token"
       slug="master"
