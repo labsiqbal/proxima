@@ -488,4 +488,29 @@ describe('ArtifactsScreen', () => {
     await user.click(await screen.findByRole('button', { name: /plan\.md/ }))
     expect(await screen.findByTestId('editor')).toHaveTextContent('editor:alpha:reports/plan.md')
   })
+
+  // Delegate has no Design Studio, so a design there is not a detour into the
+  // studio - it opens on the viewer's stage like any other picture. The whole
+  // gallery must click through, not just the documents (#151).
+  it.each([
+    ['image', /shot\.png/, 'viewer:alpha:artifacts/shot.png'],
+    ['design', /Poster/, 'viewer:alpha:artifacts/design/poster'],
+    ['page', /index\.html/, 'viewer:alpha:exports/index.html'],
+  ])('opens a gallery %s in the viewer in Delegate', async (_kind, name, expected) => {
+    const user = userEvent.setup()
+    vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
+    render(<ArtifactsScreen token="t" projects={[alpha]} globalScope />)
+    await user.click(await screen.findByRole('button', { name }))
+    expect(await screen.findByTestId('viewer')).toHaveTextContent(expected)
+  })
+
+  // A record reached in Delegate opens its file the same way Work does; only
+  // the dock-bound "Reveal in Files" is missing there, because there is no dock.
+  it('opens a record artifact from the record panel in Delegate', async () => {
+    const user = userEvent.setup()
+    render(<ArtifactsScreen token="t" projects={[alpha]} globalScope
+      archiveRecord={{ project: 'alpha', slug: 'shot-png-v1' }} />)
+    await user.click(await screen.findByRole('button', { name: 'Open image' }))
+    expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:artifacts/shot.png')
+  })
 })
