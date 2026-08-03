@@ -78,4 +78,35 @@ describe('Header notifications are ephemeral (#157/#158)', () => {
 
     expect(screen.getByText(/turn budget was reached/)).toBeInTheDocument()
   })
+
+  it('shows only the diagnosis, leaving the instruction to the Inbox', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getAttention).mockResolvedValue({
+      items: [{
+        ...budget,
+        body: 'npm run build exited with code 1\n\nOpen the Task to read the full run output.',
+      }],
+      count: 1,
+    } as never)
+    render(<AttentionInbox token="t" onOpenTarget={vi.fn()} onOpenInbox={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: /1 unread notification/ }))
+
+    expect(screen.getByText('npm run build exited with code 1')).toBeInTheDocument()
+    expect(screen.queryByText(/Open the Task to read/)).not.toBeInTheDocument()
+  })
+
+  // A pile of "your Task finished" must not paint the header red.
+  it('keeps alarm chrome for work that needs a decision, not for news', async () => {
+    vi.mocked(getAttention).mockResolvedValue({
+      items: [{
+        ...budget, id: 'task:9:done', kind: 'task_outcome', status: 'resolved',
+        requires_action: false, severity: 'success', body: 'The Task completed every step.',
+      }],
+      count: 1,
+    } as never)
+    render(<AttentionInbox token="t" onOpenTarget={vi.fn()} onOpenInbox={vi.fn()} />)
+
+    const trigger = await screen.findByRole('button', { name: /1 unread notification/ })
+    expect(trigger).not.toHaveClass('has-attention')
+  })
 })

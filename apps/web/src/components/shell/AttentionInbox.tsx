@@ -23,8 +23,11 @@ export const helperForItem = (item: AttentionItem) => {
   return 'Open linked workspace'
 }
 
-const reasonForItem = (item: AttentionItem) => {
-  if (typeof item.body === 'string' && item.body) return item.body
+// The header shows the diagnosis only. The instruction that follows it is a
+// second paragraph in the same body, and the Inbox is where it is read in full -
+// a popover row that reflows into a paragraph stops being scannable.
+export const reasonForItem = (item: AttentionItem) => {
+  if (typeof item.body === 'string' && item.body) return item.body.split('\n\n')[0]
   return item.kind === 'container_ops_migration' && typeof item.target.reason === 'string'
     ? item.target.reason
     : null
@@ -92,12 +95,15 @@ export function AttentionInbox({ token, onOpenTarget, onOpenInbox }: {
   if (count === 0 && items.length === 0) return null
 
   const badge = count || items.length
+  // Alarm chrome only when something actually needs a decision. A pile of
+  // "your Task finished" notifications must not paint the header red.
+  const urgent = items.some(item => item.requires_action !== false && item.status === 'open')
   return <div className="attention-inbox" ref={root}>
-    <button type="button" className={`attention-trigger has-attention ${open ? 'active' : ''}`} onClick={() => setOpen(value => !value)} aria-haspopup="dialog" aria-expanded={open} aria-label={`${badge} unread notification${badge === 1 ? '' : 's'}`}>
+    <button type="button" className={`attention-trigger ${urgent ? 'has-attention' : ''} ${open ? 'active' : ''}`} onClick={() => setOpen(value => !value)} aria-haspopup="dialog" aria-expanded={open} aria-label={`${badge} unread notification${badge === 1 ? '' : 's'}`}>
       <span aria-hidden="true">!</span><b>{badge > 99 ? '99+' : badge}</b>
     </button>
     {open && <section className="attention-popover" role="dialog" aria-modal="false" aria-label="Notifications">
-      <header><div><span className="eyebrow">Needs you</span><h2>Notifications</h2></div><button type="button" className="text-button" disabled={loading} onClick={() => void load()}>{loading ? 'Refreshing…' : 'Refresh'}</button></header>
+      <header><div><span className="eyebrow">Unread</span><h2>Notifications</h2></div><button type="button" className="text-button" disabled={loading} onClick={() => void load()}>{loading ? 'Refreshing…' : 'Refresh'}</button></header>
       {error && <div className="attention-error" role="alert"><strong>Notifications could not update</strong><p>{error}</p><button type="button" onClick={() => void load()}>Try again</button></div>}
       {loading ? <div className="attention-state" role="status"><span className="ui-spinner" /> Loading notifications…</div>
         : items.length === 0 ? <div className="attention-state" role="status">You are all caught up.</div>
