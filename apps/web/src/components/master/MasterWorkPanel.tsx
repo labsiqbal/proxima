@@ -43,13 +43,10 @@ function MasterPanel({
   return (
     <details className="master-side-section" open>
       <summary className="master-section-head" aria-labelledby={titleId}>
-        <span>
-          <span className="eyebrow">{eyebrow}</span>
-          <strong id={titleId}>{title}</strong>
-        </span>
-        <span className="master-section-summary-meta">
-          <span className="master-count">{count}</span>
-        </span>
+        <span className="eyebrow">{eyebrow}</span>
+        <strong id={titleId}>{title}</strong>
+        <span className="master-count">{count}</span>
+        <i className="master-section-chevron" aria-hidden="true" />
       </summary>
       <div className="master-side-panel-body">{children}</div>
     </details>
@@ -142,10 +139,9 @@ function CheckpointTimeline({
   return (
     <MasterPanel eyebrow="Safety" title="Checkpoints" count={checkpoints.length}>
       {!checkpoints.length ? (
-        <div className="master-zero">
-          <strong>No checkpoints yet</strong>
-          <p>A scoped restore point is created before each Master Task starts.</p>
-        </div>
+        <p className="master-zero">
+          No checkpoints yet - one is taken before each Master Task starts.
+        </p>
       ) : (
         <ol className="master-checkpoints">
           {checkpoints.map(checkpoint => (
@@ -212,17 +208,20 @@ export function MasterWorkPanel({
       <MasterPanel eyebrow="Fleet work" title="Master Tasks" count={visibleJobs.length}>
         <div className="master-work-counts" aria-label="Task status summary">
           {WORK_STATES.map(state => (
-            <span className={`master-work-count ${state.status}`} key={state.status}>
+            <span
+              className={`master-work-count ${state.status}`}
+              key={state.status}
+              data-empty={counts[state.status] === 0 ? 'true' : 'false'}
+            >
               <b>{counts[state.status]}</b>
               <small>{state.shortLabel}</small>
             </span>
           ))}
         </div>
         {!visibleJobs.length ? (
-          <div className="master-zero">
-            <strong>No delegated Tasks</strong>
-            <p>Tasks Master creates will stay visible here through completion or failure.</p>
-          </div>
+          <p className="master-zero">
+            No delegated Tasks yet - what Master delegates stays here.
+          </p>
         ) : (
           <div className="master-job-groups">
             {WORK_STATES.map(state => {
@@ -265,10 +264,9 @@ export function MasterWorkPanel({
         count={decisions.length + otherAttention.length}
       >
         {!decisions.length && !otherAttention.length ? (
-          <div className="master-zero">
-            <strong>Nothing needs a decision</strong>
-            <p>Review, permission, and Satpam escalations will appear here.</p>
-          </div>
+          <p className="master-zero">
+            Nothing needs a decision right now.
+          </p>
         ) : (
           <>
             {!!decisions.length && (

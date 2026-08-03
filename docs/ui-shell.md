@@ -85,15 +85,37 @@ views of that provider, so only one composer and one live connection exist. The 
 column is the Master thread plus one shared **Chat composer** stack (attach + `@`
 project file/artifact mentions) wired to Master's send API rather than a normal
 chat run; attachment context comes from an active Master job when one is available,
-not a Work project selection. The side column groups queued, running, review/attention, completed,
+not a Work project selection.
+
+The main column is a chat surface with the same anatomy as Work Chat (#152). One
+centered reading column of the Work Chat measure carries history, the target
+picker, and the composer, so all three share the same left and right edge. At
+desktop widths the thread is the desk's only vertical scrollport: history flows
+from the top of it and the composer stays anchored below it - it never floats in
+the middle of the canvas, and a sparse or empty thread simply leaves the column
+top-anchored above an anchored composer. Message shapes follow Work Chat too: the
+owner's turn is an accent-tinted bubble, everything Master says sits flat on the
+surface, and cards are reserved for the information rail. Every header control -
+Focus, History, the live indicator, New Task, the backing-runner select, and the
+Unattended toggle - shares one control height so the bar reads as one row.
+
+The side column groups queued, running, review/attention, completed,
 and failed Master-owned Tasks, then owner decisions and a job-scoped checkpoint
 timeline. **Fleet work**, **Decisions**, and **Safety** are independent native
-accordions, open by default. Each list reserves a three-row viewport and scrolls
+accordions, open by default, and share one card anatomy: a quiet eyebrow above a
+title, with the count and the disclosure chevron aligned on the title's line. The
+Task status summary is a compact five-reading row (Queued / Running / Review /
+Done / Failed) separated by hairlines, with a zero rendered quietly. An empty
+accordion states its emptiness in one quiet line, never a paragraph. Each list
+reserves a three-row viewport and scrolls
 internally for remaining entries, so the desk remains scannable without hiding its
-information rail. The Delegate sidebar stays visible at desktop widths; it has no
+information rail; the rail itself scrolls independently of the conversation and
+never squeezes a card to fit. The Delegate sidebar stays visible at desktop widths; it has no
 hide/collapse or resize control. Idle, loading, failure/retry, populated, and
 in-flight states retain the same geometry. On narrow screens the side column stacks
-after the thread with no horizontal scroll.
+after the thread with no horizontal scroll: the desk becomes one scrolling
+document, and the thread keeps its own bounded scrollport so the durable scroll
+anchor survives.
 
 Opening a graph plan from the global Tasks index is an explicit transition back to Work,
 because its editor belongs to Workflows. Task workspace Design actions are unavailable

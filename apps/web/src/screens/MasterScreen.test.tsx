@@ -459,6 +459,58 @@ describe('MasterScreen', () => {
     expect(sideBlock?.[0]).toMatch(/border-radius:\s*var\(--radius-lg\)/)
   })
 
+  it('reads as a chat: history, target picker and composer share one anchored column', () => {
+    const css = readFileSync(resolve(__dirname, '../styles.css'), 'utf8')
+    // The thread is the desk's scrollport and carries one centered column...
+    const threadBlock = css.match(/\.master-thread\s*\{[^}]+\}/)
+    expect(threadBlock?.[0]).toMatch(/overflow-y:\s*auto/)
+    expect(threadBlock?.[0]).toMatch(
+      /grid-template-columns:\s*min\(100%,\s*var\(--master-chat-column-width\)\)/,
+    )
+    // ...and the composer is anchored below it on that same measure, never
+    // scrolling away with the history (#152).
+    const dockBlock = css.match(/\.master-composer-dock\s*\{[^}]+\}/)
+    expect(dockBlock?.[0]).toMatch(/flex:\s*0 0 auto/)
+    expect(css).toMatch(
+      /\.master-composer-dock > \*\s*\{[^}]*width:\s*min\(100%,\s*var\(--master-chat-column-width\)\)/,
+    )
+  })
+
+  it('gives every rail card one anatomy: eyebrow, title, aligned count and chevron', () => {
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+    const heads = document.querySelectorAll('.master-section-head')
+    expect(heads).toHaveLength(3)
+    for (const head of heads) {
+      const shape = [...head.children].map(child => child.className || child.tagName)
+      expect(shape).toEqual([
+        'eyebrow',
+        'STRONG',
+        'master-count',
+        'master-section-chevron',
+      ])
+    }
+  })
+
+  it('states an empty rail card in one quiet line', () => {
+    vi.mocked(useMasterState).mockReturnValue({
+      ...state,
+      desk: {
+        ...state.desk,
+        jobs: [],
+        decisions: [],
+        attention: [],
+        checkpoints: [],
+      },
+    } as never)
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+    const zeros = document.querySelectorAll('.master-zero')
+    expect(zeros).toHaveLength(3)
+    for (const zero of zeros) {
+      expect(zero.tagName).toBe('P')
+      expect(zero.childElementCount).toBe(0)
+    }
+  })
+
   it('keeps every Delegate information panel available without a hide control', () => {
     render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
     expect(screen.getByText('Master Tasks')).toBeInTheDocument()

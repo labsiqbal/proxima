@@ -86,9 +86,17 @@
 	--master-control-height: 2.5rem;
 	--master-thread-min-height: 18rem;
 	--master-status-dot-size: var(--space-2);
-	--master-work-count-min-width: 3rem;
+	--master-chevron-size: 0.4rem;
+	--master-chevron-stroke: 1.5px;
+	/* One chat column for history, target picker and composer - the same
+	   860px reading measure Work Chat uses (.chat-log / .chat-dock). */
+	--master-chat-column-width: 53.75rem;
+	--master-chat-column-inline-padding: var(--space-4);
+	--master-message-user-width: 38.75rem;
+	--master-message-agent-width: 51.25rem;
 	--master-popup-width: 32rem;
-	--master-composer-max-width: 53.75rem;
+	/* Surfaces outside the desk that still want the Master reading measure. */
+	--master-composer-max-width: var(--master-chat-column-width);
 	--master-popup-height: min(42rem, calc(100vh - var(--topbar-h) - var(--space-8)));
 	--master-popup-trigger-size: 3rem;
 	--master-popup-edge: var(--space-4);
@@ -14951,13 +14959,23 @@ button.moodboard-add-method:hover {
 	/* Transparent so .main-pane radial ambience shows — same as Chat/Tasks. */
 	background: transparent;
 }
+/* Desk body is a column, not a document: the capacity strip and any error
+   banner stay pinned under the header and the grid below them owns the
+   remaining height, so the conversation - not the page - is what scrolls. */
 .master-body {
 	flex: 1;
+	display: flex;
+	flex-direction: column;
 	min-height: 0;
-	overflow: auto;
-	padding: var(--space-4) var(--space-5) var(--space-5);
+	overflow: hidden;
+	padding: var(--space-4) var(--space-5) 0;
 }
-.master-body > * { max-width: var(--master-content-max-width); margin-inline: auto; }
+.master-body > * {
+	flex: 0 0 auto;
+	width: 100%;
+	max-width: var(--master-content-max-width);
+	margin-inline: auto;
+}
 .master-loading {
 	display: flex;
 	align-items: center;
@@ -14973,6 +14991,7 @@ button.moodboard-add-method:hover {
 .master-section-head .eyebrow,
 .core-tour .eyebrow,
 .help-chapter .eyebrow { margin: 0 0 var(--space-1); }
+.master-title .eyebrow { white-space: nowrap; }
 .master-title h1 {
 	margin: 0;
 	font-size: var(--text-lg);
@@ -15021,16 +15040,18 @@ button.moodboard-add-method:hover {
 .master-connection.retrying i { background: var(--ui-warning); }
 .master-connection.disconnected i { background: var(--ui-danger); }
 .master-new-task { min-height: var(--master-control-height); }
+/* Every control on the header row shares one height so Focus, History, Live,
+   New Task, the runner select and the Unattended toggle sit on one baseline. */
 .master-controls .ui-select {
 	min-width: 9rem;
 	max-width: 14rem;
+	min-height: var(--master-control-height);
 	padding: var(--space-2) var(--space-3);
 	font-size: var(--text-sm);
 	border-radius: var(--radius-sm);
 }
 .master-controls .toggle-pill {
-	/* Match Settings toggle-pill, not a taller desk-only control. */
-	min-height: 0;
+	min-height: var(--master-control-height);
 	font-size: var(--text-sm);
 }
 .master-capacity {
@@ -15047,12 +15068,19 @@ button.moodboard-add-method:hover {
 .master-capacity span { display: inline-flex; align-items: center; gap: var(--space-2); }
 .master-capacity span:last-child { margin-left: auto; color: var(--ui-text-tertiary); }
 .capacity-live { width: var(--space-2); height: var(--space-2); border-radius: var(--radius-full); background: var(--ui-success); box-shadow: 0 0 0 var(--space-1) color-mix(in srgb, var(--ui-success) 14%, transparent); }
-.master-grid { display: grid; grid-template-columns: minmax(0, 1fr) var(--master-side-width); gap: var(--space-4); align-items: start; }
+.master-grid {
+	flex: 1 1 auto;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) var(--master-side-width);
+	gap: var(--space-4);
+	align-items: stretch;
+	min-height: 0;
+}
 /* Main conversation column: flat against the page - no outer card chrome. */
 .master-conversation {
 	display: flex;
 	flex-direction: column;
-	min-height: var(--master-thread-min-height);
+	min-height: 0;
 	overflow: hidden;
 	min-width: 0;
 	border: 0;
@@ -15122,8 +15150,24 @@ button.moodboard-add-method:hover {
 	border-color: color-mix(in srgb, var(--ui-accent) 36%, var(--ui-stroke-secondary));
 	color: var(--ui-text);
 }
-.master-thread { display: grid; align-content: start; gap: var(--space-3); flex: 1; min-height: var(--master-thread-min-height); max-height: calc(100vh - var(--topbar-h) - var(--master-side-width)); overflow: auto; padding: var(--space-5); scroll-behavior: smooth; }
-.master-message { max-width: 88%; border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); }
+/* The one vertical scrollport of the desk. History is a single centered
+   column so messages, target picker and composer share the same measure -
+   the .chat-log / .chat-dock relationship Work Chat already uses. */
+.master-thread {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	overflow-x: hidden;
+	overscroll-behavior: contain;
+	display: grid;
+	grid-template-columns: min(100%, var(--master-chat-column-width));
+	justify-content: center;
+	align-content: start;
+	gap: var(--space-3);
+	padding: var(--space-5) var(--master-chat-column-inline-padding) var(--space-6);
+	scroll-behavior: smooth;
+}
+.master-message { max-width: 100%; border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); }
 .master-message > strong { display: block; margin-bottom: var(--space-2); color: var(--ui-text-tertiary); font-size: var(--text-xs); }
 .master-message-target {
 	display: block;
@@ -15140,9 +15184,30 @@ button.moodboard-add-method:hover {
 	color: var(--ui-accent);
 	font-weight: 600;
 }
-.master-message.user { justify-self: end; border-bottom-right-radius: var(--radius-sm); background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-surface)); }
+/* Same two shapes as Work Chat: the owner's turn is an accent-tinted bubble
+   with a flattened bottom-right corner, everything Master says sits flat on
+   the surface. Cards are reserved for the work panel. */
+.master-message.user {
+	justify-self: end;
+	max-width: min(var(--master-message-user-width), 88%);
+	border: 1px solid color-mix(in srgb, var(--ui-accent) 22%, transparent);
+	border-bottom-right-radius: var(--radius-sm);
+	background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-surface));
+}
 .master-message.assistant,
-.master-message.system { justify-self: start; border: 1px solid var(--ui-stroke-tertiary); border-bottom-left-radius: var(--radius-sm); background: var(--ui-surface-subtle); }
+.master-message.system {
+	justify-self: start;
+	max-width: min(var(--master-message-agent-width), 94%);
+	border: 0;
+	border-radius: 0;
+	padding-inline: 0;
+	background: transparent;
+}
+.master-message.assistant > strong,
+.master-message.system > strong { color: var(--ui-text-secondary); font-weight: 700; }
+.master-message.user > strong {
+	color: color-mix(in srgb, var(--ui-accent) 62%, var(--ui-text-secondary));
+}
 /* Tool activity stays auditable without letting product-envelope JSON take over the thread. */
 .master-tool-results { max-width: 100%; min-width: 0; color: var(--ui-text-secondary); }
 .master-tool-results > summary {
@@ -15176,24 +15241,29 @@ button.moodboard-add-method:hover {
 .master-tool-unreadable { color: var(--ui-warning-text); }
 .master-tool-raw { max-height: calc(var(--master-control-height) * 4); margin: var(--space-2) 0 0; overflow: auto; border: 1px solid var(--ui-stroke-tertiary); border-radius: var(--radius-sm); padding: var(--space-2); background: var(--ui-surface-subtle); color: var(--ui-text-secondary); font-size: var(--text-2xs); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .master-working,
-.master-thread-state { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-5); color: var(--ui-text-secondary); font-size: var(--text-sm); }
-/* Chat-parity composer dock: reuse .composer styles; no Master-only tray chrome. */
+.master-thread-state { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; color: var(--ui-text-secondary); font-size: var(--text-sm); }
+/* Chat-parity composer dock: reuse .composer styles; no Master-only tray chrome.
+   Anchored below the scrollport and sharing the history column's measure, so
+   the composer never floats in the middle of the canvas. */
 .master-composer-dock {
+	flex: 0 0 auto;
 	border-top: 0;
-	padding: var(--space-3) var(--space-4);
+	padding: 0 var(--master-chat-column-inline-padding) var(--space-4);
 	background: transparent;
 }
+.master-composer-dock > * {
+	width: min(100%, var(--master-chat-column-width));
+	margin-inline: auto;
+}
 .master-composer-dock .composer {
-	width: 100%;
-	margin: 0;
+	width: min(100%, var(--master-chat-column-width));
+	margin: 0 auto;
 }
 .master-target-picker {
 	display: flex;
 	align-items: center;
 	gap: var(--space-2);
 	flex-wrap: wrap;
-	width: 100%;
-	max-width: var(--master-composer-max-width);
 	margin: 0 auto var(--space-2);
 	padding-inline: var(--space-1);
 }
@@ -15257,8 +15327,10 @@ button.moodboard-add-method:hover {
 }
 .master-focus-here { white-space: nowrap; }
 .master-history-empty {
+	flex: 1 1 auto;
 	display: grid;
-	place-items: center;
+	place-content: center;
+	justify-items: center;
 	min-height: var(--master-thread-min-height);
 	padding: var(--space-5);
 	color: var(--ui-text-tertiary);
@@ -15279,71 +15351,137 @@ button.moodboard-add-method:hover {
 .master-history-kind.system-event { color: var(--ui-accent); }
 .master-history-kind.focus-boundary { color: var(--ui-warning-text); }
 .master-composer-hint {
-	margin: var(--space-2) 0 0;
+	margin: var(--space-2) auto 0;
 	color: var(--ui-text-tertiary);
 	font-size: var(--text-xs);
 	line-height: 1.5;
 }
 .master-composer-error {
-	margin: var(--space-2) 0 0;
+	margin: var(--space-2) auto 0;
 	border-left: var(--space-1) solid var(--ui-danger);
 	padding-left: var(--space-3);
 	color: var(--ui-danger-text);
 	font-size: var(--text-xs);
 	line-height: 1.5;
 }
-.master-side { display: grid; gap: var(--space-4); min-width: 0; }
-.master-side-section > summary { list-style: revert; cursor: pointer; }
-.master-section-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--ui-stroke-tertiary); }
-.master-section-head > span:first-child { display: grid; gap: var(--space-1); }
-.master-section-head strong { font-size: var(--text-sm); font-weight: 650; }
-.master-section-summary-meta { display: inline-flex; align-items: center; gap: var(--space-2); }
+/* The rail scrolls on its own so the chat column keeps its anchored composer. */
+.master-side {
+	display: grid;
+	align-content: start;
+	align-items: start;
+	gap: var(--space-3);
+	/* max-content rows: a card is never squeezed to fit the rail - the rail
+	   scrolls instead, so nothing gets clipped mid-sentence. */
+	grid-auto-rows: max-content;
+	min-width: 0;
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding-bottom: var(--space-4);
+}
+/* One anatomy for every rail card: a quiet eyebrow on its own line, then the
+   title with its count and disclosure chevron aligned on the title's line. */
+.master-side-section > summary { list-style: none; cursor: pointer; }
+.master-side-section > summary::-webkit-details-marker { display: none; }
+.master-section-head {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto auto;
+	align-items: center;
+	gap: 0 var(--space-2);
+	padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+	border-bottom: 1px solid var(--ui-stroke-tertiary);
+	transition: background var(--t-fast) var(--ease);
+}
+.master-section-head:hover { background: var(--ui-row-hover-background); }
+.master-section-head .eyebrow { grid-column: 1 / -1; }
+.master-section-head strong {
+	grid-column: 1;
+	overflow: hidden;
+	color: var(--ui-text-primary);
+	font-size: var(--text-sm);
+	font-weight: 650;
+	line-height: 1.25;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.master-section-chevron {
+	width: var(--master-chevron-size);
+	height: var(--master-chevron-size);
+	border-right: var(--master-chevron-stroke) solid var(--ui-text-tertiary);
+	border-bottom: var(--master-chevron-stroke) solid var(--ui-text-tertiary);
+	transform: rotate(45deg);
+	transition: transform var(--t-fast) var(--ease);
+}
+.master-side-section[open] .master-section-chevron { transform: rotate(-135deg); }
 .master-side-section:not([open]) .master-section-head { border-bottom: 0; }
 .master-side-panel-body { min-width: 0; }
 .master-count {
+	grid-column: 2;
 	display: grid;
 	place-items: center;
 	min-width: 1.5rem;
-	min-height: 1.5rem;
+	min-height: 1.25rem;
 	padding: 0 var(--space-2);
 	border-radius: var(--radius-full);
 	background: var(--ui-surface-subtle);
 	color: var(--ui-text-secondary);
 	font-size: var(--text-xs);
 	font-weight: 600;
+	font-variant-numeric: tabular-nums;
 }
-.master-zero { padding: var(--space-4); }
-.master-zero strong { font-size: var(--text-sm); }
-.master-zero p { margin: var(--space-1) 0 0; color: var(--ui-text-tertiary); font-size: var(--text-xs); line-height: 1.55; }
+/* Empty rail card: one quiet line, never a paragraph competing with the title. */
+.master-zero {
+	margin: 0;
+	padding: var(--space-3) var(--space-4);
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-xs);
+	line-height: 1.45;
+}
+/* Compact stat row: five hairline-separated readings, no boxed pills. */
 .master-work-counts {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(var(--master-work-count-min-width), 1fr));
-	gap: var(--space-1);
+	grid-template-columns: repeat(5, minmax(0, 1fr));
 	border-bottom: 1px solid var(--ui-stroke-tertiary);
 	padding: var(--space-2) var(--space-3);
 }
 .master-work-count {
 	display: grid;
 	justify-items: center;
-	gap: var(--space-1);
-	border-radius: var(--radius-sm);
-	padding: var(--space-2) var(--space-1);
-	background: var(--ui-surface-subtle);
-	color: var(--ui-text-secondary);
+	gap: 0;
+	padding-block: var(--space-1);
+	color: var(--ui-text-tertiary);
 }
-.master-work-count b { font-size: var(--text-sm); }
-.master-work-count small { font-size: var(--text-2xs); }
+.master-work-count + .master-work-count {
+	border-left: 1px solid var(--ui-stroke-tertiary);
+}
+.master-work-count b {
+	color: var(--ui-text-primary);
+	font-size: var(--text-base);
+	font-weight: 650;
+	font-variant-numeric: tabular-nums;
+	line-height: 1.3;
+}
+.master-work-count small { font-size: var(--text-2xs); line-height: 1.3; }
 .master-work-count.running b { color: var(--ui-success-strong); }
 .master-work-count.review b { color: var(--ui-accent); }
 .master-work-count.failed b { color: var(--ui-danger-strong); }
+/* Nothing in that state: the reading recedes instead of shouting a zero. */
+.master-work-count[data-empty='true'] b { color: var(--ui-text-tertiary); font-weight: 500; }
+/* Three Task rows plus room for the state label above them, so the bounded
+   viewport does not spend its budget on group headers and cut off at one. */
 .master-job-groups {
-	max-height: calc((var(--master-control-height) + var(--space-3)) * 3 + var(--space-6));
+	max-height: calc((var(--master-control-height) + var(--space-6)) * 3 + var(--space-6));
 	overflow: auto;
 }
 .master-job-group + .master-job-group {
 	border-top: 1px solid var(--ui-stroke-secondary);
 }
 .master-job-group h3 {
+	/* The list is bounded to three rows, so the state label sticks to keep
+	   naming whatever is currently scrolled into view. */
+	position: sticky;
+	top: 0;
+	z-index: 1;
 	margin: 0;
 	padding: var(--space-2) var(--space-4);
 	background: var(--ui-surface-subtle);
@@ -15380,7 +15518,14 @@ button.moodboard-add-method:hover {
 .master-needs-list small { color: var(--ui-text-tertiary); font-size: var(--text-xs); }
 .master-decision-list { display: grid; max-height: calc((var(--master-control-height) + var(--space-8)) * 3); overflow: auto; }
 .master-decision-card { display: grid; gap: var(--space-3); border: 1px solid var(--ui-stroke-secondary); border-radius: var(--radius-md); padding: var(--space-4); background: var(--ui-surface-subtle); color: var(--ui-text-primary); }
-.master-decision-list .master-decision-card { border-width: 0 0 1px; border-radius: 0; }
+.master-decision-list .master-decision-card { border-width: 0 0 1px; border-radius: 0; background: transparent; }
+/* In the rail a decision is a row of a card, not a card of its own: its title
+   must not outrank the panel title it sits under. */
+.master-decision-card.compact { gap: var(--space-2); padding: var(--space-3) var(--space-4); }
+.master-decision-card.compact > header { gap: var(--space-2); }
+.master-decision-card.compact h3 { font-size: var(--text-sm); font-weight: 650; }
+.master-decision-card.compact .master-decision-prompt { font-size: var(--text-xs); font-weight: 600; }
+.master-decision-card.compact .master-decision-context { font-size: var(--text-2xs); }
 .master-decision-card > header { display: grid; gap: var(--space-1); }
 .master-decision-card h3 { margin: 0; font-size: var(--text-md); line-height: 1.3; }
 .master-decision-state { width: fit-content; border-radius: var(--radius-full); padding: var(--space-1) var(--space-2); background: var(--ui-warning-bg); color: var(--ui-warning-text); font-size: var(--text-2xs); font-weight: 750; letter-spacing: var(--ui-letter-wide); text-transform: uppercase; }
@@ -15420,14 +15565,18 @@ button.moodboard-add-method:hover {
 .task-master-decision { padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--ui-stroke-secondary); background: var(--ui-surface-subtle); }
 .task-master-decision .master-decision-card { max-width: var(--master-composer-max-width); background: var(--ui-surface); }
 .master-checkpoints { list-style: none; max-height: calc((var(--master-control-height) + var(--space-6)) * 3); margin: 0; overflow: auto; padding: 0; }
-.master-checkpoints li { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-3); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--ui-stroke-tertiary); }
+/* One-line checkpoint row: marker, identity, and its two quiet actions on the
+   same line - the rail card stays a list, not a stack of mini panels. */
+.master-checkpoints li { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4); border-bottom: 1px solid var(--ui-stroke-tertiary); }
 .master-checkpoints li:last-child { border-bottom: 0; }
-.checkpoint-line { width: var(--space-2); height: var(--space-2); margin-top: var(--space-2); border-radius: var(--radius-full); background: var(--ui-accent); }
+.checkpoint-line { width: var(--space-2); height: var(--space-2); border-radius: var(--radius-full); background: var(--ui-accent); }
 .master-checkpoints strong,
-.master-checkpoints small { display: block; }
+.master-checkpoints small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .master-checkpoints strong { font-size: var(--text-sm); }
-.master-checkpoints small { margin-top: var(--space-1); color: var(--ui-text-tertiary); font-size: var(--text-2xs); }
-.checkpoint-actions { grid-column: 2; display: flex; gap: var(--space-1); }
+.master-checkpoints small { color: var(--ui-text-tertiary); font-size: var(--text-2xs); }
+.checkpoint-actions { grid-column: 3; display: flex; justify-content: flex-end; gap: var(--space-1); }
+.checkpoint-actions .text-button { min-height: var(--space-8); padding-inline: var(--space-2); color: var(--ui-text-secondary); font-size: var(--text-xs); }
+.checkpoint-actions .text-button:hover:not(:disabled) { color: var(--ui-accent); }
 .checkpoint-actions .text-button { min-height: var(--master-control-height); padding-inline: var(--space-2); }
 .master-error,
 .master-inline-error,
@@ -15786,9 +15935,55 @@ button.moodboard-add-method:hover {
 .help-chapter p { line-height: 1.65; }
 
 @media (max-width: 900px) {
-	.master-grid { grid-template-columns: minmax(0, 1fr); }
-	.master-side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-	.master-controls .ui-select { min-width: 0; max-width: none; }
+	/* Narrow: the rail stacks under the conversation, so the desk becomes one
+	   scrolling document again. The thread keeps its own scrollport (and with
+	   it the durable scroll anchor) instead of growing without bound. */
+	.master-body { overflow-y: auto; padding-bottom: var(--space-4); }
+	.master-grid {
+		flex: 0 0 auto;
+		grid-template-columns: minmax(0, 1fr);
+		min-height: 0;
+	}
+	.master-side {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		overflow: visible;
+		padding-bottom: 0;
+	}
+	.master-conversation { flex: 0 0 auto; }
+	.master-thread {
+		flex: 0 0 auto;
+		min-height: var(--master-thread-min-height);
+		max-height: 55vh;
+		/* A bounded scrollport inside a scrolling page needs an edge, or a
+		   partially scrolled message reads as broken instead of continued. */
+		border-bottom: 1px solid var(--ui-stroke-tertiary);
+	}
+	/* The header stops trying to be one row well before the mobile shell: the
+	   title takes its own line and the controls become an even two-up grid,
+	   instead of wrapping into a ragged right-aligned stack. */
+	.master-head.master-head {
+		position: relative;
+		align-items: stretch;
+		flex-direction: column;
+		min-height: 0;
+		height: auto;
+		padding-block: var(--space-3);
+	}
+	.master-title { padding-right: calc(var(--master-control-height) + var(--space-2)); }
+	.master-controls {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		justify-content: stretch;
+		width: 100%;
+	}
+	.master-focus-picker,
+	.master-history-picker {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+	}
+	.master-controls .ui-select { width: 100%; min-width: 0; max-width: none; }
+	.master-connection,
+	.master-new-task { justify-content: center; }
 }
 @media (max-width: 767px) {
 	.ops-migration-head {
@@ -15874,28 +16069,6 @@ button.moodboard-add-method:hover {
 	.app-shell.delegate-mode .main-pane { padding-right: 0; }
 	.app-shell.project-tools-suppressed .main-pane { padding-right: 0; }
 	.master-body { padding: var(--space-3); }
-	.master-head.master-head {
-		position: relative;
-		align-items: stretch;
-		flex-direction: column;
-		min-height: 0;
-		height: auto;
-		padding-block: var(--space-3);
-	}
-	.master-title { padding-right: calc(var(--master-control-height) + var(--space-2)); }
-	.master-controls {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-		justify-content: stretch;
-		width: 100%;
-	}
-	.master-focus-picker {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr);
-	}
-	.master-controls .ui-select { width: 100%; max-width: none; }
-	.master-connection,
-	.master-new-task { justify-content: center; }
 	.master-capacity {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, auto));
@@ -15908,7 +16081,7 @@ button.moodboard-add-method:hover {
 		margin-left: 0;
 	}
 	.master-side { grid-template-columns: minmax(0, 1fr); }
-	.master-message { max-width: 100%; }
+	.master-message.user { max-width: 94%; }
 	.master-settings-form,
 	.help-chapters { grid-template-columns: minmax(0, 1fr); }
 }
