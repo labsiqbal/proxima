@@ -18,6 +18,8 @@ export function ArchiveRecordPage({ token, project, slug, onOpenRecord, onOpenSe
   onOpenTask?: (jobId: number, engine?: string) => void
   onOpenViewer?: (record: ArchiveRecordDetail) => void
   onOpenDesign?: (designId: string) => void
+  /** Locate the record's file on disk. Wired again when browsing returns to
+   * the right dock (#145); Artifacts itself has no tree to reveal into. */
   onRevealInFiles?: (record: ArchiveRecordDetail) => void
   onChanged?: () => void
 }) {

@@ -97,6 +97,7 @@ Supersedes / superseded-by / links to feature docs.
 | [0037](0037-container-activity-and-migration-publication.md) | Container activity and migration publication | Superseded by ADR-0038 |
 | [0038](0038-owner-safe-container-activity-boundaries.md) | Owner-safe Container activity boundaries | Accepted |
 | [0039](0039-master-orchestrator-ships-enabled.md) | Master orchestrator ships enabled | Accepted |
-| [0040](0040-files-is-a-destination.md) | Files is a destination, not a right-rail tool | Accepted |
+| [0040](0040-files-is-a-destination.md) | Files is a destination, not a right-rail tool | Superseded by ADR-0043 |
 | [0041](0041-updates-are-a-manual-git-pull.md) | Updates are a manual git pull; the safe-updater stack is removed | Accepted |
 | [0042](0042-file-preview-is-a-sandboxed-iframe.md) | File preview is one sandboxed iframe on Proxima's origin | Accepted |
+| [0043](0043-artifacts-is-the-destination.md) | Artifacts is the destination; the gallery is the main window | Accepted |

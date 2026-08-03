@@ -2,11 +2,11 @@ import React from 'react'
 import { getMasterSettings, saveMasterSettings } from '../../api/master'
 
 const STEPS = [
-  { eyebrow: 'Primary loop', title: 'Welcome to Proxima', body: 'The taught path is Chat → Tasks → Workflows → Files. Use Chat for hands-on work, watch durable runs in Tasks, keep patterns in Workflows, and find deliverables in Files.' },
+  { eyebrow: 'Primary loop', title: 'Welcome to Proxima', body: 'The taught path is Chat → Tasks → Workflows → Artifacts. Use Chat for hands-on work, watch durable runs in Tasks, keep patterns in Workflows, and find what came out in Artifacts.' },
   { eyebrow: 'Hands-on', title: 'Chat keeps you close', body: 'Talk through the work, watch tools run, open outputs in the ArtifactViewer, and restore file-changing turns when you need to roll them back.' },
   { eyebrow: 'Delegate', title: 'Master is the side path', body: 'Master creates durable Autonomous jobs, dispatches up to three workers, and queues the rest. Prefer Chat when you want to stay in the thread; use Master when you want outcomes delegated.' },
   { eyebrow: 'Watch & keep', title: 'Tasks and Workflows', body: 'Tasks holds execution and diff review. When a pattern is worth repeating, save it as a Workflow (manual or scheduled) and re-run without re-explaining.' },
-  { eyebrow: 'Deliverables', title: 'Files', body: 'Files browses the real project folder, and its Deliverables lens shows every agent output with lineage and approval status. Open supported files with the same in-app viewer used from Chat and Tasks.' },
+  { eyebrow: 'Deliverables', title: 'Artifacts', body: 'Artifacts is the gallery of what your agents made - designs, images, and video as thumbnails, documents as a list. Its Deliverables tab shows every output with lineage and approval status, and History keeps records whose file is gone.' },
 ]
 
 export const LOCAL_CORE_TOUR_DONE = 'proxima.tour.coreDone'

@@ -14,7 +14,7 @@ const HINTS: { label: string; hint: string }[] = [
 const CAPABILITIES = [
 	"Send prompts and watch tools run live",
 	"Review file changes and restore a turn when needed",
-	"Open deliverables with the same in-app viewer as Files",
+	"Open deliverables with the same in-app viewer as Artifacts",
 ];
 
 const STEPS: React.ReactNode[] = [
@@ -22,7 +22,7 @@ const STEPS: React.ReactNode[] = [
 		Write a message and press <strong>Send</strong>
 	</>,
 	<>Watch progress under Tasks when work is durable</>,
-	<>Find outputs in Files → Deliverables or open them from the thread</>,
+	<>Find outputs in Artifacts, or open them from the thread</>,
 ];
 
 /**
@@ -47,7 +47,7 @@ export function ChatEmpty() {
 			}
 			capabilities={CAPABILITIES}
 			steps={STEPS}
-			helpBtnTitle="Commands, attach, @-mentions, live tools, review, and the Send → Tasks → Files path"
+			helpBtnTitle="Commands, attach, @-mentions, live tools, review, and the Send → Tasks → Artifacts path"
 			mark={<IconSparkle size={30} />}
 			markTitle="Chat is the hands-on path with one agent"
 		/>

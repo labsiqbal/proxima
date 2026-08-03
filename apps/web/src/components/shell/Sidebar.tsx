@@ -1,30 +1,30 @@
 import { useState, type ComponentType } from 'react'
 import type { ChatSession, Profile, Project, User, View } from '../../types'
-import { IconChat, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconFile, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout, IconSparkle } from './icons'
+import { IconChat, IconTasks, IconAgents, IconClose, IconPencil, IconTrash, IconArtifacts, IconGear, IconDesign, IconChevronRight, IconWorkflows, IconLogout, IconSparkle } from './icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { ProximaMark } from '../brand/ProximaMark'
 import { ProjectSwitcher } from './ProjectSwitcher'
 
 // One workspace, nav ordered by the flow: talk it through (Chat), watch it run
-// (Tasks), keep what worked (Workflows), then find it in Files. Project
-// *switch* lives in the Work sidebar; project *manage* lives under Settings.
-// Files is a destination in both navigations (ADR-0040) and carries the
-// deliverable ledger as its Deliverables lens (prune Part D, #139 - the
-// separate Archive destination is gone). Work scopes Files to the active
-// Container, Delegate goes global like Tasks. Terminal and Preview stay
-// right-rail tools; Agents/Settings stay in the account menu.
+// (Tasks), keep what worked (Workflows), then look at what came out
+// (Artifacts). Project *switch* lives in the Work sidebar; project *manage*
+// lives under Settings. Artifacts is a destination in both navigations
+// (ADR-0043, replacing the Files destination of ADR-0040) and carries the
+// deliverable ledger as its Deliverables and History tabs (#139). Work scopes
+// it to the active Container, Delegate goes global like Tasks. Terminal and
+// Preview stay right-rail tools; Agents/Settings stay in the account menu.
 type Destination = { id: View; label: string; icon: ComponentType<{ size?: number }> }
 const primary: Destination[] = [
   { id: 'chat', label: 'Chat', icon: IconChat },
   { id: 'activity', label: 'Tasks', icon: IconTasks },
   { id: 'workflows', label: 'Workflows', icon: IconWorkflows },
-  { id: 'files', label: 'Files', icon: IconFile },
+  { id: 'artifacts', label: 'Artifacts', icon: IconArtifacts },
   { id: 'design', label: 'Design', icon: IconDesign },
 ]
 const delegatePrimary: Destination[] = [
   { id: 'master', label: 'Master', icon: IconSparkle },
   { id: 'activity', label: 'Tasks', icon: IconTasks },
-  { id: 'files', label: 'Files', icon: IconFile },
+  { id: 'artifacts', label: 'Artifacts', icon: IconArtifacts },
 ]
 export function Sidebar(props: {
   activeProfile: Profile | null; activeProject: Project | null; activeSession: ChatSession | null; currentView: View

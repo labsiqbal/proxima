@@ -706,9 +706,9 @@ const HELP_CHAPTERS = [
   { id: 'master', title: 'Master', summary: 'Delegate outcomes; up to three workers; unattended budgets stay opt-in.' },
   { id: 'tasks', title: 'Tasks', summary: 'Watch durable jobs run, review changes, and open task workspaces.' },
   { id: 'workflows', title: 'Workflows', summary: 'Save plans as templates, schedule runs, and author on the graph canvas.' },
-  { id: 'archive', title: 'Archive', summary: 'Durable deliverables, versions, lineage, and the shared ArtifactViewer.' },
+  { id: 'artifacts', title: 'Artifacts', summary: 'The gallery of produced work, plus durable deliverables, versions, lineage, and the shared ArtifactViewer.' },
   { id: 'design', title: 'Design', summary: 'Create and review visual scenes when Design Studio is enabled.' },
-  { id: 'projects', title: 'Projects & tools', summary: 'Linked folders, work areas, Files, Terminal, and app Preview.' },
+  { id: 'projects', title: 'Projects & tools', summary: 'Linked folders, work areas, Terminal, and app Preview.' },
   { id: 'agents', title: 'Agents', summary: 'Bring your own runner, choose profiles, models, skills, and tools.' },
   { id: 'remote', title: 'Remote & safety', summary: 'Owner password, loopback/Tailscale posture, audit history, checkpoints, and satpam.' },
   { id: 'settings', title: 'Settings', summary: 'Appearance, budgets, media providers, diagnostics, and update controls.' },
@@ -732,7 +732,7 @@ function HelpToursPanel({ token }: { token: string }) {
     <div className="help-chapters">{chapters.map(item => {
       return <button type="button" key={item.id} className={chapter?.id === item.id ? 'active' : ''} onClick={() => setChapter(item)}><strong>{item.title}</strong><span>{item.summary}</span></button>
     })}</div>
-    {chapter && <article className="help-chapter" aria-live="polite"><span className="eyebrow">Chapter</span><h3>{chapter.title}</h3><p>{chapter.summary}</p><p className="muted">Use the left navigation for primary destinations. Files, Terminal, and Preview stay in the tools rail so the current workspace remains visible. Review or permission decisions always return to their owning surface through Attention.</p></article>}
+    {chapter && <article className="help-chapter" aria-live="polite"><span className="eyebrow">Chapter</span><h3>{chapter.title}</h3><p>{chapter.summary}</p><p className="muted">Use the left navigation for primary destinations. Terminal and Preview stay in the tools rail so the current workspace remains visible. Review or permission decisions always return to their owning surface through Attention.</p></article>}
   </div>
 }
 

@@ -6,7 +6,7 @@
 > `AGENT.md` memory) are design targets with **no code behind them today**; other
 > inline notes mark where the shipped product diverged. Design Studio and image
 > generation are active; Video Studio was removed. The shipped single-workspace flow (Chat → Tasks → Recipes, run-first
-> plans, repo-job diff review + local merge, script nodes, the deliverable ledger on Files) is
+> plans, repo-job diff review + local merge, script nodes, the deliverable ledger on Artifacts) is
 > documented in [../ui-shell.md](../ui-shell.md) and
 > [../CAPABILITIES.md](../CAPABILITIES.md).
 
@@ -96,7 +96,6 @@ The active project is global app context for these surfaces:
 - Recipes
 - Tasks
 - Artifacts
-- Files
 - Wiki
 
 Home is the only primary exception.
@@ -154,7 +153,6 @@ Chat is a gateway. It can create or route to structured surfaces:
 
 - Design,
 - Wiki,
-- Files,
 - Recipes,
 - Artifacts,
 - Tasks.
@@ -184,7 +182,7 @@ Result card routing:
 ```text
 Design → Design Studio editor
 Image → Artifacts image viewer/detail
-Document/File → Files, unless it is wiki-owned
+Document/File → Artifacts, unless it is wiki-owned
 wiki/*.md → Wiki
 App → Artifacts app preview
 Workflow created → Workflow Editor
@@ -255,7 +253,7 @@ Manual editing location:
 
 ```text
 Project settings → Instructions
-or Files → AGENTS.md
+or the file tree → AGENTS.md
 ```
 
 ### Project Wiki
@@ -311,7 +309,7 @@ Design result card should open Design Studio directly, not Artifacts.
 
 ## Artifacts Flow
 
-> **Status (Phase-1 slice 8, T4):** shipped as the durable deliverable registry (the **Files Deliverables lens** since prune Part D, #139) - a durable registry
+> **Status (Phase-1 slice 8, T4):** shipped as the durable deliverable registry (the **Deliverables tab** of the Artifacts destination since #139/#144) - a durable registry
 > (records with lineage, one synced approval status, version chains, permalinks)
 > rather than a scan-only gallery. See `docs/CAPABILITIES.md` §14.
 
@@ -364,21 +362,15 @@ If many apps are detected:
 
 Exclude controls live in Artifacts card menus.
 
-Files may still preview individual HTML/Markdown files while editing.
-
 ## Files Flow
 
-Files is raw filesystem access for the active project.
+Raw filesystem access for the active project is a **tool**, not a destination
+(ADR-0043): browse the tree, edit and save files, preview a single HTML/Markdown
+file, inspect generated output when needed. It lives on the right dock (#145);
+the read-only Container inspection Ops-migration recovery needs is inside
+Artifacts in the meantime.
 
-Use Files for:
-
-- browse tree,
-- edit files,
-- save files,
-- single-file HTML/Markdown preview,
-- inspect generated output when needed.
-
-Do not use Files as the primary app/output consumption surface. That belongs in Artifacts.
+App and output consumption belong to Artifacts, never to the file tree.
 
 ## Workflow Flow
 

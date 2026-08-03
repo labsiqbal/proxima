@@ -192,7 +192,7 @@ describe('AppShell mobile drawer + search', () => {
     expect(screen.getByRole('navigation', { name: 'Delegate navigation' })).toBeInTheDocument()
     expect(within(document.querySelector('.sidebar') as HTMLElement).getByRole('button', { name: 'Master' })).toBeInTheDocument()
     expect(within(document.querySelector('.sidebar') as HTMLElement).getByRole('button', { name: 'Tasks' })).toBeInTheDocument()
-    expect(within(document.querySelector('.sidebar') as HTMLElement).getByRole('button', { name: 'Files' })).toBeInTheDocument()
+    expect(within(document.querySelector('.sidebar') as HTMLElement).getByRole('button', { name: 'Artifacts' })).toBeInTheDocument()
     expect(screen.queryByLabelText('Tools')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Active project:/ })).not.toBeInTheDocument()
     // The account menu stays: it is the only route to Projects, Agents,

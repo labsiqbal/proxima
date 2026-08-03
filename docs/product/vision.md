@@ -7,7 +7,7 @@ Proxima is an opinionated agent harness and workspace OS. It gives AI agents ful
 > **How to read this doc:** this is product *direction*, not a description of current
 > behavior - some flows below are **not in the code yet**. Implemented today
 > (through Phase-1 slice 9): the single-workspace flow (Chat → Tasks → Recipes,
-> plus Projects and the Files Deliverables lens), run-first plans on the graph engine, repo jobs
+> plus Projects and the Artifacts gallery with its Deliverables tab), run-first plans on the graph engine, repo jobs
 > with worktree isolation + local diff review and merge, deterministic script
 > nodes, turn-timeout auto-continuation, the durable deliverable registry, the
 > bundled capability pack, chat, schedules, wiki, image generation, and
@@ -55,7 +55,7 @@ Chat should:
 - produce result cards for concrete outputs,
 - route users into the right surface.
 
-Chat should not become the detailed workspace for every task. Detailed work belongs in Design, Files, Wiki, Workflows, Activity, or Artifacts.
+Chat should not become the detailed workspace for every task. Detailed work belongs in Design, Wiki, Workflows, Activity, or Artifacts.
 
 ### Active Project Owns All Writes
 
@@ -114,7 +114,7 @@ Examples:
 
 - design output opens in Design Studio,
 - wiki note opens in Wiki,
-- normal project file opens in Files,
+- normal project file opens in Artifacts,
 - workflow draft opens in Workflow Editor,
 - app preview opens in Artifacts,
 - generated image/document/app appears in Artifacts.
@@ -159,7 +159,7 @@ Instruction priority:
 
 More specific instructions override broader ones.
 
-### Artifacts Are The Output Library *(shipped as the deliverable registry - Phase-1 slice 8, T4; surfaced as the Files Deliverables lens since prune Part D, #139)*
+### Artifacts Are The Output Library *(shipped: the deliverable registry - Phase-1 slice 8, T4 - and, since ADR-0043/#144, the Artifacts destination itself: a thumbnail gallery with All / Deliverables / History tabs)*
 
 Artifacts is the universal gallery for outputs in the active project.
 
@@ -185,7 +185,7 @@ Artifacts should filter by:
 
 ### Files Are Raw Workspace Access
 
-Files is a utility surface for inspecting and editing the project filesystem. It should keep quick single-file preview for HTML/Markdown, but app preview and output consumption should live in Artifacts.
+Browsing the filesystem is a utility, not a destination (ADR-0043): output consumption and app preview belong to Artifacts, and the tree returns as a right-rail dock tool (#145). The read-only Container inspection used by Ops-migration recovery lives inside Artifacts in the meantime.
 
 ### Workflows Are Reusable Processes *(versioning is planned — not yet in code)*
 
@@ -259,7 +259,7 @@ Chat
 Tasks
 Recipes
 Projects
-Files (deliverables lens)
+Artifacts (gallery + deliverables/history tabs)
 Design
 ```
 
@@ -267,7 +267,7 @@ Tool rail (overlay panels, any context):
 
 ```text
 Terminal
-Files
+Files (returns in #145)
 Preview
 ```
 

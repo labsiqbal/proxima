@@ -71,6 +71,9 @@
 		(4 * var(--slash-option-height)) + (3 * var(--mention-list-gap)) +
 			(2 * var(--mention-list-padding))
 	);
+	/* Artifacts gallery: the narrowest a thumbnail card may get before the
+	   grid drops a column (ADR-0043). */
+	--artifacts-card-min-width: 13rem;
 	--artifact-review-panel-width: 22rem;
 	--artifact-review-nav-width: 2.75rem;
 	--artifact-review-nav-height: 4rem;
@@ -5674,114 +5677,283 @@ div.result-media {
    (52px vs 68px, different border, one with a background) while sitting one tab
    click from each other. Values are the tokens the old literals already equalled
    (12/16/20 = --space-3/4/5). */
-/* Files destination (ADR-0040). Shares the Tasks head language so the two global
-   surfaces read as one family; the body scrolls per tree so a long Container
-   cannot push the head off screen. */
-.files-view {
+/* Artifacts destination (ADR-0043, replacing the Files destination of
+   ADR-0040). Shares the Tasks head language so the global surfaces read as one
+   family; the body scrolls under a fixed head so a long gallery cannot push the
+   tabs off screen. Thumbnails are the point: designs, images, and video get a
+   picture, documents get a row. */
+.artifacts-view {
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
 	flex: 1;
 	overflow: hidden;
 }
-.files-head {
+.artifacts-head {
 	display: flex;
 	gap: var(--space-3);
 	align-items: center;
 	padding: var(--space-4) var(--space-5);
 	border-bottom: 1px solid var(--ui-stroke-tertiary);
 }
-.files-scope {
+.artifacts-scope {
 	font-size: var(--text-sm);
 }
-.files-empty {
-	padding: var(--space-5);
-}
-.files-body {
-	flex: 1;
-	min-height: 0;
-	overflow-y: auto;
-	padding: var(--space-3) var(--space-4);
-}
-.files-body-global {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-5);
-}
-.files-project-name {
-	font-size: var(--text-sm);
-	color: var(--ui-text-secondary);
-	margin: 0 0 var(--space-2);
-	padding-left: var(--space-2);
-}
-.files-tree {
-	min-height: 0;
-}
-/* Lens chips (prune Part D, #139): Browse the disk, Deliverables (the record
-   ledger), History (records whose file is gone). Same chip grammar as the
-   archive facet chips so the two record surfaces read as one family. */
-.files-lens {
+/* Tabs, not lenses: All (the gallery), Deliverables (the record ledger), and
+   History (records whose file is gone). Same chip grammar as the archive facet
+   chips so the two record surfaces read as one family. */
+.artifacts-tabs {
 	display: flex;
 	gap: var(--space-2);
 	align-items: center;
 }
-.files-lens-chip {
-	height: 28px;
-	padding: 0 var(--space-3);
+.artifacts-tabs button {
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--ui-stroke-secondary);
 	border-radius: var(--radius-full);
 	background: var(--ui-surface);
 	color: var(--ui-text-secondary);
 	font-size: var(--text-sm);
 	cursor: pointer;
-	transition: border-color var(--t) var(--ease), color var(--t) var(--ease), background var(--t) var(--ease);
+	transition:
+		border-color var(--t) var(--ease),
+		color var(--t) var(--ease),
+		background var(--t) var(--ease);
 }
-.files-lens-chip:hover {
+.artifacts-tabs button:hover {
 	border-color: var(--ui-stroke-primary);
 	color: var(--ui-text-primary);
 }
-.files-lens-chip.active {
+.artifacts-tabs button.active {
 	border-color: var(--ui-accent);
 	color: var(--ui-accent);
 	background: var(--ui-focus-ring);
 }
-/* Deliverable badge on a tree row: agent-produced files carry their record's
-   approval status; clicking opens the full record. A span, not a nested
-   button - the row itself is one. */
-.files-deliv-badge {
+.artifacts-body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: var(--space-4) var(--space-5);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-6);
+}
+.artifacts-section {
+	min-width: 0;
+}
+.artifacts-section-title {
+	font-size: var(--text-sm);
+	color: var(--ui-text-secondary);
+	margin: 0 0 var(--space-3);
+}
+/* The gallery. Cards size themselves to the pane, so a narrow window keeps
+   readable thumbnails instead of stretching a fixed column count. */
+.artifacts-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(var(--artifacts-card-min-width), 1fr));
+	gap: var(--space-4);
+}
+.artifacts-card {
+	position: relative;
+	display: flex;
+}
+.artifacts-card-open {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-2);
+	border: 1px solid var(--ui-stroke-tertiary);
+	border-radius: var(--radius-md);
+	background: var(--ui-surface);
+	text-align: left;
+	cursor: pointer;
+	transition:
+		border-color var(--t-fast) var(--ease),
+		transform var(--t-fast) var(--ease);
+}
+.artifacts-card-open:hover {
+	border-color: var(--ui-accent);
+	transform: translateY(-1px);
+}
+.artifacts-thumb {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	aspect-ratio: 4 / 3;
+	overflow: hidden;
+	border-radius: var(--radius-sm);
+	background: var(--ui-surface-subtle);
+	container-type: size;
+}
+.artifacts-thumb-img {
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+}
+.artifacts-thumb-video {
+	position: relative;
+	display: flex;
+	width: 100%;
+	height: 100%;
+}
+.artifacts-thumb-video video {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+.artifacts-thumb-video i {
+	position: absolute;
+	inset: auto auto var(--space-2) var(--space-2);
+	padding: var(--space-1) var(--space-2);
+	border-radius: var(--radius-full);
+	background: var(--ui-surface);
+	color: var(--ui-text-primary);
+	font-size: var(--text-2xs);
+	font-style: normal;
+	line-height: 1;
+}
+.artifacts-thumb-design {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+.artifacts-thumb-pending {
+	display: block;
+	width: 100%;
+	height: 100%;
+	background: var(--ui-surface-subtle);
+}
+.artifacts-glyph {
+	color: var(--ui-text-tertiary);
+	font-size: var(--text-lg);
+	line-height: 1;
+}
+.artifacts-card-meta,
+.artifacts-row-meta {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-width: 0;
+}
+.artifacts-card-meta strong,
+.artifacts-row-meta strong {
+	font-size: var(--text-sm);
+	color: var(--ui-text-primary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.artifacts-card-meta small,
+.artifacts-row-meta small {
+	font-size: var(--text-2xs);
+	color: var(--ui-text-tertiary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Documents read, they do not pose: one row each, kind on the right. */
+.artifacts-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.artifacts-row {
+	position: relative;
+	display: flex;
+}
+.artifacts-row-open {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--ui-stroke-tertiary);
+	border-radius: var(--radius-md);
+	background: var(--ui-surface);
+	text-align: left;
+	cursor: pointer;
+	transition: border-color var(--t-fast) var(--ease);
+}
+.artifacts-row-open:hover {
+	border-color: var(--ui-accent);
+}
+.artifacts-row-meta {
+	flex: 1;
+}
+.artifacts-row-kind {
+	flex: 0 0 auto;
+	font-size: var(--text-2xs);
+	color: var(--ui-text-tertiary);
+}
+/* Deliverable badge (#139): an artifact the ledger knows carries its record's
+   approval status, and clicking it opens that record. */
+.artifacts-badge {
+	position: absolute;
+	top: var(--space-3);
+	right: var(--space-3);
 	display: inline-flex;
 	align-items: center;
 	gap: var(--space-1);
-	margin-left: auto;
-	padding: 0 var(--space-2);
+	padding: var(--space-1) var(--space-2);
 	border-radius: var(--radius-full);
 	font-size: var(--text-2xs);
-	line-height: 18px;
+	line-height: 1;
 	color: var(--ui-text-secondary);
-	background: var(--ui-surface-subtle);
+	background: var(--ui-surface);
 	border: 1px solid var(--ui-stroke-tertiary);
-	flex: 0 0 auto;
+	cursor: pointer;
 }
-.files-deliv-badge:hover {
+.artifacts-badge:hover {
 	color: var(--ui-text-primary);
 	border-color: var(--ui-stroke-primary);
 }
-.files-deliv-badge[data-status='approved'] {
+.artifacts-badge[data-status='approved'] {
 	color: var(--ui-success);
 	border-color: color-mix(in srgb, var(--ui-success) 40%, transparent);
 }
-.files-deliv-badge[data-status='review'] {
+.artifacts-badge[data-status='review'] {
 	color: var(--ui-warning);
 	border-color: color-mix(in srgb, var(--ui-warning) 40%, transparent);
 }
-.files-deliv-badge[data-status='superseded'] {
+.artifacts-badge[data-status='superseded'] {
 	color: var(--ui-text-tertiary);
 }
-.files-deliv-badge-label {
-	display: none;
+.artifacts-empty {
+	margin: auto 0;
 }
-.tree-row:hover .files-deliv-badge-label {
-	display: inline;
+/* The live scan is capped, so the gallery says "most recent" instead of
+   looking complete; the Deliverables tab is the paginated truth. */
+.artifacts-cap-note {
+	font-size: var(--text-2xs);
+}
+/* Ops-migration recovery inspection: the one read-only tree left in this
+   destination until ordinary browsing moves to the dock (#145). */
+.artifacts-inspect {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	padding: var(--space-3) var(--space-4);
+	gap: var(--space-3);
+}
+.artifacts-inspect-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+}
+.artifacts-inspect-head > div {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	font-size: var(--text-sm);
+	min-width: 0;
+}
+.artifacts-tree {
+	min-height: 0;
 }
 
 .tasks-head,
@@ -13529,7 +13701,7 @@ button.moodboard-add-method:hover {
 	max-height: 420px;
 	border-radius: var(--radius-sm);
 	overflow: hidden;
-	box-shadow: 0 1px 3px color-mix(in srgb, var(--ui-ink) 12%, transparent);
+	box-shadow: 0 1px 3px var(--ui-scrim);
 }
 .archive-preview-box.compact.design .ds-mini {
 	max-height: 200px;

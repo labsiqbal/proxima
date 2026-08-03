@@ -29,7 +29,7 @@ Single-user cockpit · full-power Chat with approvals and turn restore · **Alph
 orchestration desk** with three worker slots, checkpoints, budgets, and optional
 unattended starts · global **Attention** inbox · multi-agent brainstorm / debate +
 validate sidecar · workflows, jobs, and cron schedules · reviewable workflow
-graphs · in-browser Terminal and Preview · Files as a navigable destination · projects and linked folders ·
+graphs · in-browser Terminal and Preview · Artifacts as a navigable destination (the produced-work gallery) · projects and linked folders ·
 agent profiles with ready/not-ready runner status · Claude Code, Codex, Grok,
 Hermes, and Pi runners · wiki + graph · Design Studio · themes and PWA · daily
 integrity-checked DB backup.
@@ -38,7 +38,7 @@ integrity-checked DB backup.
 Alpha → Tasks → Recipes, tools on a right rail) · project work containers (code
 areas + ops area) · run-first plans with per-job targets · repo jobs in isolated
 worktrees with in-app diff review + local merge · turn-timeout auto-continuation ·
-deterministic script nodes with hash-bound trust · durable deliverable registry (the Files Deliverables lens since #139)
+deterministic script nodes with hash-bound trust · durable deliverable registry (the Artifacts Deliverables tab since #139/#144)
 (lineage, synced approval, permalinks) · bundled capability pack (masterplan skill
 + work-discipline preamble) · flow-centric positioning with the honest
 two-sentence security note · BYO repo-remote connector (per-area push-after-merge,

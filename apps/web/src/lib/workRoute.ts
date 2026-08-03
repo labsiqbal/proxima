@@ -5,14 +5,17 @@ const WORK_VIEWS = new Set<View>([
 	"chat",
 	"activity",
 	"workflows",
-	"files",
+	"artifacts",
 	"design",
 ]);
 const DELEGATE_VIEWS = new Set<View>([
 	"master",
 	"activity",
-	"files",
+	"artifacts",
 ]);
+// Artifacts replaced the Files destination (ADR-0043); a bookmark or a restored
+// tab still carrying the old name lands on its successor instead of the default.
+const RENAMED_VIEWS: Record<string, View> = { files: "artifacts" };
 
 export type WorkRoute = {
 	mode: ShellMode;
@@ -36,7 +39,10 @@ export function parseWorkRoute(location: {
 	const params = new URLSearchParams(location.search);
 	const mode: ShellMode =
 		params.get("mode") === "delegate" ? "delegate" : "work";
-	const requestedView = params.get("view") as View | null;
+	const named = params.get("view");
+	const requestedView = (named && RENAMED_VIEWS[named]
+		? RENAMED_VIEWS[named]
+		: named) as View | null;
 	const allowed = mode === "delegate" ? DELEGATE_VIEWS : WORK_VIEWS;
 	let view: View =
 		requestedView && allowed.has(requestedView)
@@ -45,9 +51,9 @@ export function parseWorkRoute(location: {
 				? "master"
 				: "chat";
 	if (/^#task\/\d+$/.test(location.hash)) view = "task";
-	// Record permalinks outlive the retired Archive destination (#139):
-	// they open as the record panel inside Files.
-	if (/^#archive\/[^/]+\/[^/]+$/.test(location.hash)) view = "files";
+	// Record permalinks outlive both the retired Archive destination (#139) and
+	// the Files one (#144): they open as the record panel inside Artifacts.
+	if (/^#archive\/[^/]+\/[^/]+$/.test(location.hash)) view = "artifacts";
 	return {
 		mode,
 		view,
@@ -107,6 +113,6 @@ export function workRouteUrl(
 	) {
 		url.searchParams.set("design", route.designId);
 	}
-	if (route.view !== "task" && route.view !== "files") url.hash = "";
+	if (route.view !== "task" && route.view !== "artifacts") url.hash = "";
 	return `${url.pathname}${url.search}${url.hash}`;
 }

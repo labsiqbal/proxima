@@ -16,20 +16,21 @@ work surface. Work also adds a slim right tool rail whose tools open as overlays
 The header-level **Work / Delegate** control is URL durable (`?mode=work` or
 `?mode=delegate`) and uses pressed-button semantics. Work navigation is flow-ordered:
 **Chat** (hands-on), **Tasks** (watch it run), **Workflows** (keep what worked), then
-**Files** (what is actually in the Container - and, through its Deliverables
-lens, where deliverables live), plus **Design**. The active-project
+**Artifacts** (what came out - the gallery of produced work and, through its
+Deliverables tab, the record ledger), plus **Design**. The active-project
 switcher belongs to the Work sidebar, not global chrome or Master. Project management
 (list / link / create / remove / container settings) lives under **Settings → Projects**,
 not primary nav. Agents and Settings stay in the Work account menu. The default landing
 mode and surface are Work and Chat. Delegate uses the same header and left-panel
-geometry but its global navigation is only **Master**, **Tasks**, and **Files**.
+geometry but its global navigation is only **Master**, **Tasks**, and **Artifacts**.
 
-Files is a destination in both navigations (ADR-0040): Work scopes it to the
-active Container, Delegate lists every Container behind a head filter, and both
-open files in the ArtifactViewer. Since prune Part D (#139) the separate
-Archive destination is gone: the deliverable ledger lives on Files as its
-**Deliverables** lens (see "Files and the deliverable ledger" below). Terminal
-and Preview remain right-rail tools.
+Artifacts is a destination in both navigations (ADR-0043, replacing the Files
+destination of ADR-0040): Work scopes it to the active Container, Delegate
+gathers every Container behind a head filter, and both open artifacts in the
+ArtifactViewer. Since prune Part D (#139) the separate Archive destination is
+gone: the deliverable ledger lives here as the **Deliverables** and **History**
+tabs (see "Artifacts and the deliverable ledger" below). Terminal and Preview
+remain right-rail tools; full tree browsing returns to that rail in #145.
 
 Every Work destination has a stable history entry. Its URL records the Work mode,
 active project, active Chat session, primary surface, and the open Workflow or Design
@@ -62,11 +63,11 @@ the shell back to Work before opening.
 
 Delegate presents Master as a first-class desk, not a Chat tab or Tasks filter. It keeps
 the shared, persisted sidebar panel but replaces Work navigation with **Master**,
-**Tasks**, and **Files**. Those destinations are global: they do not show
+**Tasks**, and **Artifacts**. Those destinations are global: they do not show
 a project switcher, recent chat history, project filter menu, ordinary Work Chat,
 Workflows, Design, search, tool rail, or popup. The account menu stays - it is the
 only route to Projects, Agents, Settings, and Log out - and each of those entries
-switches the shell back to Work before opening. Tasks and Files query across projects;
+switches the shell back to Work before opening. Tasks and Artifacts query across projects;
 their rows and cards visibly and accessibly name the owning Project, and their task
 and record deep links remain usable without leaving Delegate. Switching back
 restores the prior Work surface. Its header identifies
@@ -194,7 +195,7 @@ Every schedule row offers **Run now**, which fires it immediately and opens the 
 
 ## Right tool rail — Terminal, Preview
 
-Terminal and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, scoped to the active project when Project context is available. Files used to be the third rail tool; it is a left-navigation destination now (ADR-0040) - the workspace tree renders in `FilesScreen`, recovery inspection reveals (`rootSide: 'container'`) still select the read-only Container-root adapter there, and files open in the ArtifactViewer.
+Terminal and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, scoped to the active project when Project context is available. Browsing left the rail for a destination in ADR-0040, and that destination is now Artifacts (ADR-0043), which is a gallery rather than a tree: the one tree still rendered there is the read-only Container inspection an Ops-migration recovery reveal asks for (`rootSide: 'container'`), shown as a transient panel with a Close action. Full tree browsing returns to this rail in #145. Artifacts open in the ArtifactViewer.
 
 During Task permalink resolution and any cross-Project Task mismatch, the entire rail
 and panel are suppressed. They return only after the Task owning Project and active
@@ -225,7 +226,7 @@ changing project **stays on the current view** (refilters content; does not forc
 The enabled desktop Back control includes the origin text, not only an icon.
 
 **Multitask foundation:** primary surfaces must not destroy in-flight UI on leave.
-Once visited, **Chat, Master, Tasks, Workflows, Files, and Design** stay mounted in
+Once visited, **Chat, Master, Tasks, Workflows, Artifacts, and Design** stay mounted in
 hidden `surface-pane`s so draft text, open panels, canvas/plan state, and in-flight
 runs re-attach when the owner returns in the same browser session. Work Chat reload
 durability is owned under Chat above. Server work continues regardless; the client
@@ -233,12 +234,12 @@ contract is keep-alive / re-attach, not remount-from-zero.
 
 **Teaching empty states:** top-level empties share one grammar — title, what the surface
 can do, short tutorial steps, and one primary CTA where it applies (Chat, Master, Tasks,
-Workflows library context, the Deliverables lens, Design home). Help/core tour nouns match the primary
-loop **Chat → Tasks → Workflows → Files**, with Master as the delegate side path.
+Workflows library context, the Artifacts gallery and its Deliverables tab, Design home). Help/core tour
+nouns match the primary loop **Chat → Tasks → Workflows → Artifacts**, with Master as the delegate side path.
 
 **Workflow how-it-runs:** library table rows show Availability separately from the joined
 Automation summary (schedules on, off, or needing bindings). Schedule forms lock project
-to the workflow owner - no free rebinding. Open deliverables from Chat/Tasks/Files use
+to the workflow owner - no free rebinding. Open deliverables from Chat/Tasks/Artifacts use
 the same in-app **ArtifactViewer** for supported types. Unsupported binary or
 directory-like paths show a download fallback immediately rather than remaining in a
 loading state.
@@ -263,7 +264,7 @@ Attention stays a separate `!` control and remains hidden when empty.
 
 Agents and Settings live in the Work profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The Work top bar owns the brand mark, mode switch, sidebar collapse toggle, search, Running + Attention, and account menu; its sidebar owns the active-project switcher. On mobile that switcher stays in the Work drawer and the mode control remains in the compact header. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 
-Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Files, and ordinary Design entry) keep that contract. Opening Design from a Task binds the studio to that Task's owning Project without adopting it as the Work selection, and returning to the Task restamps the in-app preserve-work policy. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Deliverable records and Designs remain owned by their Project. Delegate has no project selector or project filter: its Tasks and Files indices are global, while Master Focus and explicit target controls remain its own bounded context.
+Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Artifacts, and ordinary Design entry) keep that contract. Opening Design from a Task binds the studio to that Task's owning Project without adopting it as the Work selection, and returning to the Task restamps the in-app preserve-work policy. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Deliverable records and Designs remain owned by their Project. Delegate has no project selector or project filter: its Tasks and Artifacts indices are global, while Master Focus and explicit target controls remain its own bounded context.
 
 A **global error surface** sits below every destination. Uncaught errors, unhandled
 promise rejections, failed dynamic imports, and API calls that got no response (or a
@@ -352,18 +353,18 @@ and preserves that detail route across reload. The same surface is available fro
 each Project card in Settings. It presents the stored reason, phase, both physical
 layouts, exact physical-root entries, conflicts, and remaining usable paths. While
 the detail is open, its Project pins the shell scope across session refreshes and the
-project switcher is locked. Reveal actions open Files with explicit Container-root
-targets for the chosen side through a read-only Files adapter with no create, save,
-rename, or delete controls. Revealed directories expand and receive the active-row
+project switcher is locked. Reveal actions open the Artifacts inspection panel with
+explicit Container-root targets for the chosen side through a read-only adapter with no
+create, save, rename, or delete controls. Revealed directories expand and receive the active-row
 marker. Per-path inspection uses each side's actual file or directory state, while
 backend-declared root inspectability keeps missing, symlinked, unavailable, or
-unsupported targets disabled with an accessible refusal reason. If the ordinary
-Files editor already holds unsaved project bytes, inspection keeps that buffer
-mounted and read-only with a visible retain banner; tree selection can browse the
-inspection side without replacing those bytes, and write returns only when the
-ordinary Area-validated adapter is restored.
-Closing that inspection, changing Projects, or opening Files normally clears the
-Container-root target and restores the ordinary Files view. Changing
+unsupported targets disabled with an accessible refusal reason. If a file editor
+already holds unsaved project bytes, inspection keeps that buffer mounted and
+read-only with a visible retain banner; tree selection can browse the inspection side
+without replacing those bytes, and write returns only when the ordinary
+Area-validated adapter is restored.
+Closing that inspection or changing Projects clears the Container-root target and
+restores the ordinary Artifacts gallery. Changing
 Projects or leaving the Projects Settings section clears the durable detail hash,
 while changing directly between recovery routes clears stale detail data before
 loading the next Project. Validation refresh is read-only, and guarded retry remains
@@ -373,23 +374,23 @@ without moving content. The detail heading receives focus on entry; status chang
 use live regions, errors use alerts, and retry exposes its safety rule through
 `aria-describedby`.
 
-## Files and the deliverable ledger
+## Artifacts and the deliverable ledger
 
-Archive and Files merged into ONE Files destination (prune Part D, #139; decision #122). Files browses the real disk - disk is the truth (#121) - through three lenses:
+Archive and Files merged into ONE destination (prune Part D, #139; decision #122), and that destination is **Artifacts** (ADR-0043): the gallery of what the project produced, with the ledger as tabs on the same surface.
 
-- **Browse** - the real Container tree. Agent-produced files carry a **deliverable badge** showing their record's approval status; clicking the badge opens the full record.
-- **Deliverables** - the durable deliverable registry (T4) as a lens: every agent output is a record with lineage, ONE approval status (synced with the job-review approve), and a version chain, filterable by type/status/date/search.
+- **All** - the gallery. Designs, images, and video render as **thumbnails** (a design draws its first artboard from `scene.json`); documents, pages, and data render as a **list**. It is a live scan of the Container (`GET /api/projects/{slug}/artifacts`), so it shows what is on disk right now. An artifact the ledger knows carries a **deliverable badge** with its record's approval status; clicking the badge opens the full record.
+- **Deliverables** - the durable deliverable registry (T4): every agent output is a record with lineage, ONE approval status (synced with the job-review approve), and a version chain, filterable by type/status/date/search.
 - **History** - records whose file no longer exists on disk. They are records, not phantom files: the ledger's survive-deletion property, kept visible.
 
-The combo detail is unchanged: an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address (the hash format outlives the retired destination, so old bookmarks keep working - they open the record panel inside Files). Record paths are container-relative real paths (#139) - the same paths the Browse tree shows - so "Reveal in Files" is a lens switch, not a navigation. Approvals keep their two doors: the record panel and the Tasks review write the SAME status field. Design is a separate canvas destination whose internals are not part of the shell.
+The combo detail is unchanged: an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address (the hash format outlives both retired destinations, so old bookmarks keep working - they open the record panel inside Artifacts, and a bookmarked `?view=files` URL lands there too). Record paths are container-relative real paths (#139) - the same paths the gallery shows. Approvals keep their two doors: the record panel and the Tasks review write the SAME status field. Locating a record's file on disk waits for the dock browser (#145); documents move to the wiki/markdown editor in #146 and app preview gets the main-window viewport in #147. Design is a separate canvas destination whose internals are not part of the shell.
 
 ## De-jargon rule for primary surfaces
 
-Primary screens (Chat, Tasks, Workflows, Files, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Master has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses a server-qualified runner for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome. The qualification contract is owned by [Runner conformance](runner-conformance.md).
+Primary screens (Chat, Tasks, Workflows, Artifacts, the task workspace, the shell itself) never show the words "runner", "MCP", or "profile", env-var names, raw tool payloads, or raw stack traces. The plain words are **agent** and **tools**. Technical detail belongs to Settings, Agents, and docs. Master has one deliberate product-contract exception: its header says **Backing runner** because the owner explicitly chooses a server-qualified runner for the system identity; tool results render as flat timeline text (with plain job links when present), not raw JSON or card chrome. The qualification contract is owned by [Runner conformance](runner-conformance.md).
 
 ## Responsive and accessibility behavior
 
-The left navigation width persists locally in both modes. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses the same focus-managed drawer in both modes; Work's tool rail pins to the right edge, while Delegate keeps its global Master, Tasks, and Files navigation. The Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics in Work. Escape dismisses transient Work overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
+The left navigation width persists locally in both modes. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses the same focus-managed drawer in both modes; Work's tool rail pins to the right edge, while Delegate keeps its global Master, Tasks, and Artifacts navigation. The Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics in Work. Escape dismisses transient Work overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
 
 The setup and returning-owner password gates each expose exactly one `main` landmark.
 Password fields have stable accessible names and password-manager autocomplete values,

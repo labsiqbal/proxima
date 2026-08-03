@@ -2,11 +2,12 @@ import React from 'react'
 import { listArchive, setArchiveStatus, type ArchiveCounts, type ArchiveRecord, type ArchiveStatus } from '../../api/archive'
 import { fmtDate, fmtSize, LineageLine, permalinkOf, RecordPreview, StatusPill, typeMeta } from './archive'
 
-// The Deliverables lens on Files (prune Part D, #139): the durable deliverable
-// registry, rendered as a filterable list inside the Files destination. Rows
-// expand in place for the quick scan; "Open full record" navigates to the
-// record's permanent address. `missingOnly` is the history filter: records
-// whose file is gone from disk - they are records, not phantom files.
+// The deliverable ledger (prune Part D, #139): the durable deliverable
+// registry, rendered as a filterable list. It is the Deliverables tab of the
+// Artifacts destination (ADR-0043). Rows expand in place for the quick scan;
+// "Open full record" navigates to the record's permanent address. `missingOnly`
+// is the History tab: records whose file is gone from disk - they are records,
+// not phantom files.
 
 const clean = (n: string) => n.replace(/\s*\(private\)\s*$/i, '')
 const PAGE_SIZE = 50

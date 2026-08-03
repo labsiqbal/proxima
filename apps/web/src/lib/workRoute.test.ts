@@ -46,16 +46,16 @@ describe("Work URL state", () => {
 		).toMatchObject({ workflowJobId: null, designId: null });
 	});
 
-	it("opens record permalinks inside Files now that Archive merged (#139)", () => {
+	it("opens record permalinks inside Artifacts (#144)", () => {
 		expect(
 			parseWorkRoute({
 				search: "?mode=work&view=chat",
 				hash: "#archive/wingoh/report-md-v1",
 			}),
-		).toMatchObject({ view: "files" });
-		// The record hash survives serialization while Files is the view.
+		).toMatchObject({ view: "artifacts" });
+		// The record hash survives serialization while Artifacts is the view.
 		const route = parseWorkRoute({
-			search: "?mode=work&view=files",
+			search: "?mode=work&view=artifacts",
 			hash: "#archive/wingoh/report-md-v1",
 		});
 		expect(
@@ -63,22 +63,38 @@ describe("Work URL state", () => {
 				"http://localhost/#archive/wingoh/report-md-v1",
 				route,
 			),
-		).toBe("/?mode=work&view=files#archive/wingoh/report-md-v1");
+		).toBe("/?mode=work&view=artifacts#archive/wingoh/report-md-v1");
 	});
 
-	it("keeps Files durable in both modes (ADR-0040)", () => {
+	it("keeps Artifacts durable in both modes (ADR-0043)", () => {
+		expect(
+			parseWorkRoute({
+				search: "?mode=work&view=artifacts&project=atlas",
+				hash: "",
+			}),
+		).toMatchObject({ mode: "work", view: "artifacts", projectSlug: "atlas" });
+		expect(
+			parseWorkRoute({
+				search: "?mode=delegate&view=artifacts",
+				hash: "",
+			}),
+		).toMatchObject({
+			mode: "delegate",
+			view: "artifacts",
+			projectSlug: null,
+		});
+	});
+
+	it("lands a bookmarked Files URL on Artifacts, which replaced it (#144)", () => {
 		expect(
 			parseWorkRoute({
 				search: "?mode=work&view=files&project=atlas",
 				hash: "",
 			}),
-		).toMatchObject({ mode: "work", view: "files", projectSlug: "atlas" });
+		).toMatchObject({ mode: "work", view: "artifacts", projectSlug: "atlas" });
 		expect(
-			parseWorkRoute({
-				search: "?mode=delegate&view=files",
-				hash: "",
-			}),
-		).toMatchObject({ mode: "delegate", view: "files", projectSlug: null });
+			parseWorkRoute({ search: "?mode=delegate&view=files", hash: "" }),
+		).toMatchObject({ mode: "delegate", view: "artifacts" });
 	});
 
 	it("drops Work context from Delegate and falls back stale views explicitly", () => {

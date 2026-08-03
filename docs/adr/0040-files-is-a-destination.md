@@ -1,6 +1,6 @@
 # ADR-0040: Files is a destination, not a right-rail tool
 
-- Status: Accepted
+- Status: Superseded by ADR-0043
 - Date: 2026-08-01
 
 ## Context
@@ -86,6 +86,9 @@ Negative:
 
 ## Related
 
+- Superseded by: [`0043-artifacts-is-the-destination.md`](0043-artifacts-is-the-destination.md)
+  - Artifacts replaced Files as the destination; browsing returns to the dock.
+    The shared ArtifactViewer and the `proxima:reveal-file` contract stand.
 - Shell information architecture: [`../ui-shell.md`](../ui-shell.md)
 - Capabilities: [`../CAPABILITIES.md`](../CAPABILITIES.md)
 - Master ships enabled: [`0039-master-orchestrator-ships-enabled.md`](0039-master-orchestrator-ships-enabled.md)

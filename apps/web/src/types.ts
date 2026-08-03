@@ -673,7 +673,7 @@ export type View =
 	| "master"
 	| "projects"
 	| "wiki"
-	| "files"
+	| "artifacts"
 	| "workflows"
 	| "activity"
 	| "task"

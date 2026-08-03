@@ -8,7 +8,8 @@ const AppRunner = React.lazy(() => import('../files/AppRunner').then(m => ({ def
 // Terminal and Preview are tools, not destinations: a slim icon rail on the
 // right opens each one as an overlay panel above the current screen, so the
 // plan/chat you were reading stays where it was. Both are scoped to the active
-// project, in any context. Files moved out to its own destination (ADR-0040) -
+// project, in any context. Browsing left the rail for its own destination
+// (ADR-0040, now Artifacts per ADR-0043) -
 // browsing is navigation, and a tree in a narrow overlay could not carry the
 // cross-project scope Delegate needs.
 export type Tool = 'terminal' | 'preview'
@@ -54,7 +55,7 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
 
   // Tell the shell a tool panel is open so main content can reserve space for
   // it. Without this the overlay covers right-edge primary actions (e.g.
-  // Design Studio's "Generate →") while Files/Terminal/Preview is open.
+  // Design Studio's "Generate →") while Terminal/Preview is open.
   React.useEffect(() => {
     const shell = document.querySelector('.app-shell')
     if (!shell) return

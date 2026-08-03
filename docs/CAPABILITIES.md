@@ -699,7 +699,7 @@ labels consume the same canonical effective status as its run projection.
 with five chapters when Master is enabled and four when it is disabled. Completion
 is reconciled between the feature-off browser marker and Master settings so enabling
 Master does not replay a tour the owner already completed. Settings → Help & Tours
-can replay it and launch chapters for Workflows, Projects/tools, Files,
+can replay it and launch chapters for Workflows, Projects/tools, Artifacts,
 feature-aware Design, Agents, remote/safety, and Settings.
 
 **Endpoints:** `GET /api/master/desk`, `POST /api/master/messages`,
@@ -730,9 +730,9 @@ a chat-side feature as-is (its timeout behavior is unchanged by slice 5).
 → `wiki-note/commit` writes the markdown into **that chat session's project wiki** +
 rebuilds the wiki index. After approve, the chat shows an in-app status line with
 the saved path (desktop notifications stay background-only). Opening or switching
-a chat session pulls the shell project to match (so Files / @-mentions start on the
+a chat session pulls the shell project to match (so Artifacts / @-mentions start on the
 conversation's project); an intentional Projects pick still sticks for Tasks and
-Files while an older session stays in memory. The chat header always prefers the
+Artifacts while an older session stays in memory. The chat header always prefers the
 open session's project over a desynced shell pick.
 **Endpoints:** `POST /api/sessions/{id}/wiki-note/draft`, `/wiki-note/commit`.
 
@@ -894,7 +894,7 @@ without adopting it as Work; returning to the Task restamps the in-app preserve-
 hash policy so a later cold reload still takes the permalink path.
 A reloaded `#task/<id>` permalink resolves Task metadata and its owning Project before
 mounting the shell. It then selects and locks that Project in one transition. Until
-the Project and Task agree, Project-bound Files, Preview, and Terminal tools remain
+the Project and Task agree, Project-bound Preview and Terminal tools remain
 suppressed, so stale Work context cannot leak into the Task surface.
 
 ### Tasks screen = plans + their jobs (Phase-1 slice 3, T2)
@@ -1511,15 +1511,14 @@ shows the affected Project, exact stored owner-safe reason, migration phase, leg
 and physical path states, exact physical-root entries, conflicts, and which Ops paths
 remain usable. Owners can reveal either side through an explicit Container-root
 read-only target and refresh read-only validation. Recovery inspection has only tree
-and file-read operations; its Files tree removes mutation controls, opens files
+and file-read operations; its tree removes mutation controls, opens files
 read-only, and visibly expands and marks directory targets. An already-dirty ordinary
-Files buffer stays mounted and read-only across the inspection adapter swap and path
+file buffer stays mounted and read-only across the inspection adapter swap and path
 browses; inspection never discards those unsaved project bytes, and write returns only
 with the ordinary Area-validated adapter. Backend-declared root
 inspectability disables unavailable or unsafe reveal actions with an accessible
-reason. Closing inspection,
-changing Projects, or opening Files normally restores the ordinary writable
-boundary. The durable detail route pins the shell to its Project across reload and
+reason. Closing inspection or
+changing Projects restores the ordinary writable boundary. The durable detail route pins the shell to its Project across reload and
 refresh; switching Settings sections clears the detail route. Retry stays disabled
 until the current layout passes the existing collision, type, hash, symlink, overlap,
 and same-filesystem checks; retry then requires confirmation and resumes through the
@@ -1590,7 +1589,7 @@ no-follow refusal as a hard failure.
 **Paths mean exactly what they say on disk** (prune #138, decision #121):
 reserved-name virtual rerouting is gone. A path-only request resolves literally
 from the Container root - a real folder named `wiki/`, `scripts/`, or `tasks/`
-is just that folder, and Files browsing shows the real tree (the Ops folder is a
+is just that folder, and file browsing shows the real tree (the Ops folder is a
 normal directory entry; nothing is overlaid or shadowed). Uploads return
 container-relative paths (the mapped uploads folder by default, a literal
 folder when an explicit dir is given), and reroute-era rows (turn-journal
@@ -1621,12 +1620,13 @@ The security contract is owned by
 [Security boundaries](security-boundaries.md#canonical-file-preview);
 the locator and request flow are detailed in [Architecture](reference/architecture.md)
 and [ADR-0042](adr/0042-file-preview-is-a-sandboxed-iframe.md).
-These APIs power the **Files destination** (the project tree in the left
-navigation, ADR-0040; files open in the ArtifactViewer, whose edit action
-reaches the inline editor - and, since #139, the Deliverables/History lenses
-and record panel), the **Wiki** tree under Settings → Knowledge, chat
-attachments, and `@` file/artifact references — with the in-browser
-**Terminal** as the raw escape hatch.
+These APIs power the **Artifacts destination** (the produced-work gallery in the
+left navigation, ADR-0043; artifacts open in the ArtifactViewer, whose edit action
+reaches the inline editor - plus the Deliverables/History tabs and the record
+panel from #139, and the read-only Container inspection an Ops-migration reveal
+asks for), the **Wiki** tree under Settings → Knowledge, chat attachments, and
+`@` file/artifact references - with the in-browser **Terminal** as the raw escape
+hatch. Full tree browsing returns as a right-rail dock tool in #145.
 Inline New file / New folder / Rename rows share one tree input with an accessible
 name (`New file name`, `New folder name`, or `Rename <entry>`) and a create
 placeholder (`file-name` / `folder-name`) so the empty field is not a dead unlabeled
@@ -1786,7 +1786,8 @@ pattern as Workflows Plan Chat / node inspector); widths persist in
 `localStorage` (`proxima.design.leftWidth`, `proxima.design.inspectorWidth`) and
 handles hide when a panel is collapsed. Mobile keeps bottom sheets only. Scenes
 persist at `<artifacts>/design/<id>/scene.json` in the mapped artifacts folder
-(layout map, prune #138) and appear as design records in the Deliverables lens.
+(layout map, prune #138) and appear as design records in the Deliverables tab
+(and as thumbnails in the Artifacts gallery).
 The optional project component library (`<artifacts>/design/_components.json`) is
 loaded only when the design root listing already contains that file, so a fresh
 project does not probe a missing path. Zoom/Fit and Layers-panel rows expose
@@ -1798,22 +1799,22 @@ Design Studio is always on (the feature-flag system was removed in prune A2, #12
 Video Studio, editable video projects, and the `/video` generation surface were removed;
 ordinary video files remain readable and playable as generic artifacts.
 
-## 14. Deliverables: the durable record ledger, a lens on Files (T4; merged into Files by prune Part D, #139 - LIVE)
+## 14. Deliverables: the durable record ledger, a tab on Artifacts (T4; merged into one destination by prune Part D, #139; that destination is Artifacts per ADR-0043 - LIVE)
 
 **Why:** deliverables used to exist only as a capped (~40 item) mtime scan - no
 memory, no approval state, no trace of which job produced a file. The ledger is
 a **registry, not a scanner**: the scanner discovers files, the registry remembers
 them as durable records that survive file moves and deletion (a missing file flips
 `file_missing` on the record; the record stays). Since #139 there is no separate
-Archive destination: the ledger is the **Deliverables lens on the Files
-destination**. Files' Browse lens shows the real disk with a **deliverable badge**
-on agent-produced files (`GET /api/archive/badges?project=...` - the latest
-record per path); the **History filter** (`GET /api/archive?missing=1`) lists
+Archive destination: the ledger is the **Deliverables tab of the Artifacts
+destination** (#144). The gallery tab carries a **deliverable badge** on any
+scanned artifact the ledger knows (`GET /api/archive/badges?project=...` - the
+latest record per path); the **History tab** (`GET /api/archive?missing=1`) lists
 records whose file no longer exists on disk - records, not phantom files.
 
 **Record language is container-relative real paths (#139, decision #122):**
 `artifact_records.path`, `sessions.produced_artifacts`, and
-`messages.output_links` name the same paths the Files tree browses, resolved
+`messages.output_links` name the same paths the gallery and the file APIs use, resolved
 literally from the container root with the authoritative Area assigned by
 physical ownership. The record scan is container-rooted through the layout map,
 so a mapped artifacts area OUTSIDE the Ops root produces records too (#138's
@@ -1834,14 +1835,14 @@ projects' artifacts appear as draft records on upgrade.
 
 **Approval is ONE status with two doors (synced):** `draft / review / approved /
 superseded`. Approving a job in its Tasks review auto-approves the records that job
-produced; the record panel in Files edits the SAME field for the late/batch/
+produced; the record panel in Artifacts edits the SAME field for the late/batch/
 supersede cases. Never two separate approval states.
 
 **Registry queries replace the item cap:** paginated newest-first list with
 project/type/status/date filters, text search, and facet counts; each record has a
 permanent per-project address (`/api/archive/{project}/{slug}` — the UI's
 `#archive/<project>/<slug>` permalink, which now opens the record panel inside
-Files; old bookmarks keep working) with same-path version history plus
+Artifacts; old bookmarks keep working, as does a bookmarked `?view=files` URL) with same-path version history plus
 project-level newer/older record navigation (by produce date, not version).
 Inline and full-record previews cover docs (markdown), pages (HTML iframe),
 images/video, and **designs** (first artboard via the same `MiniPreview` thumb as
@@ -2122,12 +2123,12 @@ or the HttpOnly `proxima_session` cookie.
 
 ## Single-workspace shell ("Deck", T3)
 
-+ **One workspace, no Ops/Code switch.** The header has a URL-durable **Work / Delegate** mode control. Work keeps the flow-ordered destinations Chat, Tasks, Workflows, Files, Design, and project-scoped recent chats; its sidebar owns the active-project switcher and the top bar does not. Delegate keeps that same persistent, collapsible sidebar and header language, but replaces Work navigation with global Master, Tasks, and Files (ADR-0040: Files is a destination in both modes, Work-scoped to the active Container and Delegate-global behind a head filter, always opening through the ArtifactViewer). It keeps the global header status cluster (`N tasks running` + Needs-you), since watching delegated work is the point of the mode; opening a Work-only target from there switches back to Work first. It has no project selector, project filter menu, ordinary Chat, Workflows, Design, tools, search, or popup surfaces; the account menu stays - it is the only route to Projects, Agents, Settings, and Log out - and each of those entries switches back to Work before opening; its Tasks and Files views query across projects and their task and record deep links remain in Delegate. Opening a graph plan explicitly returns to Work, and Task workspace Design actions remain unavailable in Delegate. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. **Chrome Back** is always visible in Work (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach; Work Chat reload durability is under Chat above. Work/Chat is the default. Agents and Settings live in the Work profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle.
++ **One workspace, no Ops/Code switch.** The header has a URL-durable **Work / Delegate** mode control. Work keeps the flow-ordered destinations Chat, Tasks, Workflows, Artifacts, Design, and project-scoped recent chats; its sidebar owns the active-project switcher and the top bar does not. Delegate keeps that same persistent, collapsible sidebar and header language, but replaces Work navigation with global Master, Tasks, and Artifacts (ADR-0043, replacing the Files destination of ADR-0040: Artifacts is a destination in both modes - a produced-work gallery with All / Deliverables / History tabs, Work-scoped to the active Container and Delegate-global behind a head filter, always opening through the ArtifactViewer). It keeps the global header status cluster (`N tasks running` + Needs-you), since watching delegated work is the point of the mode; opening a Work-only target from there switches back to Work first. It has no project selector, project filter menu, ordinary Chat, Workflows, Design, tools, search, or popup surfaces; the account menu stays - it is the only route to Projects, Agents, Settings, and Log out - and each of those entries switches back to Work before opening; its Tasks and Artifacts views query across projects and their task and record deep links remain in Delegate. Opening a graph plan explicitly returns to Work, and Task workspace Design actions remain unavailable in Delegate. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. **Chrome Back** is always visible in Work (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach; Work Chat reload durability is under Chat above. Work/Chat is the default. Agents and Settings live in the Work profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. Its header carries the session and agent; Work-sidebar project context remains outside the conversation. Its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults on, and unattended starts stay opt-in behind their own toggle; dynamically conforming Codex 0.145.0 or newer is supported, and every other or unavailable adapter fails closed.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). One reusable-workflow table shows workflow Availability separately from the joined schedule summary. Every row retains Edit, manual Run, Schedules, availability pause/resume, and archive actions. The schedule dialog owns timezone, five-field cron, durable input bindings, overlap, per-schedule On/Off, Run now, configure, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
-+ **Right tool rail** (`ToolDock`): Terminal and Preview open as overlay panels above the current screen, project-scoped when Project context is synchronized; the rail and panels stay suppressed during Task permalink resolution or any Task/Work Project mismatch. Files left the rail for its own destination (ADR-0040). The rail's gear opens Settings and Escape closes the panel. Terminal stays mounted after first open (shells survive a closed panel); Preview unmounts because its dev server is a backend process. Agent outputs live on Files (the Deliverables lens, #139); Design remains a separate canvas destination.
++ **Right tool rail** (`ToolDock`): Terminal and Preview open as overlay panels above the current screen, project-scoped when Project context is synchronized; the rail and panels stay suppressed during Task permalink resolution or any Task/Work Project mismatch. Browsing left the rail for a destination in ADR-0040 and returns to it as a dock tool in #145. The rail's gear opens Settings and Escape closes the panel. Terminal stays mounted after first open (shells survive a closed panel); Preview unmounts because its dev server is a backend process. Agent outputs live on Artifacts (the gallery plus the Deliverables tab, #139/#144); Design remains a separate canvas destination.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 
 Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it. Each invalid attempt focuses the corrective field and mounts one fresh assertive alert, even when the same values are submitted again. The gate keeps one main landmark, password-manager-compatible hidden owner metadata, and token-based text and focus contrast across every canonical theme.

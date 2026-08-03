@@ -554,10 +554,11 @@ via `file_missing`. Record paths are container-relative real paths (#139,
 migration v61 rewrote legacy Ops-relative rows): presence resolves each record's
 canonical target literally from the container root through physical ownership,
 and the record scan is container-rooted through the layout map (an artifacts
-area outside the Ops root is covered). The registry is surfaced as the Files
-**Deliverables lens** with a **history filter** (`missing=1`) for gone-file
-records and a badge feed (`GET /api/archive/badges`) for the Files tree; the
-separate Archive destination is gone (prune Part D, #139). Workspace discovery
+area outside the Ops root is covered). The registry is surfaced as the Artifacts
+**Deliverables tab** with a **History tab** (`missing=1`) for gone-file records
+and a badge feed (`GET /api/archive/badges`) that marks the gallery's cards; the
+separate Archive destination is gone (prune Part D, #139) and the destination
+holding the ledger is Artifacts (ADR-0043, #144). Workspace discovery
 does not itself create registry rows. Fed at the one seam every run's outputs pass through
 (`run_outputs.save_assistant_message`); seeded from the scanner by migration 23.
 Migration 26 introduced the original orchestrator foundation. Migration 31
@@ -936,9 +937,9 @@ does not render a composer while another surface is active.
 When the Master feature is enabled, Delegate keeps the shared AppShell sidebar and
 its focus-managed mobile drawer behavior. Its desktop navigation is fixed alongside
 the desk without hide/collapse or resize controls. Its distinct
-global navigation is Master, Tasks, and Files only. Delegate passes no Work active
+global navigation is Master, Tasks, and Artifacts only. Delegate passes no Work active
 project into the Master desk and suppresses project filtering and Work-only escape
-paths from its Tasks and Files views, while preserving task and record deep
+paths from its Tasks and Artifacts views, while preserving task and record deep
 links in the same mode.
 Fleet work, Decisions, and Safety are independent native accordions, open by
 default, with each underlying list constrained to a three-entry internal scroll
@@ -1728,7 +1729,7 @@ ProjectSwitcher uses `setActiveProjectOnly` (active project + recent chat sessio
 for coherence) and **stays on the current view**; only intentional open paths
 (Search project pick, etc.) call `selectProject` to open Chat.
 
-`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Preview as overlay panels; Files is a destination, ADR-0040). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Master, Tasks, Workflows, Files, Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Master's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; the Files destination reuses `WorkspaceTree` over `projectFs` (with the record ledger as its Deliverables lens, #139), and Preview reuses `AppRunner`. The dock accepts an availability boundary from `App`; unavailable Project context closes and hides the entire dock while retaining any already-visited panes for a safe return. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
+`AppShell` retains the persisted left navigation width/collapse state, mobile drawer, search, Attention, and account actions, and owns the right **`ToolDock`** (Terminal/Preview as overlay panels; browsing left the rail in ADR-0040 and returns to it in #145). There is a single workspace: `Sidebar` renders one flow-ordered navigation (Chat, Master, Tasks, Workflows, Artifacts, Design) and the default landing view is `chat`. Session-kind metadata separately declares global-search visibility: Chat and Design sessions are searchable, while Master's hidden system thread is excluded so structured product-tool calls never leak into owner-facing results. Terminal moved out of the view routing into the ToolDock, which mounts it on first open and then hides rather than unmounts it, preserving PTYs; the Artifacts destination (ADR-0043) renders `ArtifactsScreen`: a gallery of the live artifact scan (`ArtifactThumb` draws designs from `scene.json` through `MiniPreview`, images from the preview endpoint, video as a metadata-only frame) with All / Deliverables / History tabs over the same record ledger (#139), plus the read-only Container inspection tree (`WorkspaceTree` over `containerInspectionFs`) an Ops-migration reveal asks for; Preview reuses `AppRunner`. The dock accepts an availability boundary from `App`; unavailable Project context closes and hides the entire dock while retaining any already-visited panes for a safe return. Design Studio's canvas/Konva internals and dedicated inspector remain unchanged.
 
 `App.tsx` serializes Work navigation through `lib/workRoute.ts`: mode, project,
 background Chat session, primary surface, and focused Workflow or Design identity form

@@ -37,11 +37,11 @@ what an owner sees and how the surfaces connect.
 | Tasks list / board / New task | pass (empty project honest) | `tasks-*.png`, `task-launcher.png` |
 | Recipes home / editor / schedules | pass | `workflows-home.png`, `workflow-blank-canvas.png`, `schedules.png` |
 | Projects | pass | `projects.png` |
-| Archive registry (now the Files Deliverables lens, #139) | pass (empty) | `archive-registry.png` |
+| Archive registry (now the Artifacts Deliverables tab, #139/#144) | pass (empty) | `archive-registry.png` |
 | ArtifactViewer v2 deep review | skip - no live artifacts this pass | - |
 | Design home | pass | `design-home.png` |
 | Design studio canvas | skip - not opened beyond home | - |
-| Terminal / Files / Preview rails | pass | `terminal.png`, `files.png`, `preview-rail.png` |
+| Terminal / Preview rails | pass | `terminal.png`, `preview-rail.png` |
 | Search | pass | `search.png` |
 | Settings (appearance, agents, diagnostics) | pass | `settings-*.png` |
 | Help & Tours / Core flow chapter | pass | `help-tours.png`, `help-core-flow.png` |
@@ -54,7 +54,7 @@ what an owner sees and how the surfaces connect.
 
 The shell keeps primary destinations on the left, the current surface in the
 center, and technical tools on the right. Left nav is **destinations only**:
-Chat, Tasks, Workflows, Files, and Design (Archive merged into Files as its
+Chat, Tasks, Workflows, Artifacts, and Design (Archive merged into Artifacts as its
 Deliverables lens, prune Part D #139; screenshots below predate the merge). There
 is no primary-nav **New chat** row - a blank session starts from the Chat header
 control, the mobile topbar icon, or `/new`.
@@ -62,7 +62,7 @@ control, the mobile topbar icon, or `/new`.
 ![Chat in the shared workspace](screenshots/deck-chat.png)
 
 The first post-setup visit offers a keyboard-trapped core tour. By default it is
-four steps - the primary loop, hands-on Chat, Tasks and Workflows, and Files;
+four steps - the primary loop, hands-on Chat, Tasks and Workflows, and Artifacts;
 a fifth **delegated Master work** step appears only when the Master feature is
 enabled (see [CAPABILITIES.md](CAPABILITIES.md)). The same tour can be replayed
 later from Settings → Help & Tours.
@@ -167,8 +167,9 @@ honest when no Recipe is saved yet. Trust regression captures live under
 
 ## 7. Deliverables and Projects
 
-Files remembers deliverables as durable records under its Deliverables lens
-(the separate Archive destination merged into Files, #139). Empty registry at
+Artifacts shows produced work as a gallery and remembers deliverables as durable
+records under its Deliverables tab (the separate Archive destination merged in,
+#139/#144). Empty registry at
 capture time:
 
 ![Archive registry](screenshots/archive-registry.png)
@@ -180,13 +181,11 @@ Projects is a card grid around the active work container.
 ## 8. Tool rail
 
 Terminal and Preview are tools, not destinations. They open over the
-current surface and remain scoped to the active project. Files is a
-left-navigation destination (ADR-0040): the workspace tree in its own
-screen, opening files in the ArtifactViewer.
+current surface and remain scoped to the active project. Produced work lives in
+the Artifacts destination (ADR-0043) instead: a gallery, opening artifacts in the
+ArtifactViewer. Full tree browsing returns to this rail in #145.
 
 ![Connected terminal](screenshots/terminal.png)
-
-![File tree and editor](screenshots/files.png)
 
 ![Preview rail](screenshots/preview-rail.png)
 
