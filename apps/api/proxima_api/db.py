@@ -1862,6 +1862,12 @@ def apply_schema_indexes(conn: sqlite3.Connection) -> tuple[str, ...]:
     Deferring rather than failing is what keeps an existing database bootable:
     ``init_db`` runs on every start, long before the migration that adds the
     column an index names. See the invariant above SCHEMA_TABLES.
+
+    Unlike triggers, indexes are **not** dropped and recreated to match SCHEMA.
+    A trigger body is logic and is free to reinstall; an index is data, and
+    rebuilding every one of them on every boot is real work on a large database.
+    The statements keep their ``IF NOT EXISTS``, so changing an existing index's
+    definition belongs in a migration, exactly like changing a table.
     """
     deferred: list[str] = []
     for name, table, statement in _SCHEMA_INDEX_STATEMENTS:
