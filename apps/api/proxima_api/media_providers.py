@@ -27,8 +27,8 @@ import httpx
 _HTML_MARKERS = ("<!doctype html", "<html")
 
 _BASE_URL_HINT = (
-    "check the base URL - it must be the API root (e.g. https://api.openai.com/v1) "
-    "with no endpoint path after it"
+    "Check the base URL: it must be the API root (e.g. https://api.openai.com/v1) "
+    "with no endpoint path after it."
 )
 
 
@@ -88,7 +88,7 @@ def response_error_detail(response: Any, *, fallback: str = "") -> str:
     """A short, actionable description of a failed provider response."""
     status = getattr(response, "status_code", 0)
     if _looks_like_html(response):
-        return f"the endpoint returned an HTML page, not JSON (HTTP {status}) - {_BASE_URL_HINT}"
+        return f"the endpoint returned an HTML page, not JSON (HTTP {status}). {_BASE_URL_HINT}"
     try:
         message = error_message(response.json())
     except Exception:
@@ -120,11 +120,19 @@ def probe_models_endpoint(
                 return {"ok": False, "detail": f"Key rejected ({r.status_code})."}
             if r.status_code >= 500:
                 return {"ok": False, "detail": f"Endpoint error ({r.status_code})."}
-            n = 0
+            # A base URL that already contains the endpoint path still answers -
+            # with a rendered 404 page. Reporting that as "reachable" is a false
+            # green on the single mistake owners actually make, so require the
+            # endpoint to answer as an API before calling it good.
             try:
-                n = len((r.json().get("data") or []))
+                payload = r.json()
             except Exception:
-                pass
+                return {"ok": False, "detail": response_error_detail(r, fallback="the endpoint did not answer with JSON")}
+            n = 0
+            if isinstance(payload, dict):
+                n = len(payload.get("data") or [])
+            elif isinstance(payload, list):
+                n = len(payload)
             return {"ok": True, "detail": f"Endpoint reachable — {n} models listed." if n else "Endpoint reachable."}
     except httpx.HTTPError as exc:
         return {"ok": False, "detail": f"Network error: {exc}"}

@@ -726,7 +726,7 @@ export function Composer({
 						disabled={disabled || submitting}
 						aria-haspopup="menu"
 						aria-expanded={genOpen}
-						title={combinedActions ? "Add files, image task, or design task" : "Generate an image (/image) or draft a design (/design)"}
+						title={combinedActions ? "Add files, image task, video task, or design task" : "Generate an image (/image), a video (/video), or draft a design (/design)"}
 						onClick={() => setGenOpen((o) => !o)}
 					>
 						{combinedActions ? <IconPlus size={16} /> : <IconSparkle size={15} />}

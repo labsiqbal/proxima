@@ -1885,6 +1885,21 @@ disagree about the submit path, so the client detects the shape instead of forci
 owner to configure it. Provider families stay separate modules with shared plumbing
 rather than one branching module, so a video change cannot regress the image path.
 
+**Base-URL mistakes fail loudly, not cheerfully.** "Test connection" probes
+`GET {base}/models` and now requires a JSON answer: a base URL that already contains
+the endpoint path still returns 200-ish HTML from the gateway's web app, and reporting
+that as "Endpoint reachable" was a false green on the one mistake owners actually make.
+Both media families share this (`media_providers.probe_models_endpoint`), so the same
+wrong URL now reads "the endpoint returned an HTML page, not JSON (HTTP 404). Check the
+base URL: it must be the API root ... with no endpoint path after it." - in the settings
+card and, for a real generation, in the chat reply.
+
+**The `/video` command must reach the backend.** `ChatScreen`'s local slash dispatch
+answers "Unknown command" for anything it does not recognise, so media commands are
+matched by `MEDIA_COMMAND_RE` and fall through to the server. `/video` shipped broken
+against that regex once; `ChatScreen.mediaCommands.test.ts` now pins the list against
+`_chat_media_kind` + `ALIASES`.
+
 **Endpoints:** `GET/PUT /api/settings/video-gen`, `POST /api/settings/video-gen/test`.
 A configured video endpoint also appears as a Home Connections readiness check
 (`auth_health`); an unconfigured one stays silent rather than reporting a false fault.

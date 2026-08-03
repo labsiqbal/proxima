@@ -561,7 +561,7 @@ const IMAGE_PANEL: MediaPanelSpec<ImageGenSettings> = {
 
 const VIDEO_PANEL: MediaPanelSpec<VideoGenSettings> = {
   title: 'Video generation',
-  blurb: 'Video generation uses an OpenAI-compatible video endpoint. Paste the API root only - e.g. https://api.linc.id/v1 - with no path after it; Proxima appends /videos/generations and polls the job until the clip is ready. Use /video in chat to generate one.',
+  blurb: 'Generate clips with /video in chat. Point this at any OpenAI-compatible video endpoint; Proxima submits the job and polls it until the clip is ready.',
   defaultProvider: 'openai-compatible',
   endpointPlaceholder: 'https://api.openai.com/v1',
   modelPlaceholder: () => 'sora-2, xai/grok-imagine-video, or provider model id',

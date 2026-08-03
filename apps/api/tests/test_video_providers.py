@@ -307,3 +307,31 @@ def test_test_connection_requires_a_key():
     out = video_providers.test_connection("openai-compatible", None, base_url="https://gw/v1")
     assert out["ok"] is False
     assert "API key" in out["detail"]
+
+
+def test_test_connection_rejects_a_base_url_that_already_has_the_path(monkeypatch):
+    """The mistake that actually happens: pasting the full endpoint as the base URL.
+    The probe then hits .../videos/generations/models and gets an HTML 404, which
+    must read as a base-URL problem instead of a cheerful "Endpoint reachable"."""
+    html = "<!DOCTYPE html><html><body>Next.js 404</body></html>"
+    seen = {}
+
+    def fake_get(self, url, **kw):
+        seen["url"] = url
+        return _Resp(404, None, content=html.encode(), headers={"content-type": "text/html"})
+
+    monkeypatch.setattr(httpx.Client, "get", fake_get)
+    out = video_providers.test_connection(
+        "openai-compatible", "sk", base_url="https://api.linc.id/v1/videos/generations"
+    )
+    assert seen["url"] == "https://api.linc.id/v1/videos/generations/models"
+    assert out["ok"] is False
+    assert "base URL" in out["detail"]
+    assert "<html" not in out["detail"].lower()
+
+
+def test_test_connection_accepts_a_models_list_without_a_data_array(monkeypatch):
+    """Some gateways answer /models with a bare list - still a working endpoint."""
+    monkeypatch.setattr(httpx.Client, "get", lambda self, url, **kw: _Resp(200, [{"id": "a"}]))
+    out = video_providers.test_connection("openai-compatible", "sk", base_url="https://gw/v1")
+    assert out["ok"] is True

@@ -76,6 +76,15 @@ export function chatDraftScopeKey(
 	return session ? `session:${session.id}` : `new:${project?.slug || "unscoped"}`;
 }
 
+/**
+ * Slash commands the backend routes to a media provider (create_run
+ * interception). They must fall through the local command dispatch below and
+ * reach the server, or the UI answers "Unknown command" and nothing generates.
+ * Keep in step with `_chat_media_kind` + `ALIASES` in the API.
+ */
+export const MEDIA_COMMAND_RE =
+	/^\/(image|gambar|video|klip|design|image-studio|design-studio)\b/i
+
 function localCommandReply(
 	name: string,
 	props: {
@@ -372,7 +381,7 @@ export function ChatScreen(props: {
 			const trimmed = text.trim();
 			// Media commands are real prompts — the backend routes them to the selected
 			// generation provider (create_run interception), so they must reach it.
-			const mediaCommand = /^\/(image|gambar|design|image-studio|design-studio)\b/i.test(trimmed);
+			const mediaCommand = MEDIA_COMMAND_RE.test(trimmed);
 			const agentCommand = isAgentTurnSlashCommand(trimmed, skillSlashNames);
 			if (trimmed.startsWith("/") && !trimmed.startsWith("//") && !mediaCommand && !agentCommand) {
 				const name = trimmed.split(/\s+/)[0].toLowerCase();
