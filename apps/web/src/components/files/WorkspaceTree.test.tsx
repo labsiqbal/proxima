@@ -614,3 +614,26 @@ describe('WorkspaceTree skipped symlinks (prune C7)', () => {
     expect(stylesSource).toMatch(/\.tree-row\.skipped:hover\s*\{[^}]*background:\s*transparent/s)
   })
 })
+
+// --- Actionable fail-closed refusals (prune B5, #133) ------------------------
+describe('WorkspaceTree surfaces a write refusal the owner can act on', () => {
+  it('shows the server sentence, not the transport wrapper around it', async () => {
+    const fs = mockFs({ '': entries(['README.md', 'file']) })
+    vi.mocked(fs.mkdir).mockRejectedValue(new Error(
+      'Failed to create folder (400 Bad Request): That path crosses a symlink, '
+      + 'which Proxima never follows. Open the real folder this link points at '
+      + 'instead, or replace the link with a real folder.',
+    ))
+    render(<WorkspaceTree fs={fs} title="Demo" writableFs={fs} />)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'New folder' }))
+    await userEvent.type(screen.getByRole('textbox'), 'link{Enter}')
+
+    const error = await screen.findByText(/crosses a symlink/i)
+    expect(error).toHaveTextContent('Open the real folder this link points at instead')
+    // No "Error: Failed to create folder (400 Bad Request):" noise in front of
+    // the one sentence the owner needs.
+    expect(error.textContent).not.toMatch(/400 Bad Request/)
+    expect(error.textContent).not.toMatch(/^Error:/)
+  })
+})

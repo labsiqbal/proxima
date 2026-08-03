@@ -3,6 +3,7 @@ import { appExitSummary, appStart, appStop, appStatus, appViewUrl, detectApps, g
 import { IconMonitor, IconTablet, IconMobile } from '../shell/icons'
 import { confirmDialog } from '../ui/Dialog'
 import { usePolling } from '../../hooks/usePolling'
+import { splitRefusal } from '../../lib/refusal'
 
 const VIEWPORTS = [
   { key: 'desktop', label: 'Desktop', w: '100%', Icon: IconMonitor },
@@ -242,6 +243,18 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     {options.changePort && <button className="primary-button sm" onClick={() => void changePort()} disabled={busy}>Change port</button>}
   </div>
 
+  // Governance may refuse; it may never refuse silently (prune B5, #133). The
+  // server ends every refusal message with its next step and repeats it in
+  // `next_step`; splitting them keeps the instruction on its own line instead
+  // of printing it twice.
+  const refusalCard = (fallbackReason: string) => {
+    const { reason, nextStep } = splitRefusal(status.message || fallbackReason, status.next_step)
+    return <>
+      <p>{reason || fallbackReason}</p>
+      {nextStep && <p className="app-next-step">{nextStep}</p>}
+    </>
+  }
+
   return <div className="app-runner-dock">
     <div className="app-runner-head">
       <strong>Run &amp; Preview</strong>
@@ -281,13 +294,13 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
       <p className="app-runner-cwd muted">Working dir: <code>{slug}/{dir || ''}</code> · command runs here</p>
       {status.state === 'stopped' && <section className="app-state-card" role="status">
         <h3>{status.command ? 'App stopped' : 'Command logs'}</h3>
-        <p>{status.message || (status.command ? 'The managed app is stopped. Its most recent bounded log buffer is still available.' : 'No app is running. Command output will appear here after you run one.')}</p>
+        {refusalCard(status.command ? 'The managed app is stopped. Its most recent bounded log buffer is still available.' : 'No app is running. Command output will appear here after you run one.')}
         {stateActions({ retry: Boolean(status.command), changePort: Boolean(status.command), stop: false })}
         {showLogs && <pre className="app-log">{logText}</pre>}
       </section>}
       {status.state === 'port_conflict' && <section className="app-state-card danger" role="alert">
         <h3>Port {conflictPort} is already in use</h3>
-        <p>{status.message || `Another process claimed port ${conflictPort}. Proxima did not open, proxy, or stop it.`}</p>
+        {refusalCard(`Another process claimed port ${conflictPort}. Proxima did not open, proxy, or stop it.`)}
         {stateActions({ retry: true, changePort: true })}
         {showLogs && <pre className="app-log">{logText}</pre>}
       </section>}
@@ -315,7 +328,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     {status.state === 'ownership_unknown' && <div className="app-booting">
       <section className="app-state-card warning" role="alert">
         <h3>Preview ownership could not be verified</h3>
-        <p>{status.message || 'Proxima cannot verify who owns the listener on this host.'} Proxima will not proxy this port.</p>
+        {refusalCard('A server answered on this port and Proxima cannot verify who owns it, so it will not proxy it.')}
         {stateActions({})}
         {showLogs && <pre className="app-log">{logText}</pre>}
       </section>

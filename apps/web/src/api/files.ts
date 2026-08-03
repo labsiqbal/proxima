@@ -249,6 +249,12 @@ type AppStatusBase = {
   command?: string
   log?: string[]
   message?: string
+  /**
+   * The concrete action that clears a fail-closed state (prune B5, #133).
+   * Repeated at the end of `message` so non-UI consumers still read a complete
+   * sentence; `splitRefusal` separates them for rendering.
+   */
+  next_step?: string
   reason?: 'output_sink_unavailable'
   /** Present when the managed process self-exited (sticky until next start). */
   exited?: boolean
@@ -269,6 +275,7 @@ export type AppPortConflictDetail = {
   state: 'port_conflict'
   port: number
   message: string
+  next_step?: string
 }
 
 /** Plain-language summary after a managed app process self-exits without staying up. */

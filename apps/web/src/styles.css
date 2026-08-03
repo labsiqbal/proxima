@@ -8803,6 +8803,12 @@ div.result-media {
 	font-size: var(--text-sm);
 	line-height: 1.5;
 }
+/* The next step out of a fail-closed state (prune B5): the instruction reads
+   above the diagnosis in weight, because it is the part the owner acts on. */
+.app-state-card p.app-next-step {
+	color: var(--ui-text-primary);
+	font-weight: 600;
+}
 .app-state-card.danger {
 	border-color: color-mix(in srgb, var(--ui-danger) 40%, var(--ui-stroke-secondary));
 	background: var(--ui-danger-bg);

@@ -110,12 +110,12 @@ describe('AppRunner collision feedback', () => {
       requested_port: 5180,
       command: 'npm run dev',
       log: [],
-      message: 'Proxima cannot verify who owns the listener on this host.',
+      message: 'A server answered on this port and Proxima cannot verify who owns it, so it will not proxy it.',
     })
     render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
 
     expect(await screen.findByRole('heading', { name: 'Preview ownership could not be verified' })).toBeInTheDocument()
-    expect(screen.getByText(/will not proxy this port/i)).toBeInTheDocument()
+    expect(screen.getByText(/will not proxy it/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'View logs' })).toBeInTheDocument()
     expect(screen.queryByTitle('App preview')).not.toBeInTheDocument()
@@ -160,7 +160,7 @@ describe('AppRunner collision feedback', () => {
         requested_port: 5180,
         command: 'npm run dev',
         log: ['supervisor still live'],
-        message: 'Proxima cannot verify who owns the listener on this host.',
+        message: 'A server answered on this port and Proxima cannot verify who owns it, so it will not proxy it.',
       }
       throw new Error('Authenticated stop could not finish. The prior preview scope remains unresolved.')
     })
@@ -171,8 +171,8 @@ describe('AppRunner collision feedback', () => {
 
     await waitFor(() => expect(appStop).toHaveBeenCalledWith('token', 'demo'))
     expect(await screen.findByRole('heading', { name: 'Preview ownership could not be verified' })).toBeInTheDocument()
-    expect(screen.getByText(/cannot verify who owns the listener/i)).toBeInTheDocument()
-    expect(screen.getByText(/will not proxy this port/i)).toBeInTheDocument()
+    expect(screen.getByText(/cannot verify who owns it/i)).toBeInTheDocument()
+    expect(screen.getByText(/will not proxy it/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /run/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'App stopped' })).not.toBeInTheDocument()
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument()
@@ -424,5 +424,69 @@ describe('AppRunner port pinning', () => {
     vi.mocked(appStatus).mockResolvedValue({ state: 'stopped', running: false, ready: false })
     render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
     expect(await screen.findByRole('spinbutton')).toHaveValue(4600)
+  })
+})
+
+// --- Actionable fail-closed refusals (prune B5, #133) ------------------------
+// Governance may refuse; it may never refuse silently. Every refusal state the
+// preview panel can show renders the server's next step as its own line, so the
+// owner never has to guess what clears it.
+describe('AppRunner refusals name the next step', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+    vi.mocked(getPublicConfig).mockResolvedValue({ apps_domain: null })
+    vi.mocked(previewAuth).mockResolvedValue({ ok: true })
+    vi.mocked(detectApps).mockResolvedValue({ apps: [] })
+  })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('renders the next step for a port conflict', async () => {
+    vi.mocked(appStatus).mockResolvedValue({
+      state: 'port_conflict',
+      running: false,
+      ready: false,
+      requested_port: 4600,
+      conflicting_port: 4600,
+      command: 'npm run dev',
+      log: [],
+      message: 'Port 4600 belongs to another process. Proxima did not open, proxy, or stop it.',
+      next_step: 'Stop whatever already holds that port, or press Change port to let Proxima pick a free one.',
+    })
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+
+    expect(await screen.findByText(/press Change port to let Proxima pick a free one/i)).toBeInTheDocument()
+  })
+
+  it('renders the next step for unverified preview ownership', async () => {
+    vi.mocked(appStatus).mockResolvedValue({
+      state: 'ownership_unknown',
+      running: true,
+      ready: false,
+      requested_port: 4600,
+      command: 'npm run dev',
+      log: [],
+      message: 'A server answered on this port and Proxima cannot verify who owns it, so it will not proxy it.',
+      next_step: 'Press Stop to release the port, then Run again; if it keeps happening, restart the Proxima server.',
+    })
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+
+    expect(await screen.findByText(/Press Stop to release the port/i)).toBeInTheDocument()
+  })
+
+  it('renders the next step when the preview output sink refuses', async () => {
+    vi.mocked(appStatus).mockResolvedValue({
+      state: 'stopped',
+      running: false,
+      ready: false,
+      command: 'npm run dev',
+      log: [],
+      reason: 'output_sink_unavailable',
+      message: 'Preview supervisor process identity changed.',
+      next_step: 'Press Stop and then Run again; if the refusal repeats, restart the Proxima server.',
+    })
+    render(<AppRunner token="token" slug="demo" onClose={vi.fn()} />)
+
+    expect(await screen.findByText(/if the refusal repeats, restart the Proxima server/i)).toBeInTheDocument()
   })
 })

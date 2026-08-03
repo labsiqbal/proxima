@@ -2059,6 +2059,15 @@ Container root, changed root identity, symlinked or missing Ops folder, missing 
 (`container_registry`, `layout_map`); Master runner conformance (`routes/master.py`,
 `master_runtime.py`); and a blocked project purge (`route_deps`).
 
+On the web, `apps/web/src/lib/refusal.ts` renders the contract: `splitRefusal` separates
+the diagnosis from the instruction so a screen styles them apart without printing the
+step twice, and `refusalText` recovers the server's sentence from the transport wrapper a
+thrown client error carries. `AppRunner` gives the next step its own line in every
+fail-closed card, `WorkspaceTree` shows the refused write's real sentence, `MasterScreen`
+raises a visible alert when the backing runner is not eligible, and `api/client.ts` keeps
+the instruction last in a flattened structured refusal (and exposes it as
+`ApiError.nextStep`).
+
 **What did not change:** not one refusal was softened. This is wording and delivery only.
 Refusals a *runner* sees (the Master tool broker, the model-provider proxy) stay terse by
 design — telling a possibly prompt-injected agent how to get past a boundary is the

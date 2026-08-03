@@ -73,3 +73,35 @@ describe('api client error rendering', () => {
     }
   })
 })
+
+// --- Actionable fail-closed refusals (prune B5, #133) ------------------------
+describe('structured refusals keep the next step last', () => {
+  it('puts the process counts between the diagnosis and the instruction', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      text: async () => JSON.stringify({
+        detail: {
+          code: 'purge_activity_blocked',
+          message: 'This project still has processes running. Stop this project\'s running work, then try again.',
+          next_step: 'Stop this project\'s running work, then try again.',
+          active_processes: 2,
+          unresolved_processes: 1,
+        },
+      }),
+    }))
+
+    try {
+      await api('/api/projects/demo', 'token', { method: 'DELETE' })
+      throw new Error('expected a refusal')
+    } catch (error) {
+      const apiError = error as ApiError
+      expect(apiError.detail).toBe(
+        'This project still has processes running. Active processes: 2. '
+        + 'Unverified processes: 1. Stop this project\'s running work, then try again.',
+      )
+      expect(apiError.nextStep).toBe('Stop this project\'s running work, then try again.')
+    }
+  })
+})

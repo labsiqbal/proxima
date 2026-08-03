@@ -261,6 +261,25 @@ export function MasterScreen({
           </span>
         </div>
 
+        {!selectedRunnerEligible && (
+          // Governance may refuse; it may never refuse silently (prune B5,
+          // #133). Conformance is unchanged - only a runner that proves the
+          // chat-only boundary backs Master - but the refusal now says so out
+          // loud, instead of hiding inside a closed dropdown until a send 409s.
+          <div className="master-error" role="alert">
+            <strong>
+              Master cannot run on{' '}
+              {selectedRunner?.displayName || desk.backing_runner}
+            </strong>
+            <span>
+              {selectedRunner?.masterUnavailableReason
+                || 'this runner is not available'}
+              . Pick an eligible runner in the backing-runner menu above, or
+              install the version this one needs and reload.
+            </span>
+          </div>
+        )}
+
         {(connection.error || connectionProblem) && (
           <div
             className={`master-error ${connectionProblem ? 'is-connection' : ''}`}

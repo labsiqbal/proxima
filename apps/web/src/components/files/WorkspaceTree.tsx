@@ -4,6 +4,7 @@ import type { FsAdapter, ReadOnlyFsAdapter } from '../../api/fsAdapter'
 import { retargetFile, type FileRef } from '../../api/files'
 import { IconFile, IconFolder, IconChevronRight, IconFilePlus, IconFolderPlus, IconLink } from '../shell/icons'
 import { confirmDialog } from '../ui/Dialog'
+import { refusalText } from '../../lib/refusal'
 
 // Lazy-load the CodeMirror editor so its chunk only loads when a file is opened.
 const FileEditor = React.lazy(() => import('./FileEditor').then(m => ({ default: m.FileEditor })))
@@ -281,7 +282,10 @@ export function WorkspaceTree({ fs, title, className = 'right-rail', refreshSign
       }
       return mountedRef.current && seq === actionSeq.current
     } catch (e) {
-      if (mountedRef.current && seq === actionSeq.current) setTreeError(String(e))
+      // A refused write is usually governance saying no with a next step
+      // attached (prune B5, #133). String(e) buries that sentence under the
+      // transport wrapper; refusalText keeps only what the owner can act on.
+      if (mountedRef.current && seq === actionSeq.current) setTreeError(refusalText(e))
       return false
     } finally {
       if (mountedRef.current && seq === actionSeq.current) setBusy(false)

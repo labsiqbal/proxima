@@ -694,3 +694,41 @@ describe('MasterScreen', () => {
     expect(screen.getByText(/No polling fallback is running/)).toBeInTheDocument()
   })
 })
+
+// --- Actionable fail-closed refusals (prune B5, #133) ------------------------
+// Master runner conformance is a real, correct refusal: only an adapter that
+// proves the chat-only boundary may back Master. Before B5 the owner met it as
+// a disabled entry inside a closed <select> and a 409 on send - Delegate simply
+// looked broken (evidence #115, C3).
+describe('MasterScreen explains an ineligible backing runner', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(useMasterState).mockReturnValue(state as never)
+    vi.mocked(getCommandCatalog).mockReturnValue(new Promise(() => {}))
+    vi.mocked(listReferenceFiles).mockReturnValue(new Promise(() => {}))
+    vi.mocked(listArtifacts).mockReturnValue(new Promise(() => {}))
+  })
+
+  it('names what is refused, why, and the next step', () => {
+    const ineligible = [{
+      id: 'codex',
+      displayName: 'Codex',
+      installed: true,
+      runnable: true,
+      masterChatOnly: true,
+      masterEligible: false,
+      masterUnavailableReason: 'Codex app-server 0.145.0 or newer is required',
+    }]
+    render(<MasterScreen token="token" runners={ineligible as never} onOpenJob={vi.fn()} />)
+
+    const notice = screen.getByRole('alert')
+    expect(notice).toHaveTextContent('Master cannot run on Codex')
+    expect(notice).toHaveTextContent('Codex app-server 0.145.0 or newer is required')
+    expect(notice).toHaveTextContent(/backing-runner menu/i)
+  })
+
+  it('says nothing when the backing runner is eligible', () => {
+    render(<MasterScreen token="token" runners={runners as never} onOpenJob={vi.fn()} />)
+    expect(screen.queryByText(/Master cannot run on/)).toBeNull()
+  })
+})

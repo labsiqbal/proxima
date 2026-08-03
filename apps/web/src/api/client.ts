@@ -1,4 +1,5 @@
 import { noteApiSuccess, reportApiFailure } from '../lib/errorSurface'
+import { splitRefusal } from '../lib/refusal'
 
 export class ApiError extends Error {
   status: number
@@ -6,6 +7,12 @@ export class ApiError extends Error {
   method?: string
   field?: string
   detail?: string
+  /**
+   * The concrete action that clears a governance refusal, when the server sent
+   * one (prune B5, #133). Also present at the end of `detail`; this field lets
+   * a screen render the instruction apart from the diagnosis.
+   */
+  nextStep?: string
   // The structured `detail` object as the server sent it, when it sent one.
   // Refusals that carry a decision the UI must render (an identity
   // comparison, an override offer) need more than the flattened message.
@@ -41,6 +48,7 @@ export async function api<T>(path: string, token?: string, options: RequestInit 
     const text = await res.text()
     let message = text || res.statusText
     let field: string | undefined
+    let nextStep: string | undefined
     let body: Record<string, unknown> | undefined
     try {
       const parsed = JSON.parse(text) as { detail?: unknown; message?: unknown }
@@ -59,11 +67,20 @@ export async function api<T>(path: string, token?: string, options: RequestInit 
         const structured = detail as {
           message?: unknown
           field?: unknown
+          next_step?: unknown
           active_processes?: unknown
           unresolved_processes?: unknown
         }
+        if (typeof structured.next_step === 'string' && structured.next_step.trim()) {
+          nextStep = structured.next_step.trim()
+        }
         if (typeof structured.message === 'string' && structured.message.trim()) {
-          const parts = [structured.message.trim()]
+          // The server ends a refusal message with its next step (prune B5,
+          // #133). Detail the server adds here belongs to the diagnosis, so
+          // split the instruction off and re-append it - the last thing the
+          // owner reads must be the thing to do.
+          const split = splitRefusal(structured.message, nextStep)
+          const parts = [split.reason]
           if (
             typeof structured.active_processes === 'number'
             && structured.active_processes > 0
@@ -76,7 +93,8 @@ export async function api<T>(path: string, token?: string, options: RequestInit 
           ) {
             parts.push(`Unverified processes: ${structured.unresolved_processes}.`)
           }
-          message = parts.join(' ')
+          if (split.nextStep) parts.push(split.nextStep)
+          message = parts.filter(Boolean).join(' ')
         } else {
           message = JSON.stringify(detail)
         }
@@ -88,6 +106,7 @@ export async function api<T>(path: string, token?: string, options: RequestInit 
       /* not JSON — keep the raw text */
     }
     const error = new ApiError(res.status, `${method} ${path} failed (${res.status}): ${message}`, path, method, field, message)
+    error.nextStep = nextStep
     error.body = body
     // 5xx means the server broke, which no screen can explain; 4xx (validation,
     // governance refusals, not-found) stays owned by the flow that asked.
