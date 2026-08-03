@@ -322,7 +322,32 @@ which put a second ✕ on the row immediately below the tab row's. Terminal's pe
 is not a second close for the panel: it ends **that shell session** and says so
 (`Close Terminal 2`), which is why it stays.
 
-The rail's bottom gear opens Settings. Escape closes the panel unless a modal overlay is open - the topmost overlay owns the key, so a confirm dialog raised over the dock is dismissed first. A handed-off file is not one of those since #146: it opens in the main window behind the panel, and neither surface answers Escape. Picking a tool by hand ends any reveal detour, so Files returns to the active project. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
+The rail's bottom gear opens Settings. Escape closes the panel unless a modal overlay is open - the topmost overlay owns the key, so a confirm dialog raised over the dock is dismissed first. A handed-off file is not one of those since #146: it opens in the main window behind the panel, and neither surface answers Escape. Picking a tool by hand ends any reveal detour, so Files returns to the active project.
+
+### Putting the dock away
+
+The right dock collapses from the header exactly like the left sidebar (#160). Its
+control is the sidebar toggle's mirrored twin (`IconPanelRight`) and sits **next to
+it**, so both edges of the shell are put away from the same place; the preference
+persists in `proxima.dockCollapsed`. Work only - Delegate has no dock, so it gets no
+control for one - and absent while Project tools are suppressed, because a toggle for
+a dock that is not rendered is a dead control.
+
+Collapsing is one CSS declaration: `.app-shell.dock-collapsed` sets `--toolrail-w` to
+zero, and every width derived from it follows - the grid's third column, the padding
+the main pane reserves while a tool is open, the Master popup's clearance, the toast
+column. Collapsing also closes an open panel: a panel hanging off a rail that is no
+longer there is not a state the owner asked for.
+
+It is a **preference, not a suppression**, and the two behave differently on purpose.
+Suppressed (a Task/Project mismatch) there is nothing to point a tool at, so a reveal
+is dropped. Collapsed, everything still exists - so a reveal or a run-controls request
+opens its tool *and brings the rail back*, which the dock reports through the same
+`onOpenChange` the shell already listens to. Latched tools are untouched: terminals
+keep running behind a collapsed dock. Escape is unchanged - it closes the panel, never
+the dock preference - so #145's precedence rule still holds.
+
+At **phone width there is no rail at all** (#156) - see [Phone width](#phone-width-390px).
 
 ## Chrome Back, project lock, and multitask keep-alive
 
@@ -422,7 +447,7 @@ header). The popover lists de-duplicated tasks and chat sessions with deep-links
 workspace / chat / Tasks index), matching Attention's open/refresh/empty/error affordances.
 Attention stays a separate `!` control and remains hidden when empty.
 
-**Inbox** closes both navigations - see the notifications section above. Agents and Settings live in the Work profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The Work top bar owns the brand mark, mode switch, sidebar collapse toggle, search, Running + Attention, and account menu; its sidebar owns the active-project switcher. On mobile that switcher stays in the Work drawer and the mode control remains in the compact header. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
+**Inbox** closes both navigations - see the notifications section above. Agents and Settings live in the Work profile/account menu rather than the navigation. Runner management is part of Settings → Agents. Project Wiki is part of Settings → Knowledge, including files, links, graph, and search. Settings sections are grouped for scan with short title-only nav rows under group eyebrows: **Work setup** (Projects, Agents, Master, Knowledge) · **Integrations** (Media, Remote) · **System** (Account, Diagnostics) · **Help**; full hints live on tooltips and aria. Editable panels surface clear save success/error (no silent fail). Help owns a replayable core tour (primary loop + Master side path) plus feature-aware product-map chapters. The first post-setup main UI shows the core tour once; it traps keyboard focus, supports Escape/skip, and stores completion server-side. The Work top bar owns the brand mark, mode switch, the sidebar and tool-dock collapse toggles (one pair, one per edge), search, Running + Attention, and account menu; its sidebar owns the active-project switcher. On mobile that switcher stays in the Work drawer, the mode control remains in the compact header, and the tool-dock toggle joins it there as the tool sheet's only entry point. Global search includes user-facing Chat and Design sessions but excludes Master's hidden system thread, so raw product-tool calls and tool-result payloads never become search results.
 
 Projects remain shared application entities: one active project across Work (`activeProject`). Work surfaces that already filter / default-attach / list by active project (Chat, Workflows library, Artifacts, and ordinary Design entry) keep that contract. Opening Design from a Task binds the studio to that Task's owning Project without adopting it as the Work selection, and returning to the Task restamps the in-app preserve-work policy. The Work-sidebar project switcher changes only that shell filter (and the coherent recent chat session for when Chat is opened later) - it does **not** navigate to Chat. Search (and similar intentional open paths) may still open a project's chat. Opening a workflow/plan still uses that workflow's owned project; the Work switcher does **not** rebind an open workflow instance to another project. Workflows library home has no second project dropdown and does not dump project display names (open-plan header uses a name-free lock icon). The switcher menu offers Rename (alongside Settings → Projects). Deliverable records and Designs remain owned by their Project. Delegate has no project selector or project filter: its Tasks and Artifacts indices are global, while Master Focus and explicit target controls remain its own bounded context.
 
@@ -666,11 +691,21 @@ beside it, collapsing to nothing when both are empty. As a fixed overlay the
 cluster covered Search and, with the drawer open, the drawer's own Close button
 (#154). The rest of the phone contract:
 
-- **Tool dock** — the panel is a sheet flush against the rail, and the surface
-  behind it reserves only the rail's width. Reserving the panel's width (74% of
-  the pane, the desktop behaviour) squeezed the screen behind into a
-  one-word-per-line strip. The panel's tab row scrolls so its Close button keeps
-  its place inside the panel.
+- **Tool dock** — **there is no rail down here** (#156). A 46px lane is 12% of a
+  390px screen, taken permanently from the surface behind it: the Design Studio
+  canvas ended at the rail's edge. Nothing is stranded by removing it - the three
+  tools *are* the sheet's own tab row, and Settings is in the drawer's account
+  menu - so the phone keeps the entry point and drops the lane. The dock's
+  toggle moves to the mobile top bar (same glyph as the header's, #160) and
+  shows the **sheet** rather than collapsing a rail, the way the same control
+  opens the drawer instead of collapsing the sidebar. The sheet reopens on the
+  tool last used, and its own close (its ✕, Escape) is the toggle's off state.
+  That preference is transient: a phone never writes the desktop rail's
+  `proxima.dockCollapsed`, and never reads it either.
+  The sheet is the full screen, and the surface behind it reserves nothing -
+  reserving the panel's width (74% of the pane, the desktop behaviour) squeezed
+  the screen behind into a one-word-per-line strip (#154). The panel's tab row
+  scrolls so its Close button keeps its place inside the panel.
 - **Artifacts** — the head wraps: title and scope control on one line, the
   All / Deliverables / History tabs on their own scrolling line instead of being
   clipped at the screen edge. A document opens **inside** the main window, with
@@ -685,7 +720,7 @@ cluster covered Search and, with the drawer open, the drawer's own Close button
 
 ### General
 
-The left navigation width persists locally in both modes. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses the same focus-managed drawer in both modes; Work's tool rail pins to the right edge, while Delegate keeps its global Master, Tasks, and Artifacts navigation. The Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics in Work. Escape dismisses transient Work overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
+The left navigation width persists locally in both modes. Its separator supports pointer input and keyboard Arrow keys and exposes vertical separator orientation plus minimum, maximum, and current values. At mobile widths navigation uses the same focus-managed drawer in both modes; Work's tools open as a sheet from the mobile top bar with no rail beside the content, while Delegate keeps its global Master, Tasks, and Artifacts navigation. The Task Composer and Master controls stack without changing semantics. Account actions use ordinary disclosure/popover semantics in Work. Escape dismisses transient Work overlays (including the tool panel, Attention, and Master popup); modal overlays trap focus until dismissed. Focus indicators use shared tokens, toast live priority matches urgency, and reduced-motion preferences apply globally.
 
 The setup and returning-owner password gates each expose exactly one `main` landmark.
 Password fields have stable accessible names and password-manager autocomplete values,

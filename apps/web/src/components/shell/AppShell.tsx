@@ -4,7 +4,7 @@ import { Sidebar } from './Sidebar'
 import { MobileTopbar } from './MobileTopbar'
 import { SearchModal } from './SearchModal'
 import { ToolDock } from './ToolDock'
-import { IconPanelLeft, IconGear, IconMenu, IconSearch, IconProjects, IconAgents, IconLogout, IconChevronLeft } from './icons'
+import { IconPanelLeft, IconPanelRight, IconGear, IconMenu, IconSearch, IconProjects, IconAgents, IconLogout, IconChevronLeft } from './icons'
 import { ProximaMark } from '../brand/ProximaMark'
 import { AttentionInbox } from './AttentionInbox'
 import { RunningTasks } from './RunningTasks'
@@ -94,6 +94,14 @@ export function AppShell(props: {
   const [toolOpen, setToolOpen] = React.useState(false)
   const [leftWidth, setLeftWidth] = React.useState(() => stored('proxima.leftWidth', 294))
   const [leftCollapsed, setLeftCollapsed] = React.useState(() => (typeof localStorage !== 'undefined' && localStorage.getItem('proxima.leftCollapsed') === '1'))
+  // The right dock collapses like the left sidebar, from the same header, with
+  // the same kind of persisted preference (#160). Work only: Delegate has no
+  // dock, so it gets no control for one.
+  const [dockCollapsed, setDockCollapsed] = React.useState(() => (typeof localStorage !== 'undefined' && localStorage.getItem('proxima.dockCollapsed') === '1'))
+  // Phone width has no rail to collapse (#156), so the same control shows and
+  // hides the tool sheet instead - the shape `toggleLeft` already uses for the
+  // sidebar and its drawer. Transient by design: it is a sheet, not a layout.
+  const [dockSheetOpen, setDockSheetOpen] = React.useState(false)
   const sidebarRef = React.useRef<HTMLElement>(null)
   const menuBtnRef = React.useRef<HTMLButtonElement>(null)
   const drawerWasOpen = React.useRef(false)
@@ -179,8 +187,20 @@ export function AppShell(props: {
 
   React.useEffect(() => { localStorage.setItem('proxima.leftWidth', String(leftWidth)) }, [leftWidth])
   React.useEffect(() => { localStorage.setItem('proxima.leftCollapsed', leftCollapsed ? '1' : '0') }, [leftCollapsed])
+  React.useEffect(() => { localStorage.setItem('proxima.dockCollapsed', dockCollapsed ? '1' : '0') }, [dockCollapsed])
 
   const toggleLeft = () => { if (matches('(min-width: 768px)')) setLeftCollapsed(value => !value); else setDrawerOpen(value => !value) }
+  const toggleDock = () => { if (matches('(min-width: 768px)')) setDockCollapsed(value => !value); else setDockSheetOpen(value => !value) }
+  // The dock reports every open and close here. Two things ride on it: the
+  // Master trigger stands down while a tool is up, and a tool opened from
+  // somewhere else - a reveal, a run-controls request - brings the dock back
+  // instead of leaving a panel with no rail behind it. On a phone the panel is
+  // the dock, so its own close (its ✕, Escape) is the sheet's close too.
+  const onDockOpenChange = React.useCallback((open: boolean) => {
+    setToolOpen(open)
+    if (matches('(min-width: 768px)')) { if (open) setDockCollapsed(false) }
+    else setDockSheetOpen(open)
+  }, [])
   const startResize = (event: React.PointerEvent) => {
     event.preventDefault()
     const pointerId = event.pointerId
@@ -225,7 +245,7 @@ export function AppShell(props: {
   }
 
   return (
-    <div className={`app-shell ${leftCollapsed ? 'left-rail' : ''} ${delegateMode ? 'delegate-mode' : 'work-mode'} ${props.projectToolsAvailable === false ? 'project-tools-suppressed' : ''}`} style={shellStyle}>
+    <div className={`app-shell ${leftCollapsed ? 'left-rail' : ''} ${!delegateMode && dockCollapsed ? 'dock-collapsed' : ''} ${delegateMode ? 'delegate-mode' : 'work-mode'} ${props.projectToolsAvailable === false ? 'project-tools-suppressed' : ''}`} style={shellStyle}>
       <header className="top-bar">
         {/* Brand lives up here, not in the sidebar, so collapsing the sidebar never
             takes away who you are (the mark). The drawer keeps its own copy for
@@ -236,6 +256,11 @@ export function AppShell(props: {
             put away to the same rail with the same control (#154). */}
         <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
         {!delegateMode && <>
+        {/* Its twin for the right dock (#160), next to it so the two edges of
+            the shell are put away from the same place. Absent while Project
+            tools are suppressed: a toggle for a dock that is not there is a
+            dead control. Delegate has no dock at all. */}
+        {props.projectToolsAvailable !== false && <button className="tool-btn" onClick={toggleDock} aria-label="Toggle tool dock" title={dockCollapsed ? 'Expand tool dock' : 'Collapse tool dock'}><IconPanelRight size={17} /></button>}
         {/* Global chrome Back — always visible; disabled without a deep stack (Chrome-like). */}
         <button
           type="button"
@@ -310,6 +335,8 @@ export function AppShell(props: {
         onMenu={() => setDrawerOpen(true)}
         onSearch={openSearch}
         onNewChat={props.onNewChat}
+        toolsOpen={dockSheetOpen}
+        onToggleTools={props.projectToolsAvailable === false ? undefined : toggleDock}
         menuButtonRef={menuBtnRef}
         mode="work"
         delegateEnabled
@@ -353,8 +380,10 @@ export function AppShell(props: {
         project={props.activeProject}
         projects={props.projects}
         available={props.projectToolsAvailable !== false}
+        collapsed={dockCollapsed}
+        sheetOpen={dockSheetOpen}
         onOpenSettings={() => props.onSelectView('settings')}
-        onOpenChange={setToolOpen}
+        onOpenChange={onDockOpenChange}
         onOpenFile={props.onOpenFile}
         onOpenAppViewport={props.onOpenAppViewport}
       />}

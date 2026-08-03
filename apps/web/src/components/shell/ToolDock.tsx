@@ -30,12 +30,26 @@ function PaneFallback({ label }: { label: string }) {
   return <p className="muted tool-pane-hint">{label}</p>
 }
 
-export function ToolDock({ token, project, projects = [], available = true, onOpenSettings, onOpenChange, onOpenFile, onOpenAppViewport }: {
+export function ToolDock({ token, project, projects = [], available = true, collapsed = false, sheetOpen = false, onOpenSettings, onOpenChange, onOpenFile, onOpenAppViewport }: {
   token: string
   project: Project | null
   /** Named so a reveal into another Container can title its tree properly. */
   projects?: Project[]
   available?: boolean
+  /**
+   * The owner put the dock away from the header, like the left sidebar (#160).
+   * Unlike `available` this is a preference, not a suppression: a tool asked
+   * for from somewhere else still opens, and reporting that through
+   * `onOpenChange` brings the rail back rather than leaving a panel with no
+   * dock behind it.
+   */
+  collapsed?: boolean
+  /**
+   * Phone width only (#156): there is no rail down there, so "show the tools"
+   * is the panel itself. The shell owns the width branch (it already does for
+   * the sidebar/drawer pair); here it just means "be the sheet".
+   */
+  sheetOpen?: boolean
   onOpenSettings: () => void
   onOpenChange?: (open: boolean) => void
   /**
@@ -59,6 +73,10 @@ export function ToolDock({ token, project, projects = [], available = true, onOp
   // its own, and an unmounted AppRunner stops status-polling for free.
   const visited = React.useRef(new Set<Tool>())
   if (open && open !== 'preview') visited.current.add(open)
+  // What the phone sheet reopens on. Terminal until the owner has picked
+  // something: the sheet is "my tools", and it should come back where it was.
+  const lastTool = React.useRef<Tool>('terminal')
+  if (open) lastTool.current = open
   const closePanel = React.useCallback(() => {
     setOpen(null)
     setReveal(null)
@@ -89,17 +107,35 @@ export function ToolDock({ token, project, projects = [], available = true, onOp
     if (!available) closePanel()
   }, [available, closePanel])
 
+  // Putting the dock away closes whatever it was showing: a panel hanging off a
+  // rail that is no longer there is not a state the owner asked for (#160).
+  React.useEffect(() => {
+    if (collapsed && !sheetOpen) closePanel()
+  }, [collapsed, sheetOpen, closePanel])
+
+  // The phone sheet (#156). Opening it lands on the tool last used, so the
+  // control is "show my tools" rather than "show Terminal". Its close is a
+  // transition, not a value - on desktop `sheetOpen` never changes, so this
+  // never touches the rail's own open/close.
+  const wasSheet = React.useRef(sheetOpen)
+  React.useEffect(() => {
+    if (sheetOpen) setOpen(current => current ?? lastTool.current)
+    else if (wasSheet.current) closePanel()
+    wasSheet.current = sheetOpen
+  }, [sheetOpen, closePanel])
+
   // Tell the shell a tool panel is open so main content can reserve space for
   // it. Without this the overlay covers right-edge primary actions (e.g.
   // Design Studio's "Generate →") while Terminal/Files/Preview is open.
+  // The report to the owner is unconditional - it used to be skipped whenever
+  // the class had nowhere to land, which made a callback the shell now depends
+  // on (#160) contingent on a DOM lookup.
   React.useEffect(() => {
-    const shell = document.querySelector('.app-shell')
-    if (!shell) return
-    shell.classList.toggle('tool-open', open != null)
     onOpenChange?.(open != null)
+    document.querySelector('.app-shell')?.classList.toggle('tool-open', open != null)
     return () => {
-      shell.classList.remove('tool-open')
       onOpenChange?.(false)
+      document.querySelector('.app-shell')?.classList.remove('tool-open')
     }
   }, [onOpenChange, open])
 
@@ -154,7 +190,7 @@ export function ToolDock({ token, project, projects = [], available = true, onOp
   )
 
   return <>
-    <aside className="tool-rail" aria-label="Tools" hidden={!available}>
+    <aside className="tool-rail" aria-label="Tools" hidden={!available || collapsed}>
       {TOOLS.map(tool => toolButton(tool, 'rail'))}
       <span className="tool-rail-sep" aria-hidden="true" />
       <button className="tool-rail-btn tool-rail-gear" title="Settings" aria-label="Settings" onClick={onOpenSettings}><IconGear size={17} /></button>

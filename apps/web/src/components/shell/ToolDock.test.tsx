@@ -223,6 +223,73 @@ describe('ToolDock', () => {
   })
 })
 
+// #160 (the owner puts the dock away from the header) and #156 (at phone width
+// there is no rail to put away, so the dock IS the sheet). Both arrive as props:
+// the shell owns the width branch, exactly as it does for sidebar vs drawer.
+describe('ToolDock collapse and the phone sheet', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('puts the rail away and closes the panel, without unmounting the terminal', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
+    const rail = screen.getByRole('complementary', { name: 'Tools' })
+    await user.click(rail.querySelector('[aria-label="Terminal"]') as HTMLElement)
+    expect(await screen.findByTestId('terminal-stub')).toBeVisible()
+
+    rerender(<ToolDock token="t" project={project} collapsed onOpenSettings={vi.fn()} />)
+
+    expect(screen.queryByRole('complementary', { name: 'Tools' })).not.toBeInTheDocument()
+    // Collapsing is a preference, not a suppression: the shells keep running.
+    expect(screen.getByTestId('terminal-stub')).toBeInTheDocument()
+    expect(screen.getByTestId('terminal-stub')).not.toBeVisible()
+  })
+
+  it('still answers a reveal while collapsed, and says the panel is open', async () => {
+    // The shell brings the rail back on that report (#160) - a panel hanging off
+    // a rail that is not rendered is not a state the owner asked for.
+    const onOpenChange = vi.fn()
+    render(<ToolDock token="t" project={project} collapsed onOpenChange={onOpenChange} onOpenSettings={vi.fn()} />)
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('proxima:reveal-file', { detail: { path: 'notes.md', projectSlug: 'master' } }))
+    })
+    expect(await screen.findByText('notes.md')).toBeVisible()
+    expect(onOpenChange).toHaveBeenLastCalledWith(true)
+  })
+
+  it('opens the sheet on the tool last used, and closes it when the sheet goes away', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
+    const rail = screen.getByRole('complementary', { name: 'Tools' })
+    await user.click(rail.querySelector('[aria-label="Files"]') as HTMLElement)
+    expect(await screen.findByText('notes.md')).toBeVisible()
+    await user.click(rail.querySelector('[aria-label="Files"]') as HTMLElement)
+    expect(screen.getByText('notes.md')).not.toBeVisible()
+
+    rerender(<ToolDock token="t" project={project} sheetOpen onOpenSettings={vi.fn()} />)
+    expect(screen.getByText('notes.md')).toBeVisible()
+
+    rerender(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
+    expect(screen.getByText('notes.md')).not.toBeVisible()
+  })
+
+  it('opens the sheet on Terminal when no tool has been used yet', async () => {
+    const { rerender } = render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
+    expect(screen.queryByTestId('terminal-stub')).not.toBeInTheDocument()
+    rerender(<ToolDock token="t" project={project} sheetOpen onOpenSettings={vi.fn()} />)
+    expect(await screen.findByTestId('terminal-stub')).toBeVisible()
+  })
+
+  it('shows the sheet even when the stored desktop preference is collapsed', async () => {
+    // The preference belongs to the rail; a phone has none to hide, so the
+    // sheet must not inherit a decision made on another screen.
+    const { rerender } = render(<ToolDock token="t" project={project} collapsed onOpenSettings={vi.fn()} />)
+    rerender(<ToolDock token="t" project={project} collapsed sheetOpen onOpenSettings={vi.fn()} />)
+    expect(await screen.findByTestId('terminal-stub')).toBeVisible()
+  })
+})
+
 // The file tree is a dock tool again (#145): the destination is Artifacts
 // (ADR-0043), and browsing the real disk is the utility you open next to it.
 describe('ToolDock Files browser', () => {

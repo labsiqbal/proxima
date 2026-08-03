@@ -90,6 +90,15 @@ export const IconPanelLeft = ({ size }: IconProps) => (
 	</Svg>
 );
 
+// The right dock's collapse control is the same glyph mirrored (#160): the two
+// header toggles read as one pair, each pointing at the edge it puts away.
+export const IconPanelRight = ({ size }: IconProps) => (
+	<Svg size={size}>
+		<rect x="3" y="5" width="18" height="14" rx="2" />
+		<path d="M15 5v14" />
+	</Svg>
+);
+
 export const IconMenu = ({ size }: IconProps) => (
 	<Svg size={size}>
 		<path d="M4 7h16M4 12h16M4 17h16" />

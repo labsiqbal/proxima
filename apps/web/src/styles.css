@@ -296,6 +296,13 @@ button:disabled {
 .app-shell.project-tools-suppressed {
 	grid-template-columns: var(--left-w) minmax(0, 1fr);
 }
+/* The right dock put away from the header (#160). Zeroing the rail token is the
+   whole layout change: the grid's third column, the padding the main pane
+   reserves while a tool is open, the Master popup's clearance and the toast
+   column are all derived from it, so none of them needs a second rule. */
+.app-shell.dock-collapsed {
+	--toolrail-w: 0px;
+}
 .sidebar {
 	min-width: 0;
 	border-right: 1px solid var(--ui-stroke-secondary);
@@ -2127,31 +2134,36 @@ button:disabled {
 	.mobile-only {
 		display: inline-grid;
 	}
+	/* No tool rail at phone width (#156). A 46px lane is 12% of a 390px screen,
+	   permanently, and it was taken from the surface behind it - the Design
+	   Studio canvas ended at the rail's edge. Everything the rail holds is also
+	   one tap away without it: the three tools are the sheet's own tab row, and
+	   Settings is in the drawer's account menu. The sheet is opened from the
+	   mobile top bar's tool control, the same glyph as the header's (#160).
+	   Zeroing the token is the whole layout change - the pane's reserved
+	   padding, the sheet's width, the Master popup's clearance and the toast
+	   column all derive from it. */
+	:root {
+		--toolrail-w: 0px;
+	}
+	.tool-rail {
+		display: none;
+	}
 	.main-pane {
 		flex: 1;
 		min-height: 0;
 		padding-right: var(--toolrail-w);
 	}
-	/* The shell is a flex column here, so the tool rail pins to the right edge
-	   below the mobile top bar; the panel takes most of the viewport. */
-	.tool-rail {
-		position: fixed;
-		z-index: 15;
-		top: var(--mobile-topbar-h);
-		right: 0;
-		bottom: 0;
-		width: var(--toolrail-w);
-	}
 	.tool-panel {
 		position: fixed;
 		top: var(--mobile-topbar-h);
-		/* Flush against the rail: on a phone the panel is the screen, and the
-		   sliver of surface it used to leave read as a rendering slip. */
+		/* The sheet is the screen: with no rail beside it there is no sliver of
+		   surface left over, which used to read as a rendering slip. */
 		width: calc(100vw - var(--toolrail-w));
 	}
 	/* Three labelled tabs are wider than a phone-width panel, and they were
-	   pushing the panel's own Close button out past its right edge onto the rail
-	   (#154). The row scrolls; Close keeps its place. */
+	   pushing the panel's own Close button out past its right edge (#154). The
+	   row scrolls; Close keeps its place. */
 	.tool-panel-tabs {
 		min-width: 0;
 		overflow-x: auto;
@@ -16340,8 +16352,9 @@ button.moodboard-add-method:hover {
 	.app-shell.project-tools-suppressed .main-pane { padding-right: 0; }
 	/* A tool panel is a full-height sheet on a phone, not a second column beside
 	   the surface. Reserving 74% of the pane for it squeezed the screen behind
-	   into a one-word-per-line strip (#154); here the rail keeps its lane and the
-	   panel simply overlays. */
+	   into a one-word-per-line strip (#154); the sheet simply overlays, and
+	   since #156 the token it clears is zero, so the surface behind keeps the
+	   whole screen. */
 	.app-shell.tool-open > .main-pane { padding-right: var(--toolrail-w); }
 	.master-body { padding: var(--space-3); }
 	.master-capacity {

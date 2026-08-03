@@ -7,12 +7,24 @@ import { AppShell } from './AppShell'
 vi.mock('./ToolDock', () => ({
   ToolDock: (props: {
     projects?: { slug: string }[]
+    collapsed?: boolean
+    sheetOpen?: boolean
+    onOpenChange?: (open: boolean) => void
     onOpenFile?: (slug: string, path: string) => void
     onOpenAppViewport?: (slug: string) => void
   }) => (
-    <div data-testid="tool-dock" data-projects={props.projects?.length ?? 0}>
+    <div
+      data-testid="tool-dock"
+      data-projects={props.projects?.length ?? 0}
+      data-collapsed={String(!!props.collapsed)}
+      data-sheet={String(!!props.sheetOpen)}
+    >
       <button type="button" onClick={() => props.onOpenFile?.('demo', 'notes.md')}>dock open file</button>
       <button type="button" onClick={() => props.onOpenAppViewport?.('demo')}>dock show app</button>
+      {/* The dock reports every open and close (a reveal opening a tool, its own
+          ✕, Escape); the shell's collapse state rides on those (#160/#156). */}
+      <button type="button" onClick={() => props.onOpenChange?.(true)}>dock panel opened</button>
+      <button type="button" onClick={() => props.onOpenChange?.(false)}>dock panel closed</button>
     </div>
   ),
 }))
@@ -379,5 +391,137 @@ describe('AppShell delegate header status cluster', () => {
     await user.click(screen.getByRole('button', { name: 'open target' }))
     expect(onModeChange).toHaveBeenCalledWith('work')
     expect(onOpenAttentionTarget).toHaveBeenCalledWith({ view: 'projects' })
+  })
+})
+
+// #160: the right dock collapses from the header like the left sidebar, with
+// the same kind of persisted preference. #156: at phone width there is no rail
+// to collapse, so the same control shows and hides the tool sheet.
+describe('AppShell tool dock collapse', () => {
+  const width = (desktop: boolean) => {
+    vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+      matches: query.includes('min-width: 768px') ? desktop : !desktop,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+  }
+  const dock = () => screen.getByTestId('tool-dock')
+  const headerToggle = () => within(document.querySelector('.top-bar') as HTMLElement)
+    .getByRole('button', { name: 'Toggle tool dock' })
+
+  beforeEach(() => {
+    localStorage.clear()
+    localStorage.setItem('proxima.tour.coreDone', '1')
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  it('puts the dock away from the header and remembers it', async () => {
+    width(true)
+    const user = userEvent.setup()
+    const { container } = render(<AppShell {...base}><div>main</div></AppShell>)
+    const shell = container.querySelector('.app-shell') as HTMLElement
+    expect(shell).not.toHaveClass('dock-collapsed')
+    expect(dock()).toHaveAttribute('data-collapsed', 'false')
+
+    const toggle = headerToggle()
+    // The pair reads as one: the two edge toggles sit next to each other.
+    expect(toggle.previousElementSibling).toHaveAttribute('aria-label', 'Toggle sidebar')
+    expect(toggle).toHaveAttribute('title', 'Collapse tool dock')
+    await user.click(toggle)
+
+    expect(shell).toHaveClass('dock-collapsed')
+    expect(dock()).toHaveAttribute('data-collapsed', 'true')
+    expect(toggle).toHaveAttribute('title', 'Expand tool dock')
+    expect(localStorage.getItem('proxima.dockCollapsed')).toBe('1')
+  })
+
+  it('restores the collapsed dock from the stored preference', () => {
+    width(true)
+    localStorage.setItem('proxima.dockCollapsed', '1')
+    const { container } = render(<AppShell {...base}><div>main</div></AppShell>)
+    expect(container.querySelector('.app-shell')).toHaveClass('dock-collapsed')
+    expect(dock()).toHaveAttribute('data-collapsed', 'true')
+  })
+
+  it('brings the dock back when a tool is opened from somewhere else', async () => {
+    // A reveal or a run-controls request opens a tool while the dock is away;
+    // leaving the panel hanging off a rail that is not rendered is not a state.
+    width(true)
+    localStorage.setItem('proxima.dockCollapsed', '1')
+    const user = userEvent.setup()
+    const { container } = render(<AppShell {...base}><div>main</div></AppShell>)
+    await user.click(screen.getByRole('button', { name: 'dock panel opened' }))
+    expect(container.querySelector('.app-shell')).not.toHaveClass('dock-collapsed')
+    expect(dock()).toHaveAttribute('data-collapsed', 'false')
+  })
+
+  it('closing a panel on a desktop leaves the rail where it is', async () => {
+    width(true)
+    const user = userEvent.setup()
+    const { container } = render(<AppShell {...base}><div>main</div></AppShell>)
+    await user.click(screen.getByRole('button', { name: 'dock panel closed' }))
+    expect(container.querySelector('.app-shell')).not.toHaveClass('dock-collapsed')
+    expect(dock()).toHaveAttribute('data-sheet', 'false')
+  })
+
+  it('has no dock control in Delegate, which has no dock', () => {
+    width(true)
+    render(<AppShell {...base} mode="delegate" currentView="master"><div>main</div></AppShell>)
+    expect(screen.queryByTestId('tool-dock')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Toggle tool dock' })).not.toBeInTheDocument()
+  })
+
+  it('has no dock control while Project tools are suppressed', () => {
+    width(true)
+    render(<AppShell {...base} projectToolsAvailable={false}><div>main</div></AppShell>)
+    expect(screen.queryByRole('button', { name: 'Toggle tool dock' })).not.toBeInTheDocument()
+  })
+
+  it('opens the tool sheet from the mobile top bar instead of collapsing a rail', async () => {
+    width(false)
+    const user = userEvent.setup()
+    const { container } = render(<AppShell {...base}><div>main</div></AppShell>)
+    const bar = container.querySelector('.mobile-topbar') as HTMLElement
+    const toggle = within(bar).getByRole('button', { name: 'Toggle tool dock' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+
+    await user.click(toggle)
+    expect(dock()).toHaveAttribute('data-sheet', 'true')
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    // The phone sheet is transient: it never writes the desktop preference.
+    expect(container.querySelector('.app-shell')).not.toHaveClass('dock-collapsed')
+    expect(localStorage.getItem('proxima.dockCollapsed')).toBe('0')
+
+    await user.click(toggle)
+    expect(dock()).toHaveAttribute('data-sheet', 'false')
+  })
+
+  it('lets the sheet close itself - its own close is the sheet’s close', async () => {
+    width(false)
+    const user = userEvent.setup()
+    const { container } = render(<AppShell {...base}><div>main</div></AppShell>)
+    const bar = container.querySelector('.mobile-topbar') as HTMLElement
+    const toggle = within(bar).getByRole('button', { name: 'Toggle tool dock' })
+    await user.click(toggle)
+    expect(dock()).toHaveAttribute('data-sheet', 'true')
+
+    await user.click(screen.getByRole('button', { name: 'dock panel closed' }))
+    expect(dock()).toHaveAttribute('data-sheet', 'false')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('offers no mobile tool control while Project tools are suppressed', () => {
+    width(false)
+    const { container } = render(<AppShell {...base} projectToolsAvailable={false}><div>main</div></AppShell>)
+    const bar = container.querySelector('.mobile-topbar') as HTMLElement
+    expect(within(bar).queryByRole('button', { name: 'Toggle tool dock' })).not.toBeInTheDocument()
   })
 })
