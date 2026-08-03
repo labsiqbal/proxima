@@ -46,6 +46,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [evidence/auth-onboarding-accessibility/README.md](evidence/auth-onboarding-accessibility/README.md) | Disposable real-browser auth/onboarding pass, redacted GET-only Tailscale entry check, Lighthouse report, and before/after screenshots | `npm --prefix apps/web run test:accessibility` |
 | [evidence/linux-daily-driver/README.md](evidence/linux-daily-driver/README.md) | Disposable real-browser platform labels, Master state, and validated PNG evidence | `scripts/capture-linux-daily-driver-evidence.mjs` |
 | [evidence/scheduled-workflow-trust/README.md](evidence/scheduled-workflow-trust/README.md) | Disposable real-browser scheduled-workflow trust pass with stable before/after PNGs (missing binding refusal and Run now exact job) | `npm run test:e2e:schedules` (assertions); add `--screenshots docs/evidence/scheduled-workflow-trust` to regenerate captures |
+| [evidence/master-desk-chat-surface/README.md](evidence/master-desk-chat-surface/README.md) | Disposable real-browser before/after for the Delegate Master desk becoming a chat surface, plus its tightened rail, at desktop and narrow widths in both themes (#152) | by hand (recipe in that README) |
 
 **Operations & contributing:** [installation.md](installation.md) ·
 [backup.md](backup.md) · [development-tools.md](development-tools.md) ·
