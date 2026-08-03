@@ -235,8 +235,6 @@ describe('AppShell mobile drawer + search', () => {
     // The account menu stays: it is the only route to Projects, Agents,
     // Settings, and Log out, and Delegate must not strand the owner.
     expect(screen.getByRole('button', { name: 'Account actions' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Toggle sidebar' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('separator', { name: 'Resize sidebar' })).not.toBeInTheDocument()
     await user.click(screen.getAllByRole('button', { name: 'Work' })[0])
     expect(onModeChange).toHaveBeenCalledWith('work')
   })
@@ -253,6 +251,86 @@ describe('AppShell mobile drawer + search', () => {
   })
 })
 
+// #154: collapsing is a property of the sidebar, not of a mode. Delegate had no
+// control at all even though its column was sized by Work's resize handle.
+describe('AppShell sidebar collapse parity', () => {
+  const desktop = () => {
+    vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+      matches: query.includes('min-width: 768px'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+  }
+  beforeEach(() => {
+    localStorage.clear()
+    localStorage.setItem('proxima.tour.coreDone', '1')
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  for (const mode of ['work', 'delegate'] as const) {
+    it(`collapses the sidebar to the rail from ${mode}`, async () => {
+      desktop()
+      const user = userEvent.setup()
+      const { container } = render(
+        <AppShell {...base} mode={mode} currentView={mode === 'delegate' ? 'master' : 'chat'}>
+          <div>main</div>
+        </AppShell>,
+      )
+      const shell = container.querySelector('.app-shell') as HTMLElement
+      expect(shell).not.toHaveClass('left-rail')
+      expect(shell.style.getPropertyValue('--left-w')).toBe('294px')
+
+      const toggle = within(document.querySelector('.top-bar') as HTMLElement)
+        .getByRole('button', { name: 'Toggle sidebar' })
+      expect(toggle).toHaveAttribute('title', 'Collapse sidebar')
+      await user.click(toggle)
+
+      expect(shell).toHaveClass('left-rail')
+      // Collapsed, the column is the derived rail token, never a literal (#153).
+      expect(shell.style.getPropertyValue('--left-w')).toBe('var(--rail-w)')
+      expect(toggle).toHaveAttribute('title', 'Expand sidebar')
+      expect(localStorage.getItem('proxima.leftCollapsed')).toBe('1')
+    })
+
+    it(`offers the resize handle in ${mode}`, () => {
+      desktop()
+      render(
+        <AppShell {...base} mode={mode} currentView={mode === 'delegate' ? 'master' : 'chat'}>
+          <div>main</div>
+        </AppShell>,
+      )
+      expect(screen.getByRole('separator', { name: 'Resize sidebar' })).toBeInTheDocument()
+    })
+  }
+
+  it('renders the collapsed rail in Delegate with its destinations still reachable', () => {
+    desktop()
+    localStorage.setItem('proxima.leftCollapsed', '1')
+    const { container } = render(
+      <AppShell {...base} mode="delegate" currentView="master"><div>main</div></AppShell>,
+    )
+    expect(container.querySelector('.app-shell')).toHaveClass('left-rail')
+    const sidebar = document.querySelector('.sidebar') as HTMLElement
+    for (const name of ['Master', 'Tasks', 'Artifacts']) {
+      expect(within(sidebar).getByRole('button', { name })).toBeInTheDocument()
+    }
+  })
+
+  it('gives both mobile top bars the same Menu affordance', () => {
+    const { container } = render(<AppShell {...base} mode="delegate"><div>main</div></AppShell>)
+    const bar = container.querySelector('.delegate-mobile-topbar') as HTMLElement
+    expect(within(bar).getByRole('button', { name: 'Menu' })).toBeInTheDocument()
+  })
+})
+
 describe('AppShell delegate header status cluster', () => {
   const delegateBase = {
     ...base,
@@ -265,9 +343,8 @@ describe('AppShell delegate header status cluster', () => {
     expect(container.querySelector('.header-status-cluster')).toBeTruthy()
     // Projects, Agents, Settings, and Log out live only here, so Delegate needs it.
     expect(screen.getByLabelText('Account actions')).toBeInTheDocument()
-    // Search and the sidebar toggle stay Work-only.
+    // Search stays Work-only (Delegate has nothing project-scoped to search).
     expect(screen.queryByLabelText('Search')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Toggle sidebar')).not.toBeInTheDocument()
   })
 
   it('returns to Work before opening Settings from the Delegate account menu', async () => {

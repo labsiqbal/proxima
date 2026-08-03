@@ -220,8 +220,13 @@ Every schedule row offers **Run now**, which fires it immediately and opens the 
 
 ## Collapsed left rail
 
-Collapsing the Work sidebar (top-bar toggle, persisted locally) turns it into a
-**rail**: one column of equal tiles and nothing else. Its width is not a chosen
+Collapsing the sidebar (top-bar toggle, persisted locally) turns it into a
+**rail**: one column of equal tiles and nothing else. Collapse is a property of
+the sidebar, not of a mode: **Work and Delegate share the toggle, the drag
+handle, the persisted width, and this rail** (#154). Delegate used to have no
+control at all, even though its column was already being sized by Work's handle
+through the same `--left-w`; in the rail its three global destinations become
+three tiles exactly like Work's five. Its width is not a chosen
 number — it is derived from the tile (`--rail-w = --rail-tile-size + 2 ×
 --rail-gutter`), and the same gutter is used between tiles, so the column is
 evenly spaced by construction and the shell can never disagree with what is
@@ -246,7 +251,11 @@ second way to be read (#153):
   back.
 
 Nothing else changes: the same destinations, the same project switching, the same
-accessible names. The expanded sidebar is untouched by the rail's rules.
+accessible names. The expanded sidebar is untouched by the rail's rules, and so is
+the main window: the rail's hide list is **scoped to the sidebar**, because
+`.eyebrow` is an app-wide class and an unscoped rule took "CHAT" and "YOUR
+ORCHESTRATOR" out of the screen next to it whenever the sidebar happened to be
+collapsed (fixed in #154; `Sidebar.rail.test.tsx` locks the scoping).
 
 ## Right tool rail — Terminal, Files, Preview
 

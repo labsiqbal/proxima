@@ -68,16 +68,30 @@ describe('Collapsed sidebar rail', () => {
 
   it('CSS hides every label the rail has no room for', () => {
     const hidden = ruleFor(
-      '.app-shell.left-rail .sidebar-work-eyebrow',
-      '.app-shell.left-rail .project-switcher-name',
-      '.app-shell.left-rail .project-switcher-caret',
-      '.app-shell.left-rail .sidebar-update-label',
+      '.app-shell.left-rail .sidebar .sidebar-work-eyebrow',
+      '.app-shell.left-rail .sidebar .project-switcher-name',
+      '.app-shell.left-rail .sidebar .project-switcher-caret',
+      '.app-shell.left-rail .sidebar .sidebar-update-label',
     )
     expect(hidden).toMatch(/display:\s*none/)
     // The nav labels are hidden by the same rule but come back as tooltips.
     expect(withoutComments).toMatch(
       /\.app-shell\.left-rail \.nav-item:hover strong\s*\{[^}]*opacity:\s*1/,
     )
+  })
+
+  // #154: `.eyebrow` is an app-wide class. Collapsing the sidebar used to take
+  // the main window's eyebrows ("CHAT", "YOUR ORCHESTRATOR") with it, because
+  // the rail's hide list was not scoped to the sidebar.
+  it('CSS confines the rail hide list to the sidebar', () => {
+    for (const [, selector] of withoutComments.matchAll(/([^{}]+)\{[^{}]*\}/g)) {
+      for (const one of selector.split(',')) {
+        const trimmed = one.trim()
+        if (!trimmed.startsWith('.app-shell.left-rail')) continue
+        if (!/(^|\s)\.eyebrow(\s|$|,)/.test(trimmed)) continue
+        expect(trimmed).toContain('.sidebar')
+      }
+    }
   })
 
   it('CSS gives every rail tile one footprint, active or not', () => {

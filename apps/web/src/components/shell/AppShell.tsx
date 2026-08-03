@@ -4,7 +4,7 @@ import { Sidebar } from './Sidebar'
 import { MobileTopbar } from './MobileTopbar'
 import { SearchModal } from './SearchModal'
 import { ToolDock } from './ToolDock'
-import { IconPanelLeft, IconGear, IconSearch, IconProjects, IconAgents, IconLogout, IconChevronLeft } from './icons'
+import { IconPanelLeft, IconGear, IconMenu, IconSearch, IconProjects, IconAgents, IconLogout, IconChevronLeft } from './icons'
 import { ProximaMark } from '../brand/ProximaMark'
 import { AttentionInbox } from './AttentionInbox'
 import { RunningTasks } from './RunningTasks'
@@ -210,12 +210,13 @@ export function AppShell(props: {
     const direction = event.key === 'ArrowRight' ? 1 : -1
     setLeftWidth(value => clamp(value + direction * 10, LEFT_MIN, LEFT_MAX))
   }
-  // Delegate keeps its three global destinations visible. The Work preference to
-  // collapse its navigation never hides this bounded navigation surface.
-  const effectiveLeftCollapsed = !delegateMode && leftCollapsed
+  // One sidebar, one width preference, one collapse preference — both modes read
+  // them (#154). Delegate used to opt out of collapsing, which left its
+  // navigation as the only column in the app you could not put away even though
+  // its width was still being set by Work's resize handle.
   // Collapsed, the sidebar's width is the rail token (tile + two gutters), so the
   // column and the tiles inside it can never drift apart. See --rail-w.
-  const shellStyle = { ['--left-w']: effectiveLeftCollapsed ? 'var(--rail-w)' : `${leftWidth}px` } as React.CSSProperties
+  const shellStyle = { ['--left-w']: leftCollapsed ? 'var(--rail-w)' : `${leftWidth}px` } as React.CSSProperties
 
   // Account menu "Projects" opens Settings → Projects manage (not a primary nav destination).
   const openProjectsManage = () => {
@@ -224,15 +225,17 @@ export function AppShell(props: {
   }
 
   return (
-    <div className={`app-shell ${effectiveLeftCollapsed ? 'left-rail' : ''} ${delegateMode ? 'delegate-mode' : 'work-mode'} ${props.projectToolsAvailable === false ? 'project-tools-suppressed' : ''}`} style={shellStyle}>
+    <div className={`app-shell ${leftCollapsed ? 'left-rail' : ''} ${delegateMode ? 'delegate-mode' : 'work-mode'} ${props.projectToolsAvailable === false ? 'project-tools-suppressed' : ''}`} style={shellStyle}>
       <header className="top-bar">
         {/* Brand lives up here, not in the sidebar, so collapsing the sidebar never
             takes away who you are (the mark). The drawer keeps its own copy for
             mobile, where this bar hides. */}
         <div className="top-bar-brand"><ProximaMark /><strong className="proxima-word">PROXIMA</strong></div>
         <ShellModeSwitch mode={delegateMode ? 'delegate' : 'work'} delegateEnabled onChange={mode => props.onModeChange?.(mode)} />
-        {!delegateMode && <>
+        {/* Collapse is a property of the sidebar, not of a mode: both navigations
+            put away to the same rail with the same control (#154). */}
         <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
+        {!delegateMode && <>
         {/* Global chrome Back — always visible; disabled without a deep stack (Chrome-like). */}
         <button
           type="button"
@@ -306,13 +309,17 @@ export function AppShell(props: {
         delegateEnabled
         onModeChange={props.onModeChange}
       /> : <header className="mobile-topbar delegate-mobile-topbar">
-        <button ref={menuBtnRef} className="icon-button" onClick={() => setDrawerOpen(true)} aria-label="Menu" aria-expanded={drawerOpen} aria-controls="mobile-nav-drawer"><IconPanelLeft size={18} /></button>
+        {/* Same glyph as Work's Menu: one drawer, one affordance (#154). */}
+        <button ref={menuBtnRef} className="icon-button" onClick={() => setDrawerOpen(true)} aria-label="Menu" aria-expanded={drawerOpen} aria-controls="mobile-nav-drawer"><IconMenu size={18} /></button>
         <div className="mobile-context"><ShellModeSwitch mode="delegate" delegateEnabled onChange={mode => props.onModeChange?.(mode)} /></div>
       </header>}
       <aside ref={sidebarRef} className={`sidebar ${drawerOpen ? 'is-open' : ''}`} id="mobile-nav-drawer">
         <Sidebar {...props} delegate={delegateMode} onClose={() => setDrawerOpen(false)} />
       </aside>
-      {!delegateMode && <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />}
+      {/* The width the handle sets is the width both modes render, so both modes
+          get the handle — otherwise Delegate's column is sized by a control that
+          only exists in Work (#154). */}
+      <div className="resize-handle resize-left" style={{ left: 'var(--left-w)' }} onPointerDown={startResize} onKeyDown={resizeByKey} role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={LEFT_MIN} aria-valuemax={LEFT_MAX} aria-valuenow={leftWidth} aria-label="Resize sidebar" />
       {drawerOpen && <button aria-label="Close menu" className="drawer-scrim" onClick={() => setDrawerOpen(false)} />}
       <main className="main-pane">{props.children}</main>
       {!delegateMode && (

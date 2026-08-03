@@ -2328,15 +2328,17 @@ button:disabled {
 	/* Nothing in the rail may wrap: every label steps aside (the nav labels come
 	   back as hover tooltips, the project name as the tile's title + popover),
 	   and the work-context card drops its chrome so the project tile is not a
-	   box inside a box. */
-	.app-shell.left-rail .brand-row strong,
-	.app-shell.left-rail .eyebrow,
-	.app-shell.left-rail .sidebar-work-eyebrow,
-	.app-shell.left-rail .project-switcher-name,
-	.app-shell.left-rail .project-switcher-caret,
-	.app-shell.left-rail .sidebar-update-label,
-	.app-shell.left-rail .group-toggle,
-	.app-shell.left-rail .session-row {
+	   box inside a box. Scoped to the sidebar: `.eyebrow` is an app-wide class, so
+	   an unscoped rule here also took the "CHAT" and "YOUR ORCHESTRATOR" eyebrows
+	   out of the main window whenever the sidebar happened to be collapsed (#154). */
+	.app-shell.left-rail .sidebar .brand-row strong,
+	.app-shell.left-rail .sidebar .eyebrow,
+	.app-shell.left-rail .sidebar .sidebar-work-eyebrow,
+	.app-shell.left-rail .sidebar .project-switcher-name,
+	.app-shell.left-rail .sidebar .project-switcher-caret,
+	.app-shell.left-rail .sidebar .sidebar-update-label,
+	.app-shell.left-rail .sidebar .group-toggle,
+	.app-shell.left-rail .sidebar .session-row {
 		display: none;
 	}
 	.app-shell.left-rail .sidebar-work-context {
