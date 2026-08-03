@@ -430,13 +430,18 @@ surface answers:
   text; a genuinely binary file with no extension is refused by the Files API
   with a readable reason instead of being rendered as noise.
 - **Everything else** opens in the **inline viewer** (the same ArtifactViewer,
-  now rendered in the main window rather than over it): images, video, designs,
-  PDFs, sandboxed HTML pages, and the data documents whose rendering is the
-  point - CSV tables, JSON trees, Mermaid diagrams and their whiteboard. ←/→
-  walks the Container's other viewer-bound artifacts; documents are not on that
-  walk, since each opens alone in its editor. **Edit source** hands any
-  text-backed artifact to the same editor, and the way back from there returns
-  to the artifact it came from.
+  now rendered in the main window rather than over it): images, video, PDFs,
+  sandboxed HTML pages, and the data documents whose rendering is the point -
+  CSV tables, JSON trees, Mermaid diagrams and their whiteboard. ←/→ walks the
+  Container's other viewer-bound artifacts; documents are not on that walk,
+  since each opens alone in its editor. **Edit source** hands any text-backed
+  artifact to the same editor, and the way back from there returns to the
+  artifact it came from.
+- A **design** is a folder of scene JSON, not a file with bytes. In Work it
+  opens in the Design Studio canvas, which is the same main window. Where there
+  is no studio - Delegate - the viewer draws its first artboard on the stage,
+  the same picture its gallery card shows, rather than an unsupported-file dead
+  end. A folder has nothing to download, so that action is absent for it.
 
 Both surfaces name where the way back leads: **← Gallery**, or **← Record** when
 the artifact was opened from a deliverable record; returning puts focus back on
@@ -446,9 +451,14 @@ belongs to the layers that ARE overlays, and while one of those is up inside the
 viewer (the Mermaid whiteboard, the active-preview consent alert) the viewer
 takes the key outright so the same press cannot also close the dock panel behind
 it - the precedence rule #145 established.
+Changing the shell Container closes an open artifact: the destination refilters
+to the new Container, so another project's file cannot keep the window.
+
 **Delegate behaves identically**: it has no dock and no Design Studio, but it
 has this destination, the same editor, and the same viewer, because the editor
 is an Artifacts surface and the Files API it writes through is not Work-scoped.
+Only the chat handoff differs, and it never existed there - **Add feedback to
+chat** stays disabled because Delegate has no ordinary Chat to open.
 
 ## De-jargon rule for primary surfaces
 

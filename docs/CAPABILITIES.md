@@ -1873,10 +1873,12 @@ answers:
   it: markdown in the wiki's markdown editor (its Preview tab one click away),
   anything else text in the CodeMirror file editor (⌘/Ctrl+S). Both confirm
   before discarding unsaved bytes, and their close control is the way back.
-- **Everything else** - images, video, designs, PDFs, HTML pages, and the data
-  documents whose rendering is the point (CSV tables, JSON trees, Mermaid
-  diagrams) - opens in the **inline viewer** below, which keeps every renderer,
-  its review pins, and ←/→ walking of the Container's other visual artifacts.
+- **Everything else** - images, video, PDFs, HTML pages, and the data documents
+  whose rendering is the point (CSV tables, JSON trees, Mermaid diagrams) -
+  opens in the **inline viewer** below, which keeps every renderer, its review
+  pins, and ←/→ walking of the Container's other visual artifacts. A **design**
+  opens in the Design Studio canvas where there is one (Work) and is drawn from
+  its first artboard on the viewer stage where there is not (Delegate).
   Its **Edit source** hands any text-backed artifact to that same editor, and the
   editor's **Review** action is the door back, so a markdown report can still be
   pinned and sent to chat.
