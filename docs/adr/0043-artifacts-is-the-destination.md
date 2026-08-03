@@ -89,6 +89,23 @@ a transient panel with a Close action rather than a lens.
 is the file browser again; it absorbed that inspection panel, so the destination
 now renders no tree at all, and `proxima:reveal-file` is answered by the dock.
 
+**Landed 2026-08-03 (#146):** decision 3 is executed, and with it the shape of
+opening anything. An artifact takes over the destination's **main window**
+instead of a lightbox: markdown and text documents open **directly in the
+editor** (the wiki markdown editor, or the file editor for other text) and
+everything else in the **inline viewer**, which keeps its renderers, review
+pins, and neighbour walk and hands text-backed kinds to that editor through
+**Edit source**. The popup is gone entirely - it was not kept for media either,
+because a second way to look at a file is exactly the intermediate step this
+decision removes. Data documents (CSV, JSON, Mermaid) stay with the viewer on
+purpose: their rendering, not their bytes, is why the owner opened them. The two
+surfaces are two-way - the viewer's **Edit source** reaches the editor, the
+editor's **Review** reaches the viewer - so routing a document to the editor
+costs it nothing: pinned feedback and the chat handoff stay one click away
+rather than one step in front. Both name their way back (**← Gallery** /
+**← Record**), and Delegate behaves the same, minus the chat handoff it has
+never had: it owns this destination, this editor, and this viewer.
+
 ## Consequences
 
 Positive:

@@ -217,13 +217,28 @@ async function clickByText(cdp, label, selector = 'button') {
   assert(clicked, `Missing ${selector} with text ${label}`)
 }
 
+async function openRecordPermalink(cdp, project, recordSlug) {
+  const hash = JSON.stringify(`#archive/${project}/${recordSlug}`)
+  await evaluate(cdp, `(() => { window.location.hash = ${hash}; return true })()`)
+  await waitForPage(cdp, `Boolean(document.querySelector('.archive-record-actions'))`, 'record permanent address')
+}
+
 async function switchProject(cdp, name) {
-  await evaluate(cdp, `(() => {
-    const trigger = document.querySelector('button[aria-label^="Active project:"]')
-    if (!(trigger instanceof HTMLButtonElement)) return false
-    trigger.click()
-    return true
-  })()`)
+  // The switcher can be clicked while the shell is still settling (tour skip,
+  // first project load), which swallows the open. Re-press until the list is up
+  // rather than failing the whole pass on a race.
+  let opened = false
+  for (let attempt = 0; attempt < 20 && !opened; attempt += 1) {
+    opened = await evaluate(cdp, `Boolean(document.querySelector('[role=listbox][aria-label="Projects"]'))`)
+    if (opened) break
+    await evaluate(cdp, `(() => {
+      const trigger = document.querySelector('button[aria-label^="Active project:"]')
+      if (!(trigger instanceof HTMLButtonElement)) return false
+      trigger.click()
+      return true
+    })()`)
+    await sleep(250)
+  }
   await waitForPage(cdp, `Boolean(document.querySelector('[role=listbox][aria-label="Projects"]'))`, 'project list')
   const picked = await evaluate(cdp, `(() => {
     const option = [...document.querySelectorAll('[role=option]')]
@@ -414,60 +429,83 @@ async function main() {
     await waitForPage(cdp, `document.querySelector('.code-header strong')?.textContent === 'New chat'`, 'client new chat')
     assert.equal(await evaluate(cdp, `document.querySelector('.composer textarea')?.value`), '')
     await setInput(cdp, '.composer textarea', 'Client private draft')
-    await clickByText(cdp, 'Archive')
-    await waitForPage(cdp, `document.querySelector('.archive-row')?.textContent.includes('Launch review')`, 'archive record')
-    const openedRow = await evaluate(cdp, `(() => {
-      const row = [...document.querySelectorAll('.archive-row')]
-        .find(candidate => candidate.textContent.includes('Launch review'))
-      if (!(row instanceof HTMLButtonElement)) return false
-      row.click()
-      return true
-    })()`)
-    assert(openedRow, 'Launch review archive row was unavailable')
-    await waitForPage(cdp, `Boolean(document.querySelector('.archive-exp-foot'))`, 'expanded archive row')
+    // A deliverable's permanent address is how another Container's record is
+    // reached: the ledger itself is scoped to the active Container (#144), and
+    // the shell is standing in Client Beta with an unsent draft on purpose.
+    await openRecordPermalink(cdp, producerProject.slug, 'launch-review-v1')
     const openRecord = await evaluate(cdp, `(() => {
-      const button = [...document.querySelectorAll('.archive-exp-foot button')]
+      const button = [...document.querySelectorAll('.archive-record-page button')]
         .find(candidate => candidate.textContent.trim() === 'Open')
       if (!(button instanceof HTMLButtonElement)) return false
-      button.focus()
       button.click()
       return true
     })()`)
-    assert(openRecord, 'Artifact viewer trigger was unavailable')
+    assert(openRecord, 'Record panel Open was unavailable')
 
-    await waitForPage(cdp, `Boolean(document.querySelector('[role=dialog][aria-modal=true].av-overlay'))`, 'artifact review dialog')
-    const dialogSummary = await evaluate(cdp, `(() => {
-      const dialog = document.querySelector('[role=dialog][aria-modal=true].av-overlay')
+    // #146: a markdown deliverable opens straight in the EDITOR, in the main
+    // window. The review surface is one click away from there, not in front of it.
+    await waitForPage(cdp, `Boolean(document.querySelector('.artifacts-doc .wiki-note-head'))`, 'document editor')
+    const editorSummary = await evaluate(cdp, `(() => {
+      const editor = document.querySelector('.artifacts-doc')
+      const buttons = [...editor.querySelectorAll('button')].map(button => button.textContent.trim())
       return {
-        name: dialog?.querySelector('h2')?.textContent,
+        label: editor?.getAttribute('aria-label'),
+        back: buttons.includes('← Record'),
+        review: buttons.includes('Review'),
+        viewer: Boolean(document.querySelector('.av-surface')),
+      }
+    })()`)
+    assert.deepEqual(editorSummary, {
+      label: 'Editing review.md',
+      back: true,
+      review: true,
+      viewer: false,
+    })
+    await clickByText(cdp, 'Review')
+
+    // The review surface is the MAIN WINDOW since #146: a labelled region inside
+    // the Artifacts destination, focus on its way back, no dialog and no scrim.
+    await waitForPage(cdp, `Boolean(document.querySelector('.av-surface'))`, 'artifact review surface')
+    const surfaceSummary = await evaluate(cdp, `(() => {
+      const surface = document.querySelector('.av-surface')
+      return {
+        name: surface?.querySelector('h2')?.textContent,
+        role: surface?.getAttribute('role'),
+        modal: surface?.getAttribute('aria-modal'),
+        portalled: surface?.parentElement === document.body,
         focused: document.activeElement?.getAttribute('aria-label'),
       }
     })()`)
-    assert.deepEqual(dialogSummary, {
+    assert.deepEqual(surfaceSummary, {
       name: 'Artifact review: Launch review',
-      focused: 'Close artifact review',
+      role: null,
+      modal: null,
+      portalled: false,
+      focused: 'Back to record',
     })
     await captureScreenshot(cdp, path.join(evidenceDir, 'before-artifact-review.png'))
-    await evaluate(cdp, `document.querySelector('[role=dialog] button')?.focus()`)
-    await pressKey(cdp, 'Tab', 'Tab', 9, 8)
-    assert.equal(
-      await evaluate(cdp, `document.activeElement?.closest('label')?.textContent.trim().startsWith('General feedback')`),
-      true,
-      'Shift+Tab did not wrap to the final dialog control',
-    )
+    // Escape belongs to whatever overlay is genuinely on top - never to this.
     await pressKey(cdp, 'Escape', 'Escape', 27)
-    await waitForPage(cdp, `!document.querySelector('.av-overlay')`, 'ordinary dialog close')
-    await waitForPage(
-      cdp,
-      `document.activeElement?.textContent.trim() === 'Open'`,
-      'artifact trigger focus restoration',
+    assert.equal(
+      await evaluate(cdp, `Boolean(document.querySelector('.av-surface'))`),
+      true,
+      'Escape closed a main-window surface',
     )
+    await evaluate(cdp, `document.querySelector('.av-back')?.click()`)
+    await waitForPage(cdp, `Boolean(document.querySelector('.archive-record-actions'))`, 'way back to the record')
 
-    await evaluate(cdp, `document.activeElement.click()`)
-    await waitForPage(cdp, `Boolean(document.querySelector('.av-overlay'))`, 'reopened artifact review')
+    await evaluate(cdp, `(() => {
+      const button = [...document.querySelectorAll('.archive-record-page button')]
+        .find(candidate => candidate.textContent.trim() === 'Open')
+      button?.click()
+      return true
+    })()`)
+    await waitForPage(cdp, `Boolean(document.querySelector('.artifacts-doc .wiki-note-head'))`, 'document editor again')
+    await clickByText(cdp, 'Review')
+    await waitForPage(cdp, `Boolean(document.querySelector('.av-surface'))`, 'reopened artifact review')
     await setInput(cdp, '.av-general-note textarea', 'Tighten the final call to action.')
     await clickByText(cdp, 'Add feedback to chat')
-    await waitForPage(cdp, `!document.querySelector('.av-overlay')`, 'successful feedback handoff')
+    await waitForPage(cdp, `!document.querySelector('.av-surface')`, 'successful feedback handoff')
     await waitForPage(
       cdp,
       `document.querySelector('[role=dialog] h3')?.textContent === 'This chat already has an unsent draft'`,

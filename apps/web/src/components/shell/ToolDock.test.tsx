@@ -103,8 +103,10 @@ describe('ToolDock', () => {
     const rail = screen.getByRole('complementary', { name: 'Tools' })
     await user.click(rail.querySelector('[aria-label="Terminal"]') as HTMLElement)
     expect(await screen.findByTestId('terminal-stub')).toBeVisible()
-    // A file opened from the dock lands in a modal viewer; one Escape must
-    // close that viewer, not the panel the owner was browsing in.
+    // A modal raised over the dock (a confirm dialog, the active-preview
+    // consent) owns Escape; one press must close it, not the panel the owner
+    // was browsing in. A handed-off file is NOT modal since #146 - it opens in
+    // the main window behind this panel.
     const modal = document.createElement('div')
     modal.setAttribute('aria-modal', 'true')
     document.body.appendChild(modal)

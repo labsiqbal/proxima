@@ -5,6 +5,8 @@ import { listArchive, listArchiveBadges, type ArchiveBadge, type ArchiveRecord }
 import { ArtifactViewer, type ArtifactReviewFeedback, type ArtifactReviewHandoffResult } from '../components/artifacts/ArtifactViewer'
 import { ArchiveRecordPage } from '../components/artifacts/ArchiveRecordPage'
 import { DeliverablesLens } from '../components/artifacts/DeliverablesLens'
+import { DocumentEditor } from '../components/artifacts/DocumentEditor'
+import { opensInEditor } from '../components/artifacts/fileKind'
 import { ArtifactThumb, isVisualArtifact } from '../components/artifacts/ArtifactThumb'
 import { STATUS_LABELS, typeMeta } from '../components/artifacts/archive'
 import { Dropdown } from '../components/ui/Dropdown'
@@ -20,10 +22,22 @@ import { revealFile } from '../lib/revealFile'
 // - Deliverables the durable record ledger - lineage, approval, versions (#139)
 // - History      records whose file is gone from disk (records, not phantoms)
 // Two scopes share the screen: Work shows the active Container, Delegate goes
-// global behind the head filter, the way Tasks does. Opening an artifact goes
-// through the shared ArtifactViewer (documents move to the wiki editor in #146).
+// global behind the head filter, the way Tasks does.
 // There is no tree here at all: browsing the real disk is a dock tool (#145),
 // and "Reveal in Files" on a record raises the dock's reveal event.
+//
+// Opening an artifact takes over this main window instead of raising a popup
+// (ADR-0043 decision 3, #146). This screen is the ONE router for that, because
+// every way of opening a file arrives here - a gallery click, the dock browser
+// and task file links through `App openFileInMainWindow`, a chat result card, a
+// record panel's Open, an `#archive/...` permalink:
+// - a document you write (markdown, text, source) → `DocumentEditor`, editable
+//   from the first frame, because the editor is the point
+// - everything else → the inline `ArtifactViewer`, which keeps its renderers,
+//   review pins, and neighbour walk, and reaches the editor via "Edit source"
+// Both name their way back to whatever they covered - the gallery or an open
+// record. Delegate has neither a dock nor Design Studio, but it has this
+// destination, so an artifact opened there behaves exactly the same.
 
 type Tab = 'all' | 'deliverables' | 'history'
 
@@ -41,6 +55,21 @@ const GALLERY_WINDOW_MINUTES = 525600
 const SCAN_CAP = 40
 
 type GalleryItem = Artifact & { projectSlug: string; projectName: string }
+
+/**
+ * An artifact taken over the main window. `surface` is decided once, when it is
+ * opened, from what the file is; "Edit source" is the only thing that moves an
+ * already-open artifact from the viewer to the editor, and going back from
+ * there returns to the viewer it was opened from rather than skipping it.
+ */
+type OpenArtifact = {
+  slug: string
+  items: Artifact[]
+  index: number
+  sessionId?: number | null
+  surface: 'viewer' | 'editor'
+  fromViewer?: boolean
+}
 
 const itemKey = (item: GalleryItem) => `${item.projectSlug}:${item.type}:${item.path}`
 
@@ -81,7 +110,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   const [loadError, setLoadError] = React.useState('')
   const [reloadNonce, setReloadNonce] = React.useState(0)
   const [capped, setCapped] = React.useState(false)
-  const [open, setOpen] = React.useState<{ slug: string; items: Artifact[]; index: number; sessionId?: number | null } | null>(null)
+  const [open, setOpen] = React.useState<OpenArtifact | null>(null)
   const mountedRef = React.useRef(true)
   const loadSeq = React.useRef(0)
 
@@ -97,6 +126,24 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   const shownKey = shown.map(project => project.slug).join(',')
   const shownRef = React.useRef(shown)
   shownRef.current = shown
+
+  // Changing the scope refilters this destination, so an artifact opened from
+  // the old scope cannot keep the main window. Declared before the pending-open
+  // effects so a handoff that arrives on the same commit still wins.
+  React.useEffect(() => { setOpen(null) }, [shownKey])
+
+  // Returning from an open artifact puts focus back on the card or row that
+  // opened it (and scrolls it into view). The surface cannot do this itself:
+  // the gallery is unmounted while it is up, so its trigger is a detached node.
+  const returnFocusRef = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    if (open || !returnFocusRef.current) return
+    const key = returnFocusRef.current
+    returnFocusRef.current = null
+    const trigger = Array.from(document.querySelectorAll<HTMLElement>('[data-artifact-key]'))
+      .find(element => element.dataset.artifactKey === key)
+    trigger?.focus()
+  }, [open])
 
   // The gallery is a live scan of what the Containers produced; the ledger tabs
   // fetch their own records, so only the All tab pays for it.
@@ -163,25 +210,38 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
     revealFile({ path: record.path, pathKind: 'file', projectSlug: record.project_slug })
   }, [])
 
-  const openViewerForRecord = React.useCallback((record: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug' | 'target'> & { session_id?: number | null }) => {
-    setOpen({ slug: record.project_slug, items: [recordAsArtifact(record)], index: 0, sessionId: record.session_id ?? reviewSessionId })
+  // The one place an artifact becomes a main-window surface. What the file is
+  // decides which surface answers, so every entry point routes identically.
+  const openArtifactAt = React.useCallback((slug: string, walk: Artifact[], index: number, sessionId?: number | null) => {
+    const item = walk[index]
+    if (!item) return
+    setOpen({
+      slug,
+      items: walk,
+      index,
+      sessionId: sessionId ?? reviewSessionId,
+      surface: opensInEditor(item) ? 'editor' : 'viewer',
+    })
   }, [reviewSessionId])
+
+  const openViewerForRecord = React.useCallback((record: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug' | 'target'> & { session_id?: number | null }) => {
+    openArtifactAt(record.project_slug, [recordAsArtifact(record)], 0, record.session_id ?? reviewSessionId)
+  }, [openArtifactAt, reviewSessionId])
 
   // Chat result cards and task file links keep working: a pending artifact
   // resolves to its registry record (permanent address) when one exists, and
-  // falls back to the universal viewer for anything not (yet) registered.
+  // falls back to opening the file itself when it is not (yet) registered.
   React.useEffect(() => {
     if (!pendingArtifact) return
     const link = pendingArtifact
     onPendingArtifactConsumed?.()
     const slug = link.project_slug || activeProject?.slug
     if (!slug || !link.path) return
-    const fallback = () => setOpen({
+    const fallback = () => openArtifactAt(
       slug,
-      items: [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug, target: link.target }],
-      index: 0,
-      sessionId: reviewSessionId,
-    })
+      [{ type: link.type as Artifact['type'], title: link.title || link.path, path: link.path, project_slug: slug, target: link.target }],
+      0,
+    )
     void listArchive(token, { project: slug, path: link.path, limit: 1 }).then(res => {
       if (!mountedRef.current) return
       const hit = res.items[0]
@@ -190,31 +250,48 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
     }).catch(() => {
       if (mountedRef.current) fallback()
     })
-  }, [pendingArtifact, token, activeProject?.slug, onOpenRecord, onPendingArtifactConsumed, reviewSessionId])
+  }, [pendingArtifact, token, activeProject?.slug, onOpenRecord, onPendingArtifactConsumed, openArtifactAt])
 
   React.useEffect(() => {
     if (!pendingFile) return
     onPendingConsumed?.()
-    setOpen({
-      slug: pendingFile.slug,
-      items: [{ type: 'file', title: pendingFile.path.split('/').pop() || pendingFile.path, path: pendingFile.path, target: pendingFile.target }],
-      index: 0,
-      sessionId: reviewSessionId,
-    })
-  }, [pendingFile, onPendingConsumed, reviewSessionId])
+    openArtifactAt(
+      pendingFile.slug,
+      [{ type: 'file', title: pendingFile.path.split('/').pop() || pendingFile.path, path: pendingFile.path, target: pendingFile.target }],
+      0,
+    )
+  }, [pendingFile, onPendingConsumed, openArtifactAt])
 
-  const viewer = open && (
-    <ArtifactViewer
-      token={token}
-      slug={open.slug}
-      items={open.items}
-      index={open.index}
-      onIndex={index => setOpen(current => current ? { ...current, index } : current)}
-      onClose={() => setOpen(null)}
-      reviewSessionId={open.sessionId ?? null}
-      onSendFeedback={onSendFeedback}
-    />
-  )
+  // The open artifact owns the main window; back returns to whatever it took
+  // over - an open record, or the gallery.
+  const backLabel = archiveRecord ? 'Record' : 'Gallery'
+  const openItem = open ? open.items[open.index] : null
+  const surface = open && openItem && (open.surface === 'editor'
+    ? <DocumentEditor
+        token={token}
+        slug={open.slug}
+        path={openItem.path}
+        target={openItem.target}
+        backLabel={open.fromViewer ? 'Artifact' : backLabel}
+        onClose={() => setOpen(current => current?.fromViewer
+          ? { ...current, surface: 'viewer', fromViewer: false }
+          : null)}
+        onReview={() => setOpen(current => current ? { ...current, surface: 'viewer', fromViewer: false } : current)}
+      />
+    : <ArtifactViewer
+        token={token}
+        slug={open.slug}
+        items={open.items}
+        index={open.index}
+        onIndex={index => setOpen(current => current ? { ...current, index } : current)}
+        onClose={() => setOpen(null)}
+        backLabel={backLabel}
+        onEditSource={() => setOpen(current => current ? { ...current, surface: 'editor', fromViewer: true } : current)}
+        reviewSessionId={open.sessionId ?? null}
+        onSendFeedback={onSendFeedback}
+      />)
+
+  if (surface) return <section className="artifacts-view">{surface}</section>
 
   // ── The record panel: a deliverable's permanent address ──
   if (archiveRecord) {
@@ -232,7 +309,6 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
         onRevealInFiles={globalScope ? undefined : revealInDock}
         onChanged={() => setBadgeNonce(nonce => nonce + 1)}
       />
-      {viewer}
     </section>
   }
 
@@ -241,11 +317,18 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
       onOpenDesign(item.id || item.path.split('/').filter(Boolean).slice(-1)[0] || item.path)
       return
     }
-    // The viewer walks this Container's gallery, so ←/→ moves between siblings.
+    // ←/→ walks what you LOOK at: the viewer-bound artifacts of this Container.
+    // Documents are not on that walk - each opens alone in its editor.
+    returnFocusRef.current = itemKey(item)
+    if (opensInEditor(item)) {
+      openArtifactAt(item.projectSlug, [item], 0)
+      return
+    }
     const siblings = items.filter(other => other.projectSlug === item.projectSlug
+      && !opensInEditor(other)
       && !(other.type === 'design' && designStudioEnabled && onOpenDesign))
     const index = siblings.findIndex(other => itemKey(other) === itemKey(item))
-    setOpen({ slug: item.projectSlug, items: siblings, index: index >= 0 ? index : 0, sessionId: reviewSessionId })
+    openArtifactAt(item.projectSlug, siblings, index >= 0 ? index : 0)
   }
 
   const badgeOf = (item: GalleryItem) => {
@@ -271,7 +354,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
     `${globalScope ? `${item.projectName} · ` : ''}${item.path}`
 
   const card = (item: GalleryItem) => <div className="artifacts-card" key={itemKey(item)}>
-    <button type="button" className="artifacts-card-open" onClick={() => openArtifact(item)}>
+    <button type="button" className="artifacts-card-open" data-artifact-key={itemKey(item)} onClick={() => openArtifact(item)}>
       <span className="artifacts-thumb"><ArtifactThumb token={token} slug={item.projectSlug} artifact={item} /></span>
       <span className="artifacts-card-meta">
         <strong title={item.title}>{item.title}</strong>
@@ -282,7 +365,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   </div>
 
   const row = (item: GalleryItem) => <div className="artifacts-row" key={itemKey(item)}>
-    <button type="button" className="artifacts-row-open" onClick={() => openArtifact(item)}>
+    <button type="button" className="artifacts-row-open" data-artifact-key={itemKey(item)} onClick={() => openArtifact(item)}>
       <span className="artifacts-glyph" aria-hidden="true">{typeMeta(item.type).ic}</span>
       <span className="artifacts-row-meta">
         <strong title={item.title}>{item.title}</strong>
@@ -382,7 +465,5 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
           designStudioEnabled={designStudioEnabled}
           onRecordsChanged={() => setBadgeNonce(nonce => nonce + 1)}
         />}
-
-    {viewer}
   </section>
 }

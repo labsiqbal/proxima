@@ -58,7 +58,12 @@ afterEach(() => {
 })
 
 describe('ArtifactViewer v2 review flow', () => {
-  it('is a modal dialog that traps focus, closes with Escape, and restores its trigger', async () => {
+  // #146: the viewer is the MAIN WINDOW, not a lightbox over it. No dialog role,
+  // no portal, no scrim, no focus trap - and Escape belongs to whatever overlay
+  // is genuinely on top (the dock panel, a confirm dialog), never to this.
+  // Focus enters on the way back; returning it to the trigger belongs to the
+  // opener, which outlives this surface (`ArtifactsScreen`).
+  it('renders in the main window with a named way back, not as a popup', async () => {
     function Harness() {
       const [open, setOpen] = React.useState(false)
       return <>
@@ -69,6 +74,7 @@ describe('ArtifactViewer v2 review flow', () => {
           items={[{ type: 'image', title: 'Hero', path: 'artifacts/hero.png' }]}
           index={0}
           onIndex={() => undefined}
+          backLabel="Gallery"
           onClose={() => setOpen(false)}
         />}
       </>
@@ -77,22 +83,70 @@ describe('ArtifactViewer v2 review flow', () => {
     const view = render(<Harness />)
     await userEvent.click(view.getByRole('button', { name: 'Review artifact' }))
 
-    const dialog = screen.getByRole('dialog', { name: 'Artifact review: Hero' })
-    const close = screen.getByRole('button', { name: 'Close artifact review' })
-    expect(dialog).toHaveAttribute('aria-modal', 'true')
-    expect(dialog).toHaveAccessibleDescription('Review this artifact and add editable feedback to its producing chat.')
-    await waitFor(() => expect(close).toHaveFocus())
+    const surface = screen.getByRole('region', { name: 'Artifact review: Hero' })
+    expect(surface).not.toHaveAttribute('aria-modal')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(surface.parentElement).not.toBe(document.body)
+    expect(surface).toHaveAccessibleDescription('Review this artifact and add editable feedback to its producing chat.')
 
-    const feedback = screen.getByRole('textbox', { name: 'General feedback' })
-    feedback.focus()
-    await userEvent.tab()
-    expect(screen.getByRole('button', { name: 'Annotate' })).toHaveFocus()
-    await userEvent.tab({ shift: true })
-    expect(feedback).toHaveFocus()
+    const back = screen.getByRole('button', { name: 'Back to gallery' })
+    await waitFor(() => expect(back).toHaveFocus())
 
     await userEvent.keyboard('{Escape}')
-    expect(screen.queryByRole('dialog', { name: 'Artifact review: Hero' })).not.toBeInTheDocument()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Review artifact' })).toHaveFocus())
+    expect(screen.getByRole('region', { name: 'Artifact review: Hero' })).toBeInTheDocument()
+
+    await userEvent.click(back)
+    expect(screen.queryByRole('region', { name: 'Artifact review: Hero' })).not.toBeInTheDocument()
+  })
+
+  // A design has no bytes to preview; without its artboard the stage would be an
+  // unsupported-file dead end, which is exactly what Delegate would show (#146).
+  it('draws a design from its artboard instead of the unsupported fallback', async () => {
+    fsRead.mockResolvedValue({ content: JSON.stringify({ artboards: [{ id: 'a', w: 100, h: 100, nodes: [] }] }) })
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'design', title: 'Poster', path: 'artifacts/design/poster' }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+    await waitFor(() => expect(document.querySelector('.av-design')).toBeInTheDocument())
+    expect(screen.queryByText(/Can't preview this file type/)).not.toBeInTheDocument()
+    // A folder has nothing to download either.
+    expect(screen.queryByRole('link', { name: 'Download' })).not.toBeInTheDocument()
+  })
+
+  // The way from a rendered document to its bytes: data and pages keep their
+  // renderer, so "Edit source" is how they reach the same main-window editor a
+  // markdown or text document opens in directly (#146).
+  it('hands editable kinds to the editor through Edit source', async () => {
+    const onEditSource = vi.fn()
+    fsRead.mockResolvedValue({ content: 'a,b\n1,2\n' })
+    const item = { type: 'file' as const, title: 'rows.csv', path: 'exports/rows.csv' }
+    const { rerender } = render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[item]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+      onEditSource={onEditSource}
+    />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit source' }))
+    expect(onEditSource).toHaveBeenCalledWith(item)
+
+    const binary = { type: 'file' as const, title: 'tool.wasm', path: 'bin/tool.wasm' }
+    rerender(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[binary]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+      onEditSource={onEditSource}
+    />)
+    expect(screen.queryByRole('button', { name: 'Edit source' })).not.toBeInTheDocument()
   })
 
   it('closes only after a successful feedback handoff', async () => {

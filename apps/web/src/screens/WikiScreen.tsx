@@ -137,7 +137,7 @@ export function WikiScreen({ token, projects, activeProject, onActiveProject }: 
       <div className="wiki-main">
         {createError && <p className="wiki-create-error" role="alert">{createError}</p>}
         {openNote
-          ? <React.Suspense fallback={<div className="wiki-pane-msg muted">Loading note…</div>}><WikiNote fs={fs} path={openNote} backlinks={model.backlinks[openNote] || []} resolve={model.resolve} onOpenNote={p => openInFiles(p)} onCreateNote={target => { void createAndOpen(target) }} onClose={() => { setOpenNote(null); setOpenInEdit(false) }} onSaved={reload} defaultMode={openInEdit ? 'edit' : 'preview'} /></React.Suspense>
+          ? <React.Suspense fallback={<div className="wiki-pane-msg muted">Loading note…</div>}><WikiNote fs={fs} path={openNote} wiki={{ backlinks: model.backlinks[openNote] || [], resolve: model.resolve, onOpenNote: p => openInFiles(p), onCreateNote: target => { void createAndOpen(target) } }} onClose={() => { setOpenNote(null); setOpenInEdit(false) }} onSaved={reload} defaultMode={openInEdit ? 'edit' : 'preview'} /></React.Suspense>
           : <div className="wiki-placeholder"><p className="muted">Select or create a note. Link notes with <code>[[Note]]</code> — backlinks &amp; graph update automatically. Red links create the missing note on click.</p></div>}
       </div>
     </div>}

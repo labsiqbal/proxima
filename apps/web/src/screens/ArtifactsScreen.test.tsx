@@ -41,8 +41,33 @@ vi.mock('../components/artifacts/ArtifactThumb', async importOriginal => ({
   ),
 }))
 vi.mock('../components/artifacts/ArtifactViewer', () => ({
-  ArtifactViewer: ({ slug, items, index }: { slug: string; items: { path: string }[]; index: number }) => (
-    <div data-testid="viewer">viewer:{slug}:{items[index]?.path}:{items.length}</div>
+  ArtifactViewer: ({ slug, items, index, backLabel, onClose, onEditSource }: {
+    slug: string
+    items: { path: string }[]
+    index: number
+    backLabel?: string
+    onClose: () => void
+    onEditSource?: (artifact: { path: string }) => void
+  }) => (
+    <div data-testid="viewer">viewer:{slug}:{items[index]?.path}:{items.length}
+      <button type="button" onClick={onClose}>{`\u2190 ${backLabel}`}</button>
+      {onEditSource && <button type="button" onClick={() => onEditSource(items[index])}>Edit source</button>}
+    </div>
+  ),
+}))
+vi.mock('../components/artifacts/DocumentEditor', () => ({
+  DocumentEditor: ({ slug, path, target, backLabel, onClose, onReview }: {
+    slug: string
+    path: string
+    target?: { path: string }
+    backLabel?: string
+    onClose: () => void
+    onReview?: () => void
+  }) => (
+    <div data-testid="editor">editor:{slug}:{path}:{target ? 'targeted' : 'plain'}
+      <button type="button" onClick={onClose}>{`\u2190 ${backLabel}`}</button>
+      {onReview && <button type="button" onClick={onReview}>Review</button>}
+    </div>
   ),
 }))
 vi.mock('../components/artifacts/DeliverablesLens', () => ({
@@ -51,16 +76,21 @@ vi.mock('../components/artifacts/DeliverablesLens', () => ({
   ),
 }))
 vi.mock('../components/artifacts/ArchiveRecordPage', () => ({
-  ArchiveRecordPage: ({ project, slug, onRevealInFiles }: {
+  ArchiveRecordPage: ({ project, slug, onRevealInFiles, onOpenViewer }: {
     project: string
     slug: string
     onRevealInFiles?: (record: { project_slug: string; path: string }) => void
+    onOpenViewer?: (record: { type: string; name: string; path: string; project_slug: string }) => void
   }) => (
     <div data-testid="record-panel">record:{project}:{slug}
       {onRevealInFiles && <button
         type="button"
         onClick={() => onRevealInFiles({ project_slug: project, path: 'reports/plan.md' })}
       >Reveal in Files</button>}
+      {onOpenViewer && <>
+        <button type="button" onClick={() => onOpenViewer({ type: 'doc', name: 'plan.md', path: 'reports/plan.md', project_slug: project })}>Open document</button>
+        <button type="button" onClick={() => onOpenViewer({ type: 'image', name: 'shot.png', path: 'artifacts/shot.png', project_slug: project })}>Open image</button>
+      </>}
     </div>
   ),
 }))
@@ -131,8 +161,86 @@ describe('ArtifactsScreen', () => {
     vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
     render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} />)
     await user.click(await screen.findByRole('button', { name: /shot\.png/ }))
-    // Every viewer-eligible artifact of that Container travels with it.
-    expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:artifacts/shot.png:5')
+    // The walk is what you LOOK at: the four viewer-bound artifacts of that
+    // Container. plan.md is not one of them - it opens in the editor (#146).
+    expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:artifacts/shot.png:4')
+  })
+
+  // ── #146: opening lands in the MAIN WINDOW, and a document lands in the editor ──
+
+  it('opens a document straight in the editor, with no popup in between', async () => {
+    const user = userEvent.setup()
+    vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
+    render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} />)
+    await user.click(await screen.findByRole('button', { name: /plan\.md/ }))
+
+    expect(await screen.findByTestId('editor')).toHaveTextContent('editor:alpha:reports/plan.md')
+    expect(screen.queryByTestId('viewer')).not.toBeInTheDocument()
+    // The main window IS the editor: no gallery underneath, nothing modal.
+    expect(screen.queryByTestId('artifacts-gallery')).not.toBeInTheDocument()
+    expect(document.querySelector('[aria-modal="true"]')).toBeNull()
+  })
+
+  it('gives the open surface a way back to the gallery', async () => {
+    const user = userEvent.setup()
+    vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
+    render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} />)
+
+    await user.click(await screen.findByRole('button', { name: /plan\.md/ }))
+    await user.click(await screen.findByRole('button', { name: '← Gallery' }))
+    expect(await screen.findByTestId('artifacts-gallery')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /shot\.png/ }))
+    await user.click(await screen.findByRole('button', { name: '← Gallery' }))
+    expect(await screen.findByTestId('artifacts-gallery')).toBeInTheDocument()
+  })
+
+  it('reaches the editor from a rendered artifact through Edit source, and back', async () => {
+    const user = userEvent.setup()
+    vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
+    render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} />)
+    await user.click(await screen.findByRole('button', { name: /index\.html/ }))
+    await user.click(await screen.findByRole('button', { name: 'Edit source' }))
+    expect(await screen.findByTestId('editor')).toHaveTextContent('editor:alpha:exports/index.html')
+
+    // Entered from the artifact, so the way back returns to it - not past it.
+    await user.click(screen.getByRole('button', { name: '← Artifact' }))
+    expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:exports/index.html')
+  })
+
+  // Routing documents to the editor must not cost them the review loop: pins and
+  // the chat handoff stay one click away instead of one step in front.
+  it('opens a document in the review viewer through the editor Review action', async () => {
+    const user = userEvent.setup()
+    vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
+    render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} />)
+    await user.click(await screen.findByRole('button', { name: /plan\.md/ }))
+    await user.click(await screen.findByRole('button', { name: 'Review' }))
+    expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:reports/plan.md')
+  })
+
+  it('returns focus to the artifact that was opened', async () => {
+    const user = userEvent.setup()
+    vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
+    render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} />)
+    const row = await screen.findByRole('button', { name: /plan\.md/ })
+    await user.click(row)
+    await user.click(await screen.findByRole('button', { name: '← Gallery' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /plan\.md/ })).toHaveFocus())
+  })
+
+  it('closes an open artifact when the shell moves to another Container', async () => {
+    const user = userEvent.setup()
+    vi.mocked(listArtifacts).mockImplementation(async (_token, slug) => ({
+      artifacts: [{ type: 'doc', title: `${slug}.md`, path: `reports/${slug}.md` }],
+    } as never))
+    const view = render(<ArtifactsScreen token="t" projects={[alpha, beta]} activeProject={alpha} />)
+    await user.click(await screen.findByRole('button', { name: /alpha\.md/ }))
+    expect(await screen.findByTestId('editor')).toBeInTheDocument()
+
+    view.rerender(<ArtifactsScreen token="t" projects={[alpha, beta]} activeProject={beta} />)
+    await waitFor(() => expect(screen.queryByTestId('editor')).not.toBeInTheDocument())
+    expect(await screen.findByRole('button', { name: /beta\.md/ })).toBeInTheDocument()
   })
 
   it('opens a design in the studio when Design Studio is available', async () => {
@@ -265,17 +373,56 @@ describe('ArtifactsScreen', () => {
     expect(onConsumed).toHaveBeenCalled()
   })
 
-  it('opens an unregistered pending artifact in the ArtifactViewer', async () => {
+  it('opens an unregistered pending chat artifact in the same main window', async () => {
     const onConsumed = vi.fn()
     render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} onPendingArtifactConsumed={onConsumed}
       pendingArtifact={{ type: 'doc', title: 'notes.md', path: 'out/notes.md', project_slug: 'alpha' }} />)
     await waitFor(() => expect(onConsumed).toHaveBeenCalled())
-    expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:out/notes.md')
+    expect(await screen.findByTestId('editor')).toHaveTextContent('editor:alpha:out/notes.md')
   })
 
-  it('opens a pending task file in the ArtifactViewer', async () => {
+  // The dock browser and a task's file links share one shell seam
+  // (`App openFileInMainWindow`), so both land wherever this routes them.
+  it('opens a handed-off document in the editor, keeping its Area-mapped target', async () => {
+    const target = { project: 'alpha', area: { kind: 'ops' as const }, path: 'wiki/log.md' }
     render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha}
-      pendingFile={{ slug: 'alpha', path: 'ops/report.md' }} />)
-    expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:ops/report.md')
+      pendingFile={{ slug: 'alpha', path: 'ops/wiki/log.md', target }} />)
+    expect(await screen.findByTestId('editor')).toHaveTextContent('editor:alpha:ops/wiki/log.md:targeted')
+  })
+
+  it('opens a handed-off image in the inline viewer', async () => {
+    render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha}
+      pendingFile={{ slug: 'alpha', path: 'artifacts/shot.png' }} />)
+    expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:artifacts/shot.png')
+  })
+
+  // ── The record panel opens the same way, and returns to the record ──
+
+  it('opens a record document in the editor and returns to the record', async () => {
+    const user = userEvent.setup()
+    render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} archiveRecord={{ project: 'alpha', slug: 'plan-md-v1' }} />)
+    await user.click(await screen.findByRole('button', { name: 'Open document' }))
+    expect(await screen.findByTestId('editor')).toHaveTextContent('editor:alpha:reports/plan.md')
+
+    await user.click(screen.getByRole('button', { name: '← Record' }))
+    expect(await screen.findByTestId('record-panel')).toBeInTheDocument()
+  })
+
+  it('opens a record image in the inline viewer, not over the record', async () => {
+    const user = userEvent.setup()
+    render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} archiveRecord={{ project: 'alpha', slug: 'shot-png-v1' }} />)
+    await user.click(await screen.findByRole('button', { name: 'Open image' }))
+    expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:artifacts/shot.png')
+    expect(screen.queryByTestId('record-panel')).not.toBeInTheDocument()
+  })
+
+  // Delegate has no dock and no Design Studio, but it has this destination, and
+  // an artifact opened there behaves exactly as it does in Work.
+  it('opens documents in the editor in Delegate too', async () => {
+    const user = userEvent.setup()
+    vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
+    render(<ArtifactsScreen token="t" projects={[alpha]} globalScope />)
+    await user.click(await screen.findByRole('button', { name: /plan\.md/ }))
+    expect(await screen.findByTestId('editor')).toHaveTextContent('editor:alpha:reports/plan.md')
   })
 })

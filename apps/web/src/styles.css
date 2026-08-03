@@ -84,7 +84,6 @@
 	--artifact-review-mobile-stage-height: 50vh;
 	--artifact-review-pin-size: 1.75rem;
 	--artifact-review-border-width: 1px;
-	--artifact-review-overlay-blur: 0.1875rem;
 	--master-content-max-width: 92rem;
 	--master-side-width: 22rem;
 	/* Match shared primary/ghost control height (~2.5rem from 8px+13px padding). */
@@ -4658,6 +4657,9 @@ button:disabled {
 	flex-direction: column;
 	background: var(--ui-bg-editor);
 }
+.wiki-note-loading {
+	padding: var(--space-3);
+}
 .wiki-note-head {
 	display: flex;
 	align-items: center;
@@ -5769,6 +5771,20 @@ div.result-media {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-6);
+}
+/* A document opened from the gallery takes the whole main window and holds the
+   editor (#146). Both editors position themselves absolutely inside their pane,
+   so this is the positioned box they fill. */
+.artifacts-doc {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	background: var(--ui-bg-editor);
+}
+.artifacts-doc-loading {
+	padding: var(--space-3);
 }
 .artifacts-section {
 	min-width: 0;
@@ -14024,15 +14040,19 @@ button.moodboard-add-method:hover {
 	.archive-record-nav { margin-left: 0; }
 }
 
-/* Universal artifact review workspace (ArtifactViewer v2) */
-.av-overlay {
-	position: fixed;
-	inset: 0;
-	z-index: 900;
+/* Universal artifact review workspace (ArtifactViewer v2).
+   Since #146 this is a MAIN-WINDOW surface, not a lightbox: it fills the
+   Artifacts destination instead of covering the app, so it has no fixed
+   position, no z-index above the shell, and no scrim to blur. The deep
+   backdrop stays - a dark stage is what media reads best against, and every
+   control below is coloured against it. */
+.av-surface {
+	position: relative;
+	flex: 1;
+	min-height: 0;
 	display: grid;
 	grid-template-rows: auto minmax(0, 1fr);
-	background: color-mix(in srgb, var(--brand-mark-deep) 84%, transparent);
-	backdrop-filter: blur(var(--artifact-review-overlay-blur));
+	background: var(--brand-mark-deep);
 }
 .av-bar {
 	display: flex;
@@ -14042,7 +14062,10 @@ button.moodboard-add-method:hover {
 	padding: var(--space-3) var(--space-4);
 	color: var(--ui-on-accent);
 }
-.av-title { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.av-title { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+/* The way back out of the surface. It leads the bar, where a back affordance
+   belongs, and replaces the lightbox's ✕ (#146). */
+.av-back { flex: 0 0 auto; white-space: nowrap; }
 .av-title h2 {
 	margin: 0;
 	overflow: hidden;
@@ -14074,14 +14097,14 @@ button.moodboard-add-method:hover {
 }
 .av-count { color: color-mix(in srgb, var(--ui-on-accent) 60%, transparent); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .av-actions { display: flex; align-items: center; gap: var(--space-2); flex: 0 0 auto; }
-.av-actions .ghost-button {
+.av-bar .ghost-button {
 	color: var(--ui-on-accent);
 	background: color-mix(in srgb, var(--ui-on-accent) 12%, transparent);
 	border-color: color-mix(in srgb, var(--ui-on-accent) 28%, transparent);
 	text-decoration: none;
 }
-.av-actions .ghost-button:hover,
-.av-actions .ghost-button.active { color: var(--ui-on-accent); background: color-mix(in srgb, var(--ui-on-accent) 24%, transparent); }
+.av-bar .ghost-button:hover,
+.av-bar .ghost-button.active { color: var(--ui-on-accent); background: color-mix(in srgb, var(--ui-on-accent) 24%, transparent); }
 .av-workspace {
 	min-width: 0;
 	min-height: 0;
@@ -14233,7 +14256,9 @@ button.moodboard-add-method:hover {
 .av-review-submit p { margin: var(--space-2) 0 0; font-size: var(--text-xs); line-height: 1.45; }
 .av-review-submit .av-handoff-error { color: var(--ui-danger-text); }
 .av-nav {
-	position: fixed;
+	/* Anchored to the surface, not the window: the viewer stopped being a
+	   full-screen overlay in #146, so a fixed arrow would float over the shell. */
+	position: absolute;
 	top: 50%;
 	transform: translateY(-50%);
 	width: var(--artifact-review-nav-width);
@@ -14245,11 +14270,19 @@ button.moodboard-add-method:hover {
 	font-size: var(--text-2xl);
 	line-height: 1;
 	cursor: pointer;
-	z-index: 901;
 }
 .av-nav:hover { background: color-mix(in srgb, var(--brand-mark-deep) 88%, transparent); }
 .av-nav.prev { left: var(--space-3); }
 .av-nav.next { right: calc(var(--artifact-review-panel-width) + var(--space-3)); }
+/* A design on the review stage: same artboard drawing as its gallery card,
+   scaled to the stage instead of a card (#146). */
+.av-design {
+	display: grid;
+	place-items: center;
+	width: 100%;
+	height: 100%;
+	min-height: 0;
+}
 .av-img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; border-radius: var(--radius-sm); }
 .av-img.actual { max-width: none; max-height: none; cursor: zoom-out; }
 .av-video { max-width: 100%; max-height: 100%; border-radius: var(--radius-sm); background: var(--brand-mark-deep); }

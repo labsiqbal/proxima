@@ -1,5 +1,4 @@
 import React from 'react'
-import { createPortal } from 'react-dom'
 import {
   isSvgPath,
   previewUrl,
@@ -13,6 +12,8 @@ import type { FileTarget } from '../../types'
 import { MessageContent } from '../chat/MessageContent'
 import { MermaidDiagram } from './MermaidDiagram'
 import { trapModalTab } from '../ui/modalFocus'
+import { DesignPreview } from './ArtifactThumb'
+import { EDITABLE_KINDS, fileKind } from './fileKind'
 import {
   formatArtifactReviewDraft,
   hasArtifactReviewFeedback,
@@ -28,31 +29,13 @@ const ExcalidrawWhiteboard = React.lazy(() => import('./ExcalidrawWhiteboard').t
 // ArtifactViewer v2 is Proxima's native review surface. It keeps the existing
 // media/document/data renderers, adds point annotations, and turns Mermaid into
 // an editable Excalidraw whiteboard. Review feedback returns through Proxima chat.
-
-const IMG = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i
-const VIDEO = /\.(mp4|webm|mov|m4v)$/i
-const PDF = /\.pdf$/i
-const HTML = /\.html?$/i
-const MD = /\.(md|markdown)$/i
-const MERMAID = /\.(mmd|mermaid)$/i
-const CSV = /\.(csv|tsv)$/i
-const JSONF = /\.(json|excalidraw)$/i
-const TEXT = /\.(txt|log|ya?ml|yml|xml|ini|conf|env|toml|py|js|ts|tsx|jsx|css|sh|sql|rs|go|rb|java|c|h|cpp)$/i
-
-type Kind = 'image' | 'video' | 'pdf' | 'html' | 'markdown' | 'mermaid' | 'csv' | 'json' | 'text' | 'binary'
-function kindOf(path: string): Kind {
-  if (IMG.test(path)) return 'image'
-  if (VIDEO.test(path)) return 'video'
-  if (PDF.test(path)) return 'pdf'
-  if (HTML.test(path)) return 'html'
-  if (MD.test(path)) return 'markdown'
-  if (MERMAID.test(path)) return 'mermaid'
-  if (CSV.test(path)) return 'csv'
-  if (JSONF.test(path)) return 'json'
-  if (TEXT.test(path)) return 'text'
-  return 'binary'
-}
-const EDITABLE = new Set<Kind>(['markdown', 'mermaid', 'csv', 'json', 'text', 'html'])
+//
+// Since #146 it renders IN THE MAIN WINDOW, not as a lightbox over it: opening
+// an artifact is a destination, so the surface has a named way back instead of a
+// scrim, and Escape stays with whatever overlay is genuinely on top (the dock
+// panel, a confirm dialog). Only its own preview-consent alert is still modal.
+// Which artifacts arrive here at all is `fileKind.opensInEditor`'s answer:
+// documents you write go straight to the editor and never pass through.
 
 export type ArtifactReviewFeedback = {
   sessionId: number | null
@@ -126,13 +109,15 @@ type ActivePreviewState = {
   target: FileTarget
 }
 
-export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, onEditSource, reviewSessionId = null, onSendFeedback }: {
+export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, backLabel = 'Back', onEditSource, reviewSessionId = null, onSendFeedback }: {
   token: string
   slug: string
   items: Artifact[]
   index: number
   onIndex: (index: number) => void
   onClose: () => void
+  /** Where the way back leads - the surface this viewer was opened from. */
+  backLabel?: string
   onEditSource?: (artifact: Artifact) => void
   reviewSessionId?: number | null
   onSendFeedback?: (feedback: ArtifactReviewFeedback) => ArtifactReviewHandoffResult | Promise<ArtifactReviewHandoffResult>
@@ -140,7 +125,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
   const item = items[index]
   const path = item?.path || ''
   const name = path.split('/').pop() || path
-  const kind = kindOf(path)
+  const kind = fileKind(path)
   const fs = React.useMemo(() => projectFs(token, slug), [token, slug])
   const [text, setText] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -159,11 +144,10 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
   const [previewModeError, setPreviewModeError] = React.useState('')
   const loadSeq = React.useRef(0)
   const noteRef = React.useRef<HTMLTextAreaElement>(null)
-  const dialogRef = React.useRef<HTMLDivElement>(null)
   const consentRef = React.useRef<HTMLElement>(null)
   const consentCancelRef = React.useRef<HTMLButtonElement>(null)
   const closeRef = React.useRef<HTMLButtonElement>(null)
-  const triggerRef = React.useRef<HTMLElement | null>(null)
+  const surfaceRef = React.useRef<HTMLElement>(null)
   const handoffCompletedRef = React.useRef(false)
   const activePreviewRef = React.useRef<ActivePreviewState | null>(null)
   const previewSessionRef = React.useRef(previewSessionId())
@@ -183,14 +167,12 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     item?.target,
   )
 
+  // Entering the surface puts focus on the way back, so a keyboard owner starts
+  // at the top of it. Returning focus to whatever opened this is the OPENER's
+  // job (#146): the gallery is unmounted while this surface is up, so a trigger
+  // captured here would be a detached node by the time it was restored.
   React.useLayoutEffect(() => {
-    triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     closeRef.current?.focus()
-    return () => {
-      if (!handoffCompletedRef.current) {
-        requestAnimationFrame(() => triggerRef.current?.focus())
-      }
-    }
   }, [])
 
   const updateReview = React.useCallback((mutate: (current: ArtifactReviewState) => ArtifactReviewState) => {
@@ -206,23 +188,37 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
 
   React.useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // A destination the owner navigated away from stays mounted (hidden) so
+      // its state survives; its keyboard must not.
+      if (surfaceRef.current?.offsetParent === null) return
       const target = event.target
       const editing = target instanceof HTMLInputElement
         || target instanceof HTMLTextAreaElement
         || target instanceof HTMLSelectElement
         || (target instanceof HTMLElement && target.isContentEditable)
+      // Escape dismisses this surface's own layers only. The viewer itself is
+      // the main window now (#146): leaving it is an explicit way back, and the
+      // key belongs to the overlay actually on top of the screen.
       if (event.key === 'Escape') {
-        event.preventDefault()
-        event.stopPropagation()
-        if (whiteboard) setWhiteboard(null)
-        else if (previewConsentOpen) setPreviewConsentOpen(false)
-        else onClose()
+        // Taking the key from every other listener (capture phase, immediate
+        // stop) is what keeps one press from also closing the dock panel behind
+        // this surface - the rule #145 established, which the dock can no
+        // longer see for itself now that nothing here is aria-modal.
+        if (whiteboard) {
+          event.preventDefault()
+          event.stopImmediatePropagation()
+          setWhiteboard(null)
+        } else if (previewConsentOpen) {
+          event.preventDefault()
+          event.stopImmediatePropagation()
+          setPreviewConsentOpen(false)
+        }
       } else if (!whiteboard && !editing && event.key === 'ArrowLeft') previous()
       else if (!whiteboard && !editing && event.key === 'ArrowRight') next()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, previous, next, previewConsentOpen, whiteboard])
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [previous, next, previewConsentOpen, whiteboard])
 
   React.useEffect(() => {
     setZoom(false)
@@ -288,6 +284,11 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
   }
 
   const stage = () => {
+    // A design is a folder of scene JSON, not a file with bytes to preview, so
+    // it is drawn from its artboard - the same picture the gallery card shows.
+    // Work opens designs in the studio; Delegate has none, and this is what it
+    // gets instead of an unsupported-file dead end (#146).
+    if (item.type === 'design') return <div className="av-design"><DesignPreview token={token} slug={slug} artifact={item} /></div>
     if (kind === 'image') {
       if (svgImage) {
         if (svgBlob.status === 'error') {
@@ -460,20 +461,17 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
     }
   }
 
-  return createPortal(
-    <div
-      className="av-overlay"
-      ref={dialogRef}
-      role="dialog"
-      aria-modal="true"
+  return (
+    <section
+      className="av-surface"
+      ref={surfaceRef}
       aria-label={`Artifact review: ${item.title || name}`}
       aria-describedby={descriptionId}
-      tabIndex={-1}
       onKeyDown={event => {
-        const focusRoot = previewConsentOpen ? consentRef.current : dialogRef.current
-        if (focusRoot) trapModalTab(event, focusRoot)
+        // Only the consent alert is modal; the surface itself is ordinary
+        // main-window content and must not hold Tab hostage.
+        if (previewConsentOpen && consentRef.current) trapModalTab(event, consentRef.current)
       }}
-      onClick={event => { if (event.target === event.currentTarget) onClose() }}
     >
       <span className="sr-only" id={descriptionId}>Review this artifact and add editable feedback to its producing chat.</span>
       {whiteboard
@@ -489,8 +487,15 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
           />
         </React.Suspense>
         : <>
-          <header className="av-bar" onClick={event => event.stopPropagation()}>
+          <header className="av-bar">
             <div className="av-title">
+              <button
+                type="button"
+                className="ghost-button av-back"
+                ref={closeRef}
+                onClick={onClose}
+                aria-label={`Back to ${backLabel.toLowerCase()}`}
+              >← {backLabel}</button>
               <h2 title={path}>Artifact review: {item.title || name}</h2>
               <span className="av-review-label">Review</span>
               {kind === 'html' && <span className={`av-preview-mode ${activeForCurrentArea ? 'active' : 'passive'}`}>{activeForCurrentArea ? 'Active preview' : 'Passive preview'}</span>}
@@ -501,9 +506,8 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
                 ? <button type="button" className="ghost-button" disabled={previewModePending} onClick={() => void disableActivePreview()}>{previewModePending ? 'Disabling...' : 'Disable active preview'}</button>
                 : <button type="button" className="ghost-button" disabled={previewModePending || !previewSessionRef.current} onClick={() => { setPreviewModeError(''); setPreviewConsentOpen(true) }}>Enable active preview</button>)}
               <button type="button" className={`ghost-button ${annotating ? 'active' : ''}`} aria-pressed={annotating} onClick={() => { setAnnotating(current => !current); setPendingPoint(null) }}>{annotating ? 'Click artifact to pin' : 'Annotate'}</button>
-              {EDITABLE.has(kind) && onEditSource && <button type="button" className="ghost-button" onClick={() => onEditSource(item)}>Edit source</button>}
-              <a className="ghost-button" href={rawUrl(slug, path, item.target)} download={name}>Download</a>
-              <button type="button" className="ghost-button" ref={closeRef} onClick={onClose} title="Close (Esc)" aria-label="Close artifact review">✕</button>
+              {EDITABLE_KINDS.has(kind) && onEditSource && <button type="button" className="ghost-button" onClick={() => onEditSource(item)}>Edit source</button>}
+              {item.type !== 'design' && <a className="ghost-button" href={rawUrl(slug, path, item.target)} download={name}>Download</a>}
             </div>
           </header>
           <div className="av-workspace">
@@ -550,8 +554,8 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
               </div>
             </aside>
           </div>
-          {items.length > 1 && <button type="button" className="av-nav prev" onClick={event => { event.stopPropagation(); previous() }} title="Previous (←)">‹</button>}
-          {items.length > 1 && <button type="button" className="av-nav next" onClick={event => { event.stopPropagation(); next() }} title="Next (→)">›</button>}
+          {items.length > 1 && <button type="button" className="av-nav prev" onClick={previous} title="Previous (←)">‹</button>}
+          {items.length > 1 && <button type="button" className="av-nav next" onClick={next} title="Next (→)">›</button>}
           {previewConsentOpen && <div className="av-preview-consent-scrim">
             <section ref={consentRef} className="av-preview-consent" role="alertdialog" aria-modal="true" aria-labelledby={consentTitleId}>
               <p className="eyebrow">Trust boundary</p>
@@ -565,7 +569,6 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, on
             </section>
           </div>}
         </>}
-    </div>,
-    document.body,
+    </section>
   )
 }

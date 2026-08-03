@@ -367,8 +367,8 @@ Exclude controls live in Artifacts card menus.
 Raw filesystem access for the active project is a **tool**, not a destination
 (ADR-0043). It lives on the right dock as the **Files** tool (#145): browse the
 real tree, create / rename / delete in place, and open a file - which hands off to
-the main window (today the ArtifactViewer, with its edit and preview; the
-wiki/markdown editor in #146) rather than to a panel-sized viewer. The same tool
+the main window rather than to a panel-sized viewer: a document opens in the
+editor there, anything else in the inline viewer (#146). The same tool
 answers "Reveal in Files" on a deliverable record and the read-only Container-root
 inspection Ops-migration recovery needs.
 

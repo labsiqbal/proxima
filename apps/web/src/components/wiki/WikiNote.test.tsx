@@ -28,10 +28,7 @@ describe('WikiNote missing wikilinks', () => {
       <WikiNote
         fs={fs}
         path="seed.md"
-        backlinks={[]}
-        resolve={resolve}
-        onOpenNote={onOpenNote}
-        onCreateNote={onCreateNote}
+        wiki={{ backlinks: [], resolve, onOpenNote, onCreateNote }}
         onClose={() => {}}
         onSaved={() => {}}
       />,
@@ -59,14 +56,45 @@ describe('WikiNote missing wikilinks', () => {
       <WikiNote
         fs={fs}
         path="new.md"
-        backlinks={[]}
-        resolve={() => null}
-        onOpenNote={() => {}}
+        wiki={{ backlinks: [], resolve: () => null, onOpenNote: () => {} }}
         onClose={() => {}}
         onSaved={() => {}}
         defaultMode="edit"
       />,
     )
     await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toHaveClass('active'))
+  })
+})
+
+// Artifacts opens ordinary project documents in this editor (#146). Without a
+// wiki graph there is nothing to resolve a [[wikilink]] against and no backlink
+// rail to draw - it is a plain markdown editor.
+describe('WikiNote as a plain document editor', () => {
+  it('leaves wikilinks alone and shows no linked-mentions rail', async () => {
+    const fs = mockFs('See [[Known]].')
+    render(<WikiNote fs={fs} path="reports/plan.md" onClose={() => {}} />)
+
+    await waitFor(() => expect(screen.getByText(/See \[\[Known\]\]\./)).toBeInTheDocument())
+    expect(screen.queryByRole('link')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Linked mentions/)).not.toBeInTheDocument()
+  })
+
+  it('reads and writes through the Area-mapped target', async () => {
+    const user = userEvent.setup()
+    const fs = mockFs('body')
+    const target = { project: 'alpha', area: { kind: 'ops' as const }, path: 'wiki/index.md' }
+    render(<WikiNote fs={fs} path="ops/wiki/index.md" target={target} onClose={() => {}} />)
+
+    await waitFor(() => expect(fs.read).toHaveBeenCalledWith(target))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(fs.write).toHaveBeenCalledWith(target, 'body'))
+  })
+
+  it('names the way back on its close control', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    render(<WikiNote fs={mockFs('body')} path="reports/plan.md" closeLabel="← Gallery" onClose={onClose} />)
+    await user.click(await screen.findByRole('button', { name: '← Gallery' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 })

@@ -1628,18 +1628,17 @@ The security contract is owned by
 the locator and request flow are detailed in [Architecture](reference/architecture.md)
 and [ADR-0042](adr/0042-file-preview-is-a-sandboxed-iframe.md).
 These APIs power the **Artifacts destination** (the produced-work gallery in the
-left navigation, ADR-0043; artifacts open in the ArtifactViewer, whose edit action
-reaches the inline editor - plus the Deliverables/History tabs and the record
-panel from #139), the **Files** tool in the right dock (#145 - the real-disk tree
-browser for the active project, which also answers the `proxima:reveal-file`
-event raised by a record's **Reveal in Files** and by Ops-migration recovery's
-read-only Container-root reveal), the **Wiki** tree under Settings → Knowledge,
-chat attachments, and `@` file/artifact references - with the in-browser
-**Terminal** as the raw escape hatch. Opening a file from the dock browser is a
-main-window handoff through one shell seam (today the ArtifactViewer; #146
-redirects documents to the wiki/markdown editor), except under Container-root
-inspection, whose bytes only the read-only inspection adapter can read and which
-therefore stays in the panel.
+left navigation, ADR-0043; opening an artifact takes over that main window -
+documents in the editor, everything else in the inline viewer, #146 - plus the
+Deliverables/History tabs and the record panel from #139), the **Files** tool in
+the right dock (#145 - the real-disk tree browser for the active project, which
+also answers the `proxima:reveal-file` event raised by a record's **Reveal in
+Files** and by Ops-migration recovery's read-only Container-root reveal), the
+**Wiki** tree under Settings → Knowledge, chat attachments, and `@`
+file/artifact references - with the in-browser **Terminal** as the raw escape
+hatch. Opening a file from the dock browser is a main-window handoff through one
+shell seam, except under Container-root inspection, whose bytes only the
+read-only inspection adapter can read and which therefore stays in the panel.
 Inline New file / New folder / Rename rows share one tree input with an accessible
 name (`New file name`, `New folder name`, or `Rename <entry>`) and a create
 placeholder (`file-name` / `folder-name`) so the empty field is not a dead unlabeled
@@ -1863,8 +1862,32 @@ Design gallery, loaded from `scene.json`). Apps and other types still point at O
 Chat result cards and the iterate Result view keep using the live scan
 (`GET /api/projects/{slug}/artifacts`, unchanged).
 
-**Native rich review (ArtifactViewer v2):** opening an ordinary artifact keeps the
-existing image, video, PDF, Markdown, HTML, JSON, CSV, and text renderers, but wraps
+**Opening an artifact is a main-window surface, not a popup (#146).** Every open
+path - a gallery card or row, the dock browser and task file links through the
+one shell seam, a chat result card, a record panel's Open, an `#archive/...`
+permalink - lands in the same place, and what the file IS decides which surface
+answers:
+
+- **A document you write** (markdown, text, source) opens **directly in the
+  editor**, editable from the first frame, with no read-only step in front of
+  it: markdown in the wiki's markdown editor (its Preview tab one click away),
+  anything else text in the CodeMirror file editor (⌘/Ctrl+S). Both confirm
+  before discarding unsaved bytes, and their close control is the way back.
+- **Everything else** - images, video, designs, PDFs, HTML pages, and the data
+  documents whose rendering is the point (CSV tables, JSON trees, Mermaid
+  diagrams) - opens in the **inline viewer** below, which keeps every renderer,
+  its review pins, and ←/→ walking of the Container's other visual artifacts.
+  Its **Edit source** hands any text-backed artifact to that same editor, and the
+  editor's **Review** action is the door back, so a markdown report can still be
+  pinned and sent to chat.
+
+Both name where the way back leads - **← Gallery**, or **← Record** when the
+artifact was opened from a deliverable record. The lightbox is gone: nothing
+modal stands between the owner and the file, in Work or in Delegate (which has
+no dock and no Design Studio, but the same destination and the same behaviour).
+
+**Native rich review (ArtifactViewer v2):** the inline viewer keeps the
+existing image, video, PDF, Markdown, HTML, JSON, CSV, and text renderers, and wraps
 them in one review workspace. HTML uses the passive sandboxed preview from §11 until
 the owner enables trusted active mode for that viewer. The owner can pin numbered notes directly onto the
 rendered artifact, add overall feedback, and choose **Add feedback to chat**. Review
@@ -1873,8 +1896,10 @@ chat session and places an editable, path-linked review brief in the normal comp
 Sending it uses the existing chat/run flow, so there is no Lavish poll, external URL,
 or second feedback service in the happy path. Unknown, binary, and directory-like
 paths immediately show the unsupported preview with a download action instead of an
-indefinite loading state. Artifact Review is a named modal dialog with initial focus,
-a Tab focus trap, Escape close, and trigger-focus restoration on ordinary close. A
+indefinite loading state. Artifact Review is a named main-window region with initial focus on
+its way back, and returning to the gallery restores focus to the card or row that
+opened it; it is not modal, so it never closes on Escape (its own active-preview
+consent alert still traps focus and owns that key). A
 successful feedback handoff validates the producer session and project, closes Review,
 opens that exact scoped Chat, and focuses its composer. Missing producers or projects
 leave Review open with an actionable error. Drafts are isolated per session and each
@@ -2136,7 +2161,7 @@ or the HttpOnly `proxima_session` cookie.
 
 ## Single-workspace shell ("Deck", T3)
 
-+ **One workspace, no Ops/Code switch.** The header has a URL-durable **Work / Delegate** mode control. Work keeps the flow-ordered destinations Chat, Tasks, Workflows, Artifacts, Design, and project-scoped recent chats; its sidebar owns the active-project switcher and the top bar does not. Delegate keeps that same persistent, collapsible sidebar and header language, but replaces Work navigation with global Master, Tasks, and Artifacts (ADR-0043, replacing the Files destination of ADR-0040: Artifacts is a destination in both modes - a produced-work gallery with All / Deliverables / History tabs, Work-scoped to the active Container and Delegate-global behind a head filter, always opening through the ArtifactViewer). It keeps the global header status cluster (`N tasks running` + Needs-you), since watching delegated work is the point of the mode; opening a Work-only target from there switches back to Work first. It has no project selector, project filter menu, ordinary Chat, Workflows, Design, tools, search, or popup surfaces; the account menu stays - it is the only route to Projects, Agents, Settings, and Log out - and each of those entries switches back to Work before opening; its Tasks and Artifacts views query across projects and their task and record deep links remain in Delegate. Opening a graph plan explicitly returns to Work, and Task workspace Design actions remain unavailable in Delegate. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. **Chrome Back** is always visible in Work (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach; Work Chat reload durability is under Chat above. Work/Chat is the default. Agents and Settings live in the Work profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle.
++ **One workspace, no Ops/Code switch.** The header has a URL-durable **Work / Delegate** mode control. Work keeps the flow-ordered destinations Chat, Tasks, Workflows, Artifacts, Design, and project-scoped recent chats; its sidebar owns the active-project switcher and the top bar does not. Delegate keeps that same persistent, collapsible sidebar and header language, but replaces Work navigation with global Master, Tasks, and Artifacts (ADR-0043, replacing the Files destination of ADR-0040: Artifacts is a destination in both modes - a produced-work gallery with All / Deliverables / History tabs, Work-scoped to the active Container and Delegate-global behind a head filter, artifacts open in the main window - documents in the editor, everything else in the inline viewer, #146). It keeps the global header status cluster (`N tasks running` + Needs-you), since watching delegated work is the point of the mode; opening a Work-only target from there switches back to Work first. It has no project selector, project filter menu, ordinary Chat, Workflows, Design, tools, search, or popup surfaces; the account menu stays - it is the only route to Projects, Agents, Settings, and Log out - and each of those entries switches back to Work before opening; its Tasks and Artifacts views query across projects and their task and record deep links remain in Delegate. Opening a graph plan explicitly returns to Work, and Task workspace Design actions remain unavailable in Delegate. There is no primary-nav **New chat** twin and no primary-nav **Projects** row. **Chrome Back** is always visible in Work (disabled without a deep stack) and returns to the origin surface; deep views lock the project switcher. Workflows home and open-plan header do not dump project display names (lock is icon + tooltip only). Chat stays mounted when leaving so draft + in-flight run re-attach; Work Chat reload durability is under Chat above. Work/Chat is the default. Agents and Settings live in the Work profile menu; Wiki lives under Settings → Knowledge. Running work is a text pill (`N tasks running`) hidden when idle.
 + **Chat** is the front door: brainstorm, then **Slice into plan** promotes the conversation into a runnable plan. Its header carries the session and agent; Work-sidebar project context remains outside the conversation. Its **New chat** action clears the active session (mobile topbar keeps a compact icon; `/new` remains a power-user path); the chat remains lazily created on first send.
 + **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults on, and unattended starts stay opt-in behind their own toggle; dynamically conforming Codex 0.145.0 or newer is supported, and every other or unavailable adapter fails closed.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.

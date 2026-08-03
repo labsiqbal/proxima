@@ -21,6 +21,8 @@ import { designAssetSrc, designScenePath, typeMeta } from './archive'
 // - video   → metadata-only poster frame; a grid must never download whole films
 // - other   → the type glyph, so a document row still reads as its kind
 // Opening an artifact is the caller's business; this component never navigates.
+// `DesignPreview` is exported because a design has no bytes to render anywhere
+// else: the inline viewer draws it the same way at stage size (#146).
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i
 const VIDEO_EXT = /\.(mp4|webm|mov)$/i
@@ -43,7 +45,8 @@ function ArtifactGlyph({ type }: { type: string }) {
   return <span className="artifacts-glyph" data-testid="artifact-glyph" aria-hidden="true">{typeMeta(type).ic}</span>
 }
 
-function DesignThumb({ token, slug, artifact }: { token: string; slug: string; artifact: Artifact }) {
+/** A design scene drawn at whatever size its container gives it. */
+export function DesignPreview({ token, slug, artifact }: { token: string; slug: string; artifact: Artifact }) {
   const [art, setArt] = React.useState<Artboard | null | undefined>(undefined)
   const target = artifact.target
   React.useEffect(() => {
@@ -88,7 +91,7 @@ export function ArtifactThumb({ token, slug, artifact }: {
   artifact: Artifact
 }) {
   const kind = artifactKind(artifact)
-  if (kind === 'design') return <DesignThumb token={token} slug={slug} artifact={artifact} />
+  if (kind === 'design') return <DesignPreview token={token} slug={slug} artifact={artifact} />
   if (kind === 'image') {
     if (SVG_EXT.test(artifact.path)) return <SvgThumb token={token} slug={slug} artifact={artifact} />
     return <img className="artifacts-thumb-img" src={previewUrl(slug, artifact.path, artifact.target)} alt="" loading="lazy" />

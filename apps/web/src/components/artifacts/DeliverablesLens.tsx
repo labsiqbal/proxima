@@ -205,7 +205,7 @@ export function DeliverablesLens({ token, project = '', missingOnly = false, onO
               </p>
               <ul className="teaching-empty-caps" aria-label="What you can do here">
                 <li>Browse docs, images, video, designs, and other outputs</li>
-                <li>Open supported files in the same ArtifactViewer used from Chat</li>
+                <li>Open a document in the editor, and everything else in the review viewer</li>
                 <li>Follow lineage back to the session or task that produced them</li>
               </ul>
               <ol className="teaching-empty-steps" aria-label="Getting started">

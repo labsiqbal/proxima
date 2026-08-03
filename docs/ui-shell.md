@@ -26,8 +26,9 @@ geometry but its global navigation is only **Master**, **Tasks**, and **Artifact
 
 Artifacts is a destination in both navigations (ADR-0043, replacing the Files
 destination of ADR-0040): Work scopes it to the active Container, Delegate
-gathers every Container behind a head filter, and both open artifacts in the
-ArtifactViewer. Since prune Part D (#139) the separate Archive destination is
+gathers every Container behind a head filter, and in both an opened artifact
+takes over that main window - documents in the editor, everything else in the
+inline viewer (#146, see "Artifacts and the deliverable ledger" below). Since prune Part D (#139) the separate Archive destination is
 gone: the deliverable ledger lives here as the **Deliverables** and **History**
 tabs (see "Artifacts and the deliverable ledger" below). Terminal, **Files**
 (the real-disk tree browser), and Preview are the right-rail tools: browsing
@@ -197,7 +198,7 @@ Every schedule row offers **Run now**, which fires it immediately and opens the 
 
 ## Right tool rail — Terminal, Files, Preview
 
-Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, scoped to the active project when Project context is available. Browsing left the rail for a destination in ADR-0040 and came back to it in #145: the destination is Artifacts (ADR-0043), a gallery of produced work, while "where is that file on disk" is the utility you open next to it. Artifacts open in the ArtifactViewer.
+Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, scoped to the active project when Project context is available. Browsing left the rail for a destination in ADR-0040 and came back to it in #145: the destination is Artifacts (ADR-0043), a gallery of produced work, while "where is that file on disk" is the utility you open next to it. Opening one lands in that destination's main window (#146).
 
 During Task permalink resolution and any cross-Project Task mismatch, the entire rail
 and panel are suppressed. They return only after the Task owning Project and active
@@ -210,8 +211,9 @@ Project agree, preventing Preview from presenting stale Work context.
   warn-and-skip symlink markers stay inert, and layout-map targets browse their mapped
   Area. Also latched after first open. Opening a file is a **main-window handoff**: the
   dock never grows a viewer of its own, it calls one shell seam
-  (`AppShell onOpenFile` → `App openFileInMainWindow`) which today opens the shared
-  ArtifactViewer and which #146 redirects to the wiki/markdown editor.
+  (`AppShell onOpenFile` → `App openFileInMainWindow`), and Artifacts decides
+  what answers - the editor for a document, the inline viewer for anything else
+  (#146). The panel stays open behind it, so browsing keeps its place.
   A `proxima:reveal-file` window event points the browser at a path (`lib/revealFile`
   owns both ends of that contract: the raiser's request and the listener's parse).
   A deliverable record's **Reveal in Files** raises it for the active Container, and
@@ -230,7 +232,7 @@ Project agree, preventing Preview from presenting stale Work context.
   stops the status polling. The deliverable record page and the recipe test bench keep their own
   Preview entry points for app-type artifacts.
 
-The rail's bottom gear opens Settings. Escape closes the panel unless a modal overlay is open - the topmost overlay owns the key, so closing a handed-off file's viewer does not also close the tree behind it. Picking a tool by hand ends any reveal detour, so Files returns to the active project. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
+The rail's bottom gear opens Settings. Escape closes the panel unless a modal overlay is open - the topmost overlay owns the key, so a confirm dialog raised over the dock is dismissed first. A handed-off file is not one of those since #146: it opens in the main window behind the panel, and neither surface answers Escape. Picking a tool by hand ends any reveal detour, so Files returns to the active project. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
 
 ## Chrome Back, project lock, and multitask keep-alive
 
@@ -261,8 +263,8 @@ nouns match the primary loop **Chat → Tasks → Workflows → Artifacts**, wit
 
 **Workflow how-it-runs:** library table rows show Availability separately from the joined
 Automation summary (schedules on, off, or needing bindings). Schedule forms lock project
-to the workflow owner - no free rebinding. Open deliverables from Chat/Tasks/Artifacts use
-the same in-app **ArtifactViewer** for supported types. Unsupported binary or
+to the workflow owner - no free rebinding. Open deliverables from Chat/Tasks/Artifacts land
+in the same main-window surfaces Artifacts opens (#146). Unsupported binary or
 directory-like paths show a download fallback immediately rather than remaining in a
 loading state.
 
@@ -404,7 +406,49 @@ Archive and Files merged into ONE destination (prune Part D, #139; decision #122
 - **Deliverables** - the durable deliverable registry (T4): every agent output is a record with lineage, ONE approval status (synced with the job-review approve), and a version chain, filterable by type/status/date/search.
 - **History** - records whose file no longer exists on disk. They are records, not phantom files: the ledger's survive-deletion property, kept visible.
 
-The combo detail is unchanged: an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address (the hash format outlives both retired destinations, so old bookmarks keep working - they open the record panel inside Artifacts, and a bookmarked `?view=files` URL lands there too). Record paths are container-relative real paths (#139) - the same paths the gallery shows. Approvals keep their two doors: the record panel and the Tasks review write the SAME status field. Locating a record's file on disk is **Reveal in Files** on the record panel, which raises the reveal event the dock browser answers (#145) - Delegate has no dock, so that action is absent there rather than dead; documents move to the wiki/markdown editor in #146 and app preview gets the main-window viewport in #147. Design is a separate canvas destination whose internals are not part of the shell.
+The combo detail is unchanged: an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address (the hash format outlives both retired destinations, so old bookmarks keep working - they open the record panel inside Artifacts, and a bookmarked `?view=files` URL lands there too). Record paths are container-relative real paths (#139) - the same paths the gallery shows. Approvals keep their two doors: the record panel and the Tasks review write the SAME status field. Locating a record's file on disk is **Reveal in Files** on the record panel, which raises the reveal event the dock browser answers (#145) - Delegate has no dock, so that action is absent there rather than dead. The record panel's **Open** actions use the same main-window surfaces as the gallery (see "Opening an artifact" below), and app preview gets the main-window viewport in #147. Design is a separate canvas destination whose internals are not part of the shell.
+
+### Opening an artifact
+
+Opening an artifact takes over the Artifacts **main window** (#146, ADR-0043
+decision 3). There is no lightbox: nothing modal stands between the owner and
+the file. Every open path lands here - a gallery card or row, the dock browser
+and a task's file links through the one shell seam, a chat result card or
+permalink, a record panel's **Open** - and what the file IS decides which
+surface answers:
+
+- **Documents you write** - markdown, plain text, source - open **directly in
+  the editor**, editable from the first frame. Markdown gets the wiki's markdown
+  editor (Edit first, Preview one click away); anything else text gets the
+  CodeMirror file editor with ⌘/Ctrl+S. Both confirm before discarding unsaved
+  bytes. Opened from Artifacts a markdown document carries **no wiki graph**: an
+  artifact anywhere in the Container has no backlinks to show and no
+  `[[wikilink]]` namespace to resolve against - that context belongs to the Wiki
+  destination. A **Review** action opens the same document in the viewer, so
+  pinned feedback stays reachable for a report without standing in front of the
+  editor. Extensionless documents (`README`, `Dockerfile`, `LICENSE`) count as
+  text; a genuinely binary file with no extension is refused by the Files API
+  with a readable reason instead of being rendered as noise.
+- **Everything else** opens in the **inline viewer** (the same ArtifactViewer,
+  now rendered in the main window rather than over it): images, video, designs,
+  PDFs, sandboxed HTML pages, and the data documents whose rendering is the
+  point - CSV tables, JSON trees, Mermaid diagrams and their whiteboard. ←/→
+  walks the Container's other viewer-bound artifacts; documents are not on that
+  walk, since each opens alone in its editor. **Edit source** hands any
+  text-backed artifact to the same editor, and the way back from there returns
+  to the artifact it came from.
+
+Both surfaces name where the way back leads: **← Gallery**, or **← Record** when
+the artifact was opened from a deliverable record; returning puts focus back on
+the card or row that opened it. Neither surface closes on Escape - they are
+main-window content, not overlays - and neither traps focus. Escape still
+belongs to the layers that ARE overlays, and while one of those is up inside the
+viewer (the Mermaid whiteboard, the active-preview consent alert) the viewer
+takes the key outright so the same press cannot also close the dock panel behind
+it - the precedence rule #145 established.
+**Delegate behaves identically**: it has no dock and no Design Studio, but it
+has this destination, the same editor, and the same viewer, because the editor
+is an Artifacts surface and the Files API it writes through is not Work-scoped.
 
 ## De-jargon rule for primary surfaces
 

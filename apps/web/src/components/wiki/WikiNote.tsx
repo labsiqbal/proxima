@@ -1,22 +1,43 @@
 import React from 'react'
 import CodeMirror from '@uiw/react-codemirror'
+import { EditorView } from '@codemirror/view'
 import { markdown } from '@codemirror/lang-markdown'
 import { oneDark } from '@codemirror/theme-one-dark'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { FsAdapter } from '../../api/fsAdapter'
+import type { FileTarget } from '../../types'
+import { confirmDialog } from '../ui/Dialog'
 import { baseName, linkifyWiki } from './wikiGraph'
 
-export function WikiNote({ fs, path, backlinks, resolve, onOpenNote, onCreateNote, onClose, onSaved, defaultMode = 'preview' }: {
-  fs: FsAdapter
-  path: string
+/**
+ * The wiki graph a note lives in: its backlinks and how a `[[wikilink]]`
+ * resolves. Omit it and this is a plain markdown document editor - the shape
+ * Artifacts opens a document in (#146), where there is no graph to consult.
+ */
+export type WikiNoteGraph = {
   backlinks: string[]
   resolve: (name: string) => string | null
   onOpenNote: (path: string) => void
   /** Create-and-open a missing [[wikilink]] target (Obsidian-style). */
   onCreateNote?: (target: string) => void
+}
+
+export function WikiNote({ fs, path, target, wiki, onClose, closeLabel = 'Close', closeTitle, onReview, onSaved, autoFocus = false, defaultMode = 'preview' }: {
+  fs: FsAdapter
+  path: string
+  /** Area-mapped ref when the document is not plain container-relative (#136/#138). */
+  target?: FileTarget
+  wiki?: WikiNoteGraph
   onClose: () => void
-  onSaved: () => void
+  /** The close control doubles as the way back out of a main-window editor. */
+  closeLabel?: string
+  closeTitle?: string
+  /** Offered when this document also has a review surface to open (#146). */
+  onReview?: () => void
+  onSaved?: () => void
+  /** Put the caret in the document on mount - the editor IS the surface. */
+  autoFocus?: boolean
   defaultMode?: 'edit' | 'preview'
 }) {
   const [content, setContent] = React.useState('')
@@ -27,6 +48,7 @@ export function WikiNote({ fs, path, backlinks, resolve, onOpenNote, onCreateNot
   const requestSeq = React.useRef(0)
   const editVersion = React.useRef(0)
   const mountedRef = React.useRef(true)
+  const ref = target || path
 
   React.useEffect(() => {
     mountedRef.current = true
@@ -39,7 +61,7 @@ export function WikiNote({ fs, path, backlinks, resolve, onOpenNote, onCreateNot
   React.useEffect(() => {
     const seq = ++requestSeq.current
     setStatus('loading'); setDirty(false); setMode(defaultMode)
-    fs.read(path)
+    fs.read(ref)
       .then(b => {
         if (!mountedRef.current || seq !== requestSeq.current) return
         setContent(b.content)
@@ -48,7 +70,7 @@ export function WikiNote({ fs, path, backlinks, resolve, onOpenNote, onCreateNot
       .catch(e => {
         if (mountedRef.current && seq === requestSeq.current) setStatus(String(e))
       })
-  }, [fs, path, defaultMode])
+  }, [fs, ref, defaultMode])
 
   const save = async () => {
     if (status === 'loading' || status === 'saving') return
@@ -56,14 +78,30 @@ export function WikiNote({ fs, path, backlinks, resolve, onOpenNote, onCreateNot
     const savedEditVersion = editVersion.current
     setStatus('saving')
     try {
-      await fs.write(path, content)
+      await fs.write(ref, content)
       if (!mountedRef.current || seq !== requestSeq.current || editVersion.current !== savedEditVersion) return
       setDirty(false)
       setStatus('saved')
-      onSaved()
+      onSaved?.()
     } catch (e) {
       if (mountedRef.current && seq === requestSeq.current) setStatus(String(e))
     }
+  }
+
+  // Leaving with unsaved bytes is a real loss now that this editor holds
+  // ordinary project files, not only wiki notes the graph would surface again.
+  const requestClose = async () => {
+    if (status === 'saving') return
+    if (dirty) {
+      const discard = await confirmDialog({
+        title: 'Discard unsaved edits?',
+        message: 'Your unsaved edits to this document will be lost.',
+        confirmLabel: 'Discard',
+        danger: true,
+      })
+      if (!discard) return
+    }
+    onClose()
   }
 
   const relativeWikiPath = (href?: string | null) => {
@@ -86,38 +124,38 @@ export function WikiNote({ fs, path, backlinks, resolve, onOpenNote, onCreateNot
     <div className="wiki-note-head">
       <strong title={path}>{baseName(path)}{dirty ? ' •' : ''}</strong>
       <div className="seg sm"><button className={mode === 'edit' ? 'active' : ''} onClick={() => setMode('edit')}>Edit</button><button className={mode === 'preview' ? 'active' : ''} onClick={() => setMode('preview')}>Preview</button></div>
-      <div><button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button><button className="ghost-button" onClick={onClose} disabled={status === 'saving'}>Close</button></div>
+      <div>{onReview && <button className="ghost-button" onClick={onReview} title="Pin feedback on the rendered document">Review</button>}<button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button><button className="ghost-button" onClick={() => void requestClose()} disabled={status === 'saving'} title={closeTitle} aria-label={closeTitle}>{closeLabel}</button></div>
     </div>
     {status === 'loading'
-      ? <p className="muted" style={{ padding: 10 }}>Loading…</p>
+      ? <p className="muted wiki-note-loading">Loading…</p>
       : mode === 'edit'
-        ? <div className="cm-wrap"><CodeMirror value={content} height="100%" theme={isDark ? oneDark : 'light'} extensions={[markdown()]} onChange={v => { editVersion.current += 1; setContent(v); setDirty(true); if (status === 'saved') setStatus('ready') }} basicSetup={{ lineNumbers: true, highlightActiveLine: true }} /></div>
+        ? <div className="cm-wrap"><CodeMirror value={content} height="100%" theme={isDark ? oneDark : 'light'} extensions={[markdown(), EditorView.lineWrapping]} autoFocus={autoFocus} onChange={v => { editVersion.current += 1; setContent(v); setDirty(true); if (status === 'saved') setStatus('ready') }} basicSetup={{ lineNumbers: true, highlightActiveLine: true }} /></div>
         : <div className="wiki-preview md"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{
             a: ({ href, children }) => {
-              if (href && href.startsWith('#wiki:')) {
-                const target = decodeURIComponent(href.slice(6))
-                const tp = resolve(target)
-                const label = String(typeof children === 'string' ? children : target).trim() || target.trim()
+              if (wiki && href && href.startsWith('#wiki:')) {
+                const linkTarget = decodeURIComponent(href.slice(6))
+                const tp = wiki.resolve(linkTarget)
+                const label = String(typeof children === 'string' ? children : linkTarget).trim() || linkTarget.trim()
                 return <a
                   className={`wikilink ${tp ? '' : 'missing'}`}
                   href="#"
                   title={tp ? `Open ${baseName(tp)}` : `Create note “${label}”`}
                   onClick={e => {
                     e.preventDefault()
-                    if (tp) onOpenNote(tp)
-                    else onCreateNote?.(target)
+                    if (tp) wiki.onOpenNote(tp)
+                    else wiki.onCreateNote?.(linkTarget)
                   }}
                 >{children}</a>
               }
-              const tp = relativeWikiPath(href)
-              if (tp) return <a className="wikilink" href="#" title={`Open ${baseName(tp)}`} onClick={e => { e.preventDefault(); onOpenNote(tp) }}>{children}</a>
+              const tp = wiki ? relativeWikiPath(href) : null
+              if (tp) return <a className="wikilink" href="#" title={`Open ${baseName(tp)}`} onClick={e => { e.preventDefault(); wiki?.onOpenNote(tp) }}>{children}</a>
               return <a href={href} target="_blank" rel="noreferrer">{children}</a>
             }
-          }}>{linkifyWiki(content)}</ReactMarkdown></div>}
-    <div className="wiki-backlinks">
-      <p className="eyebrow">Linked mentions ({backlinks.length})</p>
-      {backlinks.length === 0 ? <p className="muted">No backlinks yet.</p> : backlinks.map(b => <button key={b} className="backlink" onClick={() => onOpenNote(b)}>{baseName(b)}</button>)}
-    </div>
+          }}>{wiki ? linkifyWiki(content) : content}</ReactMarkdown></div>}
+    {wiki && <div className="wiki-backlinks">
+      <p className="eyebrow">Linked mentions ({wiki.backlinks.length})</p>
+      {wiki.backlinks.length === 0 ? <p className="muted">No backlinks yet.</p> : wiki.backlinks.map(b => <button key={b} className="backlink" onClick={() => wiki.onOpenNote(b)}>{baseName(b)}</button>)}
+    </div>}
     <div className="file-editor-status muted">{status === 'saved' ? 'Saved' : status === 'saving' ? 'Saving…' : dirty ? 'Unsaved · click Save' : 'Up to date'}</div>
   </div>
 }

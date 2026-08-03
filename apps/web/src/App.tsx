@@ -505,8 +505,9 @@ export function App() {
   const [pendingFile, setPendingFile] = React.useState<{ slug: string; path: string; target?: FileTarget } | null>(null)
   // The one place a file path becomes a main-window surface. Every browser in
   // the app (the dock tree from #145, a task's file link) calls this instead of
-  // opening its own viewer, so #146 redirects documents to the wiki/markdown
-  // editor by changing this function and nothing else.
+  // opening its own viewer. What the owner then sees is Artifacts' decision
+  // (#146): a document opens in the editor, anything else in the inline viewer,
+  // and the file arrives there as `pendingFile`.
   const openFileInMainWindow = React.useCallback((slug: string, path: string, target?: FileTarget) => {
     setPendingFile({ slug, path, target })
     setView('artifacts')

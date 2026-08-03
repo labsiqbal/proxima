@@ -33,6 +33,10 @@ export function FileEditor({
   path,
   target,
   onClose,
+  closeLabel = 'Close',
+  closeTitle,
+  onReview,
+  autoFocus = false,
   onDirtyChange,
 }: {
   fs: ReadOnlyFsAdapter
@@ -40,6 +44,13 @@ export function FileEditor({
   path: string
   target?: FileTarget
   onClose: () => void
+  /** The close control doubles as the way back out of a main-window editor. */
+  closeLabel?: string
+  closeTitle?: string
+  /** Offered when this document also has a review surface to open (#146). */
+  onReview?: () => void
+  /** Put the caret in the document on mount - the editor IS the surface. */
+  autoFocus?: boolean
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const [content, setContent] = React.useState('')
@@ -50,7 +61,7 @@ export function FileEditor({
   const requestSeq = React.useRef(0)
   const editVersion = React.useRef(0)
   const mountedRef = React.useRef(true)
-const ref = target || path
+  const ref = target || path
   const dirtyRef = React.useRef(false)
   const pathRef = React.useRef(path)
   dirtyRef.current = dirty
@@ -141,12 +152,12 @@ const ref = target || path
   return <div className={`file-editor${retained ? ' file-editor-retained' : ''}`}>
     <div className="file-editor-head">
       <strong title={displayPath}>{name}{dirty ? ' •' : ''}</strong>
-      <div>{write && <button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button>}<button className="ghost-button" onClick={() => void requestClose()} disabled={status === 'saving'}>Close</button></div>
+      <div>{onReview && <button className="ghost-button" onClick={onReview} title="Pin feedback on the rendered document">Review</button>}{write && <button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button>}<button className="ghost-button" onClick={() => void requestClose()} disabled={status === 'saving'} title={closeTitle} aria-label={closeTitle}>{closeLabel}</button></div>
     </div>
     {retained && <div className="file-editor-retain-banner">Unsaved project edits · inspection tree stays available</div>}
     {status === 'loading'
       ? <p className="muted file-editor-loading">Loading…</p>
-      : <div className="cm-wrap"><CodeMirror value={content} height="100%" theme={isDark ? oneDark : 'light'} editable={!!write} extensions={[...(write ? [saveKey] : []), ...langFor(displayPath)]} onChange={write ? v => { editVersion.current += 1; setContent(v); setDirty(true); setStatus('ready') } : undefined} basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: true }} /></div>}
+      : <div className="cm-wrap"><CodeMirror value={content} height="100%" theme={isDark ? oneDark : 'light'} editable={!!write} autoFocus={autoFocus} extensions={[...(write ? [saveKey] : []), ...langFor(displayPath)]} onChange={write ? v => { editVersion.current += 1; setContent(v); setDirty(true); setStatus('ready') } : undefined} basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: true }} /></div>}
     <div className="file-editor-status muted" role="status" aria-live="polite">{statusText}</div>
   </div>
 }

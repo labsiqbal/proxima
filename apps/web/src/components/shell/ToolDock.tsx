@@ -39,8 +39,8 @@ export function ToolDock({ token, project, projects = [], available = true, onOp
   onOpenChange?: (open: boolean) => void
   /**
    * The handoff seam: opening a file from the dock is a main-window event, not a
-   * panel-sized editor. Today the shell answers with the shared ArtifactViewer;
-   * #146 redirects this one call site to the wiki/markdown editor.
+   * panel-sized editor. The shell hands the path to Artifacts, which opens a
+   * document in the editor and anything else in its inline viewer (#146).
    */
   onOpenFile?: (slug: string, path: string, target?: FileTarget) => void
 }) {
@@ -63,9 +63,11 @@ export function ToolDock({ token, project, projects = [], available = true, onOp
     setOpen(current => toggle && current === tool ? null : tool)
   }
 
-  // Escape closes the topmost overlay, not everything at once: a modal opened
-  // from the dock (the viewer a handed-off file lands in) owns the key until it
-  // is gone, otherwise one press dismisses both and loses the owner's place.
+  // Escape closes the topmost overlay, not everything at once: a modal raised
+  // over the dock (a confirm dialog, the active-preview consent) owns the key
+  // until it is gone, otherwise one press dismisses both and loses the owner's
+  // place. A handed-off file is not one of those - it opens behind this panel in
+  // the main window (#146), so Escape still closes the panel above it.
   React.useEffect(() => {
     if (!open) return
     const dismiss = (event: KeyboardEvent) => {
