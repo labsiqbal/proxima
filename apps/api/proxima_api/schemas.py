@@ -52,6 +52,10 @@ class AppStatusResponse(BaseModel):
     command: str | None = None
     log: list[str] = Field(default_factory=list)
     message: str | None = None
+    # The concrete action that clears this state. Governance may refuse; it may
+    # never refuse silently (prune B5, #133), so every fail-closed preview
+    # state carries the next step apart from the diagnosis.
+    next_step: str | None = None
     reason: Literal["output_sink_unavailable"] | None = None
     prolonged_start: bool | None = None
     exited: bool | None = None

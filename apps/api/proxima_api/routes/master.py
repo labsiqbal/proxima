@@ -12,6 +12,7 @@ from .. import (
     container_registry,
     master_decisions,
     master_focus,
+    refusals,
     satpam,
     turn_restore,
 )
@@ -92,12 +93,16 @@ def register(app, deps):
             return
         spec = RUNNER_SPECS.get(runner_id)
         display_name = spec.display_name if spec else runner_id
+        # The rejection itself is untouched - Master only ever runs on a runner
+        # that proves the chat-only boundary. What the owner gets back now also
+        # says how to get out of it (prune B5, #133).
         raise HTTPException(
             status_code=409,
-            detail={
-                "code": "master_runner_not_conforming",
-                "message": f"{display_name} cannot run Master because its {reason}",
-            },
+            detail=refusals.refusal_detail(
+                "master_runner_not_conforming",
+                f"{display_name} cannot run Master because its {reason}",
+                runner_id=runner_id,
+            ),
         )
 
     def _owned_container(container_id: Any, user: dict[str, Any]):

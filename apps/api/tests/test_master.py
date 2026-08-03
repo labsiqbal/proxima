@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from proxima_api import refusals
 from proxima_api.master_runtime import (
     master_capacity,
     execute_tool,
@@ -84,7 +85,15 @@ def test_master_desk_creates_hidden_system_identity(tmp_path: Path, monkeypatch)
         "/api/master/messages", json={"content": "List current work"}
     )
     assert master_run.status_code == 409
-    assert master_run.json()["detail"]["code"] == "master_runner_not_conforming"
+    conformance_detail = master_run.json()["detail"]
+    assert conformance_detail["code"] == "master_runner_not_conforming"
+    # A conformance rejection is correct and stays; it must still tell the
+    # owner what to do about it (prune B5, #133).
+    assert (
+        conformance_detail["next_step"]
+        == refusals.NEXT_STEPS["master_runner_not_conforming"]
+    )
+    assert conformance_detail["message"].endswith(conformance_detail["next_step"])
     assert (
         client.put(
             "/api/settings/master", json={"runner_id": "not-a-runner"}

@@ -29,7 +29,7 @@ from .container_registry import (
 )
 from .profile_seed import seed_agent_home
 from .master_runtime import ensure_master_identity
-from . import master_decisions, master_focus
+from . import master_decisions, master_focus, refusals
 from .project_areas import areas_payload
 from .provisioning import provision_user_workspace
 from .runner_specs import default_runner, runner_spec
@@ -568,19 +568,23 @@ def build_route_deps(
             app.state.hub.notify(session_id)
 
     def _purge_activity_blocked_detail(recovery: Any) -> dict[str, Any]:
-        message = (
-            "Container has active processes; stop them before retrying"
+        # Deleting a project is exclusive work: Proxima refuses while anything
+        # of that project is still running, and refuses just as hard when it
+        # cannot prove nothing is. Both refusals stand; both now say what
+        # clears them (prune B5, #133).
+        reason = (
+            "This project still has processes running, and deleting it would "
+            "leave them behind"
             if recovery.active
-            else (
-                "Project process ownership could not be verified; "
-                "exclusive work is blocked until process identity is reconciled"
-            )
+            else "Proxima cannot prove this project's processes have all "
+            "stopped, so it will not delete it"
         )
-        return {
-            "message": message,
-            "active_processes": recovery.active,
-            "unresolved_processes": recovery.unresolved,
-        }
+        return refusals.refusal_detail(
+            "purge_activity_blocked",
+            reason,
+            active_processes=recovery.active,
+            unresolved_processes=recovery.unresolved,
+        )
 
     def _purge_project(project: dict[str, Any]) -> None:
         with container_mutation_lock(db(), project):

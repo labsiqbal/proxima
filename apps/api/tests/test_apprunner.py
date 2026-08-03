@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from proxima_api import apprunner
+from proxima_api import apprunner, refusals
 from proxima_api.apprunner import AppManager, PortInUseError
 from proxima_api.preview_output import (
     BROKER_STATE_ROOT_ENV,
@@ -3574,3 +3574,49 @@ def test_port_conflict_names_the_port_that_is_actually_blocked():
     )
     assert "Port 4600 belongs to another process" in same["message"]
     assert "ignores $PORT" not in same["message"]
+
+
+# --- Actionable fail-closed refusals (prune B5, #133) ------------------------
+
+
+def test_port_conflict_status_carries_the_next_step():
+    status = apprunner.AppManager._port_conflict_status(
+        command="npm run dev",
+        requested_port=4600,
+        log=[],
+        conflicting_port=4600,
+    )
+    assert status["next_step"] == refusals.NEXT_STEPS["port_conflict"]
+    assert status["message"].endswith(status["next_step"])
+
+
+@pytest.mark.parametrize(
+    "ownership",
+    [apprunner.PortOwnership.DETACHED, apprunner.PortOwnership.FOREIGN],
+)
+def test_ownership_unknown_status_explains_itself_and_names_the_next_step(ownership):
+    """`managed-lineage proof` is true and useless on its own (#115 C2)."""
+    status = apprunner.AppManager._ownership_unknown_status(
+        {"port": 4600, "command": "npm run dev", "log": []},
+        ownership,
+    )
+    assert status["state"] == "ownership_unknown"
+    assert status["next_step"] == refusals.NEXT_STEPS["preview_ownership_unknown"]
+    assert status["message"].endswith(status["next_step"])
+    # Still says WHY, and still refuses - the decision is unchanged, only the
+    # wording around it.
+    assert "cannot" in status["message"]
+    assert "will not proxy it" in status["message"]
+
+
+def test_output_sink_refusal_names_the_next_step():
+    status = apprunner.AppManager._output_unavailable_status(
+        command="npm run dev",
+        requested_port=4600,
+        log=[],
+        message="Preview supervisor process identity changed",
+    )
+    assert status["reason"] == "output_sink_unavailable"
+    assert status["next_step"] == refusals.NEXT_STEPS["app_output_sink_unavailable"]
+    assert "identity changed" in status["message"]
+    assert status["message"].endswith(status["next_step"])

@@ -1120,7 +1120,7 @@ def test_linked_project_rejects_replacement_platform_identity(tmp_path: Path):
 
     with pytest.raises(
         container_registry.ContainerBoundaryError,
-        match="identity changed",
+        match="not the one it was linked to",
     ):
         container_registry.container_root(project)
 

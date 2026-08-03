@@ -325,6 +325,34 @@ The boundary therefore did not move when the failure mode softened: before C7 an
 in-jail symlink was followed after realpath validation; now nothing is followed
 at all.
 
+## How a refusal reads (prune B5)
+
+Governance may refuse; it may never refuse silently. Every fail-closed state that
+reaches the **owner** names three things: what was refused, why, and the concrete
+next step. The next steps live in one registry,
+`apps/api/proxima_api/refusals.py`, so the wording is consistent and testable -
+`tests/test_refusals.py` asserts each one is an imperative sentence, which is what
+stops a new fail-closed state from shipping with a dead-end message.
+
+- `refusal_message(code, reason)` for the single-string convention (`FsError`,
+  `ContainerBoundaryError`, the preview status `message`).
+- `refusal_detail(code, reason, **extra)` for the structured convention,
+  `{"code", "message", "next_step", ...}`. `next_step` is repeated on its own so a
+  screen can render the instruction apart from the diagnosis;
+  `AppStatusResponse.next_step` carries it for the preview panel.
+
+This changed no decision. Every refusal listed here - realpath-jail escape,
+symlink traversal, symlinked or moved Container/Ops root, changed root identity,
+preview port conflict, unverified port ownership, Master runner conformance,
+blocked project purge - refuses exactly what it refused before.
+
+**Refusals a runner sees stay terse.** The Master tool broker and the
+model-provider proxy never import this registry: telling a possibly
+prompt-injected agent how to get past a boundary is the opposite of the goal (see
+[prompt-injection-hardening.md](prompt-injection-hardening.md)). Script trust and
+push-remote pinning already stated their next step - re-approve the exact bytes,
+re-enable the toggle to record the new URL - and are unchanged.
+
 Never allow:
 
 ```text

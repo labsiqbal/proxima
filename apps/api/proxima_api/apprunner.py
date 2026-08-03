@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
+from . import refusals
 from .preview_output import (
     BROKER_PROTOCOL,
     BROKER_PROTOCOL_ENV,
@@ -541,7 +542,12 @@ class AppManager:
             "command": command,
             "log": list(log or [])[-40:],
             "reason": "output_sink_unavailable",
-            "message": message,
+            # The supervisor's own words say WHY; the registry says what to do
+            # about it (prune B5, #133).
+            "message": refusals.refusal_message(
+                "app_output_sink_unavailable", message
+            ),
+            "next_step": refusals.next_step("app_output_sink_unavailable"),
         }
 
     def _lifecycle_lock(self, slug: str) -> asyncio.Lock:
@@ -1847,9 +1853,11 @@ class AppManager:
     ) -> dict[str, Any]:
         async with self._lifecycle_lock(slug):
             await self._settle_reservation(slug)
-            return await self._stop_locked(
-                slug,
-                preserve_status=preserve_status,
+            return self._explained(
+                await self._stop_locked(
+                    slug,
+                    preserve_status=preserve_status,
+                )
             )
 
     def _durable_records_for_slug(
@@ -2276,7 +2284,8 @@ class AppManager:
             "conflicting_port": blocked,
             "command": command,
             "log": log[-40:],
-            "message": message,
+            "message": refusals.refusal_message("port_conflict", message),
+            "next_step": refusals.next_step("port_conflict"),
         }
 
     @staticmethod
@@ -2356,11 +2365,17 @@ class AppManager:
         app: dict[str, Any],
         ownership: PortOwnership,
     ) -> dict[str, Any]:
+        # The refusal is unchanged - Proxima still will not proxy a listener it
+        # cannot tie to its own process tree. What changed (prune B5, #133) is
+        # that the owner is now told what that means and what to do about it,
+        # instead of only "managed-lineage proof".
         reason = (
-            "The listener lacks complete live managed-lineage proof, "
-            "so its lifetime cannot be verified."
+            "A server answered on this port, but Proxima cannot prove it "
+            "started it, so it will not proxy it. This usually means an "
+            "earlier preview was left running"
             if ownership == PortOwnership.DETACHED
-            else "Proxima cannot verify who owns the listener on this host."
+            else "A server answered on this port and Proxima cannot verify who "
+            "owns it, so it will not proxy it"
         )
         return {
             "state": "ownership_unknown",
@@ -2369,7 +2384,10 @@ class AppManager:
             "requested_port": app["port"],
             "command": app["command"],
             "log": app["log"][-40:],
-            "message": reason,
+            "message": refusals.refusal_message(
+                "preview_ownership_unknown", reason
+            ),
+            "next_step": refusals.next_step("preview_ownership_unknown"),
         }
 
     @staticmethod
@@ -2457,7 +2475,48 @@ class AppManager:
             return PortOwnership.VERIFIED
         return ownership
 
+    # Every fail-closed preview state the owner can see, mapped to the next
+    # step that resolves it (prune B5, #133). The manager builds these status
+    # dicts in a dozen places; normalising on the way out is what makes
+    # "governance may refuse, it may never refuse silently" a property of the
+    # surface rather than a rule each call site has to remember.
+    _STATE_REFUSAL_CODES = {
+        "port_conflict": "port_conflict",
+        "ownership_unknown": "preview_ownership_unknown",
+    }
+    _REASON_REFUSAL_CODES = {
+        "output_sink_unavailable": "app_output_sink_unavailable",
+    }
+
+    @classmethod
+    def _explained(cls, status: dict[str, Any]) -> dict[str, Any]:
+        """Attach the next step to a refusal status that does not have one.
+
+        A status that already carries ``next_step`` is left alone, so the
+        builders that word their own refusal stay authoritative and nothing is
+        appended twice.
+        """
+        if not isinstance(status, dict) or status.get("next_step"):
+            return status
+        # The reason is more specific than the state: an ownership_unknown
+        # caused by a dead output sink is fixed differently from one caused by
+        # a foreign listener.
+        code = cls._REASON_REFUSAL_CODES.get(
+            str(status.get("reason") or "")
+        ) or cls._STATE_REFUSAL_CODES.get(str(status.get("state") or ""))
+        if code is None:
+            return status
+        explained = dict(status)
+        explained["message"] = refusals.refusal_message(
+            code, str(status.get("message") or "")
+        )
+        explained["next_step"] = refusals.next_step(code)
+        return explained
+
     def status(self, slug: str) -> dict[str, Any]:
+        return self._explained(self._status(slug))
+
+    def _status(self, slug: str) -> dict[str, Any]:
         app = self._apps.get(slug)
         if not app:
             return self._last_exit.get(slug) or {

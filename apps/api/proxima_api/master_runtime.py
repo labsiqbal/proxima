@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 from . import app_settings
 from . import master_focus
+from . import refusals
 from .job_checkpoints import create_checkpoint
 from .master_persistence import master_identity_rows
 from .master_tool_broker import MasterToolBroker, validate_master_tool_call
@@ -87,7 +88,10 @@ def prepare_master_runtime(
     if not conforming:
         raise MasterToolError(
             "master_runner_not_conforming",
-            f"Runner cannot run Master because its {reason}",
+            refusals.refusal_message(
+                "master_runner_not_conforming",
+                f"Runner cannot run Master because its {reason}",
+            ),
         )
     if not managed_home:
         raise MasterToolError(

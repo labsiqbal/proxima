@@ -25,6 +25,7 @@ from .. import auth_health
 from .. import higgsfield
 from .. import image_providers
 from .. import media_settings
+from .. import refusals
 from .. import cf_hostnames
 from ..auth import hash_token, iso_now
 from ..artifacts import scan_project_artifacts, update_produced_artifacts
@@ -1098,7 +1099,7 @@ def register(app, deps):
                 detail={
                     "state": "port_conflict",
                     "port": exc.port,
-                    "message": str(exc),
+                    **refusals.refusal_detail("port_conflict", str(exc)),
                 },
             ) from exc
         except apprunner.OutputBrokerUnavailable as exc:
@@ -1108,7 +1109,12 @@ def register(app, deps):
                 detail={
                     "state": "stopped",
                     "reason": "output_sink_unavailable",
-                    "message": str(exc),
+                    "message": refusals.refusal_message(
+                        "app_output_sink_unavailable", str(exc)
+                    ),
+                    "next_step": refusals.next_step(
+                        "app_output_sink_unavailable"
+                    ),
                 },
             ) from exc
         except BaseException:
@@ -1140,10 +1146,13 @@ def register(app, deps):
                 detail={
                     "state": result.get("state") or "ownership_unknown",
                     "message": result.get("message")
-                    or (
-                        "Authenticated stop could not finish. The prior "
-                        "preview scope remains unresolved."
+                    or refusals.refusal_message(
+                        "preview_ownership_unknown",
+                        "Authenticated stop could not finish, so the prior "
+                        "preview scope stays unresolved",
                     ),
+                    "next_step": result.get("next_step")
+                    or refusals.next_step("preview_ownership_unknown"),
                 },
             )
         await app.state.preview_relays.stop(slug)

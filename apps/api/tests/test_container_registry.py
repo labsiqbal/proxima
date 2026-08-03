@@ -23,6 +23,7 @@ from proxima_api import (
     container_registry,
     ops_filesystem,
     ops_publication,
+    refusals,
     scripts_library,
 )
 from proxima_api.container_activity import _MUTATION_LOCK_DEPTH
@@ -3707,7 +3708,10 @@ def test_delete_reports_live_project_process_without_stopping_it(
         detail = response.json()["detail"]
         assert detail["active_processes"] == 1
         assert detail["unresolved_processes"] == 0
-        assert "active processes" in detail["message"]
+        assert "still has processes running" in detail["message"]
+        # The refusal stands and now names the way out (prune B5, #133).
+        assert detail["next_step"] == refusals.NEXT_STEPS["purge_activity_blocked"]
+        assert detail["message"].endswith(detail["next_step"])
         assert process.poll() is None
         assert root.exists()
         assert (
@@ -3761,7 +3765,9 @@ def test_delete_reports_unresolved_guardian_identity(tmp_path: Path):
     detail = response.json()["detail"]
     assert detail["active_processes"] == 0
     assert detail["unresolved_processes"] >= 1
-    assert "ownership could not be verified" in detail["message"]
+    assert "cannot prove this project's processes have all stopped" in detail["message"]
+    assert detail["next_step"] == refusals.NEXT_STEPS["purge_activity_blocked"]
+    assert detail["message"].endswith(detail["next_step"])
     assert root.exists()
     assert record.exists()
     assert (
@@ -4003,7 +4009,7 @@ def test_migration_detail_exposes_unavailable_root_inspectability(tmp_path: Path
     assert detail.status_code == 200, detail.text
     legacy = detail.json()["inspection"]["legacy_root"]
     assert legacy["inspectable"] is False
-    assert "missing" in legacy["reason"]
+    assert "not on disk any more" in legacy["reason"]
 
 
 def test_repaired_physical_layout_can_retry_to_resolve_open_attention(tmp_path: Path):
@@ -4505,3 +4511,56 @@ def test_fail_closed_container_keeps_legacy_ops_features_available(tmp_path: Pat
     assert attention["status"] == "open"
     visible_attention = api.get("/api/attention", headers=headers).json()["items"]
     assert any(item["kind"] == "container_ops_migration" for item in visible_attention)
+
+
+# --- Actionable fail-closed refusals (prune B5, #133) ------------------------
+# The container boundary is the jail anchor and it refuses a lot: a symlinked
+# root, a folder that moved, an Ops folder that is not there. Every one of
+# those reaches the owner through a 409, so every one names what to do -
+# usually "Relocate folder", which #141 made a real button.
+
+
+def test_container_root_gone_refusal_names_relocate(tmp_path):
+    missing = tmp_path / "moved-away"
+    with pytest.raises(ContainerBoundaryError) as caught:
+        container_registry.container_root(
+            {"id": 1, "path": str(missing), "path_identity": "x"}
+        )
+    assert str(caught.value).endswith(refusals.NEXT_STEPS["container_root_gone"])
+
+
+def test_container_root_symlink_refusal_names_the_next_step(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    with pytest.raises(ContainerBoundaryError) as caught:
+        container_registry.container_root(
+            {"id": 1, "path": str(link), "path_identity": "x"}
+        )
+    assert "symlink" in str(caught.value)
+    assert str(caught.value).endswith(refusals.NEXT_STEPS["container_root_symlink"])
+
+
+def test_container_root_identity_change_refusal_names_relocate(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    with pytest.raises(ContainerBoundaryError) as caught:
+        container_registry.container_root(
+            {"id": 1, "path": str(root), "path_identity": "not-the-real-identity"}
+        )
+    assert str(caught.value).endswith(
+        refusals.NEXT_STEPS["container_root_identity_changed"]
+    )
+
+
+def test_chosen_ops_folder_refusals_name_the_next_step(tmp_path):
+    root = tmp_path / "proj"
+    (root / "real-ops").mkdir(parents=True)
+    (root / "linked-ops").symlink_to(root / "real-ops", target_is_directory=True)
+    with pytest.raises(ContainerBoundaryError) as caught:
+        container_registry.validate_ops_path_choice(root, "linked-ops")
+    assert str(caught.value).endswith(refusals.NEXT_STEPS["ops_root_symlink"])
+    with pytest.raises(ContainerBoundaryError) as caught:
+        container_registry.validate_ops_path_choice(root, "nope")
+    assert str(caught.value).endswith(refusals.NEXT_STEPS["ops_root_missing"])

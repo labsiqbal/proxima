@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator
 
 from . import ops_publication
+from . import refusals
 from .auth import iso_now
 from .directory_handles import directory_backend
 from .container_activity import (
@@ -126,19 +127,45 @@ def container_root(container: sqlite3.Row | Mapping[str, Any]) -> Path:
     data = _as_dict(container)
     raw = str(data.get("path") or "").strip()
     if not raw:
-        raise ContainerBoundaryError("Container path is unavailable")
+        raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "container_root_gone",
+                "This project has no folder path recorded",
+            )
+        )
     root = Path(raw)
     try:
         if root.is_symlink():
-            raise ContainerBoundaryError("Container root cannot be a symlink")
+            raise ContainerBoundaryError(
+                refusals.refusal_message(
+                    "container_root_symlink",
+                    "This project's folder is a symlink, and Proxima never "
+                    "anchors a project on a link",
+                )
+            )
         resolved = root.resolve()
     except (OSError, RuntimeError) as exc:
-        raise ContainerBoundaryError("Container root is not reachable") from exc
+        raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "container_root_gone",
+                "This project's folder cannot be reached on disk",
+            )
+        ) from exc
     if not resolved.is_dir():
-        raise ContainerBoundaryError("Container root is missing")
+        raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "container_root_gone",
+                "This project's folder is not on disk any more",
+            )
+        )
     expected_identity = str(data.get("path_identity") or "").strip()
     if not expected_identity:
-        raise ContainerBoundaryError("Container root identity is unavailable")
+        raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "container_root_identity_changed",
+                "This project has no recorded folder identity to verify against",
+            )
+        )
     try:
         verification_root = (
             root.absolute() if _directory_backend.platform == "windows" else resolved
@@ -146,11 +173,21 @@ def container_root(container: sqlite3.Row | Mapping[str, Any]) -> Path:
         handle = _directory_backend.open_absolute(verification_root)
     except (OSError, RuntimeError, ValueError) as exc:
         raise ContainerBoundaryError(
-            "Container root identity cannot be verified"
+            refusals.refusal_message(
+                "container_root_identity_changed",
+                "Proxima cannot read the identity of the folder at this "
+                "project's path, so it cannot confirm this is the right one",
+            )
         ) from exc
     try:
         if handle.identity != expected_identity:
-            raise ContainerBoundaryError("Container root identity changed")
+            raise ContainerBoundaryError(
+                refusals.refusal_message(
+                    "container_root_identity_changed",
+                    "The folder at this project's path is not the one it was "
+                    "linked to - it was moved, renamed, or replaced",
+                )
+            )
     finally:
         _directory_backend.close(handle)
     return resolved
@@ -187,14 +224,25 @@ def _reject_symlinks(root: Path, *, deep: bool = True) -> None:
     listing, adoption, or Area change.
     """
     if root.is_symlink():
-        raise ContainerBoundaryError("physical Ops root cannot be a symlink")
+        raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "ops_root_symlink",
+                "This project's Ops folder is a symlink, and Proxima never "
+                "anchors on a link",
+            )
+        )
     if not deep:
         return
     try:
         for path in root.rglob("*"):
             if path.is_symlink():
                 raise ContainerBoundaryError(
-                    f"physical Ops root contains a symlink: {path.relative_to(root).as_posix()}"
+                    refusals.refusal_message(
+                        "ops_root_symlink",
+                        "This project's Ops folder contains a symlink "
+                        f"({path.relative_to(root).as_posix()}), and moving "
+                        "content across a link is refused",
+                    )
                 )
     except OSError as exc:
         raise ContainerBoundaryError(
@@ -225,7 +273,12 @@ def validated_area_roots(
     ).fetchall()
     ops_rows = [row for row in rows if row["kind"] == "ops"]
     if len(ops_rows) != 1:
-        raise ContainerBoundaryError("Container must have exactly one active Ops Area")
+        raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "container_no_ops_area",
+                "This project does not have exactly one active Ops folder",
+            )
+        )
 
     resolved: dict[int, Path] = {}
     by_root: dict[Path, sqlite3.Row] = {}
@@ -312,7 +365,12 @@ def ops_root(
         (data["id"],),
     ).fetchone()
     if row is None:
-        raise ContainerBoundaryError("Container has no active Ops Area")
+        raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "container_no_ops_area",
+                "This project has no active Ops folder",
+            )
+        )
     return resolve_area_root(conn, data, int(row["id"]), deep_ops_scan=deep_ops_scan)
 
 
@@ -370,10 +428,19 @@ def validate_ops_path_choice(root: Path, raw: str) -> str:
     candidate = Path(root).joinpath(*rel.parts)
     state = _path_state(candidate)
     if state == "symlink":
-        raise ContainerBoundaryError("the chosen Ops folder cannot be a symlink")
+        raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "ops_root_symlink",
+                "The chosen Ops folder is a symlink, and Proxima never anchors "
+                "on a link",
+            )
+        )
     if state != "directory":
         raise ContainerBoundaryError(
-            "the chosen Ops folder does not exist inside the project"
+            refusals.refusal_message(
+                "ops_root_missing",
+                "The chosen Ops folder does not exist inside this project",
+            )
         )
     _reject_symlinks(candidate, deep=False)
     return normalized
@@ -833,20 +900,42 @@ def create_physical_ops_root(
     """Create the physical Ops layout for a fresh Container."""
     raw_root = Path(root)
     if raw_root.is_symlink():
-        raise ContainerBoundaryError("Container root cannot be a symlink")
+        raise ContainerBoundaryError(
+                refusals.refusal_message(
+                    "container_root_symlink",
+                    "This project's folder is a symlink, and Proxima never "
+                    "anchors a project on a link",
+                )
+            )
     if _platform_is_windows():
         if not raw_root.is_dir():
-            raise ContainerBoundaryError("Container root is missing")
+            raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "container_root_gone",
+                "This project's folder is not on disk any more",
+            )
+        )
         return _create_physical_ops_root_windows(
             raw_root.absolute(),
             starter_dirs,
         )
     container = raw_root.resolve()
     if not container.is_dir():
-        raise ContainerBoundaryError("Container root is missing")
+        raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "container_root_gone",
+                "This project's folder is not on disk any more",
+            )
+        )
     physical = container / OPS_RELPATH
     if physical.is_symlink():
-        raise ContainerBoundaryError("physical Ops root cannot be a symlink")
+        raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "ops_root_symlink",
+                "This project's Ops folder is a symlink, and Proxima never "
+                "anchors on a link",
+            )
+        )
     if physical.exists() and not physical.is_dir():
         raise ContainerBoundaryError("physical Ops root must be a directory")
     physical.mkdir(parents=True, exist_ok=True)
@@ -3723,7 +3812,9 @@ def _migrate_container_ops_locked(
         (data["id"],),
     ).fetchone()
     if row is None:
-        reason = "Container has no active Ops Area"
+        reason = refusals.refusal_message(
+            "container_no_ops_area", "This project has no active Ops folder"
+        )
         _attention(conn, data, reason)
         return False
     if row["rel_path"] != ".":

@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import refusals
 from .container_registry import (
     ContainerBoundaryError,
     container_root,
@@ -218,7 +219,12 @@ def _ops_rel(conn: sqlite3.Connection, project_id: int) -> str:
         (project_id,),
     ).fetchone()
     if row is None:
-        raise ContainerBoundaryError("Container has no active Ops Area")
+        raise ContainerBoundaryError(
+            refusals.refusal_message(
+                "container_no_ops_area",
+                "This project has no active Ops folder",
+            )
+        )
     return str(row["rel_path"] or ".")
 
 

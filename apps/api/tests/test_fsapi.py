@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from proxima_api import fsapi
+from proxima_api import fsapi, refusals
 
 
 def _project(tmp_path):
@@ -212,3 +212,42 @@ def test_read_file_maps_oserror_to_fserror(tmp_path):
             fsapi.read_file(root, "secret.txt")
     finally:
         secret.chmod(0o644)
+
+
+# --- Actionable fail-closed refusals (prune B5, #133) ------------------------
+# The jail and symlink refusals reach the owner verbatim through the Files
+# screen, so each one must name the next step, not just the verdict.
+
+
+def test_symlink_refusal_names_the_next_step(tmp_path):
+    root = _project(tmp_path)
+    (root / "link").symlink_to(root / "sub", target_is_directory=True)
+    with pytest.raises(fsapi.SymlinkRefused) as caught:
+        fsapi.resolve_in_project(root, "link/b.md")
+    message = str(caught.value)
+    assert "symlink" in message
+    assert message.endswith(refusals.NEXT_STEPS["symlink_refused"])
+
+
+def test_jail_escape_refusal_names_the_next_step(tmp_path):
+    root = _project(tmp_path)
+    for rel in ("../secret", "/etc/passwd"):
+        with pytest.raises(fsapi.FsError) as caught:
+            fsapi.resolve_in_project(root, rel)
+        assert str(caught.value).endswith(refusals.NEXT_STEPS["jail_escape"])
+
+
+def test_oversized_file_refusal_names_the_next_step(tmp_path, monkeypatch):
+    root = _project(tmp_path)
+    monkeypatch.setattr(fsapi, "MAX_READ_BYTES", 1)
+    with pytest.raises(fsapi.FsError) as caught:
+        fsapi.read_file(root, "a.txt")
+    assert str(caught.value).endswith(refusals.NEXT_STEPS["file_too_large"])
+
+
+def test_binary_file_refusal_names_the_next_step(tmp_path):
+    root = _project(tmp_path)
+    (root / "blob.bin").write_bytes(b"\xff\xfe\x00\x01")
+    with pytest.raises(fsapi.FsError) as caught:
+        fsapi.read_file(root, "blob.bin")
+    assert str(caught.value).endswith(refusals.NEXT_STEPS["file_not_readable"])

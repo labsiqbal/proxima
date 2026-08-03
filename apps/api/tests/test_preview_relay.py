@@ -27,7 +27,7 @@ import websockets
 
 from fastapi.testclient import TestClient
 
-from proxima_api import apprunner
+from proxima_api import apprunner, refusals
 from proxima_api.main import create_app
 from proxima_api.preview_output import OutputBrokerUnavailable
 from proxima_api.preview_proxy import PreviewProxyMiddleware, PreviewRelayManager
@@ -483,10 +483,14 @@ def test_app_start_refuses_an_existing_preview_port_without_stopping_it(tmp_path
             assert detail["state"] == "port_conflict"
             assert detail["port"] == app_port
             assert "already in use" in detail["message"]
+            # Governance may refuse; it may never refuse silently (prune B5).
+            assert detail["next_step"] == refusals.NEXT_STEPS["port_conflict"]
+            assert detail["message"].endswith(detail["next_step"])
             assert foreign.poll() is None
             status = client.get("/api/projects/demo/app/status", headers=auth).json()
             assert status["state"] == "port_conflict"
             assert status["running"] is False
+            assert status["next_step"] == refusals.NEXT_STEPS["port_conflict"]
     finally:
         foreign.terminate()
         foreign.wait(timeout=5)
@@ -523,7 +527,11 @@ def test_app_start_reports_recoverable_output_broker_failure(tmp_path):
         assert response.json()["detail"] == {
             "state": "stopped",
             "reason": "output_sink_unavailable",
-            "message": "Preview output broker could not start",
+            "message": refusals.refusal_message(
+                "app_output_sink_unavailable",
+                "Preview output broker could not start",
+            ),
+            "next_step": refusals.NEXT_STEPS["app_output_sink_unavailable"],
         }
         status = client.get(
             "/api/projects/demo/app/status",

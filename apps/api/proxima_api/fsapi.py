@@ -4,6 +4,8 @@ import os
 import shutil
 from pathlib import Path
 
+from . import refusals
+
 MAX_READ_BYTES = 1_000_000
 REFERENCE_MAX_SCANNED = 20_000
 REFERENCE_MAX_DEPTH = 12
@@ -69,7 +71,14 @@ class SymlinkRefused(FsError):
 
 
 SYMLINK_SKIP_REASON = "symlink - not followed"
-_SYMLINK_REFUSAL = "path crosses a symlink, which Proxima never follows"
+_SYMLINK_REFUSAL = refusals.refusal_message(
+    "symlink_refused",
+    "That path crosses a symlink, which Proxima never follows",
+)
+_JAIL_ESCAPE_REFUSAL = refusals.refusal_message(
+    "jail_escape",
+    "That path leaves the project folder, and Proxima never resolves outside it",
+)
 
 
 def _reject_symlink_components(root: Path, target: Path) -> None:
@@ -111,14 +120,14 @@ def resolve_in_project(root: Path, rel: str) -> Path:
         raise FsError("invalid path")
     # Reject absolute paths explicitly before any joining
     if rel and Path(rel).is_absolute():
-        raise FsError("path escapes project root")
+        raise FsError(_JAIL_ESCAPE_REFUSAL)
     rel = rel.lstrip("/")
     try:
         target = Path(os.path.normpath(os.path.join(str(root), rel)))
     except (OSError, RuntimeError, ValueError) as exc:
         raise FsError("cannot resolve project path") from exc
     if target != root and root not in target.parents:
-        raise FsError("path escapes project root")
+        raise FsError(_JAIL_ESCAPE_REFUSAL)
     _reject_symlink_components(root, target)
     return target
 
@@ -294,11 +303,22 @@ def read_file(root: Path, rel: str) -> str:
     if not target.is_file():
         raise FsError("not a file")
     if target.stat().st_size > MAX_READ_BYTES:
-        raise FsError("file too large to open")
+        raise FsError(
+            refusals.refusal_message(
+                "file_too_large",
+                f"That file is larger than the {MAX_READ_BYTES:,}-byte limit "
+                "the in-app editor loads",
+            )
+        )
     try:
         return target.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
-        raise FsError("binary file not supported") from exc
+        raise FsError(
+            refusals.refusal_message(
+                "file_not_readable",
+                "That file is not UTF-8 text, so the editor cannot open it",
+            )
+        ) from exc
     except OSError as exc:
         raise FsError(f"cannot read file: {exc.strerror}") from exc
 

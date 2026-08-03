@@ -2033,6 +2033,37 @@ disclosure with the message plus a bounded stack snippet for pasting into a bug 
 
 Backend-side visibility is separate: journald captures server logs (#123/#125).
 
+### Actionable fail-closed refusals (prune B5)
+
+**Why:** The other half of "errors everywhere with unknown causes" was not breakage at
+all. Roughly a third of the friction in the #115 audit was Proxima refusing *correctly*
+and never saying what to do about it: `ownership_unknown` rendered a Blocked badge and
+the words "the listener lacks complete live managed-lineage proof"; a Master conformance
+rejection hid inside a closed dropdown until a send 409'd; a symlink write refusal
+reached the Files tree as `Error: Failed to write file (400 Bad Request): …`. Every one
+of those decisions is right. None of them told the owner the next move.
+
+**How:** `apps/api/proxima_api/refusals.py` is the single registry of owner-facing next
+steps, keyed by refusal code. `refusal_message(code, reason)` appends the step to the
+single-string convention (`FsError`, `ContainerBoundaryError`, the preview status
+`message`); `refusal_detail(code, reason, **extra)` builds the structured convention
+(`{"code", "message", "next_step", …}`) used by `HTTPException` details. So every
+refusal the owner meets names three things: **what** was refused, **why**, and **the
+concrete next step**. `apps/api/tests/test_refusals.py` asserts every registered step is
+an imperative sentence, so a new fail-closed state cannot ship with a dead-end message.
+
+Wired refusals: preview port conflict and unverified port ownership and a dead preview
+output sink (`apprunner`, plus `AppStatusResponse.next_step`); realpath-jail escape,
+symlink traversal, oversized and non-text file opens (`fsapi`); symlinked or moved
+Container root, changed root identity, symlinked or missing Ops folder, missing Ops Area
+(`container_registry`, `layout_map`); Master runner conformance (`routes/master.py`,
+`master_runtime.py`); and a blocked project purge (`route_deps`).
+
+**What did not change:** not one refusal was softened. This is wording and delivery only.
+Refusals a *runner* sees (the Master tool broker, the model-provider proxy) stay terse by
+design — telling a possibly prompt-injected agent how to get past a boundary is the
+opposite of the goal (see [prompt-injection-hardening.md](prompt-injection-hardening.md)).
+
 Linux daily-driver reliability is release-gated by
 `scripts/linux-daily-driver-acceptance`. The executable matrix covers install,
 service status/restart/stop, POSIX PTY behavior, online backup and isolated restore,
