@@ -185,7 +185,7 @@ Artifacts should filter by:
 
 ### Files Are Raw Workspace Access
 
-Browsing the filesystem is a utility, not a destination (ADR-0043): output consumption and app preview belong to Artifacts, and the tree returns as a right-rail dock tool (#145). The read-only Container inspection used by Ops-migration recovery lives inside Artifacts in the meantime.
+Browsing the filesystem is a utility, not a destination (ADR-0043): output consumption and app preview belong to Artifacts, and the tree is a right-rail dock tool (#145) - including the read-only Container inspection Ops-migration recovery uses.
 
 ### Workflows Are Reusable Processes *(versioning is planned — not yet in code)*
 
@@ -267,7 +267,7 @@ Tool rail (overlay panels, any context):
 
 ```text
 Terminal
-Files (returns in #145)
+Files
 Preview
 ```
 

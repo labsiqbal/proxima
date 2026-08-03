@@ -1510,15 +1510,22 @@ The Attention item links to a durable Project settings detail route. That surfac
 shows the affected Project, exact stored owner-safe reason, migration phase, legacy
 and physical path states, exact physical-root entries, conflicts, and which Ops paths
 remain usable. Owners can reveal either side through an explicit Container-root
-read-only target and refresh read-only validation. Recovery inspection has only tree
+read-only target, answered by the dock's **Files** tool (#145), and refresh
+read-only validation. Recovery inspection has only tree
 and file-read operations; its tree removes mutation controls, opens files
-read-only, and visibly expands and marks directory targets. An already-dirty ordinary
-file buffer stays mounted and read-only across the inspection adapter swap and path
-browses; inspection never discards those unsaved project bytes, and write returns only
-with the ordinary Area-validated adapter. Backend-declared root
+read-only in place (Container-root bytes are reachable only through the inspection
+adapter, so an inspected file is never handed to a main-window viewer that knows
+just the Area-scoped root), and visibly expands and marks directory targets. The
+shared tree still keeps an already-dirty buffer mounted and read-only across an
+adapter swap and path browses rather than discarding unsaved bytes - that
+guarantee now protects the Wiki tree and any surface whose tree owns its editor,
+since the dock's ordinary Files tree hands opens to the main window and therefore
+holds no buffer of its own. Write returns only with the ordinary Area-validated
+adapter. Backend-declared root
 inspectability disables unavailable or unsafe reveal actions with an accessible
-reason. Closing inspection or
-changing Projects restores the ordinary writable boundary. The durable detail route pins the shell to its Project across reload and
+reason. The dock names the inspected Container and offers one **Close inspection**
+action; closing inspection, picking a tool by hand, or changing Projects restores
+the ordinary writable boundary. The durable detail route pins the shell to its Project across reload and
 refresh; switching Settings sections clears the detail route. Retry stays disabled
 until the current layout passes the existing collision, type, hash, symlink, overlap,
 and same-filesystem checks; retry then requires confirmation and resumes through the
@@ -1623,10 +1630,16 @@ and [ADR-0042](adr/0042-file-preview-is-a-sandboxed-iframe.md).
 These APIs power the **Artifacts destination** (the produced-work gallery in the
 left navigation, ADR-0043; artifacts open in the ArtifactViewer, whose edit action
 reaches the inline editor - plus the Deliverables/History tabs and the record
-panel from #139, and the read-only Container inspection an Ops-migration reveal
-asks for), the **Wiki** tree under Settings → Knowledge, chat attachments, and
-`@` file/artifact references - with the in-browser **Terminal** as the raw escape
-hatch. Full tree browsing returns as a right-rail dock tool in #145.
+panel from #139), the **Files** tool in the right dock (#145 - the real-disk tree
+browser for the active project, which also answers the `proxima:reveal-file`
+event raised by a record's **Reveal in Files** and by Ops-migration recovery's
+read-only Container-root reveal), the **Wiki** tree under Settings → Knowledge,
+chat attachments, and `@` file/artifact references - with the in-browser
+**Terminal** as the raw escape hatch. Opening a file from the dock browser is a
+main-window handoff through one shell seam (today the ArtifactViewer; #146
+redirects documents to the wiki/markdown editor), except under Container-root
+inspection, whose bytes only the read-only inspection adapter can read and which
+therefore stays in the panel.
 Inline New file / New folder / Rename rows share one tree input with an accessible
 name (`New file name`, `New folder name`, or `Rename <entry>`) and a create
 placeholder (`file-name` / `folder-name`) so the empty field is not a dead unlabeled
@@ -2128,7 +2141,7 @@ or the HttpOnly `proxima_session` cookie.
 + **Master** is the gated delegation/monitoring peer to Chat: one hidden system identity, a schema-validated filesystem-isolated product broker, chat-only runner conformance, three honest worker slots, active queue, needs-you subset, job checkpoints, and an opt-in budgeted unattended toggle. The flag defaults on, and unattended starts stay opt-in behind their own toggle; dynamically conforming Codex 0.145.0 or newer is supported, and every other or unavailable adapter fails closed.
 + **Tasks** is the permanent execution/review index; its `+ New task` button opens the launcher - a single integrated Task Composer with searchable Project/folder context, selected Agent, a combined Add menu for attachments/image/design, and Guarded or Autonomous execution policy. It creates a durable ad-hoc job and opens a dedicated hash-addressable task workspace with live progress, review, approval, and deliverables. The linked execution session is not a visible chat conversation.
 + The single **Workflows** destination contains a remembered Drafts / Workflows / Runs library home and the plan Editor (graph canvas). One reusable-workflow table shows workflow Availability separately from the joined schedule summary. Every row retains Edit, manual Run, Schedules, availability pause/resume, and archive actions. The schedule dialog owns timezone, five-field cron, durable input bindings, overlap, per-schedule On/Off, Run now, configure, and delete behavior. The graph is enabled by default; its flag is a recovery switch rather than a hidden experimental mode.
-+ **Right tool rail** (`ToolDock`): Terminal and Preview open as overlay panels above the current screen, project-scoped when Project context is synchronized; the rail and panels stay suppressed during Task permalink resolution or any Task/Work Project mismatch. Browsing left the rail for a destination in ADR-0040 and returns to it as a dock tool in #145. The rail's gear opens Settings and Escape closes the panel. Terminal stays mounted after first open (shells survive a closed panel); Preview unmounts because its dev server is a backend process. Agent outputs live on Artifacts (the gallery plus the Deliverables tab, #139/#144); Design remains a separate canvas destination.
++ **Right tool rail** (`ToolDock`): Terminal, Files, and Preview open as overlay panels above the current screen, project-scoped when Project context is synchronized; the rail and panels stay suppressed during Task permalink resolution or any Task/Work Project mismatch. Browsing left the rail for a destination in ADR-0040 and came back to it in #145, so no navigation offers a Files destination and a bookmarked `?view=files` URL lands on Artifacts. The rail's gear opens Settings and Escape closes the panel. Terminal and Files stay mounted after first open (shells survive a closed panel, and the tree keeps its place); Preview unmounts because its dev server is a backend process. Agent outputs live on Artifacts (the gallery plus the Deliverables tab, #139/#144); Design remains a separate canvas destination.
 + **De-jargon rule:** primary surfaces say "agent" and "tools" — never "runner", "MCP", "profile", env-var names, or raw stack traces. That detail lives in Settings → Agents and the docs.
 
 Authentication remains single-owner defense in depth: first run sets a password, later requests require a bearer token or `proxima_session` HttpOnly cookie, login establishes the session, and resume restores it. Each invalid attempt focuses the corrective field and mounts one fresh assertive alert, even when the same values are submitted again. The gate keeps one main landmark, password-manager-compatible hidden owner metadata, and token-based text and focus contrast across every canonical theme.

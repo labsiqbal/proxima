@@ -1,24 +1,36 @@
 import '@testing-library/jest-dom/vitest'
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { containerInspectionFs, projectFs } from '../../api/fsAdapter'
 import { ToolDock } from './ToolDock'
 import type { Project } from '../../types'
 
+// One folder shape for every adapter: a directory, a file, and a symlink the
+// backend already marked warn-and-skip (prune C7) so the dock tree can be
+// checked against the real-disk semantics it must keep.
+const entries = [
+  { name: 'wiki', type: 'dir', size: 0 },
+  { name: 'notes.md', type: 'file', size: 12 },
+  { name: 'outside', type: 'symlink', size: 0, skipped: true, reason: 'symlink skipped' },
+]
+
 vi.mock('../../api/fsAdapter', () => ({
   projectFs: vi.fn(() => ({
-    list: vi.fn().mockResolvedValue({ entries: [] }),
-    read: vi.fn(),
+    list: vi.fn().mockResolvedValue({ entries }),
+    read: vi.fn().mockResolvedValue({ content: '' }),
     write: vi.fn(),
     mkdir: vi.fn(),
     rename: vi.fn(),
     remove: vi.fn(),
   })),
   containerInspectionFs: vi.fn(() => ({
-    list: vi.fn().mockResolvedValue({ entries: [] }),
-    read: vi.fn(),
+    list: vi.fn().mockResolvedValue({ entries }),
+    read: vi.fn().mockResolvedValue({ content: '' }),
   })),
+}))
+vi.mock('@uiw/react-codemirror', () => ({
+  default: ({ value }: { value?: string }) => <textarea data-testid="codemirror-stub" value={value ?? ''} readOnly />,
 }))
 vi.mock('../terminal/TerminalTabs', () => ({
   TerminalTabs: ({ projectSlug }: { projectSlug?: string }) => <div data-testid="terminal-stub">terminal:{projectSlug || 'none'}</div>,
@@ -34,15 +46,14 @@ describe('ToolDock', () => {
     vi.clearAllMocks()
   })
 
-  it('offers Terminal and Preview as rail tools plus Settings', () => {
+  it('offers Files next to Terminal and Preview, plus Settings', () => {
     const onOpenSettings = vi.fn()
     render(<ToolDock token="t" project={project} onOpenSettings={onOpenSettings} />)
     const rail = screen.getByRole('complementary', { name: 'Tools' })
-    for (const name of ['Terminal', 'Preview']) {
+    // Browsing is a tool again (#145): the destination is Artifacts (ADR-0043).
+    for (const name of ['Terminal', 'Files', 'Preview']) {
       expect(rail.querySelector(`[aria-label="${name}"]`)).toBeTruthy()
     }
-    // Files is a destination now (ADR-0040), not a rail tool.
-    expect(rail.querySelector('[aria-label="Files"]')).toBeNull()
     ;(rail.querySelector('[aria-label="Settings"]') as HTMLButtonElement).click()
     expect(onOpenSettings).toHaveBeenCalled()
   })
@@ -129,5 +140,104 @@ describe('ToolDock', () => {
     )
     expect(screen.getByRole('complementary', { name: 'Tools' })).toBeVisible()
     expect(screen.getByTestId('terminal-stub')).toBeInTheDocument()
+  })
+})
+
+// The file tree is a dock tool again (#145): the destination is Artifacts
+// (ADR-0043), and browsing the real disk is the utility you open next to it.
+describe('ToolDock Files browser', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const openFiles = async (user: ReturnType<typeof userEvent.setup>) => {
+    const rail = screen.getByRole('complementary', { name: 'Tools' })
+    await user.click(rail.querySelector('[aria-label="Files"]') as HTMLElement)
+  }
+
+  it('browses the active project on the real disk, skip markers included', async () => {
+    const user = userEvent.setup()
+    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
+    await openFiles(user)
+    expect(projectFs).toHaveBeenCalledWith('t', 'master')
+    expect(await screen.findByText('notes.md')).toBeVisible()
+    expect(screen.getByText('wiki')).toBeVisible()
+    // Warn-and-skip (prune C7) stays inert: acknowledged, never a click target.
+    const skipped = document.querySelector('.tree-row.skipped') as HTMLElement
+    expect(skipped).toHaveTextContent('outside')
+    expect(skipped.tagName).toBe('DIV')
+  })
+
+  it('hands an opened file to the main window instead of an in-panel editor', async () => {
+    const user = userEvent.setup()
+    const onOpenFile = vi.fn()
+    render(<ToolDock token="t" project={project} onOpenFile={onOpenFile} onOpenSettings={vi.fn()} />)
+    await openFiles(user)
+    await user.click(await screen.findByText('notes.md'))
+    expect(onOpenFile).toHaveBeenCalledWith('master', 'notes.md', undefined)
+    expect(document.querySelector('.file-editor')).toBeNull()
+  })
+
+  it('asks for a project before Files can work', async () => {
+    const user = userEvent.setup()
+    render(<ToolDock token="t" project={null} onOpenSettings={vi.fn()} />)
+    await openFiles(user)
+    expect(screen.getByText('Pick a project to browse its files.')).toBeVisible()
+    expect(projectFs).not.toHaveBeenCalled()
+  })
+
+  it('keeps the tree mounted after the panel closes', async () => {
+    const user = userEvent.setup()
+    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
+    await openFiles(user)
+    expect(await screen.findByText('notes.md')).toBeVisible()
+    await openFiles(user)
+    expect(screen.getByText('notes.md')).not.toBeVisible()
+  })
+
+  it('absorbs the Ops-migration Container inspection - read-only, at the named project', async () => {
+    const user = userEvent.setup()
+    const onOpenFile = vi.fn()
+    render(<ToolDock token="t" project={project} onOpenFile={onOpenFile} onOpenSettings={vi.fn()} />)
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('proxima:reveal-file', {
+        detail: { path: 'wiki', pathKind: 'directory', projectSlug: 'ops', rootSide: 'container' },
+      }))
+    })
+    expect(containerInspectionFs).toHaveBeenCalledWith('t', 'ops')
+    // The Container root side is never read through the ordinary project adapter.
+    expect(projectFs).not.toHaveBeenCalledWith('t', 'ops')
+    expect(await screen.findByText('Read-only')).toBeVisible()
+    expect(screen.getByText(/Inspecting/)).toBeVisible()
+    // Container-root bytes exist only through the inspection adapter, so this
+    // tree reads them in place rather than handing a path to the main window.
+    await user.click(document.querySelector('[data-path="notes.md"]') as HTMLElement)
+    expect(onOpenFile).not.toHaveBeenCalled()
+  })
+
+  it('leaves the inspection and returns to the active project tree', async () => {
+    const user = userEvent.setup()
+    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('proxima:reveal-file', {
+        detail: { path: 'wiki', pathKind: 'directory', projectSlug: 'ops', rootSide: 'container' },
+      }))
+    })
+    await user.click(await screen.findByRole('button', { name: 'Close inspection' }))
+    await waitFor(() => expect(projectFs).toHaveBeenCalledWith('t', 'master'))
+    expect(screen.queryByText(/Inspecting/)).not.toBeInTheDocument()
+  })
+
+  it('highlights an ordinary reveal inside the active project tree', async () => {
+    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} />)
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('proxima:reveal-file', {
+        detail: { path: 'wiki/notes.md', projectSlug: 'master' },
+      }))
+    })
+    expect(projectFs).toHaveBeenCalledWith('t', 'master')
+    await waitFor(() => {
+      expect(document.querySelector('[data-path="wiki/notes.md"]')).toHaveClass('active')
+    })
   })
 })

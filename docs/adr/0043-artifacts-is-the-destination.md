@@ -80,10 +80,14 @@ permalinks. #145/#146/#147 build on it.
 
 What carries forward from ADR-0040 unchanged: one shared **ArtifactViewer** for
 every surface that opens a file, and the `proxima:reveal-file` window-event
-contract. Its *destination* decision is superseded. Until #145 lands, the only
-tree left in the destination is the read-only **Container inspection** an
-Ops-migration recovery reveal asks for (`rootSide: 'container'`), rendered as a
-transient panel with a Close action rather than a lens.
+contract. Its *destination* decision is superseded. Between this record and #145
+the only tree left in the destination was the read-only **Container inspection**
+an Ops-migration recovery reveal asks for (`rootSide: 'container'`), rendered as
+a transient panel with a Close action rather than a lens.
+
+**Landed 2026-08-03 (#145):** decision 1 is executed. The dock's **Files** tool
+is the file browser again; it absorbed that inspection panel, so the destination
+now renders no tree at all, and `proxima:reveal-file` is answered by the dock.
 
 ## Consequences
 
@@ -101,10 +105,12 @@ Positive:
 
 Negative / accepted trade-offs:
 
-- **There is no full file browser between this ticket and #145.** Owners who
-  reached arbitrary project files through the destination lose that path in the
-  interim; the record panel's "Reveal in Files" action is unwired for the same
-  window (its prop stays, so #145 rewires one call site).
+- **There was no full file browser between this ticket and #145.** Owners who
+  reached arbitrary project files through the destination lost that path in the
+  interim, and the record panel's "Reveal in Files" action stayed unwired for the
+  same window. #145 closed both: the dock browser returned and that one call site
+  now raises the reveal event (in Work only - Delegate has no dock, so the action
+  is absent there rather than dead).
 - The gallery only shows what the artifact scanner types and caps, so it is not
   a complete view of the folder; that completeness is the dock's job.
 - Runnable apps are deliberately absent from the gallery until #147 gives them

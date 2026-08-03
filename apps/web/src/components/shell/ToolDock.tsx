@@ -1,20 +1,27 @@
 import React from 'react'
-import type { Project } from '../../types'
-import { IconClose, IconGear, IconMonitor, IconTerminal } from './icons'
+import type { FileTarget, Project } from '../../types'
+import { parseRevealTarget, REVEAL_FILE_EVENT, type RevealTarget } from '../../lib/revealFile'
+import { DockFileBrowser } from '../files/DockFileBrowser'
+import { IconClose, IconFile, IconGear, IconMonitor, IconTerminal } from './icons'
 
 const TerminalTabs = React.lazy(() => import('../terminal/TerminalTabs').then(m => ({ default: m.TerminalTabs })))
 const AppRunner = React.lazy(() => import('../files/AppRunner').then(m => ({ default: m.AppRunner })))
 
-// Terminal and Preview are tools, not destinations: a slim icon rail on the
-// right opens each one as an overlay panel above the current screen, so the
-// plan/chat you were reading stays where it was. Both are scoped to the active
-// project, in any context. Browsing left the rail for its own destination
-// (ADR-0040, now Artifacts per ADR-0043) -
-// browsing is navigation, and a tree in a narrow overlay could not carry the
-// cross-project scope Delegate needs.
-export type Tool = 'terminal' | 'preview'
+// Terminal, Files, and Preview are tools, not destinations: a slim icon rail on
+// the right opens each one as an overlay panel above the current screen, so the
+// plan/chat you were reading stays where it was. All three are scoped to the
+// active project, in any context.
+//
+// Browsing spent one release as a destination (ADR-0040) and came back here in
+// #145: the destination is Artifacts (ADR-0043), a gallery of what the project
+// produced, while "where is that file on disk" is the utility you open next to
+// your work. The dock owns when Files is showing and where it is pointed;
+// `DockFileBrowser` owns the tree itself.
+export type Tool = 'terminal' | 'files' | 'preview'
+
 const TOOLS: { id: Tool; label: string; Icon: React.ComponentType<{ size?: number }> }[] = [
   { id: 'terminal', label: 'Terminal', Icon: IconTerminal },
+  { id: 'files', label: 'Files', Icon: IconFile },
   { id: 'preview', label: 'Preview', Icon: IconMonitor },
 ]
 
@@ -22,24 +29,37 @@ function PaneFallback({ label }: { label: string }) {
   return <p className="muted tool-pane-hint">{label}</p>
 }
 
-export function ToolDock({ token, project, available = true, onOpenSettings, onOpenChange }: {
+export function ToolDock({ token, project, projects = [], available = true, onOpenSettings, onOpenChange, onOpenFile }: {
   token: string
   project: Project | null
+  /** Named so a reveal into another Container can title its tree properly. */
+  projects?: Project[]
   available?: boolean
   onOpenSettings: () => void
   onOpenChange?: (open: boolean) => void
+  /**
+   * The handoff seam: opening a file from the dock is a main-window event, not a
+   * panel-sized editor. Today the shell answers with the shared ArtifactViewer;
+   * #146 redirects this one call site to the wiki/markdown editor.
+   */
+  onOpenFile?: (slug: string, path: string, target?: FileTarget) => void
 }) {
   const [open, setOpen] = React.useState<Tool | null>(null)
-  // Latch: once Terminal has been opened it stays mounted (hidden when closed) —
-  // unmounting would SIGHUP every shell.
+  const [reveal, setReveal] = React.useState<RevealTarget | null>(null)
+  // Latch: once Terminal or Files has been opened it stays mounted (hidden when
+  // closed) — unmounting would SIGHUP every shell and drop tree state.
   // Preview is NOT latched: its dev server is a backend process that survives on
   // its own, and an unmounted AppRunner stops status-polling for free.
   const visited = React.useRef(new Set<Tool>())
   if (open && open !== 'preview') visited.current.add(open)
   const closePanel = React.useCallback(() => {
     setOpen(null)
+    setReveal(null)
   }, [])
   const selectTool = (tool: Tool, toggle: boolean) => {
+    // Picking a tool by hand is a fresh start: drop the reveal so Files returns
+    // to the active project instead of staying parked on someone else's tree.
+    setReveal(null)
     setOpen(current => toggle && current === tool ? null : tool)
   }
 
@@ -55,7 +75,7 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
 
   // Tell the shell a tool panel is open so main content can reserve space for
   // it. Without this the overlay covers right-edge primary actions (e.g.
-  // Design Studio's "Generate →") while Terminal/Preview is open.
+  // Design Studio's "Generate →") while Terminal/Files/Preview is open.
   React.useEffect(() => {
     const shell = document.querySelector('.app-shell')
     if (!shell) return
@@ -68,6 +88,27 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
   }, [onOpenChange, open])
 
   const slug = project?.slug
+  const activeSlugRef = React.useRef(slug)
+  activeSlugRef.current = slug
+  // Switching the shell project ends any reveal: the owner moved on.
+  React.useEffect(() => { setReveal(null) }, [slug])
+
+  // "Reveal in Files" and Ops-migration recovery raise a window event rather
+  // than prop-drilling through the whole shell: the dock owns the only tree in
+  // the app, so far-away surfaces just name a path and let it answer. While
+  // Project tools are suppressed there is no tree to point, so the reveal is
+  // dropped rather than queued behind a hidden panel.
+  React.useEffect(() => {
+    const onReveal = (event: Event) => {
+      if (!available) return
+      const target = parseRevealTarget(event, activeSlugRef.current)
+      if (!target) return
+      setReveal(target)
+      setOpen('files')
+    }
+    window.addEventListener(REVEAL_FILE_EVENT, onReveal)
+    return () => window.removeEventListener(REVEAL_FILE_EVENT, onReveal)
+  }, [available])
 
   const toolButton = (tool: typeof TOOLS[number], where: 'rail' | 'tab') => (
     <button
@@ -102,6 +143,15 @@ export function ToolDock({ token, project, available = true, onOpenSettings, onO
           <React.Suspense fallback={<PaneFallback label="Loading terminal…" />}>
             <TerminalTabs token={token} projectSlug={slug} />
           </React.Suspense>)}
+        {pane('files',
+          <DockFileBrowser
+            token={token}
+            project={project}
+            projects={projects}
+            reveal={reveal}
+            onLeaveReveal={() => setReveal(null)}
+            onOpenFile={onOpenFile}
+          />)}
         {open === 'preview' && <div className="tool-pane" style={{ display: 'flex' }}>
           {slug
             ? <React.Suspense fallback={<PaneFallback label="Loading preview…" />}>

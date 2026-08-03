@@ -3950,6 +3950,30 @@ button:disabled {
 	overflow: auto;
 	padding: var(--space-2);
 }
+/* A reveal can point the browser at another Container, or at the Container root
+   side an Ops-migration recovery inspects read-only (#145 absorbed that panel).
+   Say whose files these are, and give the detour one way back. */
+.tool-files-detour {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+	padding: var(--space-2) var(--space-3);
+	border-bottom: 1px solid var(--ui-stroke-tertiary);
+	font-size: var(--text-sm);
+}
+.tool-files-detour > div {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-width: 0;
+}
+.tool-files-detour strong,
+.tool-files-detour span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 /* The Run & Preview rows were built for wide docks; the panel is narrow on any
    viewport, so reuse the stacked layout the dock only uses on mobile. */
 .tool-pane .app-runner-bar {
@@ -5952,33 +5976,6 @@ div.result-media {
 .artifacts-cap-note {
 	font-size: var(--text-2xs);
 }
-/* Ops-migration recovery inspection: the one read-only tree left in this
-   destination until ordinary browsing moves to the dock (#145). */
-.artifacts-inspect {
-	flex: 1;
-	min-height: 0;
-	display: flex;
-	flex-direction: column;
-	padding: var(--space-3) var(--space-4);
-	gap: var(--space-3);
-}
-.artifacts-inspect-head {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: var(--space-3);
-}
-.artifacts-inspect-head > div {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-1);
-	font-size: var(--text-sm);
-	min-width: 0;
-}
-.artifacts-tree {
-	min-height: 0;
-}
-
 .tasks-head,
 .graph-header {
 	display: flex;

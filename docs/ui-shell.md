@@ -29,8 +29,10 @@ destination of ADR-0040): Work scopes it to the active Container, Delegate
 gathers every Container behind a head filter, and both open artifacts in the
 ArtifactViewer. Since prune Part D (#139) the separate Archive destination is
 gone: the deliverable ledger lives here as the **Deliverables** and **History**
-tabs (see "Artifacts and the deliverable ledger" below). Terminal and Preview
-remain right-rail tools; full tree browsing returns to that rail in #145.
+tabs (see "Artifacts and the deliverable ledger" below). Terminal, **Files**
+(the real-disk tree browser), and Preview are the right-rail tools: browsing
+came back to the rail in #145, so no navigation offers a Files destination and a
+bookmarked `?view=files` URL lands on Artifacts.
 
 Every Work destination has a stable history entry. Its URL records the Work mode,
 active project, active Chat session, primary surface, and the open Workflow or Design
@@ -155,8 +157,8 @@ visible **Back to Tasks** (or matching origin) label.
 
 Reloading a `#task/<id>` permalink first resolves the Task and its owning Project
 behind a dedicated loading state, then atomically selects and locks that Project.
-The shell does not expose Terminal or Preview until Task ownership and the
-active Project are synchronized. The Task banner always names the Project and Area.
+The shell does not expose Terminal, Files, or Preview until Task ownership and
+the active Project are synchronized. The Task banner always names the Project and Area.
 
 The **New task** launcher lives behind the Tasks screen's `+ New task` button (it is no longer a nav destination of its own). It is a focused launcher with no destination dashboard grid. Its integrated Task Composer splits into two rows by kind. The prompt row carries only *actions*: the Add menu for attachments/image/design, and the start action. A context bar underneath groups the three controls that describe a task's **execution context** — a searchable Project/folder picker (where it runs), Agent (who runs it), and Guarded or Autonomous execution policy (how it is governed). Each context control carries a leading icon inside its own click target and all three share one type scale, so the bar reads as one row of peers rather than three unrelated widgets. `/image` and `/design` create real media runs that are linked back to the durable task lifecycle. A created task opens `#task/<id>` with live progress, review, approval, and deliverables. Ordinary start failures clean up the queued task; media link failures preserve and identify the task for inspection.
 
@@ -193,9 +195,9 @@ Schedule inputs mirror each workflow's declared definitions, validate required v
 
 Every schedule row offers **Run now**, which fires it immediately and opens the task it spawned. It exists so a schedule can be trusted before it is left alone: the run goes through the scheduler's own spawn, so what executes is what the cron would have executed — same recipe, project, agent profile and stored input — rather than a lookalike. A manual run deliberately does **not** claim the scheduler's minute, and it works on a disabled schedule, since `enabled` governs the tick and trying a schedule out is exactly when it is still switched off. The stored overlap policy is honoured but never silently: a `skip` schedule with a run already in flight reports that instead of appearing to do nothing.
 
-## Right tool rail — Terminal, Preview
+## Right tool rail — Terminal, Files, Preview
 
-Terminal and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, scoped to the active project when Project context is available. Browsing left the rail for a destination in ADR-0040, and that destination is now Artifacts (ADR-0043), which is a gallery rather than a tree: the one tree still rendered there is the read-only Container inspection an Ops-migration recovery reveal asks for (`rootSide: 'container'`), shown as a transient panel with a Close action. Full tree browsing returns to this rail in #145. Artifacts open in the ArtifactViewer.
+Terminal, Files, and Preview are **tools, not destinations**. A slim icon rail on the right edge opens each as an overlay panel (`ToolDock`) above the current screen, scoped to the active project when Project context is available. Browsing left the rail for a destination in ADR-0040 and came back to it in #145: the destination is Artifacts (ADR-0043), a gallery of produced work, while "where is that file on disk" is the utility you open next to it. Artifacts open in the ArtifactViewer.
 
 During Task permalink resolution and any cross-Project Task mismatch, the entire rail
 and panel are suppressed. They return only after the Task owning Project and active
@@ -203,12 +205,32 @@ Project agree, preventing Preview from presenting stale Work context.
 
 - **Terminal** — the multi-tab PTY terminal. Once opened it stays mounted (hidden when
   the panel closes) so shells survive closing the panel and navigating anywhere.
+- **Files** — the real-disk tree browser for the active project (`WorkspaceTree` over
+  the Files API), with the prune's semantics intact: paths mean what they say on disk,
+  warn-and-skip symlink markers stay inert, and layout-map targets browse their mapped
+  Area. Also latched after first open. Opening a file is a **main-window handoff**: the
+  dock never grows a viewer of its own, it calls one shell seam
+  (`AppShell onOpenFile` → `App openFileInMainWindow`) which today opens the shared
+  ArtifactViewer and which #146 redirects to the wiki/markdown editor.
+  A `proxima:reveal-file` window event points the browser at a path (`lib/revealFile`
+  owns both ends of that contract: the raiser's request and the listener's parse).
+  A deliverable record's **Reveal in Files** raises it for the active Container, and
+  the tree simply expands to the highlighted row, writable as usual. Ops-migration
+  recovery raises it for a **Container-root** path (`rootSide: 'container'`) in the
+  Container it is recovering, which need not be the active one. Anything that is not
+  "the active project, ordinary side" shows a **detour strip** naming whose files
+  these are with one way back (`Close inspection` / `Back to <project>`); a
+  Container-root tree is read-only and reads its bytes through the inspection adapter
+  in place, because no main-window viewer knows that root side. #145 absorbed the
+  transient inspection panel the Artifacts destination carried, so this is the only
+  tree in the app besides the Wiki's. A reveal raised while Project tools are
+  suppressed is dropped, not queued: there is no tree to point at.
 - **Preview** — the Run & Preview dev-server dock (`AppRunner`). Not kept mounted:
   its server is a managed backend process that survives on its own, and unmounting
   stops the status polling. The deliverable record page and the recipe test bench keep their own
   Preview entry points for app-type artifacts.
 
-The rail's bottom gear opens Settings. Escape closes the panel. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
+The rail's bottom gear opens Settings. Escape closes the panel, and picking a tool by hand ends any reveal detour, so Files returns to the active project. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
 
 ## Chrome Back, project lock, and multitask keep-alive
 
@@ -382,7 +404,7 @@ Archive and Files merged into ONE destination (prune Part D, #139; decision #122
 - **Deliverables** - the durable deliverable registry (T4): every agent output is a record with lineage, ONE approval status (synced with the job-review approve), and a version chain, filterable by type/status/date/search.
 - **History** - records whose file no longer exists on disk. They are records, not phantom files: the ledger's survive-deletion property, kept visible.
 
-The combo detail is unchanged: an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address (the hash format outlives both retired destinations, so old bookmarks keep working - they open the record panel inside Artifacts, and a bookmarked `?view=files` URL lands there too). Record paths are container-relative real paths (#139) - the same paths the gallery shows. Approvals keep their two doors: the record panel and the Tasks review write the SAME status field. Locating a record's file on disk waits for the dock browser (#145); documents move to the wiki/markdown editor in #146 and app preview gets the main-window viewport in #147. Design is a separate canvas destination whose internals are not part of the shell.
+The combo detail is unchanged: an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address (the hash format outlives both retired destinations, so old bookmarks keep working - they open the record panel inside Artifacts, and a bookmarked `?view=files` URL lands there too). Record paths are container-relative real paths (#139) - the same paths the gallery shows. Approvals keep their two doors: the record panel and the Tasks review write the SAME status field. Locating a record's file on disk is **Reveal in Files** on the record panel, which raises the reveal event the dock browser answers (#145) - Delegate has no dock, so that action is absent there rather than dead; documents move to the wiki/markdown editor in #146 and app preview gets the main-window viewport in #147. Design is a separate canvas destination whose internals are not part of the shell.
 
 ## De-jargon rule for primary surfaces
 
@@ -412,7 +434,7 @@ Add destinations through the existing `View`, feature policy, App routing, Sideb
 For shell changes, run `npm --prefix apps/web test`,
 `npm --prefix apps/web run build`, and `git diff --check`. Tests should cover
 navigation order and feature-off gating, tool-rail open/close with Terminal
-persistence, asynchronous task success/failure, declared schedule inputs, cron
+persistence, the dock's Files tree and its main-window handoff, asynchronous task success/failure, declared schedule inputs, cron
 grammar, keyboard resizing, and durable detail routes reached from Attention.
 
 `npm --prefix apps/web run test:accessibility` first runs focused project-link API

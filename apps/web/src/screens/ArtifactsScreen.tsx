@@ -2,14 +2,13 @@ import React from 'react'
 import type { FileTarget, OutputLink, Project } from '../types'
 import { listArtifacts, type Artifact } from '../api/files'
 import { listArchive, listArchiveBadges, type ArchiveBadge, type ArchiveRecord } from '../api/archive'
-import { containerInspectionFs, projectFs } from '../api/fsAdapter'
-import { WorkspaceTree } from '../components/files/WorkspaceTree'
 import { ArtifactViewer, type ArtifactReviewFeedback, type ArtifactReviewHandoffResult } from '../components/artifacts/ArtifactViewer'
 import { ArchiveRecordPage } from '../components/artifacts/ArchiveRecordPage'
 import { DeliverablesLens } from '../components/artifacts/DeliverablesLens'
 import { ArtifactThumb, isVisualArtifact } from '../components/artifacts/ArtifactThumb'
 import { STATUS_LABELS, typeMeta } from '../components/artifacts/archive'
 import { Dropdown } from '../components/ui/Dropdown'
+import { revealFile } from '../lib/revealFile'
 
 // Artifacts is the destination (ADR-0043, amending ADR-0040): the main window
 // is the gallery of what the project produced, not a file tree. What you LOOK
@@ -22,9 +21,9 @@ import { Dropdown } from '../components/ui/Dropdown'
 // - History      records whose file is gone from disk (records, not phantoms)
 // Two scopes share the screen: Work shows the active Container, Delegate goes
 // global behind the head filter, the way Tasks does. Opening an artifact goes
-// through the shared ArtifactViewer (documents move to the wiki editor in #146);
-// full tree browsing moves to the right dock in #145, so the only tree left
-// here is the read-only Container inspection an Ops-migration reveal asks for.
+// through the shared ArtifactViewer (documents move to the wiki editor in #146).
+// There is no tree here at all: browsing the real disk is a dock tool (#145),
+// and "Reveal in Files" on a record raises the dock's reveal event.
 
 type Tab = 'all' | 'deliverables' | 'history'
 
@@ -43,8 +42,6 @@ const SCAN_CAP = 40
 
 type GalleryItem = Artifact & { projectSlug: string; projectName: string }
 
-type Reveal = { slug: string; path: string; pathKind?: 'root' | 'directory' | 'file'; rootSide?: 'container' | 'virtual' }
-
 const itemKey = (item: GalleryItem) => `${item.projectSlug}:${item.type}:${item.path}`
 
 const recordAsArtifact = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug' | 'target'>): Artifact => ({
@@ -55,14 +52,11 @@ const recordAsArtifact = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'pro
   target: r.target || undefined,
 })
 
-export function ArtifactsScreen({ token, projects, activeProject, globalScope = false, revealPath, onRevealConsumed, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
+export function ArtifactsScreen({ token, projects, activeProject, globalScope = false, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
   token: string
   projects: Project[]
   activeProject?: Project | null
   globalScope?: boolean
-  /** An Ops-migration recovery reveal: inspect this Container path read-only. */
-  revealPath?: Reveal | null
-  onRevealConsumed?: () => void
   /** An open deliverable record (permanent address) renders as the record panel. */
   archiveRecord?: { project: string; slug: string } | null
   pendingFile?: { slug: string; path: string; target?: FileTarget } | null
@@ -87,8 +81,6 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   const [loadError, setLoadError] = React.useState('')
   const [reloadNonce, setReloadNonce] = React.useState(0)
   const [capped, setCapped] = React.useState(false)
-  // A dismissed inspection stays dismissed even if the caller is slow to drop it.
-  const [dismissedReveal, setDismissedReveal] = React.useState('')
   const [open, setOpen] = React.useState<{ slug: string; items: Artifact[]; index: number; sessionId?: number | null } | null>(null)
   const mountedRef = React.useRef(true)
   const loadSeq = React.useRef(0)
@@ -164,6 +156,13 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
     return () => { alive = false }
   }, [token, tab, shownKey, badgeNonce])
 
+  // "Reveal in Files" answers "where is this on disk", which is the dock
+  // browser's question since #145. The window event keeps this destination free
+  // of a tree: it names the path and the dock opens itself on it.
+  const revealInDock = React.useCallback((record: Pick<ArchiveRecord, 'path' | 'project_slug'>) => {
+    revealFile({ path: record.path, pathKind: 'file', projectSlug: record.project_slug })
+  }, [])
+
   const openViewerForRecord = React.useCallback((record: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug' | 'target'> & { session_id?: number | null }) => {
     setOpen({ slug: record.project_slug, items: [recordAsArtifact(record)], index: 0, sessionId: record.session_id ?? reviewSessionId })
   }, [reviewSessionId])
@@ -230,6 +229,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
         onOpenTask={onOpenTask}
         onOpenViewer={openViewerForRecord}
         onOpenDesign={designStudioEnabled ? onOpenDesign : undefined}
+        onRevealInFiles={globalScope ? undefined : revealInDock}
         onChanged={() => setBadgeNonce(nonce => nonce + 1)}
       />
       {viewer}
@@ -296,12 +296,6 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   const visuals = items.filter(isVisualArtifact)
   const documents = items.filter(item => !isVisualArtifact(item))
   const ledgerProject = globalScope ? filter : activeProject?.slug || ''
-  const revealKey = revealPath ? `${revealPath.slug}:${revealPath.path}` : ''
-  const reveal = revealPath && revealKey !== dismissedReveal ? revealPath : null
-  const leaveInspection = () => {
-    setDismissedReveal(revealKey)
-    onRevealConsumed?.()
-  }
 
   const gallery = <div className="artifacts-body">
     {visuals.length > 0 && <section className="artifacts-section" data-testid="artifacts-gallery" aria-label="Designs, images, and video">
@@ -354,7 +348,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
             role="tab"
             className={tab === item.id ? 'active' : ''}
             aria-selected={tab === item.id}
-            onClick={() => { setTab(item.id); if (reveal) leaveInspection() }}
+            onClick={() => setTab(item.id)}
           >{item.label}</button>
         ))}
       </div>
@@ -370,70 +364,25 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
               ]}
             />
           : activeProject && <span className="artifacts-scope muted">{activeProject.name}</span>}
-        {tab === 'all' && !reveal && <button className="ghost-button" onClick={() => setReloadNonce(nonce => nonce + 1)} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>}
+        {tab === 'all' && <button className="ghost-button" onClick={() => setReloadNonce(nonce => nonce + 1)} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>}
       </div>
     </div>
 
-    {reveal
-      ? <ContainerInspection
+    {tab === 'all'
+      ? gallery
+      : <DeliverablesLens
           token={token}
-          project={projects.find(project => project.slug === reveal.slug) || activeProject || null}
-          reveal={reveal}
-          onOpenFile={(slug, path, target) => setOpen({ slug, items: [{ type: 'file', title: path.split('/').pop() || path, path, target }], index: 0 })}
-          onClose={leaveInspection}
-        />
-      : tab === 'all'
-        ? gallery
-        : <DeliverablesLens
-            token={token}
-            project={ledgerProject}
-            missingOnly={tab === 'history'}
-            onOpenRecord={onOpenRecord}
-            onOpenTask={onOpenTask}
-            onOpenSession={globalScope ? undefined : onOpenSession}
-            onOpenViewer={openViewerForRecord}
-            onOpenDesign={designStudioEnabled ? onOpenDesign : undefined}
-            designStudioEnabled={designStudioEnabled}
-            onRecordsChanged={() => setBadgeNonce(nonce => nonce + 1)}
-          />}
+          project={ledgerProject}
+          missingOnly={tab === 'history'}
+          onOpenRecord={onOpenRecord}
+          onOpenTask={onOpenTask}
+          onOpenSession={globalScope ? undefined : onOpenSession}
+          onOpenViewer={openViewerForRecord}
+          onOpenDesign={designStudioEnabled ? onOpenDesign : undefined}
+          designStudioEnabled={designStudioEnabled}
+          onRecordsChanged={() => setBadgeNonce(nonce => nonce + 1)}
+        />}
 
     {viewer}
   </section>
-}
-
-// Ops-migration recovery inspection (prune #133/#139 heritage): a reveal names a
-// Container-root path that needs the read-only inspection adapter, not the
-// Area-scoped project filesystem. It is the one tree left in this destination -
-// ordinary browsing moves to the right dock in #145.
-function ContainerInspection({ token, project, reveal, onOpenFile, onClose }: {
-  token: string
-  project: Project | null
-  reveal: Reveal
-  onOpenFile: (slug: string, path: string, target?: FileTarget) => void
-  onClose: () => void
-}) {
-  const inspecting = reveal.rootSide === 'container'
-  const slug = project?.slug || reveal.slug
-  const fs = React.useMemo(
-    () => inspecting ? containerInspectionFs(token, slug) : projectFs(token, slug),
-    [inspecting, token, slug],
-  )
-  return <div className="artifacts-inspect" data-testid="artifacts-inspect">
-    <div className="artifacts-inspect-head">
-      <div>
-        <strong>Inspecting {project?.name || reveal.slug}</strong>
-        <span className="muted mono">{reveal.path || '/'}</span>
-      </div>
-      <button type="button" className="ghost-button" onClick={onClose}>Close inspection</button>
-    </div>
-    <WorkspaceTree
-      key={slug}
-      fs={fs}
-      title={project?.name || reveal.slug}
-      className="artifacts-tree"
-      activePath={reveal.path}
-      activePathKind={reveal.pathKind}
-      onOpenFile={(path, target) => onOpenFile(slug, path, target)}
-    />
-  </div>
 }

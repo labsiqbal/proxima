@@ -1,6 +1,7 @@
 import React from 'react'
 import { getOpsMigration, retryOpsMigration, validateOpsMigration } from '../../api/projects'
 import type { OpsMigrationDetail as OpsMigrationDetailPayload, Project } from '../../types'
+import { revealFile } from '../../lib/revealFile'
 import { confirmDialog } from '../ui/Dialog'
 
 const stateLabel = (state: string) => state.replaceAll('_', ' ')
@@ -128,14 +129,9 @@ export function OpsMigrationDetail({ token, project, onBack, onChanged }: {
   }
 
   function reveal(path: string, pathKind: 'root' | 'directory' | 'file') {
-    window.dispatchEvent(new CustomEvent('proxima:reveal-file', {
-      detail: {
-        path,
-        pathKind,
-        projectSlug: project.slug,
-        rootSide: 'container',
-      },
-    }))
+    // Recovery inspects the Container root side, which only the read-only
+    // adapter can read; the dock's Files tool answers it (#145).
+    revealFile({ path, pathKind, projectSlug: project.slug, rootSide: 'container' })
   }
 
   const phase = detail?.phase || 'loading'

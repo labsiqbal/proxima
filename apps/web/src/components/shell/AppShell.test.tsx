@@ -4,7 +4,16 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { AppShell } from './AppShell'
 
-vi.mock('./ToolDock', () => ({ ToolDock: () => <div data-testid="tool-dock" /> }))
+vi.mock('./ToolDock', () => ({
+  ToolDock: (props: {
+    projects?: { slug: string }[]
+    onOpenFile?: (slug: string, path: string) => void
+  }) => (
+    <div data-testid="tool-dock" data-projects={props.projects?.length ?? 0}>
+      <button type="button" onClick={() => props.onOpenFile?.('demo', 'notes.md')}>dock open file</button>
+    </div>
+  ),
+}))
 vi.mock('./AttentionInbox', () => ({ AttentionInbox: () => null }))
 vi.mock('../master/MasterPopup', () => ({ MasterPopup: () => null }))
 vi.mock('../master/MasterToastRegion', () => ({ MasterToastRegion: () => null }))
@@ -182,6 +191,20 @@ describe('AppShell mobile drawer + search', () => {
     const switcher = within(sidebar).getByRole('button', { name: /Active project: Demo \(locked\)/ })
     expect(switcher).toBeDisabled()
     expect(switcher).toHaveAttribute('title', 'Project is locked while this view is open')
+  })
+
+  // The dock owns the only file tree (#145); opening one of its files is a
+  // main-window event the shell owner answers, not a panel-sized editor.
+  it('hands a dock file open to the shell owner, with the project list for naming', async () => {
+    const user = userEvent.setup()
+    const onOpenFile = vi.fn()
+    const projects = [{ slug: 'demo', name: 'Demo', path: '/tmp/demo', owner: 'o', visibility: 'private' as const }]
+    render(
+      <AppShell {...base} projects={projects} onOpenFile={onOpenFile}><div>main</div></AppShell>,
+    )
+    expect(screen.getByTestId('tool-dock')).toHaveAttribute('data-projects', '1')
+    await user.click(screen.getByRole('button', { name: 'dock open file' }))
+    expect(onOpenFile).toHaveBeenCalledWith('demo', 'notes.md')
   })
 
   it('keeps Delegate global while retaining the accessible shell sidebar', async () => {

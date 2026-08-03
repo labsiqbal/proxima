@@ -18,11 +18,13 @@ describe('Sidebar single-workspace IA', () => {
     expect(labels()).toEqual(['Chat', 'Tasks', 'Workflows', 'Artifacts', 'Design'])
     expect(screen.queryByRole('button', { name: 'New chat' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Projects' })).not.toBeInTheDocument()
-    // No workspace switch, and Terminal/Preview stay right-rail tools. Artifacts
-    // replaced the Files destination (ADR-0043) and is asserted in the order above.
+    // No workspace switch, and Terminal/Files/Preview stay right-rail tools.
+    // Artifacts replaced the Files destination (ADR-0043) and browsing went back
+    // to the dock (#145), so neither navigation may offer a Files row again.
     expect(screen.queryByRole('button', { name: 'Ops' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Code' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Files' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Workflows' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Master' })).not.toBeInTheDocument()
@@ -75,6 +77,7 @@ describe('Sidebar single-workspace IA', () => {
     const { rerender } = render(<Sidebar {...base} currentView="master" delegate />)
     const labels = () => Array.from(document.querySelectorAll('.primary-nav > .nav-item strong')).map(node => node.textContent)
     expect(labels()).toEqual(['Master', 'Tasks', 'Artifacts'])
+    expect(screen.queryByRole('button', { name: 'Files' })).not.toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: 'Delegate navigation' })).toBeInTheDocument()
     expect(screen.queryByText('Work project')).not.toBeInTheDocument()
     expect(screen.queryByText('Recent chats')).not.toBeInTheDocument()

@@ -365,10 +365,12 @@ Exclude controls live in Artifacts card menus.
 ## Files Flow
 
 Raw filesystem access for the active project is a **tool**, not a destination
-(ADR-0043): browse the tree, edit and save files, preview a single HTML/Markdown
-file, inspect generated output when needed. It lives on the right dock (#145);
-the read-only Container inspection Ops-migration recovery needs is inside
-Artifacts in the meantime.
+(ADR-0043). It lives on the right dock as the **Files** tool (#145): browse the
+real tree, create / rename / delete in place, and open a file - which hands off to
+the main window (today the ArtifactViewer, with its edit and preview; the
+wiki/markdown editor in #146) rather than to a panel-sized viewer. The same tool
+answers "Reveal in Files" on a deliverable record and the read-only Container-root
+inspection Ops-migration recovery needs.
 
 App and output consumption belong to Artifacts, never to the file tree.
 

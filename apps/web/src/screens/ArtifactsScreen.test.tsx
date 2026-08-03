@@ -51,8 +51,17 @@ vi.mock('../components/artifacts/DeliverablesLens', () => ({
   ),
 }))
 vi.mock('../components/artifacts/ArchiveRecordPage', () => ({
-  ArchiveRecordPage: ({ project, slug }: { project: string; slug: string }) => (
-    <div data-testid="record-panel">record:{project}:{slug}</div>
+  ArchiveRecordPage: ({ project, slug, onRevealInFiles }: {
+    project: string
+    slug: string
+    onRevealInFiles?: (record: { project_slug: string; path: string }) => void
+  }) => (
+    <div data-testid="record-panel">record:{project}:{slug}
+      {onRevealInFiles && <button
+        type="button"
+        onClick={() => onRevealInFiles({ project_slug: project, path: 'reports/plan.md' })}
+      >Reveal in Files</button>}
+    </div>
   ),
 }))
 
@@ -193,6 +202,23 @@ describe('ArtifactsScreen', () => {
     expect(screen.queryByTestId('artifacts-gallery')).not.toBeInTheDocument()
   })
 
+  it('sends "Reveal in Files" to the dock browser', async () => {
+    const user = userEvent.setup()
+    const revealed: unknown[] = []
+    const listener = (event: Event) => revealed.push((event as CustomEvent).detail)
+    window.addEventListener('proxima:reveal-file', listener)
+    render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} archiveRecord={{ project: 'alpha', slug: 'plan-md-v1' }} />)
+    await user.click(await screen.findByRole('button', { name: 'Reveal in Files' }))
+    window.removeEventListener('proxima:reveal-file', listener)
+    expect(revealed).toEqual([{ path: 'reports/plan.md', pathKind: 'file', projectSlug: 'alpha' }])
+  })
+
+  it('hides "Reveal in Files" in Delegate, which has no dock to answer it', async () => {
+    render(<ArtifactsScreen token="t" projects={[alpha]} globalScope archiveRecord={{ project: 'alpha', slug: 'plan-md-v1' }} />)
+    await screen.findByTestId('record-panel')
+    expect(screen.queryByRole('button', { name: 'Reveal in Files' })).not.toBeInTheDocument()
+  })
+
   // ── Global scope ──
 
   it('gathers every Container in Delegate and narrows through the head filter', async () => {
@@ -210,56 +236,17 @@ describe('ArtifactsScreen', () => {
     expect(screen.getByRole('button', { name: /beta\.png/ })).toBeInTheDocument()
   })
 
-  // ── Container-root inspection (Ops-migration recovery) ──
+  // ── No trees here: browsing is a dock tool (#145) ──
 
-  it('renders the read-only Container tree for a migration reveal', async () => {
-    render(
-      <ArtifactsScreen
-        token="t"
-        projects={[alpha]}
-        activeProject={alpha}
-        revealPath={{ slug: 'alpha', path: 'wiki', pathKind: 'directory', rootSide: 'container' }}
-      />,
-    )
-    await waitFor(() => expect(containerInspectionFs).toHaveBeenCalledWith('t', 'alpha'))
-    expect(screen.getByTestId('artifacts-inspect')).toBeInTheDocument()
-    expect(screen.queryByTestId('artifacts-gallery')).not.toBeInTheDocument()
-  })
-
-  it('never leaves a dead tab: picking one leaves the inspection', async () => {
-    const user = userEvent.setup()
-    const onRevealConsumed = vi.fn()
-    render(
-      <ArtifactsScreen
-        token="t"
-        projects={[alpha]}
-        activeProject={alpha}
-        revealPath={{ slug: 'alpha', path: 'wiki', pathKind: 'directory', rootSide: 'container' }}
-        onRevealConsumed={onRevealConsumed}
-      />,
-    )
-    await screen.findByTestId('artifacts-inspect')
-    await user.click(screen.getByRole('tab', { name: 'Deliverables' }))
-    expect(onRevealConsumed).toHaveBeenCalled()
-    expect(await screen.findByTestId('deliverables-lens')).toBeInTheDocument()
-  })
-
-  it('returns to the gallery when the inspection is closed', async () => {
-    const user = userEvent.setup()
-    const onRevealConsumed = vi.fn()
-    const { rerender } = render(
-      <ArtifactsScreen
-        token="t"
-        projects={[alpha]}
-        activeProject={alpha}
-        revealPath={{ slug: 'alpha', path: 'wiki', pathKind: 'directory', rootSide: 'container' }}
-        onRevealConsumed={onRevealConsumed}
-      />,
-    )
-    await user.click(await screen.findByRole('button', { name: 'Close inspection' }))
-    expect(onRevealConsumed).toHaveBeenCalled()
-    rerender(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} revealPath={null} onRevealConsumed={onRevealConsumed} />)
-    await waitFor(() => expect(screen.queryByTestId('artifacts-inspect')).not.toBeInTheDocument())
+  it('renders no file tree at all - the dock owns browsing', async () => {
+    vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
+    render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} />)
+    await screen.findByTestId('artifacts-gallery')
+    expect(document.querySelector('.tree-scroll')).toBeNull()
+    // Not even the Ops-migration Container inspection: the dock absorbed it,
+    // so this destination never reaches for a filesystem adapter.
+    expect(containerInspectionFs).not.toHaveBeenCalled()
+    expect(projectFs).not.toHaveBeenCalled()
   })
 
   // ── Entry points from Chat and Tasks ──

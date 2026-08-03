@@ -1,5 +1,5 @@
 import React from 'react'
-import type { ChatSession, Profile, Project, User, View } from '../../types'
+import type { ChatSession, FileTarget, Profile, Project, User, View } from '../../types'
 import { Sidebar } from './Sidebar'
 import { MobileTopbar } from './MobileTopbar'
 import { SearchModal } from './SearchModal'
@@ -77,6 +77,11 @@ export function AppShell(props: {
   projectLockedReason?: string
   /** Project-bound tools stay hidden until a deep Task and shell Project agree. */
   projectToolsAvailable?: boolean
+  /**
+   * Opening a file from the dock browser (#145): the shell owner decides which
+   * main-window surface answers, so the dock never grows a viewer of its own.
+   */
+  onOpenFile?: (slug: string, path: string, target?: FileTarget) => void
   mode?: ShellMode
   onModeChange?: (mode: ShellMode) => void
 }) {
@@ -328,9 +333,11 @@ export function AppShell(props: {
       {!delegateMode && <ToolDock
         token={props.token}
         project={props.activeProject}
+        projects={props.projects}
         available={props.projectToolsAvailable !== false}
         onOpenSettings={() => props.onSelectView('settings')}
         onOpenChange={setToolOpen}
+        onOpenFile={props.onOpenFile}
       />}
       {!delegateMode && searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onOpenDesign={props.onOpenDesign} onSelectProject={props.onOpenProject ?? props.onSelectProject} onSelectView={props.onSelectView} />}
       {!delegateMode && <CoreTour token={props.token} />}
