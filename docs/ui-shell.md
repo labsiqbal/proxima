@@ -544,7 +544,13 @@ surface answers:
 
 Both surfaces name where the way back leads: **← Gallery**, or **← Record** when
 the artifact was opened from a deliverable record; returning puts focus back on
-the card or row that opened it. Neither surface closes on Escape - they are
+the card or row that opened it. That control **leads the toolbar row on both
+surfaces** - viewer and editor alike, at every width - because it is the same
+back affordance the shell's own chrome Back and every detail header use, and a
+back control that moves depending on which surface you are on is one the eye has
+to hunt for. It is deliberately *not* a pane's **Close**: the Wiki destination's
+note pane and the dock's file editor still trail their actions with one, since
+dismissing a pane is not leaving a surface (#159). Neither surface closes on Escape - they are
 main-window content, not overlays - and neither traps focus. Escape still
 belongs to the layers that ARE overlays, and while one of those is up inside the
 viewer (the Mermaid whiteboard, the active-preview consent alert) the viewer

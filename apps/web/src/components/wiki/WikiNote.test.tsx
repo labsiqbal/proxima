@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { FsAdapter } from '../../api/fsAdapter'
@@ -96,5 +96,20 @@ describe('WikiNote as a plain document editor', () => {
     render(<WikiNote fs={mockFs('body')} path="reports/plan.md" closeLabel="← Gallery" onClose={onClose} />)
     await user.click(await screen.findByRole('button', { name: '← Gallery' }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  // #159 moved the way back to the head of the row - but only when the control
+  // IS a way back. The Wiki destination opens this note in a pane, and a pane's
+  // Close stays where a Close belongs: last, with the other actions.
+  it('keeps a pane Close with the trailing actions', async () => {
+    render(<WikiNote fs={mockFs('body')} path="reports/plan.md" onClose={() => {}} />)
+    const head = document.querySelector('.wiki-note-head') as HTMLElement
+    const controls = await waitFor(() => {
+      const found = within(head).getAllByRole('button')
+      expect(found.length).toBeGreaterThan(1)
+      return found
+    })
+    expect(controls[0]).toHaveAccessibleName('Edit')
+    expect(controls[controls.length - 1]).toHaveTextContent('Close')
   })
 })

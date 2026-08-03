@@ -2282,8 +2282,23 @@ button:disabled {
 	padding: var(--space-2) var(--space-3);
 	border-bottom: 1px solid var(--ui-stroke-tertiary, #e5e7eb);
 }
+.file-editor-head > strong {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 .file-editor-head button {
 	margin-left: var(--space-2);
+}
+/* Same rule as `.wiki-note-back`: a back control leads the row, so it takes no
+   left margin and never shrinks (#159). */
+.file-editor-head > .file-editor-back {
+	flex: 0 0 auto;
+	margin-left: 0;
+	margin-right: var(--space-2);
+	white-space: nowrap;
 }
 .file-editor-retain-banner {
 	flex: 0 0 auto;
@@ -4800,6 +4815,12 @@ button:disabled {
 .wiki-note-head > div:last-child {
 	display: flex;
 	gap: 6px;
+}
+/* A way back out of a main-window surface leads the row, next to the shell's own
+   Back, instead of trailing the actions like a pane's Close (#159). */
+.wiki-note-back {
+	flex: 0 0 auto;
+	white-space: nowrap;
 }
 .wiki-preview {
 	flex: 1;

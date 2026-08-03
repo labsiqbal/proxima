@@ -35,6 +35,7 @@ export function FileEditor({
   onClose,
   closeLabel = 'Close',
   closeTitle,
+  closeAs = 'close',
   autoFocus = false,
   onDirtyChange,
 }: {
@@ -46,6 +47,14 @@ export function FileEditor({
   /** The close control doubles as the way back out of a main-window editor. */
   closeLabel?: string
   closeTitle?: string
+  /**
+   * What that control IS, which decides where it sits (#159). A `close`
+   * dismisses a pane and stays with the other actions on the right; a `back`
+   * leaves a main-window surface, so it leads the row like every other back
+   * affordance in the app (chrome Back, `BackButton`, the artifact viewer's
+   * `← Gallery`).
+   */
+  closeAs?: 'close' | 'back'
   /** Put the caret in the document on mount - the editor IS the surface. */
   autoFocus?: boolean
   onDirtyChange?: (dirty: boolean) => void
@@ -146,10 +155,19 @@ export function FileEditor({
           : status === 'loading'
             ? 'Loading…'
             : status
+  const closeButton = <button
+    className={`ghost-button${closeAs === 'back' ? ' file-editor-back' : ''}`}
+    onClick={() => void requestClose()}
+    disabled={status === 'saving'}
+    title={closeTitle}
+    aria-label={closeTitle}
+  >{closeLabel}</button>
+
   return <div className={`file-editor${retained ? ' file-editor-retained' : ''}`}>
     <div className="file-editor-head">
+      {closeAs === 'back' && closeButton}
       <strong title={displayPath}>{name}{dirty ? ' •' : ''}</strong>
-      <div>{write && <button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button>}<button className="ghost-button" onClick={() => void requestClose()} disabled={status === 'saving'} title={closeTitle} aria-label={closeTitle}>{closeLabel}</button></div>
+      <div>{write && <button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button>}{closeAs === 'close' && closeButton}</div>
     </div>
     {retained && <div className="file-editor-retain-banner">Unsaved project edits · inspection tree stays available</div>}
     {status === 'loading'

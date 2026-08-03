@@ -16,7 +16,10 @@ import { fileKind } from './fileKind'
 // - anything else text → `FileEditor` (CodeMirror, language-aware, ⌘/Ctrl+S).
 // Both editors already guard unsaved bytes on close, so the way back cannot
 // silently drop an edit, and both take focus so "editable immediately" is true
-// for the keyboard too.
+// for the keyboard too. Opened from here their close control is a way BACK out
+// of a main-window surface, not a pane dismissal, so it is handed `closeAs`
+// and leads the toolbar row - the same position the viewer's `← Gallery`,
+// the app viewport's, and the shell's own chrome Back take (#159).
 //
 // Media, data, and pages are NOT documents in this sense: they keep the viewer
 // and its renderers, and reach this editor through the viewer's "Edit source"
@@ -58,6 +61,7 @@ export function DocumentEditor({ token, slug, path, target, backLabel = 'Back', 
             autoFocus
             closeLabel={closeLabel}
             closeTitle={closeTitle}
+            closeAs="back"
             onClose={onClose}
           />
         : <FileEditor
@@ -68,6 +72,7 @@ export function DocumentEditor({ token, slug, path, target, backLabel = 'Back', 
             autoFocus
             closeLabel={closeLabel}
             closeTitle={closeTitle}
+            closeAs="back"
             onClose={onClose}
           />}
     </React.Suspense>

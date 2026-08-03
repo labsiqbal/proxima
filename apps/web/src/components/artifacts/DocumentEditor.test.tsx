@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { projectFs } from '../../api/fsAdapter'
@@ -63,5 +63,24 @@ describe('DocumentEditor', () => {
     expect(back).toHaveTextContent('← Gallery')
     await user.click(back)
     expect(onClose).toHaveBeenCalled()
+  })
+
+  // #159: a way back out of a main-window surface leads its toolbar row, the
+  // position every other back affordance in the app takes (chrome Back, the
+  // artifact viewer's ← Gallery, the app viewport's). It is not a pane Close
+  // trailing the actions, which is where both editors used to put it.
+  it.each([
+    ['markdown', 'reports/plan.md', '.wiki-note-head'],
+    ['text', 'notes/todo.txt', '.file-editor-head'],
+  ])('leads the %s editor toolbar with the way back', async (_kind, path, head) => {
+    render(<DocumentEditor token="t" slug="alpha" path={path} backLabel="Gallery" onClose={() => {}} />)
+    const bar = await waitFor(() => {
+      const found = document.querySelector(head)
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    const controls = within(bar).getAllByRole('button')
+    expect(controls[0]).toHaveAccessibleName('Back to gallery')
+    expect(within(bar).getByRole('button', { name: 'Save' })).toBeInTheDocument()
   })
 })
