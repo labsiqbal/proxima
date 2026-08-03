@@ -48,6 +48,7 @@ Database docs update themselves — see [Keeping docs fresh](#keeping-docs-fresh
 | [evidence/scheduled-workflow-trust/README.md](evidence/scheduled-workflow-trust/README.md) | Disposable real-browser scheduled-workflow trust pass with stable before/after PNGs (missing binding refusal and Run now exact job) | `npm run test:e2e:schedules` (assertions); add `--screenshots docs/evidence/scheduled-workflow-trust` to regenerate captures |
 | [evidence/master-desk-chat-surface/README.md](evidence/master-desk-chat-surface/README.md) | Disposable real-browser before/after for the Delegate Master desk becoming a chat surface, plus its tightened rail, at desktop and narrow widths in both themes (#152) | by hand (recipe in that README) |
 | [evidence/collapsed-sidebar-rail/README.md](evidence/collapsed-sidebar-rail/README.md) | Disposable real-browser before/after for the collapsed Work sidebar becoming one tile column, with measured geometry, in three themes (#153) | by hand (recipe in that README) |
+| [evidence/mobile-shell-and-composer/README.md](evidence/mobile-shell-and-composer/README.md) | Disposable real-browser before/after for Delegate collapse parity, the ten-item 390px phone inventory in both modes, and the floating Master trigger clearing the composer, with measured geometry (#154) | by hand (recipe in that README) |
 
 **Operations & contributing:** [installation.md](installation.md) ·
 [backup.md](backup.md) · [development-tools.md](development-tools.md) ·
