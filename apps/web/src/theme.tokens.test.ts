@@ -5,13 +5,13 @@ import { describe, expect, it } from 'vitest'
 import { THEMES } from './theme'
 
 // #155. A theme preset is only a variable override, so a token the dark preset
-// forgets keeps its LIGHT value — which is how every danger/warning/success
+// forgets keeps its LIGHT value - which is how every danger/warning/success
 // panel came to render a near-white card on a dark app. The two blocks live
 // ~11k lines apart in styles.css, so parity is asserted here instead of being
 // eyeballed: any semantic token that :root pins to a literal must be re-pinned
 // by the dark preset. Tokens whose light value is itself a var() reference
 // (--ui-danger-fill, --ui-error-text) already derive from one that is covered,
-// so they are exempt — the dark preset may still override them, and does.
+// so they are exempt - the dark preset may still override them, and does.
 const stylesSource = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), 'styles.css'),
   'utf8',

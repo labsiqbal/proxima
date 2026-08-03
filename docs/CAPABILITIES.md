@@ -2143,13 +2143,13 @@ A theme is only a variable override, so all six presets share one **semantic
 palette**: danger, warning, and success each carry a signal hue (dots, borders,
 icons), a tint for the panel it fills, a border, and one or two ink steps for the
 text on that tint. The five light-surfaced presets (Light, Ocean, Violet, Sunset,
-Forest) inherit that palette from `:root` unchanged — overriding it there would
+Forest) inherit that palette from `:root` unchanged - overriding it there would
 fork the palette rather than theme it. Dark restates every one of those tokens and
 derives its tints by mixing the hue *into* `--ui-surface`, so they follow the dark
 surface instead of being pinned to a second hex. Before that (#155) the dark preset
-carried only `--ui-warning-text`, so every error/warning/success panel — Master
+carried only `--ui-warning-text`, so every error/warning/success panel - Master
 error banners, toasts, app-runner refusal cards, migration messages, review and
-job badges, diff lines — kept the light `#fef2f2`-family tints and rendered as
+job badges, diff lines - kept the light `#fef2f2`-family tints and rendered as
 near-white cards on a dark app. `apps/web/src/theme.tokens.test.ts` fails the
 build if the dark preset ever drops one of them again.
 
