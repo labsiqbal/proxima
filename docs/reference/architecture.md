@@ -1805,6 +1805,15 @@ title, subtitle, entered value,
 placeholder, error, button, and input/button focus styles use theme tokens that meet
 WCAG AA across every canonical preset.
 
+The same rule governs status surfaces generally. `--ui-danger*`, `--ui-warning*`, and
+`--ui-success*` are one palette declared in `:root` and re-declared by the dark preset,
+which mixes its tints from the hue into `--ui-surface` so they track the dark surface
+rather than a pinned hex. Components never branch on theme and never inline a status
+colour; a destructive fill that has to *carry* an `--ui-on-accent` label uses
+`--ui-danger-fill`, the danger twin of `--ui-accent-fill`, because on a dark surface a
+single hue cannot both be readable text and sit under a readable white label.
+`apps/web/src/theme.tokens.test.ts` enforces the parity.
+
 Project link/create failures use structured API details carrying the owning request
 field. The fetch client preserves FastAPI validation locations and explicit
 selected `path`/`parent`, child `folder`, and display `name`/`slug` ownership.
