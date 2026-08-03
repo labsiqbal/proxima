@@ -593,10 +593,11 @@ semantics for paths changed by a Chat turn and cascades with the session;
 `attention_items` is the single notification ledger behind both the ephemeral header
 feed and the persistent Inbox destination (#158): durable Master, budget, and
 permission needs-you items, plus mirrored copies of the review/satpam/script items the
-attention API derives from other tables and informational `task_outcome` rows for
-terminal Task transitions. `read_at` (seen) and `status` (still needs you) are
+attention API derives from other tables, informational `task_outcome` rows for
+terminal Task transitions, and bounded `client_error` rows filed by the browser's own
+error surface. `read_at` (seen) and `status` (still needs you) are
 independent, and `item_key` is the one public id space shared by native and projected
-rows. `notifications.py` owns settling, projection, and read state;
+rows. `notifications.py` owns settling, projection, acknowledgement, and read state;
 `master_decisions` stores each non-approval owner question, bounded response contract,
 pending/deferred/resolved state, response attribution, and exact links to its
 Attention row, requesting Task, origin Master message, Task response message, and
