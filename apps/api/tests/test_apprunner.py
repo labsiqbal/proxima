@@ -2765,12 +2765,20 @@ def test_terminate_process_tree_sigkills_setsid_writers_not_just_launcher(
         except ChildProcessError:
             pass
         for pid in (launcher, writer_pid):
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                pass
-            else:
-                raise AssertionError(f"pid {pid} survived tree terminate")
+            # The writer is a grandchild in its own session, so after the kill
+            # lands it still has to be reparented and reaped before its pid
+            # disappears - `os.kill(pid, 0)` succeeds on a zombie. Poll for the
+            # contract (the tree dies) instead of asserting on the scheduler
+            # winning that race, which it does not on a loaded CI runner.
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(f"pid {pid} survived tree terminate")
+                time.sleep(0.02)
     finally:
         for pid in (launcher,):
             try:
