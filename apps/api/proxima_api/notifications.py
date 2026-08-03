@@ -69,6 +69,10 @@ _DEFAULT_INBOX_LIMIT = 60
 _MAX_INBOX_LIMIT = 200
 _MAX_BODY = 2000
 
+# Bounds on what the browser may file about itself (see record_client_error).
+MAX_CLIENT_ERROR_TITLE = 160
+MAX_CLIENT_ERRORS_PER_DAY = 50
+
 
 def _json(value: Any, fallback: Any) -> Any:
     try:
@@ -393,8 +397,7 @@ def ensure_task_outcome_watermark(conn) -> str:
     return now
 
 
-MAX_CLIENT_ERROR_TITLE = 160
-MAX_CLIENT_ERRORS_PER_DAY = 50
+# ── Browser-side failures ─────────────────────────────────────────────────────
 
 
 def record_client_error(
