@@ -586,6 +586,29 @@ ACP tool events to trigger a bounded before/after path journal. Assistant replie
 changed files show **Restore N changed paths**; preview lists each path and warns about
 active Master work before confirmation. The journal cascades when its session closes.
 
+**Inbox and notifications (#157/#158):** `attention_items` is the one notification
+ledger - the Inbox extends it rather than forking a second store beside it. Two
+independent axes: `read_at` answers *has the owner seen this* and `status` keeps meaning
+*does this still need them*. `GET /api/attention` is the ephemeral header feed (unread
+rows only, newest first, `count` = unread); `GET /api/inbox` is the persistent
+destination (everything, with `?unread=1`, `limit`, and a `before` cursor).
+`POST /api/inbox/{id}/read` toggles one row, `POST /api/inbox/read-all` clears the
+badge, and `POST /api/attention/{id}/dismiss` acknowledges a header item - including
+navigate-only kinds like Master budget that `/act` refuses. Dismissing is *seen*, not
+*done*: the row keeps its open status, its actions, and its place in the Inbox.
+Acting on an item marks it read too. Items the attention route derives from other
+tables (job reviews, node-script trust, satpam restarts) are mirrored into the ledger
+under the same `job:`/`script:`/`satpam:` ids, so the Inbox is a strict superset of
+everything the header ever showed. Terminal Task transitions are projected as
+informational `task_outcome` notifications carrying the failure detail (rejected
+reason, failed step, failed node, or run error) in their body, watermarked at the
+moment the ledger started listening so an upgrade never replays old history. Work that
+the system settles (review approved, decision resolved, restart run) stops counting
+toward the badge; informational rows stay unread until the owner reads them. A Master
+budget notice clears itself once Unattended is switched back on - the sentence it
+carries no longer describes reality - and its `source_key` now names the budget cycle,
+so a second stop notifies again instead of being swallowed by the first row.
+
 **Attention:** the shell badge calls one `/api/attention` shape spanning simple final
 job reviews, complex diff reviews, pending satpam restarts, durable tool permissions,
 and Master decision/budget items. Non-decision rows deep-link to their owning

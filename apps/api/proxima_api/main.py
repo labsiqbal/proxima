@@ -22,6 +22,7 @@ from .container_registry import (
     refresh_registry_projections,
 )
 from . import layout_map
+from . import notifications
 from .acp import AcpManager
 from .apprunner import AppManager
 from .preview_proxy import (
@@ -313,6 +314,8 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     run_migrations(
         app.state.db, cfg.get("database_path")
     )  # versioned migrations (backs up before applying)
+    # The Inbox only reports work that ends from now on (#158).
+    notifications.ensure_task_outcome_watermark(app.state.db)
     assert_master_persistence(app.state.db)
     assert_master_projection_ledger(app.state.db)
     assert_task_projection_outbox(app.state.db)

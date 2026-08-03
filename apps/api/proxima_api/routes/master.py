@@ -12,6 +12,7 @@ from .. import (
     container_registry,
     master_decisions,
     master_focus,
+    notifications,
     refusals,
     satpam,
     turn_restore,
@@ -862,6 +863,14 @@ def register(app, deps):
         return result
 
     def _attention_items(user: dict[str, Any]) -> list[dict[str, Any]]:
+        """The live list: work that needs the owner *right now*.
+
+        This is the Master desk's work panel and the source the Inbox ledger
+        mirrors. The header popover reads the ledger instead (unread only), so
+        an item the owner has already seen stops shouting - see
+        ``notifications`` for the two-axis model.
+        """
+
         def run_projection_for(job_id: Any) -> dict[str, Any] | None:
             try:
                 normalized_job_id = _as_int(job_id)
@@ -1042,10 +1051,103 @@ def register(app, deps):
         )
         return normalized_items
 
+    def _refresh_ledger(user: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """Settle stale items, mirror the live list, and return it by id."""
+        notifications.settle(db())
+        live = {item["id"]: item for item in _attention_items(user)}
+        notifications.record(db(), live.values())
+        return live
+
+    def _ledger_payload(
+        rows: list[dict[str, Any]], live: dict[str, dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Overlay the live state (fresh title, actions, projections) on history."""
+        merged: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            current = live.get(item["id"])
+            if current is not None:
+                for key in (
+                    "title",
+                    "target",
+                    "inline_ok",
+                    "actions",
+                    "run_projection",
+                    "decision",
+                ):
+                    if key in current:
+                        item[key] = current[key]
+            merged.append(item)
+        return canonicalize_api_timestamps(merged)
+
     @app.get("/api/attention")
     def get_attention(user: dict[str, Any] = Depends(current_user)):
-        items = _attention_items(user)
-        return {"items": items, "count": len(items)}
+        """Ephemeral header notifications: unread only, newest first."""
+        live = _refresh_ledger(user)
+        rows = notifications.list_items(db(), unread_only=True, limit=30)
+        return {
+            "items": _ledger_payload(rows, live),
+            "count": notifications.unread_count(db()),
+        }
+
+    @app.get("/api/inbox")
+    def get_inbox(
+        unread: int = 0,
+        limit: int = 60,
+        before: int | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """The Inbox destination: every notification, read and unread."""
+        live = _refresh_ledger(user)
+        rows = notifications.list_items(
+            db(),
+            unread_only=bool(unread),
+            limit=limit,
+            before=before,
+        )
+        items = _ledger_payload(rows, live)
+        return {
+            "items": items,
+            "unread": notifications.unread_count(db()),
+            "next_before": items[-1]["seq"] if len(items) >= max(1, limit) else None,
+        }
+
+    @app.post("/api/inbox/{item_id:path}/read")
+    def set_inbox_read(
+        item_id: str,
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """Mark one notification read or unread. The row itself never moves."""
+        wanted = True if payload is None else bool(payload.get("read", True))
+        if not notifications.set_read(db(), item_id, wanted):
+            raise HTTPException(status_code=404, detail="notification not found")
+        return {"ok": True, "id": item_id, "read": wanted}
+
+    @app.post("/api/inbox/read-all")
+    def read_all_inbox(
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """Clear the unread badge without discarding a single notification."""
+        return {"ok": True, "read": notifications.mark_all_read(db())}
+
+    @app.post("/api/attention/{item_id:path}/dismiss")
+    def dismiss_attention(
+        item_id: str,
+        payload: dict[str, Any] | None = None,
+        user: dict[str, Any] = Depends(current_user),
+    ):
+        """Acknowledge a header item (#157).
+
+        Dismissing is *seen*, not *done*: navigate-only items (Master budget,
+        Ops migration) leave the header immediately, and anything that still
+        needs a decision keeps its open status and its actions in the Inbox.
+        """
+        _refresh_ledger(user)
+        if not notifications.set_read(db(), item_id, True):
+            raise HTTPException(status_code=404, detail="attention item not found")
+        return {"ok": True, "id": item_id}
 
     @app.get("/api/master/decisions/{decision_id}")
     def get_master_decision(
@@ -1092,6 +1194,12 @@ def register(app, deps):
             )
         except master_decisions.MasterDecisionError as exc:
             raise _decision_http_error(exc) from exc
+
+    def _acted(item_id: str, action: str) -> dict[str, Any]:
+        # Acting on an item is the strongest possible "I have seen this", so it
+        # leaves the ephemeral header even when the row lives on in the Inbox.
+        notifications.set_read(db(), item_id, True)
+        return {"ok": True, "id": item_id, "action": action}
 
     @app.post("/api/attention/{item_id:path}/act")
     def act_attention(
@@ -1144,7 +1252,7 @@ def register(app, deps):
                 "UPDATE attention_items SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (attention_id,),
             )
-            return {"ok": True, "id": item_id, "action": action}
+            return _acted(item_id, action)
         if item_id.startswith("job:"):
             job_id = _as_int(item_id.split(":", 1)[1])
             current = next(
@@ -1168,7 +1276,7 @@ def register(app, deps):
                 raise HTTPException(
                     status_code=409, detail="job review service is unavailable"
                 )
-            return {"ok": True, "id": item_id, "action": action}
+            return _acted(item_id, action)
         if item_id.startswith("script:"):
             parts = item_id.split(":", 2)
             if len(parts) != 3 or action != "approve":
@@ -1194,7 +1302,7 @@ def register(app, deps):
                 ),
                 user,
             )
-            return {"ok": True, "id": item_id, "action": action}
+            return _acted(item_id, action)
         if item_id.startswith("satpam:"):
             intervention_id = _as_int(item_id.split(":", 1)[1])
             row = (
@@ -1221,5 +1329,5 @@ def register(app, deps):
                 )
             else:
                 raise HTTPException(status_code=400, detail="action is not available")
-            return {"ok": True, "id": item_id, "action": action}
+            return _acted(item_id, action)
         raise HTTPException(status_code=404, detail="attention item not found")

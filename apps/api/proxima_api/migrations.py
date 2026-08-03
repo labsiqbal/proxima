@@ -6602,6 +6602,60 @@ def _rework_artifact_record_paths(conn: sqlite3.Connection) -> None:
                     )
 
 
+def _add_inbox_ledger(conn: sqlite3.Connection) -> None:
+    # Inbox destination (#158): attention_items becomes the one notification
+    # ledger instead of a second store being forked next to it. `read_at` is the
+    # "has the owner seen it" axis the ephemeral header filters on; `status`
+    # keeps meaning "does it still need them". Existing rows are seeded unread so
+    # nothing an owner has not acknowledged silently disappears from the header.
+    #
+    # `item_key` is the stable public id. Native rows get "attention:{id}"; rows
+    # projected from jobs / node scripts / satpam interventions carry the same
+    # synthetic id the attention route has always exposed, so one id space serves
+    # the header, the Inbox, and /api/attention/{id}/act.
+    cols = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(attention_items)").fetchall()
+    }
+    if not cols:
+        return
+    additions = (
+        ("item_key", "TEXT"),
+        ("severity", "TEXT NOT NULL DEFAULT 'action'"),
+        ("body", "TEXT NOT NULL DEFAULT ''"),
+        ("detail_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("requires_action", "INTEGER NOT NULL DEFAULT 1"),
+        ("read_at", "TEXT"),
+    )
+    for name, decl in additions:
+        if name not in cols:
+            conn.execute(f"ALTER TABLE attention_items ADD COLUMN {name} {decl}")
+    conn.execute(
+        "UPDATE attention_items SET item_key = 'attention:' || id "
+        "WHERE item_key IS NULL OR item_key = ''"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_attention_item_key "
+        "ON attention_items(item_key) WHERE item_key IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_attention_unread "
+        "ON attention_items(read_at, created_at DESC)"
+    )
+    # Producers keep writing plain INSERTs; the trigger stamps the public id so
+    # no call site has to learn about the ledger to join it.
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS attention_items_item_key "
+        "AFTER INSERT ON attention_items WHEN NEW.item_key IS NULL BEGIN "
+        "UPDATE attention_items SET item_key = 'attention:' || NEW.id "
+        "WHERE id = NEW.id; END"
+    )
+    # The "only notify about work that ends after the ledger exists" watermark is
+    # set lazily on the first Inbox read (see notifications.record_task_outcomes)
+    # rather than here: this migration also runs against partial legacy schemas
+    # that have no app_settings table yet.
+
+
 MIGRATIONS: list[Migration] = [
     (1, "add messages.author (chat sender / agent name)", _add_messages_author),
     (2, "add profiles.runner_id", _add_profiles_runner_id),
@@ -6887,6 +6941,11 @@ MIGRATIONS: list[Migration] = [
         62,
         "drop dead users.role column (single-user: one principal, no roles)",
         _drop_users_role,
+    ),
+    (
+        63,
+        "extend attention_items into the Inbox notification ledger (#158)",
+        _add_inbox_ledger,
     ),
 ]
 

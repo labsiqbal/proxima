@@ -25,18 +25,24 @@ class MasterSupervisor:
         self._tick_lock = threading.Lock()
 
     def _stop_for_budget(self, conn, origin_master_session_id: int, reason: str) -> None:
+        # The source_key carries the budget cycle this stop belongs to. Without
+        # it, `INSERT OR IGNORE` against a UNIQUE source_key silently swallowed
+        # every later stop for the same session and reason - the owner saw the
+        # very first notice forever and never heard about the next one (#157).
+        cycle = app_settings.get_setting(conn, "master.budget.started_at") or ""
+        source_key = f"master-budget:{origin_master_session_id}:{reason}:{cycle}"
         app_settings.set_master_settings(conn, unattended=False)
         conn.execute(
             "INSERT OR IGNORE INTO attention_items(kind, title, target_json, inline_ok, status, source_key) "
             "VALUES ('master_budget', 'Master unattended work stopped', ?, 0, 'open', ?)",
             (
                 json.dumps({"view": "master", "section": "budgets", "origin_master_session_id": origin_master_session_id, "reason": reason}),
-                f"master-budget:{origin_master_session_id}:{reason}",
+                source_key,
             ),
         )
         row = conn.execute(
             "SELECT id FROM attention_items WHERE source_key = ?",
-            (f"master-budget:{origin_master_session_id}:{reason}",),
+            (source_key,),
         ).fetchone()
         if row and self.app.state.master_projection is not None:
             self.app.state.master_projection.safe_project_attention(

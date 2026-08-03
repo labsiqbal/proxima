@@ -590,8 +590,13 @@ by the database in the same transaction that completes an Ops Task;
 state plus git/worktree refs (never a DB backup or filesystem zip);
 `turn_file_journals` stores bounded before-content plus versioned filesystem-root
 semantics for paths changed by a Chat turn and cascades with the session;
-`attention_items` stores durable Master, budget, and
-permission needs-you items while review/satpam items are projected into the same API;
+`attention_items` is the single notification ledger behind both the ephemeral header
+feed and the persistent Inbox destination (#158): durable Master, budget, and
+permission needs-you items, plus mirrored copies of the review/satpam/script items the
+attention API derives from other tables and informational `task_outcome` rows for
+terminal Task transitions. `read_at` (seen) and `status` (still needs you) are
+independent, and `item_key` is the one public id space shared by native and projected
+rows. `notifications.py` owns settling, projection, and read state;
 `master_decisions` stores each non-approval owner question, bounded response contract,
 pending/deferred/resolved state, response attribution, and exact links to its
 Attention row, requesting Task, origin Master message, Task response message, and
@@ -924,7 +929,9 @@ Running jobs between their job claim and first run commit count as reservations,
 ready graph branches share the same global limit. The optional token value is stored
 and shown, but current ACP events expose no usage counter, so turn + wall-clock are
 the enforced Master budgets today. Budget exhaustion disables unattended mode and
-creates a `master_budget` attention item.
+creates a `master_budget` attention item, keyed by the budget cycle it stopped so a
+later stop notifies again. The item clears itself once Unattended is switched back on,
+and can be acknowledged from the header at any time (#157).
 Git commit/push/PR remains ordinary job work through the existing BYO environment.
 Destructive install administration is not in the unattended allowlist.
 

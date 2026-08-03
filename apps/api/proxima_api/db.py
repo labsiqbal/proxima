@@ -1498,6 +1498,13 @@ CREATE TABLE IF NOT EXISTS turn_file_journals (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_turn_file_journals_session ON turn_file_journals(session_id, id);
+-- The single notification ledger (#158). Every notification the owner can see
+-- is a row here: items that need a decision (status 'open', requires_action 1)
+-- and purely informational ones (task outcomes, errors). Two independent axes:
+-- `read_at` answers "has the owner seen it" (the ephemeral header shows unread
+-- rows only) and `status` answers "does it still need them" (the Inbox keeps
+-- the row either way). `item_key` is the stable public identifier, so derived
+-- items projected from jobs/scripts/satpam share one id space with native rows.
 CREATE TABLE IF NOT EXISTS attention_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL,
@@ -1508,9 +1515,27 @@ CREATE TABLE IF NOT EXISTS attention_items (
   status TEXT NOT NULL DEFAULT 'open',
   source_key TEXT UNIQUE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  resolved_at TEXT
+  resolved_at TEXT,
+  item_key TEXT,
+  severity TEXT NOT NULL DEFAULT 'action',
+  body TEXT NOT NULL DEFAULT '',
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  requires_action INTEGER NOT NULL DEFAULT 1,
+  read_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_attention_item_key
+  ON attention_items(item_key) WHERE item_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_attention_unread
+  ON attention_items(read_at, created_at DESC);
+-- Producers keep writing plain INSERTs; the trigger stamps the public id so no
+-- call site has to learn about the ledger in order to join it.
+CREATE TRIGGER IF NOT EXISTS attention_items_item_key
+AFTER INSERT ON attention_items
+WHEN NEW.item_key IS NULL
+BEGIN
+  UPDATE attention_items SET item_key = 'attention:' || NEW.id WHERE id = NEW.id;
+END;
 CREATE TABLE IF NOT EXISTS master_decisions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   attention_item_id INTEGER NOT NULL UNIQUE REFERENCES attention_items(id) ON DELETE CASCADE,

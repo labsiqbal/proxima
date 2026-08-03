@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-SQLite (WAL mode). 57 tables. Applied migration version: **62**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
+SQLite (WAL mode). 57 tables. Applied migration version: **63**. This is the exact shape a fresh install gets from `init_db` + versioned migrations. Per-install data lives at `~/.local/share/proxima/proxima.db` (outside the repo).
 
 
 ## Tables
@@ -70,8 +70,14 @@ SQLite (WAL mode). 57 tables. Applied migration version: **62**. This is the exa
 | `source_key` | TEXT | yes |  |  |
 | `created_at` | TEXT | NO | `CURRENT_TIMESTAMP` |  |
 | `resolved_at` | TEXT | yes |  |  |
+| `item_key` | TEXT | yes |  |  |
+| `severity` | TEXT | NO | `'action'` |  |
+| `body` | TEXT | NO | `''` |  |
+| `detail_json` | TEXT | NO | `'{}'` |  |
+| `requires_action` | INTEGER | NO | `1` |  |
+| `read_at` | TEXT | yes |  |  |
 
-**Indexes:** `idx_attention_status` - (status, created_at)
+**Indexes:** `idx_attention_unread` - (read_at, created_at); `uq_attention_item_key` - UNIQUE (item_key); `idx_attention_status` - (status, created_at)
 
 
 ### audit_log
@@ -1026,4 +1032,4 @@ SQLite (WAL mode). 57 tables. Applied migration version: **62**. This is the exa
 
 
 ---
-_Generated 2026-08-02 22:22 UTC._
+_Generated 2026-08-03 15:03 UTC._
