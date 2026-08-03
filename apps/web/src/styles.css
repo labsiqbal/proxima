@@ -5696,6 +5696,14 @@ div.result-media {
 	padding: var(--space-4) var(--space-5);
 	border-bottom: 1px solid var(--ui-stroke-tertiary);
 }
+/* Scope + Refresh sit at the far end, the way the Tasks head puts its action
+   there, so the tabs stay next to the title. */
+.artifacts-head-controls {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+}
 .artifacts-scope {
 	font-size: var(--text-sm);
 }
@@ -5785,7 +5793,6 @@ div.result-media {
 	overflow: hidden;
 	border-radius: var(--radius-sm);
 	background: var(--ui-surface-subtle);
-	container-type: size;
 }
 .artifacts-thumb-img {
 	width: 100%;
@@ -5814,10 +5821,18 @@ div.result-media {
 	font-style: normal;
 	line-height: 1;
 }
+/* A design keeps its own artboard ratio, centred in the card's frame. Same
+   recipe as the Design gallery: `.ds-mini` carries the artboard aspect ratio
+   inline, so it needs one definite dimension (height) to resolve against. */
 .artifacts-thumb-design {
-	display: block;
+	display: grid;
+	place-items: center;
 	width: 100%;
 	height: 100%;
+}
+.artifacts-thumb-design .ds-mini {
+	height: 100%;
+	width: auto;
 }
 .artifacts-thumb-pending {
 	display: block;
@@ -5862,6 +5877,8 @@ div.result-media {
 .artifacts-row {
 	position: relative;
 	display: flex;
+	align-items: center;
+	gap: var(--space-2);
 }
 .artifacts-row-open {
 	flex: 1;
@@ -5889,11 +5906,9 @@ div.result-media {
 	color: var(--ui-text-tertiary);
 }
 /* Deliverable badge (#139): an artifact the ledger knows carries its record's
-   approval status, and clicking it opens that record. */
+   approval status, and clicking it opens that record. It floats over a card's
+   thumbnail, but rides beside a document row so it never covers its kind. */
 .artifacts-badge {
-	position: absolute;
-	top: var(--space-3);
-	right: var(--space-3);
 	display: inline-flex;
 	align-items: center;
 	gap: var(--space-1);
@@ -5905,6 +5920,14 @@ div.result-media {
 	background: var(--ui-surface);
 	border: 1px solid var(--ui-stroke-tertiary);
 	cursor: pointer;
+}
+.artifacts-card .artifacts-badge {
+	position: absolute;
+	top: var(--space-3);
+	right: var(--space-3);
+}
+.artifacts-row .artifacts-badge {
+	flex: 0 0 auto;
 }
 .artifacts-badge:hover {
 	color: var(--ui-text-primary);

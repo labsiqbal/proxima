@@ -41,4 +41,20 @@ describe('MiniPreview image targets', () => {
       '/api/target-preview/identity/ops/42/visual.png',
     )
   })
+
+  it('draws nothing for an unresolvable source instead of a broken image', () => {
+    const art: Artboard = {
+      id: 'a1',
+      width: 100,
+      height: 100,
+      background: '#fff',
+      layers: [
+        { id: 'image', type: 'image', x: 0, y: 0, width: 100, height: 100, src: 'gen:pending' },
+      ],
+    }
+
+    const { container } = render(<MiniPreview art={art} resolveSrc={() => ''} />)
+
+    expect(container.querySelector('img')).toBeNull()
+  })
 })

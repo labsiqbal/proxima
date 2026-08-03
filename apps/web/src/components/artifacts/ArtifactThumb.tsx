@@ -8,7 +8,7 @@ import { useRawBlobUrl } from '../../hooks/useRawBlobUrl'
 import { MiniPreview } from '../design/MiniPreview'
 import type { Artboard } from '../design/scene'
 import type { FileTarget } from '../../types'
-import { designScenePath, typeMeta } from './archive'
+import { designAssetSrc, designScenePath, typeMeta } from './archive'
 
 // One artifact, rendered small (ADR-0043). The Artifacts gallery shows what you
 // LOOK at as a picture - designs, images, video - and leaves what you READ to a
@@ -67,8 +67,9 @@ function DesignThumb({ token, slug, artifact }: { token: string; slug: string; a
   const mediaRefs = React.useMemo(() => collectArtboardMediaRefs(art || undefined), [art])
   const mediaUrls = useProjectMediaUrls(token, slug, mediaRefs)
   const resolveSrc = React.useCallback(
-    (src: string, srcTarget?: FileTarget) => resolveProjectMediaSrc(src, srcTarget, slug, mediaUrls),
-    [slug, mediaUrls],
+    (src: string, srcTarget?: FileTarget) =>
+      resolveProjectMediaSrc(srcTarget ? src : designAssetSrc(artifact.path, src), srcTarget, slug, mediaUrls),
+    [slug, mediaUrls, artifact.path],
   )
   if (art === undefined) return <span className="artifacts-thumb-pending" aria-hidden="true" />
   if (!art) return <ArtifactGlyph type="design" />

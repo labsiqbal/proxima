@@ -378,7 +378,7 @@ use live regions, errors use alerts, and retry exposes its safety rule through
 
 Archive and Files merged into ONE destination (prune Part D, #139; decision #122), and that destination is **Artifacts** (ADR-0043): the gallery of what the project produced, with the ledger as tabs on the same surface.
 
-- **All** - the gallery. Designs, images, and video render as **thumbnails** (a design draws its first artboard from `scene.json`); documents, pages, and data render as a **list**. It is a live scan of the Container (`GET /api/projects/{slug}/artifacts`), so it shows what is on disk right now. An artifact the ledger knows carries a **deliverable badge** with its record's approval status; clicking the badge opens the full record.
+- **All** - the gallery. Designs, images, and video render as **thumbnails** (a design draws its first artboard from `scene.json`); documents, pages, and data render as a **list**. It is a live scan of the Container (`GET /api/projects/{slug}/artifacts`), so it shows what is on disk right now; that scan is capped, and the gallery says so under the last row rather than looking complete - the paginated truth is the Deliverables tab. An artifact the ledger knows carries a **deliverable badge** with its record's approval status; clicking the badge opens the full record.
 - **Deliverables** - the durable deliverable registry (T4): every agent output is a record with lineage, ONE approval status (synced with the job-review approve), and a version chain, filterable by type/status/date/search.
 - **History** - records whose file no longer exists on disk. They are records, not phantom files: the ledger's survive-deletion property, kept visible.
 

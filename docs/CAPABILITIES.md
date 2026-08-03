@@ -1807,8 +1807,8 @@ a **registry, not a scanner**: the scanner discovers files, the registry remembe
 them as durable records that survive file moves and deletion (a missing file flips
 `file_missing` on the record; the record stays). Since #139 there is no separate
 Archive destination: the ledger is the **Deliverables tab of the Artifacts
-destination** (#144). The gallery tab carries a **deliverable badge** on any
-scanned artifact the ledger knows (`GET /api/archive/badges?project=...` - the
+destination** (#144). The gallery tab is the live scan (capped, and labelled as such) and carries a
+**deliverable badge** on any scanned artifact the ledger knows (`GET /api/archive/badges?project=...` - the
 latest record per path); the **History tab** (`GET /api/archive?missing=1`) lists
 records whose file no longer exists on disk - records, not phantom files.
 

@@ -358,18 +358,20 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
           >{item.label}</button>
         ))}
       </div>
-      {globalScope
-        ? <Dropdown
-            value={filter}
-            onChange={setFilter}
-            minWidth={180}
-            options={[
-              { value: '', label: 'All projects' },
-              ...projects.map(project => ({ value: project.slug, label: project.name })),
-            ]}
-          />
-        : activeProject && <span className="artifacts-scope muted">{activeProject.name}</span>}
-      {tab === 'all' && !reveal && <button className="ghost-button" onClick={() => setReloadNonce(nonce => nonce + 1)} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>}
+      <div className="artifacts-head-controls">
+        {globalScope
+          ? <Dropdown
+              value={filter}
+              onChange={setFilter}
+              minWidth={180}
+              options={[
+                { value: '', label: 'All projects' },
+                ...projects.map(project => ({ value: project.slug, label: project.name })),
+              ]}
+            />
+          : activeProject && <span className="artifacts-scope muted">{activeProject.name}</span>}
+        {tab === 'all' && !reveal && <button className="ghost-button" onClick={() => setReloadNonce(nonce => nonce + 1)} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>}
+      </div>
     </div>
 
     {reveal

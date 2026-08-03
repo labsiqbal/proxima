@@ -37,6 +37,7 @@ what an owner sees and how the surfaces connect.
 | Tasks list / board / New task | pass (empty project honest) | `tasks-*.png`, `task-launcher.png` |
 | Recipes home / editor / schedules | pass | `workflows-home.png`, `workflow-blank-canvas.png`, `schedules.png` |
 | Projects | pass | `projects.png` |
+| Artifacts gallery (thumbnails + All/Deliverables/History tabs) | pass - #144 live pass | `artifacts-gallery.png` |
 | Archive registry (now the Artifacts Deliverables tab, #139/#144) | pass (empty) | `archive-registry.png` |
 | ArtifactViewer v2 deep review | skip - no live artifacts this pass | - |
 | Design home | pass | `design-home.png` |
@@ -55,7 +56,7 @@ what an owner sees and how the surfaces connect.
 The shell keeps primary destinations on the left, the current surface in the
 center, and technical tools on the right. Left nav is **destinations only**:
 Chat, Tasks, Workflows, Artifacts, and Design (Archive merged into Artifacts as its
-Deliverables lens, prune Part D #139; screenshots below predate the merge). There
+Deliverables tab, prune Part D #139 and #144; older screenshots below predate that). There
 is no primary-nav **New chat** row - a blank session starts from the Chat header
 control, the mobile topbar icon, or `/new`.
 
@@ -167,10 +168,15 @@ honest when no Recipe is saved yet. Trust regression captures live under
 
 ## 7. Deliverables and Projects
 
-Artifacts shows produced work as a gallery and remembers deliverables as durable
-records under its Deliverables tab (the separate Archive destination merged in,
-#139/#144). Empty registry at
-capture time:
+Artifacts shows produced work as a gallery - designs, images, and video as
+thumbnails, documents as a list - and remembers deliverables as durable records
+under its Deliverables tab (the separate Archive destination merged in,
+#139/#144). Anything the ledger knows carries its approval badge, which opens the
+record:
+
+![Artifacts gallery](screenshots/artifacts-gallery.png)
+
+The ledger itself, empty at the original capture time:
 
 ![Archive registry](screenshots/archive-registry.png)
 

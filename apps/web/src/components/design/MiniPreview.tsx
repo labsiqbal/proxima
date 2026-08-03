@@ -44,7 +44,11 @@ export function MiniPreview({ art, resolveSrc }: { art?: Artboard; resolveSrc: (
       if (l.type === 'image') {
         const im = l as ImageLayer
         const cropTransform = [rot.transform, im.cropZoom && im.cropZoom !== 1 ? `scale(${im.cropZoom})` : ''].filter(Boolean).join(' ')
-        return <img key={l.id} src={resolveSrc(l.src, l.target)} alt="" style={{ ...pos(l), ...rot, ...cssEffects(im.effects), transform: cropTransform || undefined, transformOrigin: `${im.cropX ?? 50}% ${im.cropY ?? 50}%`, height: `${l.height / H * 100}cqh`, objectFit: 'cover', objectPosition: `${im.cropX ?? 50}% ${im.cropY ?? 50}%`, borderRadius: `${(l.cornerRadius || 0) / W * 100}cqw`, opacity: l.opacity ?? 1 }} />
+        const src = resolveSrc(l.src, l.target)
+        // An unresolvable source (generated placeholder, missing media) would
+        // render as a broken-image icon; draw nothing instead.
+        if (!src) return null
+        return <img key={l.id} src={src} alt="" style={{ ...pos(l), ...rot, ...cssEffects(im.effects), transform: cropTransform || undefined, transformOrigin: `${im.cropX ?? 50}% ${im.cropY ?? 50}%`, height: `${l.height / H * 100}cqh`, objectFit: 'cover', objectPosition: `${im.cropX ?? 50}% ${im.cropY ?? 50}%`, borderRadius: `${(l.cornerRadius || 0) / W * 100}cqw`, opacity: l.opacity ?? 1 }} />
       }
       if (l.type === 'text') {
         const t = l as TextLayer

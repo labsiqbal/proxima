@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { projectFs } from '../../api/fsAdapter'
 import { ArtifactThumb, artifactKind } from './ArtifactThumb'
+import { designAssetSrc } from './archive'
 import type { Artifact } from '../../api/files'
 
 vi.mock('../../api/fsAdapter', () => ({
@@ -32,6 +33,22 @@ describe('artifactKind', () => {
     expect(artifactKind(artifact({ type: 'doc', path: 'a.md' }))).toBe('document')
     expect(artifactKind(artifact({ type: 'page', path: 'a.html' }))).toBe('document')
     expect(artifactKind(artifact({ type: 'file', path: 'a.csv' }))).toBe('document')
+  })
+})
+
+describe('designAssetSrc', () => {
+  it('rebases a scene-relative asset onto the design own artifacts location', () => {
+    // Record/artifact paths are container-relative (#138/#139); scene srcs are not.
+    expect(designAssetSrc('ops/artifacts/design/poster', 'artifacts/design/_assets/logo.webp'))
+      .toBe('ops/artifacts/design/_assets/logo.webp')
+  })
+
+  it('leaves an already-container-relative or foreign src alone', () => {
+    expect(designAssetSrc('artifacts/design/poster', 'artifacts/design/_assets/logo.webp'))
+      .toBe('artifacts/design/_assets/logo.webp')
+    expect(designAssetSrc('ops/artifacts/design/poster', 'https://example.com/a.png'))
+      .toBe('https://example.com/a.png')
+    expect(designAssetSrc('ops/artifacts/design/poster', '')).toBe('')
   })
 })
 

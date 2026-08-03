@@ -83,6 +83,20 @@ const VIDEO = /\.(mp4|webm|mov)$/i
 const HTML = /\.html?$/i
 const MD = /\.(md|markdown)$/i
 
+/** A design scene's own asset references are Area-relative and untargeted in
+ * reroute-era scenes ("artifacts/design/_assets/x.webp"), while record and
+ * artifact paths are container-relative real paths (prune #138/#139). Rebase
+ * such a src onto the design's own artifacts location so the preview endpoint
+ * finds the real file; a targeted src already names its Area and is left alone.
+ * Design Studio does the same upgrade from the layout map (`legacySrc`). */
+export function designAssetSrc(designPath: string, src: string): string {
+  if (!src || !src.startsWith('artifacts/')) return src
+  const cut = designPath.lastIndexOf('/design/')
+  const base = cut > 0 ? designPath.slice(0, cut) : ''
+  if (!base || base === 'artifacts') return src
+  return `${base}/${src.slice('artifacts/'.length)}`
+}
+
 /** Resolve the scene.json path for a design archive record (folder or file). */
 export const designScenePath = (path: string) => {
   const cleaned = path.replace(/\/+$/, '')
@@ -112,8 +126,9 @@ export function RecordPreview({ token, record, compact = false }: {
   )
   const designMediaUrls = useProjectMediaUrls(token, slug, designMediaRefs)
   const resolveDesignSrc = React.useCallback(
-    (src: string, target?: FileTarget) => resolveProjectMediaSrc(src, target, slug, designMediaUrls),
-    [slug, designMediaUrls],
+    (src: string, target?: FileTarget) =>
+      resolveProjectMediaSrc(target ? src : designAssetSrc(path, src), target, slug, designMediaUrls),
+    [slug, designMediaUrls, path],
   )
   React.useEffect(() => {
     let alive = true
