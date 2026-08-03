@@ -15,6 +15,11 @@ import { MasterToastRegion } from '../master/MasterToastRegion'
 import { ShellModeSwitch, type ShellMode } from './ShellModeSwitch'
 
 const matches = (query: string) => typeof window !== 'undefined' && window.matchMedia(query).matches
+// One shell breakpoint, named once: above it the sidebar and the tool dock are
+// columns you collapse, below it they are a drawer and a sheet you open. Its
+// partner in styles.css is `@media (max-width: 767px)`.
+const DESKTOP = '(min-width: 768px)'
+const isDesktop = () => matches(DESKTOP)
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
 const stored = (key: string, fallback: number) => {
   const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null
@@ -188,22 +193,27 @@ export function AppShell(props: {
   React.useEffect(() => { localStorage.setItem('proxima.leftWidth', String(leftWidth)) }, [leftWidth])
   React.useEffect(() => { localStorage.setItem('proxima.leftCollapsed', leftCollapsed ? '1' : '0') }, [leftCollapsed])
   React.useEffect(() => { localStorage.setItem('proxima.dockCollapsed', dockCollapsed ? '1' : '0') }, [dockCollapsed])
-  // The sheet belongs to phone width. Widening the window into the desktop
-  // layout retires it, or the rail inherits a phone decision - a dock that
-  // refuses to collapse because an invisible sheet flag is still set.
+  // The sheet belongs to phone width, so crossing the breakpoint re-reads it
+  // from the layout rather than carrying the other side's answer over. Widening
+  // retires it, or the rail inherits a phone decision and refuses to collapse.
+  // Narrowing adopts whatever the dock is showing, or a panel that is visibly a
+  // sheet is held by a control that says "Show tools" - press once, nothing
+  // changes; press again, it closes.
+  const toolOpenRef = React.useRef(toolOpen)
+  toolOpenRef.current = toolOpen
   React.useEffect(() => {
     const desktop = typeof window !== 'undefined' && window.matchMedia
-      ? window.matchMedia('(min-width: 768px)')
+      ? window.matchMedia(DESKTOP)
       : null
     if (!desktop) return
-    const sync = () => { if (desktop.matches) setDockSheetOpen(false) }
+    const sync = () => setDockSheetOpen(desktop.matches ? false : toolOpenRef.current)
     sync()
     desktop.addEventListener?.('change', sync)
     return () => desktop.removeEventListener?.('change', sync)
   }, [])
 
-  const toggleLeft = () => { if (matches('(min-width: 768px)')) setLeftCollapsed(value => !value); else setDrawerOpen(value => !value) }
-  const toggleDock = () => { if (matches('(min-width: 768px)')) setDockCollapsed(value => !value); else setDockSheetOpen(value => !value) }
+  const toggleLeft = () => { if (isDesktop()) setLeftCollapsed(value => !value); else setDrawerOpen(value => !value) }
+  const toggleDock = () => { if (isDesktop()) setDockCollapsed(value => !value); else setDockSheetOpen(value => !value) }
   // The dock reports every open and close here. Two things ride on it: the
   // Master trigger stands down while a tool is up, and a tool opened from
   // somewhere else - a reveal, a run-controls request - brings the dock back
@@ -211,7 +221,7 @@ export function AppShell(props: {
   // the dock, so its own close (its ✕, Escape) is the sheet's close too.
   const onDockOpenChange = React.useCallback((open: boolean) => {
     setToolOpen(open)
-    if (matches('(min-width: 768px)')) { if (open) setDockCollapsed(false) }
+    if (isDesktop()) { if (open) setDockCollapsed(false) }
     else setDockSheetOpen(open)
   }, [])
   const startResize = (event: React.PointerEvent) => {

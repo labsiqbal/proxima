@@ -343,7 +343,10 @@ It is a **preference, not a suppression**, and the two behave differently on pur
 Suppressed (a Task/Project mismatch) there is nothing to point a tool at, so a reveal
 is dropped. Collapsed, everything still exists - so a reveal or a run-controls request
 opens its tool *and brings the rail back*, which the dock reports through the same
-`onOpenChange` the shell already listens to. Latched tools are untouched: terminals
+`onOpenChange` the shell already listens to. That return **updates the stored
+preference**, deliberately: the preference is "is the dock on screen", so leaving it
+collapsed while the rail is visible would only mean the next reload takes the rail
+away again with no owner action in between. Latched tools are untouched: terminals
 keep running behind a collapsed dock. Escape is unchanged - it closes the panel, never
 the dock preference - so #145's precedence rule still holds.
 
@@ -701,9 +704,12 @@ cluster covered Search and, with the drawer open, the drawer's own Close button
   opens the drawer instead of collapsing the sidebar. The sheet reopens on the
   tool last used, and its own close (its ✕, Escape) is the toggle's off state.
   That preference is transient: a phone never writes the desktop rail's
-  `proxima.dockCollapsed`, never reads it, and is retired the moment the window
-  widens into the desktop layout - otherwise the rail inherits a phone decision
-  and refuses to collapse.
+  `proxima.dockCollapsed` and never reads it. Crossing the breakpoint re-reads
+  it from the layout instead of carrying the other side's answer over - widening
+  retires the sheet (or the rail inherits a phone decision and refuses to
+  collapse), narrowing adopts whatever the dock is showing (or a panel that is
+  visibly a sheet is held by a control that still says *Show tools*: press once,
+  nothing changes; press again, it closes).
   The sheet is the full screen, and the surface behind it reserves nothing -
   reserving the panel's width (74% of the pane, the desktop behaviour) squeezed
   the screen behind into a one-word-per-line strip (#154). The panel's tab row

@@ -3879,17 +3879,16 @@ button:disabled {
 	opacity: 0.35;
 	cursor: default;
 }
-.tool-btn.active {
-	color: var(--ui-accent);
-	background: color-mix(in srgb, var(--ui-accent) 12%, transparent);
-}
-/* The same "this is on" reading one bar down: the mobile top bar's tool control
-   holds the sheet open, and a toggle that never looks pressed is a toggle you
-   press twice (#156). Bordered here because `.icon-button` has a border to
-   tint, which the borderless header `.tool-btn` does not. */
+/* One "this is on" reading for both bars: the header's tool buttons and the
+   mobile top bar's, whose tool control holds the sheet open - a toggle that
+   never looks pressed is a toggle you press twice (#156). */
+.tool-btn.active,
 .icon-button.active {
 	color: var(--ui-accent);
 	background: color-mix(in srgb, var(--ui-accent) 12%, transparent);
+}
+/* `.icon-button` has a border to tint; the header's `.tool-btn` has none. */
+.icon-button.active {
 	border-color: color-mix(in srgb, var(--ui-accent) 34%, transparent);
 }
 /* Chrome Back: always present for layout stability; muted when no deep stack. */

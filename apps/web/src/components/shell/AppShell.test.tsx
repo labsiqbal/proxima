@@ -416,8 +416,8 @@ describe('AppShell tool dock collapse', () => {
       dispatchEvent: vi.fn(),
     }))
   }
-  const widenToDesktop = () => {
-    isDesktop = true
+  const crossTo = (desktop: boolean) => {
+    isDesktop = desktop
     act(() => { listeners.forEach(handler => handler()) })
   }
   const dock = () => screen.getByTestId('tool-dock')
@@ -539,13 +539,30 @@ describe('AppShell tool dock collapse', () => {
     await user.click(within(bar).getByRole('button', { name: 'Toggle tool dock' }))
     expect(dock()).toHaveAttribute('data-sheet', 'true')
 
-    widenToDesktop()
+    crossTo(true)
     expect(dock()).toHaveAttribute('data-sheet', 'false')
 
     // And the header toggle now collapses the rail, as it should on a desktop.
     await user.click(headerToggle())
     expect(container.querySelector('.app-shell')).toHaveClass('dock-collapsed')
     expect(dock()).toHaveAttribute('data-collapsed', 'true')
+  })
+
+  it('adopts an open panel as the sheet when the window narrows', async () => {
+    // The other direction: a desktop panel that becomes a sheet must be held by
+    // a control that says so, or the first tap does nothing and the second one
+    // closes what the owner was looking at.
+    width(true)
+    const user = userEvent.setup()
+    const { container } = render(<AppShell {...base}><div>main</div></AppShell>)
+    await user.click(screen.getByRole('button', { name: 'dock panel opened' }))
+    expect(dock()).toHaveAttribute('data-sheet', 'false')
+
+    crossTo(false)
+    expect(dock()).toHaveAttribute('data-sheet', 'true')
+    const bar = container.querySelector('.mobile-topbar') as HTMLElement
+    expect(within(bar).getByRole('button', { name: 'Toggle tool dock' }))
+      .toHaveAttribute('aria-pressed', 'true')
   })
 
   it('offers no mobile tool control while Project tools are suppressed', () => {
