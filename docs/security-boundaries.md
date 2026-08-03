@@ -450,7 +450,10 @@ filtered environment (additional names require `PROXIMA_APP_ENV_ALLOWLIST`) but 
 the service OS user. Preview transport is isolated from owner credentials: local and
 remote previews use a short-lived preview-only capability, reverse proxies strip
 Cookie/Authorization and upstream `Set-Cookie`, and same-origin generated HTML is
-rendered without `allow-same-origin`.
+rendered without `allow-same-origin`. Since #147 the frame renders in the Artifacts
+main window instead of the dock panel; the sandbox and origin selection are
+unchanged and now stated once in `apps/web/src/components/files/appPreview.ts`,
+where the same-origin fallback string provably omits `allow-same-origin`.
 
 The requested dev-server port is never a preview authority. It is a candidate until
 procfs maps every listening socket back to the managed process group. Appview, relay,

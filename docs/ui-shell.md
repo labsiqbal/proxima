@@ -227,10 +227,15 @@ Project agree, preventing Preview from presenting stale Work context.
   transient inspection panel the Artifacts destination carried, so this is the only
   tree in the app besides the Wiki's. A reveal raised while Project tools are
   suppressed is dropped, not queued: there is no tree to point at.
-- **Preview** — the Run & Preview dev-server dock (`AppRunner`). Not kept mounted:
-  its server is a managed backend process that survives on its own, and unmounting
-  stops the status polling. The deliverable record page and the recipe test bench keep their own
-  Preview entry points for app-type artifacts.
+- **Preview** — the Run & Preview **controls** (`AppRunner`): folder, command, port,
+  Run and Stop, the owner-power consent, the command logs, and every fail-closed
+  refusal with the next step that clears it. Since #147 it does not frame the app -
+  the running app renders in the Artifacts main window (see "The running app" below),
+  and this panel keeps a compact status (Ready/Starting, command, port) with one
+  **Show app** action. Not kept mounted: its server is a managed backend process that
+  survives on its own, and unmounting stops the status polling. The deliverable record
+  page and the recipe test bench keep their own Preview entry points for app-type
+  artifacts, and both route their picture to the same main-window viewport.
 
 The rail's bottom gear opens Settings. Escape closes the panel unless a modal overlay is open - the topmost overlay owns the key, so a confirm dialog raised over the dock is dismissed first. A handed-off file is not one of those since #146: it opens in the main window behind the panel, and neither surface answers Escape. Picking a tool by hand ends any reveal detour, so Files returns to the active project. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
 
@@ -406,7 +411,7 @@ Archive and Files merged into ONE destination (prune Part D, #139; decision #122
 - **Deliverables** - the durable deliverable registry (T4): every agent output is a record with lineage, ONE approval status (synced with the job-review approve), and a version chain, filterable by type/status/date/search.
 - **History** - records whose file no longer exists on disk. They are records, not phantom files: the ledger's survive-deletion property, kept visible.
 
-The combo detail is unchanged: an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address (the hash format outlives both retired destinations, so old bookmarks keep working - they open the record panel inside Artifacts, and a bookmarked `?view=files` URL lands there too). Record paths are container-relative real paths (#139) - the same paths the gallery shows. Approvals keep their two doors: the record panel and the Tasks review write the SAME status field. Locating a record's file on disk is **Reveal in Files** on the record panel, which raises the reveal event the dock browser answers (#145) - Delegate has no dock, so that action is absent there rather than dead. The record panel's **Open** actions use the same main-window surfaces as the gallery (see "Opening an artifact" below), and app preview gets the main-window viewport in #147. Design is a separate canvas destination whose internals are not part of the shell.
+The combo detail is unchanged: an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address (the hash format outlives both retired destinations, so old bookmarks keep working - they open the record panel inside Artifacts, and a bookmarked `?view=files` URL lands there too). Record paths are container-relative real paths (#139) - the same paths the gallery shows. Approvals keep their two doors: the record panel and the Tasks review write the SAME status field. Locating a record's file on disk is **Reveal in Files** on the record panel, which raises the reveal event the dock browser answers (#145) - Delegate has no dock, so that action is absent there rather than dead. The record panel's **Open** actions use the same main-window surfaces as the gallery (see "Opening an artifact" below), and an app record's **Preview app** opens the Run controls inside the record with that app's folder prefilled; running from there hands the picture to the main-window viewport, which takes the window over (see "The running app" below) - in Work only, for the same reason Reveal in Files is. Design is a separate canvas destination whose internals are not part of the shell.
 
 ### Opening an artifact
 
@@ -459,6 +464,49 @@ has this destination, the same editor, and the same viewer, because the editor
 is an Artifacts surface and the Files API it writes through is not Work-scoped.
 Only the chat handoff differs, and it never existed there - **Add feedback to
 chat** stays disabled because Delegate has no ordinary Chat to open.
+
+### The running app
+
+A running app is the fourth thing this main window can hold (#147, ADR-0043
+decision 4), and it is not an artifact: it has no bytes, no record, and no
+neighbours to walk, so it is its own surface rather than another branch of the
+artifact router. It takes the window whole - an open artifact steps aside for
+it, and opening an artifact closes it.
+
+- **The dock runs it, the main window shows it.** The Preview tool keeps every
+  control; Run opens the viewport here automatically, so the app the owner just
+  started is in front of them without a second click. The dock then shows a
+  compact status with **Show app**, which brings this surface back up from
+  anywhere.
+- **The viewport polls status itself.** It is not handed a snapshot, because the
+  dock is not its parent and need not even be open. A ready app is framed at the
+  chosen device width (Desktop/Tablet/Mobile) with **Reload** and **Open in new
+  tab**; a starting app shows what it is waiting for; a stopped, exited,
+  port-conflicted or ownership-unknown app stops being framed and names its state
+  rather than leaving a stale page up.
+- **It never dead-ends.** Every state carries **Run controls**, which opens the
+  dock's Preview tool (a `proxima:open-run-preview` window event the dock
+  answers, the mirror of `proxima:reveal-file`), and **← Gallery** back to the
+  destination. Like a reveal, that request is *dropped* while Project tools are
+  suppressed (Task permalink resolution, cross-Project mismatch): there is no
+  dock to open, and the way back to the gallery still works.
+- **Run shows the app, from wherever it was started.** That is one rule for all
+  three entry points: the dock, a deliverable record's **Preview app**, and the
+  recipe test bench. The last two mount the same controls inline with the app's
+  folder prefilled, and running from them hands the window to this viewport - so
+  those inline controls go away and Stop is reached through **Run controls**.
+  It was already true that both took over the panel they sat in; what changed is
+  which surface they take over.
+- **The security model did not move with the picture.** The frame's sandbox is
+  ADR-0042/#140's, unchanged and stated in one place (`appPreview.ts`): an
+  isolated origin (the per-app subdomain or the relay port) gets
+  `allow-scripts allow-same-origin allow-forms allow-popups allow-modals`, and
+  the same-origin `/api/appview` fallback gets that string **without**
+  `allow-same-origin`, because that origin holds the owner's session.
+- **Work only.** Running an app is owner-power execution driven from a dock
+  Delegate does not have, and a viewport opened there could reach no controls, so
+  Delegate offers neither half: an app record's **Preview app** entry is absent
+  there rather than dead.
 
 ## De-jargon rule for primary surfaces
 

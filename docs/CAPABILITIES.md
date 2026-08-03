@@ -1651,6 +1651,30 @@ box — Enter commits, Escape or empty blur cancels.
 
 **Why:** Launch a project's dev server and preview it in-app — from the **Preview**
 tool on the right rail, from an app-type artifact, or from the recipe test bench.
+
+**Where it renders (#147, ADR-0043 decision 4):** the two halves live in two places.
+The **Run controls** stay in the dock's Preview tool (`AppRunner`): folder, command,
+port, Run/Stop, the owner-power consent, the command logs, and every fail-closed
+refusal with its next step. The **running app renders in the Artifacts main window**
+(`AppViewport`) at full width, with the device presets (Desktop/Tablet/Mobile),
+Reload, and Open in new tab. Starting an app opens that viewport automatically -
+`AppRunner onOpenViewport` → `ToolDock` → `AppShell onOpenAppViewport` →
+`App openAppViewportInMainWindow` → `ArtifactsScreen`, the same shell seam a
+handed-off file uses (#146) - and the dock then keeps only a compact status
+(Ready/Starting, command, port) with a **Show app** action that brings the viewport
+back up. The viewport polls status itself, so a stopped or failed app stops being
+framed and says which state it is in, with **Run controls** (a
+`proxima:open-run-preview` window event the dock answers) and the way back to the
+gallery. The security model is unchanged by the move: the frame's sandbox comes from
+`appPreview.ts` (`allow-scripts allow-same-origin allow-forms allow-popups
+allow-modals` on an isolated relay/subdomain origin, the same string minus
+`allow-same-origin` on the same-origin `/api/appview` fallback), and the origin
+selection is the same as before. **Work only:** running an app is owner-power
+execution driven from a dock Delegate does not have, and a viewport opened there
+could not reach any controls, so Delegate offers neither - an app record's
+*Preview app* entry is absent there rather than dead, the rule Reveal in Files
+follows (#145).
+
 **How:** `AppManager` runs one owner-confirmed dev process per project with a filtered
 environment. The owner-power confirmation is asked once per browser and persisted
 (localStorage `proxima.ownerpower.ack`), not re-asked on every panel mount or project
@@ -1702,7 +1726,7 @@ script, crash, or non-server entry point), status keeps
 a sticky `exited` + `exit_code` payload across polls so Run & Preview can show Finished
 vs Failed with the log and a next-step hint instead of a silent bare dump. Logs remain
 toggleable in stopped, starting, ready, conflict, ownership-unknown, and exited states.
-The existing bounded 40-line status buffer survives preview Reload and explicit Stop,
+The existing bounded 40-line status buffer survives viewport Reload and explicit Stop,
 so stopped/retry feedback shows the most recent command output, including terminal
 shutdown lines drained before the stopped snapshot. The exited relay
 returns HTTP 503 until Stop or the next start releases or replaces that listener.
@@ -2104,7 +2128,7 @@ On the web, `apps/web/src/lib/refusal.ts` renders the contract: `splitRefusal` s
 the diagnosis from the instruction so a screen styles them apart without printing the
 step twice, and `refusalText` recovers the server's sentence from the transport wrapper a
 thrown client error carries. `AppRunner` gives the next step its own line in every
-fail-closed card, `WorkspaceTree` shows the refused write's real sentence, `MasterScreen`
+fail-closed card (and `AppViewport` repeats it where the app itself would be), `WorkspaceTree` shows the refused write's real sentence, `MasterScreen`
 raises a visible alert when the backing runner is not eligible, and `api/client.ts` keeps
 the instruction last in a flattened structured refusal (and exposes it as
 `ApiError.nextStep`).

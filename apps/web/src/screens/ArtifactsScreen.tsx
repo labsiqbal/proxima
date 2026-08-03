@@ -8,6 +8,7 @@ import { DeliverablesLens } from '../components/artifacts/DeliverablesLens'
 import { DocumentEditor } from '../components/artifacts/DocumentEditor'
 import { opensInEditor } from '../components/artifacts/fileKind'
 import { ArtifactThumb, isVisualArtifact } from '../components/artifacts/ArtifactThumb'
+import { AppViewport } from '../components/files/AppViewport'
 import { STATUS_LABELS, typeMeta } from '../components/artifacts/archive'
 import { Dropdown } from '../components/ui/Dropdown'
 import { revealFile } from '../lib/revealFile'
@@ -38,6 +39,15 @@ import { revealFile } from '../lib/revealFile'
 // Both name their way back to whatever they covered - the gallery or an open
 // record. Delegate has neither a dock nor Design Studio, but it has this
 // destination, so an artifact opened there behaves exactly the same.
+//
+// A RUNNING APP is the fourth thing this window can hold (ADR-0043 decision 4,
+// #147). The dock's Run & Preview keeps the controls and asks the shell to open
+// the viewport here (`pendingApp`), the same seam a handed-off file uses. It is
+// not an artifact - it has no bytes, no record, and no neighbours to walk - so
+// it is its own surface rather than a fifth branch of the artifact router, and
+// it takes the whole window (an open artifact steps aside for it, and vice
+// versa). Work only: the run is owner-power execution driven from a dock
+// Delegate does not have, so Delegate gets no half of it.
 
 type Tab = 'all' | 'deliverables' | 'history'
 
@@ -81,7 +91,7 @@ const recordAsArtifact = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'pro
   target: r.target || undefined,
 })
 
-export function ArtifactsScreen({ token, projects, activeProject, globalScope = false, archiveRecord, pendingFile, pendingArtifact, onPendingConsumed, onPendingArtifactConsumed, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
+export function ArtifactsScreen({ token, projects, activeProject, globalScope = false, archiveRecord, pendingFile, pendingArtifact, pendingApp, onPendingConsumed, onPendingArtifactConsumed, onPendingAppConsumed, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
   token: string
   projects: Project[]
   activeProject?: Project | null
@@ -90,8 +100,11 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   archiveRecord?: { project: string; slug: string } | null
   pendingFile?: { slug: string; path: string; target?: FileTarget } | null
   pendingArtifact?: OutputLink | null
+  /** The dock's Run & Preview asking for this project's app viewport (#147). */
+  pendingApp?: { slug: string } | null
   onPendingConsumed?: () => void
   onPendingArtifactConsumed?: () => void
+  onPendingAppConsumed?: () => void
   onOpenRecord?: (project: string, slug: string) => void
   onCloseRecord?: () => void
   onOpenTask?: (jobId: number, engine?: string) => void
@@ -111,6 +124,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   const [reloadNonce, setReloadNonce] = React.useState(0)
   const [capped, setCapped] = React.useState(false)
   const [open, setOpen] = React.useState<OpenArtifact | null>(null)
+  const [appSlug, setAppSlug] = React.useState<string | null>(null)
   const mountedRef = React.useRef(true)
   const loadSeq = React.useRef(0)
 
@@ -130,7 +144,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   // Changing the scope refilters this destination, so an artifact opened from
   // the old scope cannot keep the main window. Declared before the pending-open
   // effects so a handoff that arrives on the same commit still wins.
-  React.useEffect(() => { setOpen(null) }, [shownKey])
+  React.useEffect(() => { setOpen(null); setAppSlug(null) }, [shownKey])
 
   // Returning from an open artifact puts focus back on the card or row that
   // opened it (and scrolls it into view). The surface cannot do this itself:
@@ -215,6 +229,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   const openArtifactAt = React.useCallback((slug: string, walk: Artifact[], index: number, sessionId?: number | null) => {
     const item = walk[index]
     if (!item) return
+    setAppSlug(null)
     setOpen({
       slug,
       items: walk,
@@ -252,6 +267,24 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
     })
   }, [pendingArtifact, token, activeProject?.slug, onOpenRecord, onPendingArtifactConsumed, openArtifactAt])
 
+  // The app viewport and an open artifact are exclusive: each takes the whole
+  // main window, so opening one closes the other.
+  const openAppViewport = React.useCallback((slug: string) => {
+    setOpen(null)
+    setAppSlug(slug)
+  }, [])
+
+  // The dock started (or wants to show) an app. It is always consumed, even in
+  // Delegate, so a request raised in Work cannot sit queued and surface later
+  // in the wrong shell mode.
+  React.useEffect(() => {
+    if (!pendingApp) return
+    const slug = pendingApp.slug
+    onPendingAppConsumed?.()
+    if (globalScope) return
+    openAppViewport(slug)
+  }, [pendingApp, globalScope, onPendingAppConsumed, openAppViewport])
+
   React.useEffect(() => {
     if (!pendingFile) return
     onPendingConsumed?.()
@@ -265,6 +298,21 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   // The open artifact owns the main window; back returns to whatever it took
   // over - an open record, or the gallery.
   const backLabel = archiveRecord ? 'Record' : 'Gallery'
+
+  // The running app takes the window whole - no head, no tabs, no gallery
+  // behind it - because a dev server is worth every pixel this destination has.
+  if (appSlug && !globalScope) {
+    return <section className="artifacts-view">
+      <AppViewport
+        token={token}
+        slug={appSlug}
+        projectName={projects.find(project => project.slug === appSlug)?.name}
+        backLabel={backLabel}
+        onClose={() => setAppSlug(null)}
+      />
+    </section>
+  }
+
   const openItem = open ? open.items[open.index] : null
   const surface = open && openItem && (open.surface === 'editor'
     ? <DocumentEditor
@@ -307,6 +355,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
         onOpenViewer={openViewerForRecord}
         onOpenDesign={designStudioEnabled ? onOpenDesign : undefined}
         onRevealInFiles={globalScope ? undefined : revealInDock}
+        onOpenAppViewport={globalScope ? undefined : openAppViewport}
         onChanged={() => setBadgeNonce(nonce => nonce + 1)}
       />
     </section>

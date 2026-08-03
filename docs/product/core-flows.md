@@ -341,7 +341,10 @@ Artifacts may index outputs from:
 
 ### App Artifacts
 
-Run App / app preview should live in Artifacts.
+Run App / app preview should live in Artifacts. **Delivered (#147):** the running
+app renders in the Artifacts main window, while the Run controls (command, folder,
+port, Run/Stop, the owner-power consent) stay in the right dock's Preview tool -
+running an app is an owner-power action, so it stays a Work-mode capability.
 
 Auto-detect app candidates by scanning for `package.json` and framework hints:
 

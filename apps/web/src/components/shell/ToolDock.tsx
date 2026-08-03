@@ -1,6 +1,7 @@
 import React from 'react'
 import type { FileTarget, Project } from '../../types'
 import { parseRevealTarget, REVEAL_FILE_EVENT, type RevealTarget } from '../../lib/revealFile'
+import { OPEN_RUN_PREVIEW_EVENT } from '../../lib/runPreview'
 import { DockFileBrowser } from '../files/DockFileBrowser'
 import { IconClose, IconFile, IconGear, IconMonitor, IconTerminal } from './icons'
 
@@ -29,7 +30,7 @@ function PaneFallback({ label }: { label: string }) {
   return <p className="muted tool-pane-hint">{label}</p>
 }
 
-export function ToolDock({ token, project, projects = [], available = true, onOpenSettings, onOpenChange, onOpenFile }: {
+export function ToolDock({ token, project, projects = [], available = true, onOpenSettings, onOpenChange, onOpenFile, onOpenAppViewport }: {
   token: string
   project: Project | null
   /** Named so a reveal into another Container can title its tree properly. */
@@ -43,6 +44,12 @@ export function ToolDock({ token, project, projects = [], available = true, onOp
    * document in the editor and anything else in its inline viewer (#146).
    */
   onOpenFile?: (slug: string, path: string, target?: FileTarget) => void
+  /**
+   * The same shape for the running app (#147): the Preview tool keeps the Run
+   * controls and asks the shell to put the app's viewport in the main window,
+   * because opening a destination is App state, not the dock's.
+   */
+  onOpenAppViewport?: (slug: string) => void
 }) {
   const [open, setOpen] = React.useState<Tool | null>(null)
   const [reveal, setReveal] = React.useState<RevealTarget | null>(null)
@@ -119,6 +126,16 @@ export function ToolDock({ token, project, projects = [], available = true, onOp
     return () => window.removeEventListener(REVEAL_FILE_EVENT, onReveal)
   }, [available])
 
+  // The main-window viewport's way back to the controls that start and stop the
+  // app (#147). Same reasoning as the reveal above: the dock owns the tool, a
+  // far-away surface only asks for it, and a request that arrives while Project
+  // tools are suppressed is dropped rather than queued.
+  React.useEffect(() => {
+    const onRunControls = () => { if (available) setOpen('preview') }
+    window.addEventListener(OPEN_RUN_PREVIEW_EVENT, onRunControls)
+    return () => window.removeEventListener(OPEN_RUN_PREVIEW_EVENT, onRunControls)
+  }, [available])
+
   const toolButton = (tool: typeof TOOLS[number], where: 'rail' | 'tab') => (
     <button
       key={tool.id}
@@ -164,7 +181,7 @@ export function ToolDock({ token, project, projects = [], available = true, onOp
         {open === 'preview' && <div className="tool-pane" style={{ display: 'flex' }}>
           {slug
             ? <React.Suspense fallback={<PaneFallback label="Loading preview…" />}>
-                <AppRunner token={token} slug={slug} onClose={closePanel} />
+                <AppRunner token={token} slug={slug} onClose={closePanel} onOpenViewport={onOpenAppViewport && (() => onOpenAppViewport(slug))} />
               </React.Suspense>
             : <PaneFallback label="Pick a project to run and preview its app." />}
         </div>}

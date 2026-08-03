@@ -55,6 +55,18 @@ vi.mock('../components/artifacts/ArtifactViewer', () => ({
     </div>
   ),
 }))
+vi.mock('../components/files/AppViewport', () => ({
+  AppViewport: ({ slug, projectName, backLabel, onClose }: {
+    slug: string
+    projectName?: string
+    backLabel?: string
+    onClose: () => void
+  }) => (
+    <div data-testid="app-viewport">app:{slug}:{projectName}
+      <button type="button" onClick={onClose}>{`\u2190 ${backLabel}`}</button>
+    </div>
+  ),
+}))
 vi.mock('../components/artifacts/DocumentEditor', () => ({
   DocumentEditor: ({ slug, path, target, backLabel, onClose, onReview }: {
     slug: string
@@ -394,6 +406,58 @@ describe('ArtifactsScreen', () => {
     render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha}
       pendingFile={{ slug: 'alpha', path: 'artifacts/shot.png' }} />)
     expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:artifacts/shot.png')
+  })
+
+  // ── The running app: the dock runs it, this main window shows it (#147) ──
+
+  it('opens the app viewport in the main window when the run controls ask', async () => {
+    const user = userEvent.setup()
+    const onConsumed = vi.fn()
+    vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
+    const view = render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} />)
+    await screen.findByTestId('artifacts-gallery')
+
+    view.rerender(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha}
+      pendingApp={{ slug: 'alpha' }} onPendingAppConsumed={onConsumed} />)
+
+    const viewport = await screen.findByTestId('app-viewport')
+    expect(viewport).toHaveTextContent('app:alpha:Alpha')
+    expect(onConsumed).toHaveBeenCalled()
+    expect(screen.queryByTestId('artifacts-gallery')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '\u2190 Gallery' }))
+    expect(await screen.findByTestId('artifacts-gallery')).toBeInTheDocument()
+  })
+
+  it('gives the app viewport the whole main window, replacing an open artifact', async () => {
+    const user = userEvent.setup()
+    vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
+    const view = render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} />)
+    await user.click(await screen.findByRole('button', { name: /plan\.md/ }))
+    expect(await screen.findByTestId('editor')).toBeInTheDocument()
+
+    view.rerender(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} pendingApp={{ slug: 'alpha' }} />)
+    expect(await screen.findByTestId('app-viewport')).toBeInTheDocument()
+    expect(screen.queryByTestId('editor')).not.toBeInTheDocument()
+  })
+
+  it('closes the app viewport when the shell moves to another Container', async () => {
+    vi.mocked(listArtifacts).mockResolvedValue({ artifacts: [] })
+    const view = render(<ArtifactsScreen token="t" projects={[alpha, beta]} activeProject={alpha} pendingApp={{ slug: 'alpha' }} />)
+    expect(await screen.findByTestId('app-viewport')).toBeInTheDocument()
+
+    view.rerender(<ArtifactsScreen token="t" projects={[alpha, beta]} activeProject={beta} />)
+    await waitFor(() => expect(screen.queryByTestId('app-viewport')).not.toBeInTheDocument())
+  })
+
+  // Running an app is Work-only: it is owner-power execution driven from the
+  // dock, and Delegate has no dock. Delegate must not grow a half of it.
+  it('never opens an app viewport in Delegate', async () => {
+    const onConsumed = vi.fn()
+    render(<ArtifactsScreen token="t" projects={[alpha]} globalScope
+      pendingApp={{ slug: 'alpha' }} onPendingAppConsumed={onConsumed} />)
+    await waitFor(() => expect(onConsumed).toHaveBeenCalled())
+    expect(screen.queryByTestId('app-viewport')).not.toBeInTheDocument()
   })
 
   // ── The record panel opens the same way, and returns to the record ──

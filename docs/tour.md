@@ -190,8 +190,10 @@ Terminal, Files, and Preview are tools, not destinations. They open over the
 current surface and remain scoped to the active project. Produced work lives in
 the Artifacts destination (ADR-0043) instead: a gallery that opens an artifact in
 its own main window - documents in the editor, everything else in the inline
-viewer (#146) - while the rail's Files tree answers "where is that file on disk"
-(#145) and hands an opened file to that same main window.
+viewer (#146), and the running app in its own viewport (#147) - while the rail's
+Files tree answers "where is that file on disk" (#145) and hands an opened file to
+that same main window, and the rail's Preview tool keeps the Run controls that put
+the app there.
 
 ![Connected terminal](screenshots/terminal.png)
 

@@ -7,7 +7,7 @@ import { fmtDate, fmtSize, permalinkOf, RecordPreview, StatusPill, STATUS_LABELS
 // per record with breadcrumb back, prev/next, large preview, metadata, the
 // lineage chain as navigable links, version history, and actions. No right
 // panel, no popup - this IS the page.
-export function ArchiveRecordPage({ token, project, slug, onOpenRecord, onOpenSession, onOpenTask, onOpenViewer, onOpenDesign, onRevealInFiles, onChanged }: {
+export function ArchiveRecordPage({ token, project, slug, onOpenRecord, onOpenSession, onOpenTask, onOpenViewer, onOpenDesign, onRevealInFiles, onOpenAppViewport, onChanged }: {
   token: string
   project: string
   slug: string
@@ -21,6 +21,14 @@ export function ArchiveRecordPage({ token, project, slug, onOpenRecord, onOpenSe
   /** Locate the record's file on disk. Wired again when browsing returns to
    * the right dock (#145); Artifacts itself has no tree to reveal into. */
   onRevealInFiles?: (record: ArchiveRecordDetail) => void
+  /**
+   * Show this Container's running app in the Artifacts main window (#147). Its
+   * absence means running an app is not offered here at all: an app record's
+   * Preview app entry is the Run controls, and controls whose picture has
+   * nowhere to render would strand the owner. Absent in Delegate, which has no
+   * dock to get back to - the same rule Reveal in Files follows (#145).
+   */
+  onOpenAppViewport?: (slug: string) => void
   onChanged?: () => void
 }) {
   const [record, setRecord] = React.useState<ArchiveRecordDetail | null>(null)
@@ -57,7 +65,7 @@ export function ArchiveRecordPage({ token, project, slug, onOpenRecord, onOpenSe
     if (record.type === 'design' && onOpenDesign) {
       onOpenDesign(record.path.split('/').filter(Boolean).slice(-1)[0] || record.path)
     } else if (record.type === 'app') {
-      setRunApp(true)
+      if (onOpenAppViewport) setRunApp(true)
     } else {
       onOpenViewer?.(record)
     }
@@ -110,16 +118,16 @@ export function ArchiveRecordPage({ token, project, slug, onOpenRecord, onOpenSe
         <div className="archive-record-main">
           <section className="archive-record-section">
             <h4>Preview</h4>
-            {runApp && record.type === 'app'
-              ? <AppRunner token={token} slug={record.project_slug} initialDir={record.path === '.' ? '' : record.path} onClose={() => setRunApp(false)} />
+            {runApp && record.type === 'app' && onOpenAppViewport
+              ? <AppRunner token={token} slug={record.project_slug} initialDir={record.path === '.' ? '' : record.path} onClose={() => setRunApp(false)} onOpenViewport={() => onOpenAppViewport(record.project_slug)} />
               : <RecordPreview token={token} record={record} />}
           </section>
           <section className="archive-record-section">
             <h4>Actions</h4>
             <div className="archive-record-actions">
-              <button className="primary-button" onClick={open} disabled={record.file_missing && record.type !== 'app'}>
+              {(record.type !== 'app' || onOpenAppViewport) && <button className="primary-button" onClick={open} disabled={record.file_missing && record.type !== 'app'}>
                 {record.type === 'app' ? 'Preview app' : record.type === 'design' ? 'Open in Design' : 'Open'}
-              </button>
+              </button>}
               {canApprove && <button className="archive-approve-button" disabled={busy} onClick={() => void changeStatus('approved')}>✓ Approve</button>}
               {record.status === 'approved' && <button className="archive-approve-button" disabled>✓ Approved</button>}
               <label className="archive-status-set">

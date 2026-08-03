@@ -106,6 +106,39 @@ rather than one step in front. Both name their way back (**← Gallery** /
 **← Record**), and Delegate behaves the same, minus the chat handoff it has
 never had: it owns this destination, this editor, and this viewer.
 
+**Landed 2026-08-03 (#147):** decision 4 is executed, and the decision set is
+complete. The **running app renders in the main window** (`AppViewport`), full
+width, with the device presets, Reload, and Open in new tab; the **Run controls
+stay in the dock** (`AppRunner`) - folder, command, port, Run/Stop, the
+owner-power consent, the logs, and every fail-closed refusal - keeping a compact
+status (Ready/Starting, command, port) and one **Show app** action. Run opens the
+viewport automatically, through the same shell seam a handed-off file uses
+(#146). Three details sharpen this record:
+
+- **The app is not an artifact.** It has no bytes, no record, and no neighbours
+  to walk, so it is its own main-window surface rather than a fifth branch of the
+  artifact router - and the two are exclusive: each closes the other. This is why
+  the gallery still does not list runnable apps as cards; the entry point to a run
+  is the Run controls, not a thumbnail whose click would have to start a process.
+- **Only the location changed, not the boundary.** ADR-0042's app-frame model is
+  restated in one module (`appPreview.ts`) and asserted in tests: an isolated
+  origin (per-app subdomain or relay port) gets
+  `allow-scripts allow-same-origin allow-forms allow-popups allow-modals`; the
+  same-origin `/api/appview` fallback gets the same string **without**
+  `allow-same-origin`, because that origin holds the owner's session. The consent
+  gate, the origin selection, and the proxy semantics are untouched, and the
+  backend was not modified.
+- **Running an app is Work-only**, decided here rather than inherited - and it is
+  a deliberate *removal*, not a relocation. Until now a deliverable record page
+  would embed the whole runner in Delegate too, so an owner could start an
+  owner-power dev server from the global mode. After this ticket the picture lives
+  in a main window whose only way back to Stop is the dock, and Delegate has no
+  dock: it would have the app and no controls. Rather than ship that, Delegate
+  offers neither half - an app record's *Preview app* entry is absent there rather
+  than dead, the rule #145 set for Reveal in Files. Delegate is already the mode
+  without a terminal, without a file tree, and without a design canvas; owner-power
+  execution belongs with them.
+
 ## Consequences
 
 Positive:
@@ -130,9 +163,10 @@ Negative / accepted trade-offs:
   is absent there rather than dead).
 - The gallery only shows what the artifact scanner types and caps, so it is not
   a complete view of the folder; that completeness is the dock's job.
-- Runnable apps are deliberately absent from the gallery until #147 gives them
-  the preview viewport, rather than shipping a card whose click has nowhere to
-  go.
+- Runnable apps are not gallery cards. #147 gave them the main-window viewport
+  but deliberately not a thumbnail: a card whose click starts an owner-power
+  process is not the same gesture as opening a file, so a run still begins at the
+  Run controls.
 
 ## Related
 

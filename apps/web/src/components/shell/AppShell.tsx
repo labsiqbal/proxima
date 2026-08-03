@@ -82,6 +82,9 @@ export function AppShell(props: {
    * main-window surface answers, so the dock never grows a viewer of its own.
    */
   onOpenFile?: (slug: string, path: string, target?: FileTarget) => void
+  /** Same seam for the running app's viewport (#147): the dock names the
+   *  project, the shell owner opens it in the Artifacts main window. */
+  onOpenAppViewport?: (slug: string) => void
   mode?: ShellMode
   onModeChange?: (mode: ShellMode) => void
 }) {
@@ -338,6 +341,7 @@ export function AppShell(props: {
         onOpenSettings={() => props.onSelectView('settings')}
         onOpenChange={setToolOpen}
         onOpenFile={props.onOpenFile}
+        onOpenAppViewport={props.onOpenAppViewport}
       />}
       {!delegateMode && searchOpen && <SearchModal token={props.token} sessions={props.sessions} projects={props.projects} onClose={() => setSearchOpen(false)} onSelectSession={props.onSelectSession} onOpenDesign={props.onOpenDesign} onSelectProject={props.onOpenProject ?? props.onSelectProject} onSelectView={props.onSelectView} />}
       {!delegateMode && <CoreTour token={props.token} />}

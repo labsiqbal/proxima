@@ -1,19 +1,22 @@
 import React from 'react'
-import { appExitSummary, appStart, appStop, appStatus, appViewUrl, detectApps, getPublicConfig, previewAuth, type AppStatus, type DetectedApp } from '../../api/files'
-import { IconMonitor, IconTablet, IconMobile } from '../shell/icons'
+import { appExitSummary, appStart, appStop, detectApps, type DetectedApp } from '../../api/files'
 import { confirmDialog } from '../ui/Dialog'
-import { usePolling } from '../../hooks/usePolling'
 import { splitRefusal } from '../../lib/refusal'
+import { useAppStatus } from './useAppStatus'
 
-const VIEWPORTS = [
-  { key: 'desktop', label: 'Desktop', w: '100%', Icon: IconMonitor },
-  { key: 'tablet', label: 'Tablet', w: '834px', Icon: IconTablet },
-  { key: 'mobile', label: 'Mobile', w: '390px', Icon: IconMobile },
-] as const
-type VKey = typeof VIEWPORTS[number]['key']
-
-// Run a project's dev server as a managed process and preview it live — docked
-// panel (not a popup), with viewport presets like a real preview tool.
+// Run a project's dev server as a managed process. This is the CONTROLS half of
+// Run & Preview: which command, which folder, which port, Run and Stop, the
+// owner-power consent, the command logs, and every fail-closed refusal with the
+// next step that clears it. It lives in the right dock, next to whatever the
+// owner is working on.
+//
+// Since #147 (ADR-0043 decision 4) it does not frame the app. The running app
+// renders in the Artifacts main window (`AppViewport`), because a live app is
+// worth the widest surface in the product and a 420px-wide panel was never it.
+// What stays here is a compact status - Ready/Starting, the command, the port -
+// and one action that brings that viewport up. Starting an app opens it
+// automatically, so Run puts the app in front of the owner without a second
+// click.
 const PORT_PIN_KEY = 'proxima.appport.v2.'
 const LEGACY_PORT_PIN_KEY = 'proxima.appport.'
 // The owner-power acknowledgement is asked once per browser, then persisted.
@@ -22,7 +25,19 @@ const LEGACY_PORT_PIN_KEY = 'proxima.appport.'
 // "runs with your account permissions" means (PRUNE-SPEC B6). Global, not
 // per-project: the dialog explains a category of power, not a project fact.
 const OWNER_POWER_ACK_KEY = 'proxima.ownerpower.ack'
-export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: { token: string; slug: string; onClose: () => void; initialDir?: string; initialCommand?: string }) {
+export function AppRunner({ token, slug, onClose, onOpenViewport, initialDir, initialCommand }: {
+  token: string
+  slug: string
+  onClose: () => void
+  /**
+   * Bring this project's app viewport up in the main window (#147). Absent
+   * where the shell cannot route one, and then "Show app" is absent too -
+   * a control whose destination does not exist is worse than no control.
+   */
+  onOpenViewport?: () => void
+  initialDir?: string
+  initialCommand?: string
+}) {
   const [command, setCommand] = React.useState(() => initialCommand || localStorage.getItem('proxima.appcmd.' + slug) || 'npm run dev')
   const [dir, setDir] = React.useState(() => initialDir || localStorage.getItem('proxima.appdir.' + slug) || '')
   // 0 = auto: let the server take any free port. Only a deliberate pin is stored.
@@ -35,21 +50,22 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     localStorage.removeItem(LEGACY_PORT_PIN_KEY + slug)
     return Number(localStorage.getItem(PORT_PIN_KEY + slug)) || 0
   })
-  const [appsDomain, setAppsDomain] = React.useState<string | null>(null)
-  React.useEffect(() => {
-    getPublicConfig(token).then(c => setAppsDomain(c.apps_domain)).catch(() => undefined)
-    void previewAuth(token).catch(() => undefined)  // mint the preview cookie so iframes load without a CF Access login
-  }, [token])
-  const [status, setStatus] = React.useState<AppStatus>({ state: 'stopped', running: false, ready: false })
+  // Mirror the reported port into the editable box only when the owner has to
+  // act on it — a conflict or unverified ownership, where "Change port" is the
+  // way out. On a healthy run it stays read-only: writing it back would
+  // silently turn "auto" into a pin that the next start must honour, and then
+  // fail closed the first time anything else held that port.
+  const { status, setStatus, refresh: poll } = useAppStatus(token, slug, next => {
+    const candidatePort = next.requested_port ?? next.port
+    const needsOwnerChoice = next.state === 'port_conflict' || next.state === 'ownership_unknown'
+    if (candidatePort != null && needsOwnerChoice) setPort(candidatePort)
+  })
   const [apps, setApps] = React.useState<DetectedApp[]>([])
-  const [vw, setVw] = React.useState<VKey>('desktop')
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
   const [showLogs, setShowLogs] = React.useState(false)
-  const [reloadKey, setReloadKey] = React.useState(0)
   const portInputRef = React.useRef<HTMLInputElement>(null)
   const mountedRef = React.useRef(true)
-  const statusSeq = React.useRef(0)
   const actionSeq = React.useRef(0)
   const appsSeq = React.useRef(0)
 
@@ -57,52 +73,20 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     mountedRef.current = true
     return () => {
       mountedRef.current = false
-      statusSeq.current += 1
       actionSeq.current += 1
       appsSeq.current += 1
     }
   }, [])
 
   React.useEffect(() => {
-    statusSeq.current += 1
     actionSeq.current += 1
     appsSeq.current += 1
-    setStatus({ state: 'stopped', running: false, ready: false })
     setApps([])
     setBusy(false)
     setError('')
     setShowLogs(false)
-    setReloadKey(0)
   }, [slug])
 
-  const poll = React.useCallback(async () => {
-    const seq = ++statusSeq.current
-    try {
-      const next = await appStatus(token, slug)
-      if (mountedRef.current && seq === statusSeq.current) {
-        setStatus(next)
-        // Mirror the port into the editable box only when the owner has to act
-        // on it — a conflict or unverified ownership, where "Change port" is the
-        // way out. On a healthy run it stays read-only: writing it back would
-        // silently turn "auto" into a pin that the next start must honour, and
-        // then fail closed the first time anything else held that port.
-        const candidatePort = next.requested_port ?? next.port
-        const needsOwnerChoice = next.state === 'port_conflict' || next.state === 'ownership_unknown'
-        if (candidatePort != null && needsOwnerChoice) setPort(candidatePort)
-      }
-    } catch { /* a stopped or booting app is represented by the last known status */ }
-  }, [token, slug])
-  usePolling(poll, 2000, { restartKey: `${token}:${slug}` })
-  // Reload the preview the moment a (new) server comes up — covers Stop → Run
-  // another, even when both use the same port (the iframe URL wouldn't change).
-  const prevReady = React.useRef(false)
-  const prevPort = React.useRef<number | undefined>(undefined)
-  React.useEffect(() => {
-    const ready = !!(status.running && status.ready)
-    if (ready && (!prevReady.current || status.port !== prevPort.current)) setReloadKey(k => k + 1)
-    prevReady.current = ready
-    prevPort.current = status.port
-  }, [status.running, status.ready, status.port])
   React.useEffect(() => {
     const seq = ++appsSeq.current
     detectApps(token, slug)
@@ -157,8 +141,15 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     const seq = ++actionSeq.current
     try {
       await appStart(token, slug, cmd, port, dir)
-      window.setTimeout(() => { if (mountedRef.current && seq === actionSeq.current) setReloadKey(k => k + 1) }, 1800)
-      if (mountedRef.current && seq === actionSeq.current) poll()
+      // The app the owner just started is what they want to look at: put its
+      // viewport in the main window now rather than making them find it (#147).
+      // Guarded like every other post-await step: a panel closed or a project
+      // switched during the start round trip must not drag the shell to another
+      // Container's app.
+      if (mountedRef.current && seq === actionSeq.current) {
+        onOpenViewport?.()
+        poll()
+      }
     }
     catch (e) {
       if (mountedRef.current && seq === actionSeq.current) {
@@ -198,47 +189,14 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     }, 0)
   }
 
-  // Prefer an isolated origin: remote apps-domain subdomain when configured, else
-  // the app's preview relay port on the same host (local and remote). Absolute
-  // asset paths and HMR websockets work on that origin, gated by the
-  // proxima_preview cookie (host-scoped cookies ignore ports) and
-  // credential-stripped upstream. Fall back to same-origin appview only when no
-  // isolated origin is available.
-  const isRemote = location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'
-  const subdomainUrl = appsDomain && isRemote && status.running && status.ready ? `${location.protocol}//preview-${slug}.${appsDomain}/` : ''
-  // The relay speaks plain HTTP only. From an https page (Tailscale Serve, a
-  // fronting proxy) an https://host:relayPort iframe dies in the TLS handshake
-  // and an http:// one is blocked as mixed content — so https origins skip the
-  // relay and use the same-origin /api/appview proxy, which rides the page's own
-  // TLS. The relay stays preferred on http origins for its isolated origin.
-  const relayUrl = !subdomainUrl && status.running && status.preview_port && location.protocol === 'http:'
-    ? `http://${location.hostname}:${status.preview_port}/`
-    : ''
-  // A freshly-provisioned preview subdomain can lag on DNS for a few seconds (and a
-  // relay iframe can race the preview-auth cookie mint). Retry the frame ONLY while
-  // it hasn't loaded yet — the iframe's onLoad clears this — so a preview that loads
-  // first try (the normal case now) never visibly reloads.
-  const previewLoadedRef = React.useRef(false)
-  React.useEffect(() => {
-    previewLoadedRef.current = false
-    if (!subdomainUrl && !relayUrl) return
-    const timers = [5000, 12000].map(ms => setTimeout(() => { if (!previewLoadedRef.current) setReloadKey(k => k + 1) }, ms))
-    return () => timers.forEach(clearTimeout)
-  }, [subdomainUrl, relayUrl])
-  const baseUrl = subdomainUrl || relayUrl || appViewUrl(slug)
-  // Cache-bust per (re)load so switching apps on the same port doesn't show a
-  // cached page; static servers don't send no-cache headers.
-  const previewUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}_proxima=${reloadKey}`
-  const openUrl = subdomainUrl || relayUrl || appViewUrl(slug)
-  const isolatedOrigin = Boolean(subdomainUrl || relayUrl)
-  const width = VIEWPORTS.find(v => v.key === vw)?.w || '100%'
   const exitInfo = status.state === 'exited' ? appExitSummary(status) : null
   const conflictPort = status.requested_port ?? port
   const hasLogs = (status.log || []).length > 0
   const logText = hasLogs ? (status.log || []).join('\n') : 'No command logs yet.'
-  const stateActions = (options: { retry?: boolean; changePort?: boolean; stop?: boolean }) => <div className="app-state-actions">
+  const stateActions = (options: { retry?: boolean; changePort?: boolean; stop?: boolean; showApp?: boolean }) => <div className="app-state-actions">
     {options.stop !== false && <button className="ghost-button sm danger" onClick={() => void stop()} disabled={busy}>Stop</button>}
     <button className="ghost-button sm" onClick={() => setShowLogs(value => !value)}>{showLogs ? 'Hide logs' : 'View logs'}</button>
+    {options.showApp && onOpenViewport && <button className="ghost-button sm" onClick={onOpenViewport}>Show app</button>}
     {options.retry && <button className="ghost-button sm" onClick={() => void run()} disabled={busy}>Retry</button>}
     {options.changePort && <button className="primary-button sm" onClick={() => void changePort()} disabled={busy}>Change port</button>}
   </div>
@@ -261,9 +219,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
       {status.running && <span className={`app-ready-badge ${status.ready ? 'ready' : 'starting'}`}>{status.ready ? '● Ready' : status.state === 'ownership_unknown' ? '● Blocked' : '◌ Starting…'}</span>}
       {status.state === 'port_conflict' && <span className="app-ready-badge failed">● Port conflict</span>}
       {exitInfo && <span className={`app-ready-badge ${exitInfo.tone === 'fail' ? 'failed' : 'finished'}`}>{exitInfo.tone === 'fail' ? '● Failed' : '● Finished'}</span>}
-      {status.running && status.ready && <div className="vp-seg">{VIEWPORTS.map(v => <button key={v.key} className={vw === v.key ? 'active' : ''} onClick={() => setVw(v.key)} title={v.label} aria-label={v.label}><v.Icon size={16} /></button>)}</div>}
       <span className="spacer" />
-      {status.running && status.ready && <><a className="ghost-button sm app-act" href={openUrl} target="_blank" rel="noreferrer" title="Open in new tab" aria-label="Open in new tab"><span className="act-ico">↗</span><span className="btn-txt">Open</span></a><button className="ghost-button sm app-act" onClick={() => setReloadKey(k => k + 1)} title="Reload" aria-label="Reload"><span className="act-ico">⟳</span><span className="btn-txt">Reload</span></button><button className="ghost-button sm app-act" onClick={() => setShowLogs(value => !value)} title={showLogs ? 'Hide logs' : 'Logs'} aria-label={showLogs ? 'Hide logs' : 'Logs'} aria-expanded={showLogs}><span className="act-ico">≡</span><span className="btn-txt">{showLogs ? 'Hide logs' : 'Logs'}</span></button><button className="ghost-button sm danger app-act" onClick={() => void stop()} disabled={busy} title="Stop" aria-label="Stop"><span className="act-ico">■</span><span className="btn-txt">Stop</span></button></>}
       <button className="icon-button" onClick={close} disabled={busy} aria-label="Close">✕</button>
     </div>
 
@@ -320,11 +276,21 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
     {status.running && status.ready && showLogs && <section className="app-ready-logs" aria-label="Command logs">
       <pre className="app-log">{logText}</pre>
     </section>}
-    {status.running && status.ready && <div className="app-preview-area">
-      <div className="app-viewport" style={{ width, maxWidth: '100%' }}>
-        <iframe key={reloadKey} className="app-frame" title="App preview" src={previewUrl} onLoad={() => { previewLoadedRef.current = true }} sandbox={isolatedOrigin ? 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals' : 'allow-scripts allow-forms allow-popups allow-modals'} />
+    {/* The compact status the dock keeps once the viewport owns the picture
+        (#147): what is running, where, and one way to bring it up. Stop stays
+        here because starting and stopping are the controls' job. */}
+    {status.running && status.ready && <section className="app-run-status" role="status">
+      <h3>Running in the main window</h3>
+      <p className="app-run-status-meta">
+        <code>{status.command}</code>{status.port != null && <> · port {status.port}</>}
+      </p>
+      <p className="muted">The live app renders in the Artifacts main window, at full width.</p>
+      <div className="app-state-actions">
+        {onOpenViewport && <button className="primary-button sm" onClick={onOpenViewport}>Show app</button>}
+        <button className="ghost-button sm" onClick={() => setShowLogs(value => !value)} aria-expanded={showLogs}>{showLogs ? 'Hide logs' : 'Logs'}</button>
+        <button className="ghost-button sm danger" onClick={() => void stop()} disabled={busy}>Stop</button>
       </div>
-    </div>}
+    </section>}
     {status.state === 'ownership_unknown' && <div className="app-booting">
       <section className="app-state-card warning" role="alert">
         <h3>Preview ownership could not be verified</h3>
@@ -337,7 +303,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
       <section className="app-state-card warning" role="status">
         <h3>Still waiting for a preview server</h3>
         <p>This is taking longer than expected. The command is still running, but no ownership-verified server is ready.</p>
-        {stateActions({})}
+        {stateActions({ showApp: true })}
         {showLogs && <pre className="app-log">{logText}</pre>}
       </section>
     </div>}
@@ -345,7 +311,7 @@ export function AppRunner({ token, slug, onClose, initialDir, initialCommand }: 
       <div className="app-booting-inner">
         <span className="app-spinner" /><strong>Starting your app…</strong>
         <p className="muted">Running <code>{status.command}</code> — waiting for the server to come up.</p>
-        {stateActions({})}
+        {stateActions({ showApp: true })}
         {showLogs && <pre className="app-log">{hasLogs ? (status.log || []).slice(-12).join('\n') : logText}</pre>}
       </div>
     </div>}

@@ -125,6 +125,10 @@
 	--moodboard-shot-max-height: 24rem;
 	--app-log-max-height: 15rem;
 	--app-state-card-width: 35rem;
+	/* Below this a main-window surface bar (the artifact viewer, the app
+	   viewport) stops shrinking its title and wraps its actions to their own
+	   row, instead of the title vanishing into an ellipsis. */
+	--surface-bar-title-min: 16rem;
 
 	color-scheme: light;
 	--font-sans:
@@ -8898,15 +8902,6 @@ div.result-media {
 	gap: 12px;
 	overflow: auto;
 }
-.app-preview-area {
-	flex: 1;
-	min-height: 0;
-	overflow: auto;
-	display: flex;
-	justify-content: center;
-	padding: 16px;
-	background: var(--ui-surface-subtle);
-}
 .app-ready-logs {
 	flex: 0 1 var(--app-log-max-height);
 	min-height: 0;
@@ -8919,20 +8914,145 @@ div.result-media {
 	margin: 0;
 	overflow: auto;
 }
-.app-viewport {
+/* Run & Preview — the compact status the dock keeps once the main window owns
+   the picture (#147): what is running, where, and the way to bring it up. */
+.app-run-status {
+	display: grid;
+	gap: var(--space-2);
+	padding: var(--space-4);
+	overflow: auto;
+}
+.app-run-status h3 {
+	margin: 0;
+	font-size: var(--text-md);
+}
+.app-run-status p {
+	margin: 0;
+	font-size: var(--text-sm);
+}
+.app-run-status-meta code {
+	font-size: var(--text-xs);
+}
+.app-run-status .app-state-actions {
+	margin-top: var(--space-1);
+}
+
+/* Run & Preview — the app viewport in the Artifacts main window (#147). It is a
+   sibling of the artifact viewer surface, so it wears the same bar. */
+.app-viewport-surface {
+	flex: 1;
+	min-height: 0;
+	display: grid;
+	grid-template-rows: auto minmax(0, 1fr);
+	background: var(--brand-mark-deep);
+}
+.app-viewport-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+	row-gap: var(--space-2);
+	/* A grid item does not shrink below min-content on its own, and the dock
+	   halves this surface's width. Let the bar shrink, then wrap. */
+	min-width: 0;
+	flex-wrap: wrap;
+	padding: var(--space-3) var(--space-4);
+	color: var(--ui-on-accent);
+}
+.app-viewport-title {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	flex: 1 1 auto;
+	min-width: min(100%, var(--surface-bar-title-min));
+}
+.app-viewport-bar .app-ready-badge {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+.app-viewport-back {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+.app-viewport-title h2 {
+	margin: 0;
+	overflow: hidden;
+	color: inherit;
+	font-size: var(--text-base);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.app-viewport-port {
+	flex: 0 0 auto;
+	font-size: var(--text-xs);
+	font-family: var(--font-mono);
+	color: color-mix(in srgb, var(--ui-on-accent) 72%, transparent);
+}
+.app-viewport-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	flex: 0 0 auto;
+}
+.app-viewport-bar .ghost-button {
+	color: var(--ui-on-accent);
+	background: color-mix(in srgb, var(--ui-on-accent) 12%, transparent);
+	border-color: color-mix(in srgb, var(--ui-on-accent) 28%, transparent);
+	text-decoration: none;
+}
+.app-viewport-bar .ghost-button:hover {
+	color: var(--ui-on-accent);
+	background: color-mix(in srgb, var(--ui-on-accent) 24%, transparent);
+}
+.app-viewport-bar .vp-seg {
+	border-color: color-mix(in srgb, var(--ui-on-accent) 28%, transparent);
+}
+.app-viewport-bar .vp-seg button {
+	color: color-mix(in srgb, var(--ui-on-accent) 72%, transparent);
+}
+.app-viewport-area {
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	justify-content: center;
+	overflow: auto;
+	padding: var(--space-4);
+	border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+	background: var(--ui-surface-subtle);
+}
+.app-viewport-stage {
 	height: 100%;
+	max-width: 100%;
 	border-radius: var(--radius-md);
 	overflow: hidden;
 	background: var(--ui-surface);
 	box-shadow: var(--shadow-composer);
 	transition: width var(--t) var(--ease);
 }
-.app-viewport .app-frame {
+.app-viewport-stage .app-frame {
 	width: 100%;
 	height: 100%;
 	border: 0;
 	background: var(--ui-surface);
 	display: block;
+}
+/* No server to frame: say which state this is and leave a way on, never a
+   blank rectangle (prune B5, #133). */
+.app-viewport-idle {
+	margin: auto;
+	display: grid;
+	gap: var(--space-2);
+	justify-items: center;
+	text-align: center;
+	max-width: var(--app-state-card-width);
+}
+.app-viewport-idle h3 {
+	margin: 0;
+	font-size: var(--text-md);
+}
+.app-viewport-idle p {
+	margin: 0;
+	font-size: var(--text-sm);
 }
 .ghost-button.sm.danger {
 	color: var(--ui-danger);
@@ -9152,19 +9272,9 @@ div.result-media {
 	.app-runner-head .spacer {
 		display: none;
 	}
-	.app-runner-head .ghost-button.sm,
 	.app-runner-head .icon-button {
 		flex: 0 0 auto;
-	}
-	.app-runner-head .icon-button {
 		margin-left: auto;
-	}
-	.vp-seg {
-		flex: 1 1 auto;
-	}
-	.vp-seg button {
-		flex: 1;
-		padding: 6px 8px;
 	}
 	.app-runner-bar {
 		flex-direction: column;
@@ -9194,33 +9304,22 @@ div.result-media {
 	.app-runner-power small {
 		text-align: left;
 	}
-	.app-preview-area {
-		padding: 8px;
+	.app-viewport-bar {
+		flex-wrap: wrap;
+		row-gap: var(--space-2);
+	}
+	.app-viewport-bar .vp-seg {
+		flex: 1 1 auto;
+	}
+	.app-viewport-bar .vp-seg button {
+		flex: 1;
+		padding: var(--space-2) var(--space-2);
+	}
+	.app-viewport-area {
+		padding: var(--space-2);
 	}
 	.app-runner-cwd {
 		word-break: break-all;
-	}
-}
-
-/* Run & Preview — icon-only actions on mobile */
-.app-act {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-}
-.app-act .act-ico {
-	font-size: var(--text-sm);
-	line-height: 1;
-}
-@media (max-width: 640px) {
-	.app-runner-head .app-act .btn-txt {
-		display: none;
-	}
-	.app-runner-head .app-act {
-		padding: 7px 10px;
-	}
-	.app-runner-head .vp-seg button {
-		padding: 6px 10px;
 	}
 }
 
@@ -9243,9 +9342,6 @@ div.result-media {
 	font-weight: 600;
 	padding: 8px 12px;
 	border-radius: var(--radius-md);
-}
-.app-runner-dock .app-act {
-	padding: 7px 11px;
 }
 .app-runner-bar {
 	align-items: center;

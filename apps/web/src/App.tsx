@@ -512,6 +512,14 @@ export function App() {
     setPendingFile({ slug, path, target })
     setView('artifacts')
   }, [])
+  // The dock's Run & Preview keeps the controls; the app itself renders in the
+  // Artifacts main window (#147, ADR-0043 decision 4). Same shape as the file
+  // handoff above - the dock names a project, this decides where it lands.
+  const [pendingApp, setPendingApp] = React.useState<{ slug: string } | null>(null)
+  const openAppViewportInMainWindow = React.useCallback((slug: string) => {
+    setPendingApp({ slug })
+    setView('artifacts')
+  }, [])
   const [pendingMasterMessageId, setPendingMasterMessageId] = React.useState<number | null>(null)
   const [pendingArtifact, setPendingArtifact] = React.useState<OutputLink | null>(null)
   const reviewDraftNonce = React.useRef(0)
@@ -529,6 +537,7 @@ export function App() {
     setDesignProjectSlug(null)
     setPendingFile(null)
     setPendingArtifact(null)
+    setPendingApp(null)
     setPendingMasterMessageId(null)
     setReturnToChat(null)
     setOpsMigrationSlug(null)
@@ -1636,6 +1645,7 @@ export function App() {
       projectLockedReason="Project is locked while this view is open"
       projectToolsAvailable={projectToolsSynchronized}
       onOpenFile={openFileInMainWindow}
+      onOpenAppViewport={openAppViewportInMainWindow}
     >
       {error && <div className="error-bar">{error}</div>}
       {projectFallbackNotice && (
@@ -1659,12 +1669,12 @@ export function App() {
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
         const chat = <ChatScreen active={chatActive} activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} onActiveProfile={setActiveProfile} onActiveProject={setActiveProjectOnly} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} draftSeed={reviewDraft?.text} draftSeedNonce={reviewDraft?.nonce} onDraftSeedConsumed={clearReviewDraft} />
         const body = activeSession?.workflow_id
-          ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled onOpenDesign={id => { openDesignById(id, 'chat', 'Chat') }} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} /></React.Suspense></div>
+          ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled onOpenDesign={id => { openDesignById(id, 'chat', 'Chat') }} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} onOpenAppViewport={openAppViewportInMainWindow} /></React.Suspense></div>
           : chat
         return pane('chat', chatActive, body)
       })()}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
-      {keep('artifacts') && pane('artifacts', artifactsActive, <React.Suspense fallback={<ViewFallback label="Loading artifacts..." />}><ArtifactsScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={delegateActive ? undefined : openSessionById} designStudioEnabled={!delegateActive} onOpenDesign={delegateActive ? undefined : id => { openDesignById(id, 'artifacts') }} reviewSessionId={delegateActive ? null : returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={delegateActive ? undefined : continueArtifactReview} /></React.Suspense>)}
+      {keep('artifacts') && pane('artifacts', artifactsActive, <React.Suspense fallback={<ViewFallback label="Loading artifacts..." />}><ArtifactsScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} pendingApp={pendingApp} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onPendingAppConsumed={() => setPendingApp(null)} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={delegateActive ? undefined : openSessionById} designStudioEnabled={!delegateActive} onOpenDesign={delegateActive ? undefined : id => { openDesignById(id, 'artifacts') }} reviewSessionId={delegateActive ? null : returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={delegateActive ? undefined : continueArtifactReview} /></React.Suspense>)}
       {keep('workflows') && pane('workflows', workflowsActive, <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen graphContent={<GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} backNonce={graphBackNonce} />} /></React.Suspense>)}
       {keep('activity') && pane('activity', activityActive, <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={delegateActive ? null : activeProject} projects={projects} globalScope={delegateActive} profiles={profiles} onOpenTask={jobId => openTask(jobId, 'activity')} onOpenPlan={jobId => {
         // A graph plan editor is a Work surface. Opening it is an explicit

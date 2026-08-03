@@ -36,9 +36,12 @@ type RunCard = {
 // The "Panggung" — the BIG pane beside the iterate chat. The recipe is editable here
 // directly; the Result tab shows a UNIVERSAL view of whatever the dry-run produced —
 // designs, runnable apps / pages (live preview), articles, and files — grouped by type.
-export function IterateStage({ token, workflowId, sessionId, projectSlug, running = false, designStudioEnabled = false, onOpenDesign, onRunRecipe }: {
+export function IterateStage({ token, workflowId, sessionId, projectSlug, running = false, designStudioEnabled = false, onOpenDesign, onRunRecipe, onOpenAppViewport }: {
   token: string; workflowId: number; sessionId: number; projectSlug: string | null
   running?: boolean; designStudioEnabled?: boolean; onOpenDesign?: (id: string) => void; onRunRecipe?: (prompt?: string, label?: string, instantResult?: string) => void
+  /** The test bench runs the app here; the app itself renders in the Artifacts
+   *  main window (#147), so the bench needs the same shell seam the dock uses. */
+  onOpenAppViewport?: (slug: string) => void
 }) {
   const [steps, setSteps] = React.useState<WorkflowStep[]>([])
   const [sel, setSel] = React.useState(0)
@@ -513,7 +516,7 @@ Finish with a short result summary and artifact/file links if created.`, label, 
       </div>
     )}
 
-    {runnerOpen && projectSlug && <AppRunner token={token} slug={projectSlug} onClose={() => setRunnerOpen(false)} />}
+    {runnerOpen && projectSlug && <AppRunner token={token} slug={projectSlug} onClose={() => setRunnerOpen(false)} onOpenViewport={onOpenAppViewport && (() => onOpenAppViewport(projectSlug))} />}
     {doc && <div className="art-doc-scrim" onClick={() => setDoc(null)}>
       <div className="art-doc" onClick={e => e.stopPropagation()}>
         <header className="art-doc-head"><strong>{doc.title}</strong><button className="icon-btn" onClick={() => setDoc(null)}>✕</button></header>

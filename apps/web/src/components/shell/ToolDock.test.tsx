@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { containerInspectionFs, projectFs } from '../../api/fsAdapter'
 import { ToolDock } from './ToolDock'
+import { openRunPreview } from '../../lib/runPreview'
 import type { Project } from '../../types'
 
 // One folder shape for every adapter: a directory, a file, and a symlink the
@@ -36,7 +37,11 @@ vi.mock('../terminal/TerminalTabs', () => ({
   TerminalTabs: ({ projectSlug }: { projectSlug?: string }) => <div data-testid="terminal-stub">terminal:{projectSlug || 'none'}</div>,
 }))
 vi.mock('../files/AppRunner', () => ({
-  AppRunner: ({ slug }: { slug: string }) => <div data-testid="preview-stub">preview:{slug}</div>,
+  AppRunner: ({ slug, onOpenViewport }: { slug: string; onOpenViewport: () => void }) => (
+    <div data-testid="preview-stub">preview:{slug}
+      <button type="button" onClick={onOpenViewport}>Show app</button>
+    </div>
+  ),
 }))
 
 const project = { slug: 'master', name: 'Master', visibility: 'private' } as Project
@@ -132,6 +137,34 @@ describe('ToolDock', () => {
     await user.click(rail.querySelector('[aria-label="Preview"]') as HTMLElement)
     expect(await screen.findByTestId('preview-stub')).toBeVisible()
     await user.click(rail.querySelector('[aria-label="Preview"]') as HTMLElement)
+    expect(screen.queryByTestId('preview-stub')).not.toBeInTheDocument()
+  })
+
+  it('sends the run controls\u2019 viewport request to the shell owner', async () => {
+    // The dock cannot open a destination by itself - opening Artifacts is App
+    // state. It names the project and the shell routes it (#147), the same
+    // shape the file handoff uses (#146).
+    const user = userEvent.setup()
+    const onOpenAppViewport = vi.fn()
+    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} onOpenAppViewport={onOpenAppViewport} />)
+    const rail = screen.getByRole('complementary', { name: 'Tools' })
+    await user.click(rail.querySelector('[aria-label="Preview"]') as HTMLElement)
+    await user.click(await screen.findByRole('button', { name: 'Show app' }))
+    expect(onOpenAppViewport).toHaveBeenCalledWith('master')
+  })
+
+  it('opens the run controls when the main-window viewport asks for them', async () => {
+    // The other direction needs no shell state: the viewport just asks the dock
+    // to show a tool it already owns, so a stopped app is never a dead end.
+    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} onOpenAppViewport={vi.fn()} />)
+    expect(screen.queryByTestId('preview-stub')).not.toBeInTheDocument()
+    act(() => { openRunPreview() })
+    expect(await screen.findByTestId('preview-stub')).toBeVisible()
+  })
+
+  it('ignores a run-controls request while Project tools are suppressed', async () => {
+    render(<ToolDock token="t" project={project} available={false} onOpenSettings={vi.fn()} onOpenAppViewport={vi.fn()} />)
+    act(() => { openRunPreview() })
     expect(screen.queryByTestId('preview-stub')).not.toBeInTheDocument()
   })
 

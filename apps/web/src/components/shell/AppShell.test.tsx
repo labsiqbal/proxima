@@ -8,9 +8,11 @@ vi.mock('./ToolDock', () => ({
   ToolDock: (props: {
     projects?: { slug: string }[]
     onOpenFile?: (slug: string, path: string) => void
+    onOpenAppViewport?: (slug: string) => void
   }) => (
     <div data-testid="tool-dock" data-projects={props.projects?.length ?? 0}>
       <button type="button" onClick={() => props.onOpenFile?.('demo', 'notes.md')}>dock open file</button>
+      <button type="button" onClick={() => props.onOpenAppViewport?.('demo')}>dock show app</button>
     </div>
   ),
 }))
@@ -205,6 +207,18 @@ describe('AppShell mobile drawer + search', () => {
     expect(screen.getByTestId('tool-dock')).toHaveAttribute('data-projects', '1')
     await user.click(screen.getByRole('button', { name: 'dock open file' }))
     expect(onOpenFile).toHaveBeenCalledWith('demo', 'notes.md')
+  })
+
+  // The run controls keep the same shape for the running app (#147): the dock
+  // asks, the shell owner routes it to the Artifacts main window.
+  it('hands the dock\u2019s app-viewport request to the shell owner', async () => {
+    const user = userEvent.setup()
+    const onOpenAppViewport = vi.fn()
+    render(
+      <AppShell {...base} onOpenAppViewport={onOpenAppViewport}><div>main</div></AppShell>,
+    )
+    await user.click(screen.getByRole('button', { name: 'dock show app' }))
+    expect(onOpenAppViewport).toHaveBeenCalledWith('demo')
   })
 
   it('keeps Delegate global while retaining the accessible shell sidebar', async () => {
