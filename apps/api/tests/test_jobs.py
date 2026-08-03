@@ -453,3 +453,44 @@ def test_archive_old_jobs_helper(tmp_path):
     assert n == 1
     archived = {r["title"] for r in conn.execute("SELECT title FROM jobs WHERE archived_at IS NOT NULL")}
     assert archived == {"old"}
+
+
+def test_delete_job_after_a_restart_when_a_tombstone_already_exists(tmp_path):
+    """#149: DELETE /api/jobs/{id} returned 500 on any restarted install.
+
+    Deleting a Task upserts its recovery tombstone. A Task whose tombstone was
+    already captured earlier (the recovery path, ``deletion_source='task_event'``)
+    takes the upsert's DO UPDATE branch, which only the *identity*-scoped
+    tombstone guard allows. Booting the app a second time is what used to
+    re-install an older, blanket guard over the migrated one, so the delete
+    aborted -- reproduced here by building the app twice on the same database.
+    """
+    app = _app(tmp_path)
+    c = _client(app)
+    job = c.post("/api/jobs", json={"input": {"brief": "plan"}}).json()
+    job_id = int(job["id"])
+    app.state.db.execute(
+        "INSERT INTO task_recovery_history_tombstones("
+        "job_id, task_session_id, capture_source, deletion_source"
+        ") VALUES (?, ?, 'session', 'task_event')",
+        (job_id, int(job["session_id"])),
+    )
+
+    restarted = _app(tmp_path)
+    restarted_client = _client(restarted)
+
+    assert restarted_client.delete(f"/api/jobs/{job_id}").status_code == 200
+    assert (
+        restarted.state.db.execute(
+            "SELECT 1 FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        is None
+    )
+    assert (
+        restarted.state.db.execute(
+            "SELECT deletion_source FROM task_recovery_history_tombstones "
+            "WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()[0]
+        == "task_event"
+    )

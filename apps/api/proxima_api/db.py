@@ -242,7 +242,10 @@ WHEN NEW.focus_mode IS NOT OLD.focus_mode
   OR NEW.target_container_id IS NOT OLD.target_container_id
   OR NEW.target_area_id IS NOT OLD.target_area_id
 BEGIN
-  SELECT RAISE(ABORT, 'Master message context is immutable');
+  SELECT RAISE(
+    ABORT,
+    'Master message context is immutable'
+  );
 END;
 CREATE INDEX IF NOT EXISTS idx_master_message_context_focus
   ON master_message_context(focus_container_id, message_id);
@@ -287,7 +290,10 @@ WHEN NEW.focus_epoch_id IS NOT OLD.focus_epoch_id
   OR NEW.focus_container_id IS NOT OLD.focus_container_id
   OR NEW.subject_container_id IS NOT OLD.subject_container_id
 BEGIN
-  SELECT RAISE(ABORT, 'Message Focus epoch attribution is immutable');
+  SELECT RAISE(
+    ABORT,
+    'Message Focus epoch attribution is immutable'
+  );
 END;
 CREATE TABLE IF NOT EXISTS message_reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -616,7 +622,10 @@ ON task_delegations
 WHEN NEW.origin_focus_epoch_id IS NOT OLD.origin_focus_epoch_id
   OR NEW.origin_focus_captured != OLD.origin_focus_captured
 BEGIN
-  SELECT RAISE(ABORT, 'Task delegation Focus attribution is immutable');
+  SELECT RAISE(
+    ABORT,
+    'Task delegation Focus attribution is immutable'
+  );
 END;
 CREATE INDEX IF NOT EXISTS idx_task_delegations_origin
   ON task_delegations(origin_session_id, origin_message_id);
@@ -1103,10 +1112,87 @@ CREATE TABLE IF NOT EXISTS task_recovery_correction_gap_history (
   archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (correction_id, gap_id)
 );
+-- A tombstone's *identity* is immutable, but its coverage is not: a Task can be
+-- captured twice (the recovery-outbox path first, the job delete second), and
+-- the second capture upserts wider event/outbox bounds onto the same row. This
+-- body must stay in step with migration 53 -- SCHEMA is re-applied on every
+-- start and drops/recreates each trigger, so an older body here silently
+-- overwrites the migrated one and forbids that legitimate widening forever
+-- (#149: it turned DELETE /api/jobs/{id} into a 500).
 CREATE TRIGGER IF NOT EXISTS task_recovery_history_tombstones_immutable
 BEFORE UPDATE ON task_recovery_history_tombstones
+WHEN NEW.job_id != OLD.job_id
+  OR NEW.deletion_source != OLD.deletion_source
+  OR NEW.deleted_at != OLD.deleted_at
+  OR NOT (
+    NEW.task_session_id IS OLD.task_session_id
+    OR (
+      OLD.task_session_id IS NULL
+      AND NEW.task_session_id IS NOT NULL
+    )
+  )
+  OR NOT (
+    NEW.master_session_id IS OLD.master_session_id
+    OR (
+      OLD.master_session_id IS NULL
+      AND NEW.master_session_id IS NOT NULL
+    )
+  )
+  OR NOT (
+    NEW.first_task_event_id IS OLD.first_task_event_id
+    OR (
+      NEW.first_task_event_id IS NOT NULL
+      AND (
+        OLD.first_task_event_id IS NULL
+        OR NEW.first_task_event_id < OLD.first_task_event_id
+      )
+    )
+  )
+  OR NOT (
+    NEW.last_task_event_id IS OLD.last_task_event_id
+    OR (
+      NEW.last_task_event_id IS NOT NULL
+      AND (
+        OLD.last_task_event_id IS NULL
+        OR NEW.last_task_event_id > OLD.last_task_event_id
+      )
+    )
+  )
+  OR NOT (
+    NEW.first_recovery_outbox_id
+      IS OLD.first_recovery_outbox_id
+    OR (
+      NEW.first_recovery_outbox_id IS NOT NULL
+      AND (
+        OLD.first_recovery_outbox_id IS NULL
+        OR NEW.first_recovery_outbox_id
+          < OLD.first_recovery_outbox_id
+      )
+    )
+  )
+  OR NOT (
+    NEW.last_recovery_outbox_id IS OLD.last_recovery_outbox_id
+    OR (
+      NEW.last_recovery_outbox_id IS NOT NULL
+      AND (
+        OLD.last_recovery_outbox_id IS NULL
+        OR NEW.last_recovery_outbox_id
+          > OLD.last_recovery_outbox_id
+      )
+    )
+  )
+  OR NOT (
+    NEW.capture_source IS OLD.capture_source
+    OR (
+      OLD.capture_source IS NULL
+      AND NEW.capture_source IS NOT NULL
+    )
+  )
 BEGIN
-  SELECT RAISE(ABORT, 'recovery history tombstone is immutable');
+  SELECT RAISE(
+    ABORT,
+    'recovery history tombstone identity is immutable'
+  );
 END;
 CREATE TRIGGER IF NOT EXISTS
 task_recovery_history_tombstones_delete_immutable
@@ -1512,18 +1598,30 @@ def _split_statements(script: str) -> list[str]:
     return statements
 
 
+# Leading `--` comments belong to the statement that follows them, so they must
+# be skipped before the CREATE is recognised. Anchoring straight at CREATE meant
+# a documented trigger silently dropped out of the managed set: it was neither
+# installed nor kept in step with the migrations, and an older body already in
+# the database was left untouched.
 _TRIGGER_HEAD = re.compile(
-    r"^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z0-9_]+)",
+    r"^(?:\s*--[^\n]*\n)*\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z0-9_]+)",
     re.IGNORECASE | re.DOTALL,
 )
 
 _TRIGGER_TARGET = re.compile(r"\bON\s+([A-Za-z0-9_]+)", re.IGNORECASE)
 
+_SQL_LINE_COMMENT = re.compile(r"^\s*--[^\n]*$", re.MULTILINE)
+
 
 def _trigger_target_table(statement: str) -> str:
-    """The table a CREATE TRIGGER statement fires on."""
+    """The table a CREATE TRIGGER statement fires on.
+
+    Comment lines are dropped first: prose above (or inside) the header is
+    ordinary English, and a stray "on" in it would otherwise be read as the
+    trigger's target table, which silently makes the trigger uninstallable.
+    """
     header = re.split(r"\bBEGIN\b", statement, maxsplit=1, flags=re.IGNORECASE)[0]
-    match = _TRIGGER_TARGET.search(header)
+    match = _TRIGGER_TARGET.search(_SQL_LINE_COMMENT.sub("", header))
     return match.group(1) if match else ""
 
 

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
 import pytest
 
-from proxima_api.db import SCHEMA, connect, init_db
+from proxima_api.db import (
+    _SCHEMA_TRIGGER_STATEMENTS,
+    SCHEMA,
+    connect,
+    init_db,
+)
 from proxima_api.master_persistence import MasterPersistenceError
 from proxima_api.migrations import MIGRATIONS, current_version, run_migrations
 
@@ -4013,3 +4019,91 @@ def test_table_rebuild_keeps_referencing_foreign_keys_pointing_at_the_real_table
     assert "references master_projections(id) on delete set null" in outbox_sql
     assert "_before_decisions" not in outbox_sql
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def _boot(conn: sqlite3.Connection, db_path: Path) -> None:
+    """One server start: SCHEMA is applied, then pending migrations run."""
+    init_db(conn)
+    run_migrations(conn, str(db_path))
+
+
+def _trigger_bodies(conn: sqlite3.Connection) -> dict[str, str]:
+    return {
+        str(row["name"]): " ".join(str(row["sql"]).split())
+        for row in conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'trigger'"
+        ).fetchall()
+    }
+
+
+def test_restarting_the_server_does_not_rewrite_any_trigger(tmp_path: Path):
+    """SCHEMA's trigger bodies must match what the migrations install.
+
+    ``init_db`` re-applies SCHEMA on *every* start and ``apply_schema_triggers``
+    drops and recreates each trigger, while an already-applied migration never
+    runs again. A SCHEMA trigger left on an older body therefore silently
+    overwrites the migrated one on the second boot and stays wrong forever --
+    the shape that broke DELETE /api/jobs/{id} (#149).
+    """
+    db_path = tmp_path / "restart-triggers.db"
+    conn = connect(db_path)
+    _boot(conn, db_path)
+    after_first = _trigger_bodies(conn)
+
+    _boot(conn, db_path)
+
+    assert _trigger_bodies(conn) == after_first
+
+
+def test_deleting_a_task_that_already_has_a_tombstone_survives_a_restart(
+    tmp_path: Path,
+):
+    """The #149 repro: the second capture of a Task's recovery tombstone.
+
+    Deleting a job fires ``jobs_archive_recovery_history``, which upserts into
+    the tombstone table. When a tombstone already exists the upsert takes its
+    DO UPDATE branch, so a tombstone trigger that forbids *every* update -- not
+    just an identity change -- aborts the delete with a 500.
+    """
+    db_path = tmp_path / "delete-task-after-restart.db"
+    conn = connect(db_path)
+    _boot(conn, db_path)
+    conn.execute("INSERT INTO jobs(id, title) VALUES (3, 'Untitled plan')")
+    conn.execute(
+        "INSERT INTO task_recovery_history_tombstones("
+        "job_id, task_session_id, capture_source, deletion_source"
+        ") VALUES (3, 7, 'session', 'task_event')"
+    )
+
+    _boot(conn, db_path)
+
+    conn.execute("DELETE FROM jobs WHERE id = 3")
+    assert conn.execute("SELECT COUNT(*) FROM jobs WHERE id = 3").fetchone()[0] == 0
+    tombstone = conn.execute(
+        "SELECT task_session_id, deletion_source FROM "
+        "task_recovery_history_tombstones WHERE job_id = 3"
+    ).fetchone()
+    assert (tombstone[0], tombstone[1]) == (7, "task_event")
+
+
+def test_every_schema_trigger_is_managed_and_targets_a_real_table():
+    """No SCHEMA trigger may drop out of the set apply_schema_triggers manages.
+
+    A trigger is only kept in step with the migrations while it is recognised
+    *and* its target table resolves. Prose around the header used to break both
+    -- a leading comment hid the CREATE, and an "on" inside that prose was read
+    as the target table -- leaving the trigger uninstalled and any older body in
+    the database untouched.
+    """
+    declared = re.findall(
+        r"CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?\s*([A-Za-z0-9_]+)",
+        SCHEMA,
+        re.IGNORECASE,
+    )
+    managed = {name for name, _, _ in _SCHEMA_TRIGGER_STATEMENTS}
+    tables = set(re.findall(r"CREATE TABLE IF NOT EXISTS ([A-Za-z0-9_]+)", SCHEMA))
+
+    assert sorted(managed) == sorted(declared)
+    assert [
+        name for name, table, _ in _SCHEMA_TRIGGER_STATEMENTS if table not in tables
+    ] == []
