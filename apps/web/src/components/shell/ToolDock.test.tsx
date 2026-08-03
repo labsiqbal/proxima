@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { containerInspectionFs, projectFs } from '../../api/fsAdapter'
@@ -36,9 +36,13 @@ vi.mock('@uiw/react-codemirror', () => ({
 vi.mock('../terminal/TerminalTabs', () => ({
   TerminalTabs: ({ projectSlug }: { projectSlug?: string }) => <div data-testid="terminal-stub">terminal:{projectSlug || 'none'}</div>,
 }))
+// Mirrors the real AppRunner's close contract (#161): it renders its own ✕ only
+// for a host that gives it one, so a dock that stops passing `onClose` is
+// visible in this stub instead of being hidden behind it.
 vi.mock('../files/AppRunner', () => ({
-  AppRunner: ({ slug, onOpenViewport }: { slug: string; onOpenViewport: () => void }) => (
+  AppRunner: ({ slug, onClose, onOpenViewport }: { slug: string; onClose?: () => void; onOpenViewport: () => void }) => (
     <div data-testid="preview-stub">preview:{slug}
+      {onClose && <button type="button" aria-label="Close" onClick={onClose}>✕</button>}
       <button type="button" onClick={onOpenViewport}>Show app</button>
     </div>
   ),
@@ -61,6 +65,29 @@ describe('ToolDock', () => {
     }
     ;(rail.querySelector('[aria-label="Settings"]') as HTMLButtonElement).click()
     expect(onOpenSettings).toHaveBeenCalled()
+  })
+
+  it('gives every tool exactly one close affordance - the tab row owns it', async () => {
+    // Preview used to stack two ✕ on the same edge: the tab row's and the Run &
+    // Preview header's (#161). The panel is one container, so one row closes it,
+    // and the rule is the same for all three tools.
+    const user = userEvent.setup()
+    render(<ToolDock token="t" project={project} onOpenSettings={vi.fn()} onOpenAppViewport={vi.fn()} />)
+    const rail = screen.getByRole('complementary', { name: 'Tools' })
+    const panel = screen.getByLabelText('Tool panel')
+    const settled: [string, () => Promise<unknown>][] = [
+      ['Terminal', () => screen.findByTestId('terminal-stub')],
+      ['Files', () => screen.findByText('notes.md')],
+      ['Preview', () => screen.findByTestId('preview-stub')],
+    ]
+    for (const [tool, mounted] of settled) {
+      await user.click(rail.querySelector(`[aria-label="${tool}"]`) as HTMLElement)
+      // Wait for the pane itself: Terminal and Preview load lazily, and a
+      // count taken over the Suspense fallback would miss their chrome.
+      await mounted()
+      const closers = within(panel).getAllByRole('button', { name: /^close/i })
+      expect(closers.map(button => button.getAttribute('aria-label'))).toEqual(['Close tool panel'])
+    }
   })
 
   it('opens the terminal overlay and keeps shells mounted after closing', async () => {

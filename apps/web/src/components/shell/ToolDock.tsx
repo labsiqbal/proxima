@@ -181,7 +181,10 @@ export function ToolDock({ token, project, projects = [], available = true, onOp
         {open === 'preview' && <div className="tool-pane" style={{ display: 'flex' }}>
           {slug
             ? <React.Suspense fallback={<PaneFallback label="Loading preview…" />}>
-                <AppRunner token={token} slug={slug} onClose={closePanel} onOpenViewport={onOpenAppViewport && (() => onOpenAppViewport(slug))} />
+                {/* No `onClose`: the tab row above owns closing this panel, the
+                    same as it does for Terminal and Files. Passing one put a
+                    second ✕ on the row below the first (#161). */}
+                <AppRunner token={token} slug={slug} onOpenViewport={onOpenAppViewport && (() => onOpenAppViewport(slug))} />
               </React.Suspense>
             : <PaneFallback label="Pick a project to run and preview its app." />}
         </div>}

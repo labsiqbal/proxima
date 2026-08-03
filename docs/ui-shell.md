@@ -313,6 +313,15 @@ Project agree, preventing Preview from presenting stale Work context.
   page and the recipe test bench keep their own Preview entry points for app-type
   artifacts, and both route their picture to the same main-window viewport.
 
+**One container, one close affordance** (#161). The panel's tab row owns closing it,
+identically for all three tools. `AppRunner` takes `onClose` only from a host that
+wraps it in no chrome of its own - the deliverable record page and the iterate stage,
+where its header ✕ is the only way out - so inside the dock its header carries the
+title and the Ready/Starting badge and nothing else. It used to take one there too,
+which put a second ✕ on the row immediately below the tab row's. Terminal's per-tab ✕
+is not a second close for the panel: it ends **that shell session** and says so
+(`Close Terminal 2`), which is why it stays.
+
 The rail's bottom gear opens Settings. Escape closes the panel unless a modal overlay is open - the topmost overlay owns the key, so a confirm dialog raised over the dock is dismissed first. A handed-off file is not one of those since #146: it opens in the main window behind the panel, and neither surface answers Escape. Picking a tool by hand ends any reveal detour, so Files returns to the active project. The rail persists at mobile widths (fixed to the right edge below the mobile top bar), so every tool stays reachable on a phone.
 
 ## Chrome Back, project lock, and multitask keep-alive

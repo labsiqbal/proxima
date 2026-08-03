@@ -28,7 +28,14 @@ const OWNER_POWER_ACK_KEY = 'proxima.ownerpower.ack'
 export function AppRunner({ token, slug, onClose, onOpenViewport, initialDir, initialCommand }: {
   token: string
   slug: string
-  onClose: () => void
+  /**
+   * Close affordance for hosts that embed these controls inline and have no
+   * chrome of their own (the deliverable record, the iterate stage). Omitted by
+   * the tool dock: there the panel's tab row owns closing, and rendering a
+   * second ✕ directly under it stacked two close buttons on the same edge
+   * (#161). One container, one way to close it.
+   */
+  onClose?: () => void
   /**
    * Bring this project's app viewport up in the main window (#147). Absent
    * where the shell cannot route one, and then "Show app" is absent too -
@@ -112,7 +119,7 @@ export function AppRunner({ token, slug, onClose, onOpenViewport, initialDir, in
     if (initialDir != null) setDir(initialDir)
     if (initialCommand) setCommand(initialCommand)
   }, [initialDir, initialCommand])
-  const close = () => { if (!busy) onClose() }
+  const close = () => { if (!busy) onClose?.() }
   const pick = (a: DetectedApp) => {
     if (busy) return
     setDir(a.dir)
@@ -220,7 +227,7 @@ export function AppRunner({ token, slug, onClose, onOpenViewport, initialDir, in
       {status.state === 'port_conflict' && <span className="app-ready-badge failed">● Port conflict</span>}
       {exitInfo && <span className={`app-ready-badge ${exitInfo.tone === 'fail' ? 'failed' : 'finished'}`}>{exitInfo.tone === 'fail' ? '● Failed' : '● Finished'}</span>}
       <span className="spacer" />
-      <button className="icon-button" onClick={close} disabled={busy} aria-label="Close">✕</button>
+      {onClose && <button className="icon-button" onClick={close} disabled={busy} aria-label="Close">✕</button>}
     </div>
 
     {status.running && status.broad_bind && <div className="app-bind-warning" role="alert">

@@ -329,6 +329,36 @@ describe('AppRunner hands the preview to the main window', () => {
   })
 })
 
+// One container, one close affordance (#161). Inline hosts (the deliverable
+// record, the iterate stage) wrap these controls in no chrome of their own, so
+// the header ✕ is their only way out; the tool dock's tab row already owns
+// closing, so the same ✕ there was a second button on the edge below the first.
+describe('AppRunner close affordance', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+    vi.mocked(detectApps).mockResolvedValue({ apps: [] })
+    vi.mocked(appStatus).mockResolvedValue({ state: 'stopped', running: false, ready: false })
+  })
+
+  it('closes for a host that owns no close chrome of its own', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    render(<AppRunner token="token" slug="demo" onClose={onClose} />)
+
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders no close button for a host whose own chrome closes it', () => {
+    render(<AppRunner token="token" slug="demo" />)
+
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument()
+    // The rest of the header is untouched - the panel still names itself.
+    expect(screen.getByText('Run & Preview')).toBeInTheDocument()
+  })
+})
+
 describe('AppRunner owner-power acknowledgement', () => {
   beforeEach(() => {
     localStorage.clear()
