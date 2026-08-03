@@ -2054,7 +2054,7 @@ an imperative sentence, so a new fail-closed state cannot ship with a dead-end m
 
 Wired refusals: preview port conflict and unverified port ownership and a dead preview
 output sink (`apprunner`, plus `AppStatusResponse.next_step`); realpath-jail escape,
-symlink traversal, oversized and non-text file opens (`fsapi`); symlinked or moved
+symlink traversal, oversized and non-text file opens (`fsapi`, `file_targets`); symlinked or moved
 Container root, changed root identity, symlinked or missing Ops folder, missing Ops Area
 (`container_registry`, `layout_map`); Master runner conformance (`routes/master.py`,
 `master_runtime.py`); and a blocked project purge (`route_deps`).

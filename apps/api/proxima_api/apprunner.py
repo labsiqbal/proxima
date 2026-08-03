@@ -57,8 +57,11 @@ class PortInUseError(RuntimeError):
 
     def __init__(self, port: int) -> None:
         self.port = int(port)
+        # Diagnosis only - the owner-facing next step is appended once at the
+        # boundary that renders it (prune B5, #133), so it is not said twice.
         super().__init__(
-            f"Port {self.port} is already in use by another process. Choose a different port; Proxima did not stop it."
+            f"Port {self.port} is already in use by another process. "
+            "Proxima did not open, proxy, or stop it."
         )
 
 

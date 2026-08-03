@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from . import container_registry, fsapi
+from . import container_registry, fsapi, refusals
 
 AREA_KINDS = frozenset(("container", "ops", "code"))
 
@@ -86,7 +86,12 @@ class FileTargetContext:
             None,
         )
         if binding is None:
-            raise FileTargetError("Container has no active Ops Area")
+            raise FileTargetError(
+                refusals.refusal_message(
+                    "container_no_ops_area",
+                    "This project has no active Ops folder",
+                )
+            )
         return binding.root
 
 
@@ -100,7 +105,13 @@ def normalize_relative_path(raw: str, *, allow_empty: bool = True) -> str:
         raise FileTargetError("file path is required")
     candidate = PurePosixPath(text)
     if candidate.is_absolute() or any(part == ".." for part in candidate.parts):
-        raise FileTargetError("path escapes file Area")
+        raise FileTargetError(
+            refusals.refusal_message(
+                "jail_escape",
+                "That path leaves the project folder, and Proxima never "
+                "resolves outside it",
+            )
+        )
     normalized = candidate.as_posix()
     if normalized == ".":
         if allow_empty:
@@ -234,7 +245,13 @@ def _locator_for_absolute(
 ) -> FileLocator:
     container_root = context.container_root
     if absolute != container_root and container_root not in absolute.parents:
-        raise FileTargetError("path escapes Container")
+        raise FileTargetError(
+            refusals.refusal_message(
+                "jail_escape",
+                "That path leaves the project folder, and Proxima never "
+                "resolves outside it",
+            )
+        )
     binding = _authoritative_binding(context.bindings, absolute)
     if binding is None:
         area = FileArea(kind="container", id=None)

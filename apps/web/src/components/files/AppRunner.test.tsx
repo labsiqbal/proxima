@@ -41,7 +41,7 @@ describe('AppRunner collision feedback', () => {
 
   it('shows a port collision instead of presenting a foreign preview', async () => {
     const user = userEvent.setup()
-    vi.mocked(appStart).mockRejectedValue(new Error('Port 5180 is already in use by another process. Choose a different port; Proxima did not stop it.'))
+    vi.mocked(appStart).mockRejectedValue(new Error('Port 5180 is already in use by another process. Proxima did not open, proxy, or stop it.'))
     vi.mocked(appStatus).mockResolvedValue({
       state: 'port_conflict',
       running: false,

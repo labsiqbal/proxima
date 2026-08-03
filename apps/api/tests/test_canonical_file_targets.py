@@ -1021,3 +1021,17 @@ def test_legacy_ops_at_dot_keeps_area_identity_and_does_not_rewrite_ops_prefix(
     assert protected.status_code == 400
 
 
+
+
+# --- Actionable fail-closed refusals (prune B5, #133) ------------------------
+
+
+def test_jail_escape_through_a_file_target_names_the_next_step():
+    """The Area-level jail refusal is the one an owner meets through Files; it
+    must name the way out like every other refusal does."""
+    from proxima_api import refusals
+
+    for raw in ("../outside/secret.md", "/etc/passwd"):
+        with pytest.raises(file_targets.FileTargetError) as caught:
+            file_targets.normalize_relative_path(raw)
+        assert str(caught.value).endswith(refusals.NEXT_STEPS["jail_escape"])
