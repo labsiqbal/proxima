@@ -22,7 +22,9 @@ const withoutComments = stylesSource.replace(/\/\*[\s\S]*?\*\//g, '')
  */
 const ruleFor = (source: string, selector: string, declares?: RegExp) => {
   for (const [, selectors, body] of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if (!selectors.includes(selector)) continue
+    // Exact selector, not substring: `.tool-panel` must not match
+    // `.tool-panel-tabs`.
+    if (!selectors.split(',').some(one => one.trim() === selector)) continue
     if (declares && !declares.test(body)) continue
     return body
   }
@@ -75,5 +77,18 @@ describe('tool dock layout contract', () => {
       .toMatch(/padding-right:\s*var\(--toolrail-w\)/)
     // The sheet is the screen.
     expect(ruleFor(phoneRules, '.tool-panel', /width/)).toMatch(/width:\s*calc\(100vw - var\(--toolrail-w\)\)/)
+  })
+
+  it('writes the phone dock rules after the desktop ones they must beat', () => {
+    // A media query adds no specificity. #154's sheet rules sat in the mobile
+    // block near the top of the file, before `.tool-rail`/`.tool-panel`, so
+    // they silently lost: at 390px the "sheet" was still a 289px column with a
+    // rail beside it. Order is the whole contract here, so it is asserted.
+    const base = (selector: string) => withoutComments.search(
+      new RegExp(`(^|\\n)${selector.replace('.', '\\.')}\\s*\\{`),
+    )
+    const phone = withoutComments.indexOf('--toolrail-w: 0px', withoutComments.indexOf('.tool-pane-hint'))
+    expect(phone).toBeGreaterThan(base('.tool-rail'))
+    expect(phone).toBeGreaterThan(base('.tool-panel'))
   })
 })

@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { AppShell } from './AppShell'
@@ -398,23 +398,34 @@ describe('AppShell delegate header status cluster', () => {
 // the same kind of persisted preference. #156: at phone width there is no rail
 // to collapse, so the same control shows and hides the tool sheet.
 describe('AppShell tool dock collapse', () => {
+  /** Registered `(min-width: 768px)` change handlers, so a test can widen. */
+  const listeners: (() => void)[] = []
+  let isDesktop = false
   const width = (desktop: boolean) => {
+    isDesktop = desktop
     vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
-      matches: query.includes('min-width: 768px') ? desktop : !desktop,
+      get matches() { return query.includes('min-width: 768px') ? isDesktop : !isDesktop },
       media: query,
       onchange: null,
       addListener: vi.fn(),
       removeListener: vi.fn(),
-      addEventListener: vi.fn(),
+      addEventListener: vi.fn((_: string, handler: () => void) => {
+        if (query.includes('min-width: 768px')) listeners.push(handler)
+      }),
       removeEventListener: vi.fn(),
       dispatchEvent: vi.fn(),
     }))
+  }
+  const widenToDesktop = () => {
+    isDesktop = true
+    act(() => { listeners.forEach(handler => handler()) })
   }
   const dock = () => screen.getByTestId('tool-dock')
   const headerToggle = () => within(document.querySelector('.top-bar') as HTMLElement)
     .getByRole('button', { name: 'Toggle tool dock' })
 
   beforeEach(() => {
+    listeners.length = 0
     localStorage.clear()
     localStorage.setItem('proxima.tour.coreDone', '1')
   })
@@ -516,6 +527,25 @@ describe('AppShell tool dock collapse', () => {
     await user.click(screen.getByRole('button', { name: 'dock panel closed' }))
     expect(dock()).toHaveAttribute('data-sheet', 'false')
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('retires the sheet when the window widens into the desktop layout', async () => {
+    // Found live: the sheet flag survived the resize, and the rail then refused
+    // to collapse because an invisible phone state said a sheet was up.
+    width(false)
+    const user = userEvent.setup()
+    const { container } = render(<AppShell {...base}><div>main</div></AppShell>)
+    const bar = container.querySelector('.mobile-topbar') as HTMLElement
+    await user.click(within(bar).getByRole('button', { name: 'Toggle tool dock' }))
+    expect(dock()).toHaveAttribute('data-sheet', 'true')
+
+    widenToDesktop()
+    expect(dock()).toHaveAttribute('data-sheet', 'false')
+
+    // And the header toggle now collapses the rail, as it should on a desktop.
+    await user.click(headerToggle())
+    expect(container.querySelector('.app-shell')).toHaveClass('dock-collapsed')
+    expect(dock()).toHaveAttribute('data-collapsed', 'true')
   })
 
   it('offers no mobile tool control while Project tools are suppressed', () => {

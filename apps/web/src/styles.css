@@ -2134,32 +2134,12 @@ button:disabled {
 	.mobile-only {
 		display: inline-grid;
 	}
-	/* No tool rail at phone width (#156). A 46px lane is 12% of a 390px screen,
-	   permanently, and it was taken from the surface behind it - the Design
-	   Studio canvas ended at the rail's edge. Everything the rail holds is also
-	   one tap away without it: the three tools are the sheet's own tab row, and
-	   Settings is in the drawer's account menu. The sheet is opened from the
-	   mobile top bar's tool control, the same glyph as the header's (#160).
-	   Zeroing the token is the whole layout change - the pane's reserved
-	   padding, the sheet's width, the Master popup's clearance and the toast
-	   column all derive from it. */
-	:root {
-		--toolrail-w: 0px;
-	}
-	.tool-rail {
-		display: none;
-	}
 	.main-pane {
 		flex: 1;
 		min-height: 0;
+		/* Zero at this width since #156 - see the phone block under the tool
+		   dock section, which is where the rail's own rules must live. */
 		padding-right: var(--toolrail-w);
-	}
-	.tool-panel {
-		position: fixed;
-		top: var(--mobile-topbar-h);
-		/* The sheet is the screen: with no rail beside it there is no sliver of
-		   surface left over, which used to read as a rendering slip. */
-		width: calc(100vw - var(--toolrail-w));
 	}
 	/* Three labelled tabs are wider than a phone-width panel, and they were
 	   pushing the panel's own Close button out past its right edge (#154). The
@@ -3903,6 +3883,15 @@ button:disabled {
 	color: var(--ui-accent);
 	background: color-mix(in srgb, var(--ui-accent) 12%, transparent);
 }
+/* The same "this is on" reading one bar down: the mobile top bar's tool control
+   holds the sheet open, and a toggle that never looks pressed is a toggle you
+   press twice (#156). Bordered here because `.icon-button` has a border to
+   tint, which the borderless header `.tool-btn` does not. */
+.icon-button.active {
+	color: var(--ui-accent);
+	background: color-mix(in srgb, var(--ui-accent) 12%, transparent);
+	border-color: color-mix(in srgb, var(--ui-accent) 34%, transparent);
+}
 /* Chrome Back: always present for layout stability; muted when no deep stack. */
 .chrome-back-btn:disabled {
 	opacity: 0.3;
@@ -4068,6 +4057,36 @@ button:disabled {
 }
 .tool-pane-hint {
 	padding: var(--space-4);
+}
+/* No tool rail at phone width (#156). A 46px lane is 12% of a 390px screen,
+   permanently, and it was taken from the surface behind it - the Design Studio
+   canvas ended at the rail's edge. Everything the rail holds is also one tap
+   away without it: the three tools are the sheet's own tab row, and Settings is
+   in the drawer's account menu. The sheet is opened from the mobile top bar's
+   tool control, the same glyph as the header's (#160). Zeroing the token is the
+   whole layout change - the pane's reserved padding, the sheet's width, the
+   Master popup's clearance and the toast column all derive from it.
+
+   These rules live HERE, immediately after the dock's own, and not with the
+   rest of the phone layout further up: a media query adds no specificity, so a
+   phone rule written before `.tool-rail`/`.tool-panel` simply loses to them.
+   That is exactly what happened to #154's sheet rules - they sat in the earlier
+   block and never applied, which is why the "sheet" was still a 289px column
+   with a rail beside it at 390px. */
+@media (max-width: 767px) {
+	:root {
+		--toolrail-w: 0px;
+	}
+	.tool-rail {
+		display: none;
+	}
+	.tool-panel {
+		position: fixed;
+		top: var(--mobile-topbar-h);
+		/* The sheet is the screen: with no rail beside it there is no sliver of
+		   surface left over, which used to read as a rendering slip. */
+		width: calc(100vw - var(--toolrail-w));
+	}
 }
 /* Files tool: the shared workspace tree, shaped for the panel. A clean inline
    editor is absolutely positioned over the pane; a dirty buffer retained during

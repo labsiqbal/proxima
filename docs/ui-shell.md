@@ -701,11 +701,19 @@ cluster covered Search and, with the drawer open, the drawer's own Close button
   opens the drawer instead of collapsing the sidebar. The sheet reopens on the
   tool last used, and its own close (its ✕, Escape) is the toggle's off state.
   That preference is transient: a phone never writes the desktop rail's
-  `proxima.dockCollapsed`, and never reads it either.
+  `proxima.dockCollapsed`, never reads it, and is retired the moment the window
+  widens into the desktop layout - otherwise the rail inherits a phone decision
+  and refuses to collapse.
   The sheet is the full screen, and the surface behind it reserves nothing -
   reserving the panel's width (74% of the pane, the desktop behaviour) squeezed
   the screen behind into a one-word-per-line strip (#154). The panel's tab row
   scrolls so its Close button keeps its place inside the panel.
+  **Where these rules live matters.** A media query adds no specificity, so the
+  dock's phone rules are written *after* `.tool-rail` / `.tool-panel` in
+  `styles.css`, not with the rest of the phone layout further up. #154's sheet
+  rules sat in that earlier block and silently lost to the desktop ones: at
+  390px the "sheet" was still a 289px column with a rail beside it, which is
+  part of what #156 found. A stylesheet test now locks the order.
 - **Artifacts** — the head wraps: title and scope control on one line, the
   All / Deliverables / History tabs on their own scrolling line instead of being
   clipped at the screen edge. A document opens **inside** the main window, with

@@ -188,6 +188,19 @@ export function AppShell(props: {
   React.useEffect(() => { localStorage.setItem('proxima.leftWidth', String(leftWidth)) }, [leftWidth])
   React.useEffect(() => { localStorage.setItem('proxima.leftCollapsed', leftCollapsed ? '1' : '0') }, [leftCollapsed])
   React.useEffect(() => { localStorage.setItem('proxima.dockCollapsed', dockCollapsed ? '1' : '0') }, [dockCollapsed])
+  // The sheet belongs to phone width. Widening the window into the desktop
+  // layout retires it, or the rail inherits a phone decision - a dock that
+  // refuses to collapse because an invisible sheet flag is still set.
+  React.useEffect(() => {
+    const desktop = typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia('(min-width: 768px)')
+      : null
+    if (!desktop) return
+    const sync = () => { if (desktop.matches) setDockSheetOpen(false) }
+    sync()
+    desktop.addEventListener?.('change', sync)
+    return () => desktop.removeEventListener?.('change', sync)
+  }, [])
 
   const toggleLeft = () => { if (matches('(min-width: 768px)')) setLeftCollapsed(value => !value); else setDrawerOpen(value => !value) }
   const toggleDock = () => { if (matches('(min-width: 768px)')) setDockCollapsed(value => !value); else setDockSheetOpen(value => !value) }
