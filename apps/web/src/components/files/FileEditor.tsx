@@ -35,7 +35,6 @@ export function FileEditor({
   onClose,
   closeLabel = 'Close',
   closeTitle,
-  onReview,
   autoFocus = false,
   onDirtyChange,
 }: {
@@ -47,8 +46,6 @@ export function FileEditor({
   /** The close control doubles as the way back out of a main-window editor. */
   closeLabel?: string
   closeTitle?: string
-  /** Offered when this document also has a review surface to open (#146). */
-  onReview?: () => void
   /** Put the caret in the document on mount - the editor IS the surface. */
   autoFocus?: boolean
   onDirtyChange?: (dirty: boolean) => void
@@ -152,7 +149,7 @@ export function FileEditor({
   return <div className={`file-editor${retained ? ' file-editor-retained' : ''}`}>
     <div className="file-editor-head">
       <strong title={displayPath}>{name}{dirty ? ' •' : ''}</strong>
-      <div>{onReview && <button className="ghost-button" onClick={onReview} title="Pin feedback on the rendered document">Review</button>}{write && <button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button>}<button className="ghost-button" onClick={() => void requestClose()} disabled={status === 'saving'} title={closeTitle} aria-label={closeTitle}>{closeLabel}</button></div>
+      <div>{write && <button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button>}<button className="ghost-button" onClick={() => void requestClose()} disabled={status === 'saving'} title={closeTitle} aria-label={closeTitle}>{closeLabel}</button></div>
     </div>
     {retained && <div className="file-editor-retain-banner">Unsaved project edits · inspection tree stays available</div>}
     {status === 'loading'

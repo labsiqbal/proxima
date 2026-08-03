@@ -352,7 +352,7 @@ once, idempotently, by migration v60.
 (ADR-0042). The authenticated `/api/target-preview/{slug}/{kind}/{id}/{path}` entry
 validates the locator and answers with the file bytes on Proxima's own origin: no
 redirect, no capability token, no preview cookie, no Area hostname. Isolation comes
-from the sandbox instead - Artifact Review frames the response with `sandbox=""`
+from the sandbox instead - the artifact viewer frames the response with `sandbox=""`
 (passive) or `sandbox="allow-scripts"` (active, never `allow-same-origin`), and the
 response repeats it as a CSP `sandbox` directive so the document is opaque-origin
 either way. Passive HTML additionally carries `default-src 'none'`; SVG/XHTML/XML
@@ -763,21 +763,26 @@ while unavailable folders are read-only and shell Container selection is indepen
 unless the owner explicitly chooses `Focus Master here`.
 See [ADR-0007](../adr/0007-master-focus-is-a-durable-execution-boundary.md).
 
-### Native artifact review flow
+### Artifact viewing flow
 
 `ArtifactViewer.tsx` remains the universal renderer boundary rather than routing
-ordinary deliverables through Design Studio. Its v2 workspace composes the existing
-image/video/PDF/HTML/Markdown/JSON/CSV/text renderers with a normalized point-annotation
-layer and review panel. Since #146 it renders **in the main window** (`.av-surface`,
-no portal, no dialog role, no focus trap, no Escape close) with a named way back,
-and `ArtifactsScreen` decides whether an opened artifact reaches it at all:
+ordinary deliverables through Design Studio. It composes the existing
+image/video/PDF/HTML/Markdown/JSON/CSV/text renderers on a single stage. Since #146
+it renders **in the main window** (`.av-surface`, no portal, no dialog role, no focus
+trap, no Escape close) with a named way back, and since #148 the stage is the only
+thing under its bar: the review side panel that used to take a fixed column beside it
+is gone, so an artifact - an HTML page above all - is rendered at the window's full
+width. Kinds that ARE a page (HTML, PDF) fill the stage edge to edge; pictures
+(including a design's artboard) and documents keep the padding that centres them.
+
+`ArtifactsScreen` decides whether an opened artifact reaches the viewer at all:
 `components/artifacts/fileKind.ts` owns the taxonomy for both, and its
 `opensInEditor` sends markdown and text straight to `DocumentEditor` (the wiki
 `WikiNote` markdown editor, or `FileEditor` for other text, over `projectFs`).
-The viewer's `onEditSource` is the return path for the kinds that keep a
-renderer - CSV, JSON, Mermaid, HTML. Unsaved review notes live browser-side per `(project, path)`;
-unknown, binary, and directory-like paths bypass text loading and render the download
-fallback immediately.
+The viewer's `onEditSource` is the one-way path to that editor for the kinds that keep
+a renderer - CSV, JSON, Mermaid, HTML. Unknown, binary, and directory-like paths bypass
+text loading and render the download fallback immediately.
+
 Every renderer uses an artifact's canonical file target when present. Markdown text,
 image/video media, PDF/HTML frames, and download links therefore resolve the same Area
 identity returned by the server instead of re-deriving a root from a display path.
@@ -789,36 +794,27 @@ source path, and canvas, gallery, Moodboard, record thumbnail, image-frame, and
 export renderers pass it to the media resolver. SVG display uses authenticated raw
 bytes rather than preview-origin document rendering.
 
-**Add feedback to chat** resolves the record's existing `session_id` (or the chat that
-opened the artifact), returns to that session, and seeds the ordinary `Composer` with
-path-linked feedback. The user can edit and send it through `POST /api/sessions/{id}/runs`
-like any other prompt. A successful handoff first validates that both the producing
-session and its project remain available, then closes Artifact Review, selects that
-scoped project and Chat, and focuses the seeded composer. A missing producer or project
-leaves the review open with an actionable error. Composer drafts are isolated per
-session and per project's new-chat scope, so cross-project navigation preserves the
-source draft. If the producing chat already has unsent text, an explicit dialog offers
-to append the feedback while preserving both drafts or keep the current draft unchanged.
-No external polling process or review URL is involved.
-
-Artifact Review is a modal dialog with a screen-reader name and description. It moves
-initial focus to its close control, traps Tab and Shift+Tab, closes with Escape, and
-restores the element that opened it after an ordinary close. The successful Chat
-handoff deliberately transfers focus to the composer instead of restoring the trigger.
+**Removed with the review panel (#148, owner refinement to ADR-0043):** the point
+annotations and their browser-local per-`(project, path)` state, the general-feedback
+field, the **Add feedback to chat** handoff (producer-session resolution, the seeded
+`Composer` draft and its append/keep conflict dialog), and the editor's **Review**
+action back into the viewer. No API route backed any of it - the whole loop was
+client-side - so the removal is web-only. Feedback now goes through ordinary Chat.
 
 Markdown Mermaid fences and standalone Mermaid files use a lazy renderer. Choosing
 **Edit as whiteboard** lazy-loads `@excalidraw/excalidraw` and
 `@excalidraw/mermaid-to-excalidraw`, converts supported diagram structures to editable
 shapes, and writes only on explicit save through the existing jailed project file API.
-Scenes live at deterministic `artifacts/whiteboards/*.excalidraw` paths and carry the
-source fingerprint. A mismatch offers keep-edits versus rebuild-from-source; saving
-adds the scene path to the chat review draft. Excalidraw and Mermaid stay out of the
+Scenes live at deterministic `<mapped artifacts>/whiteboards/*.excalidraw` paths
+(`components/artifacts/whiteboard.ts`) and carry the source fingerprint. A mismatch
+offers keep-edits versus rebuild-from-source. Excalidraw and Mermaid stay out of the
 initial app bundle and load only when their artifact path is used.
 
 ```text
-ArtifactViewer render -> point notes / general note -> Add feedback to chat
-        |                                           -> producing Proxima session
-        +-> Mermaid preview -> Excalidraw edit -> save project scene -> feedback path
+ArtifactsScreen (the one router) -> document  -> DocumentEditor
+                                 -> otherwise -> ArtifactViewer (full-width stage)
+                                                   +-> Edit source -> DocumentEditor
+                                                   +-> Mermaid -> Excalidraw -> save scene
 ```
 
 ## Key flows

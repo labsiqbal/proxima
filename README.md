@@ -19,9 +19,9 @@ Codex, Grok, Hermes, or Pi**. Reach it from any browser, or your phone via Tails
   endpoint, with the same ready/not-ready status shown for every installed runner.
 - **First-class `/masterplan`:** start the bundled masterplan methodology from
   Chat's slash palette and continue its interactive intake in the same session.
-- **ArtifactViewer v2:** review ordinary artifacts in Proxima with point
-  annotations, rendered Mermaid, editable Excalidraw conversion, and an editable
-  feedback handoff to the producing Chat.
+- **Artifacts is the destination:** what a project produced opens in the main
+  window at full width - documents straight in the editor, everything else in a
+  viewer with rendered Mermaid and editable Excalidraw conversion.
 
 ![Core tour: two ways to work](docs/screenshots/core-tour-work-modes.png)
 
@@ -134,13 +134,12 @@ One workspace, organized around two paths into durable work: **Chat or Master �
 - **Image generation** — `/image` in chat via Codex/ChatGPT OAuth, xAI,
   Higgsfield, or any OpenAI-compatible endpoint; results land in the Archive
   and can open in Design Studio.
-- **Archive + native artifact review** - every agent deliverable becomes a
+- **Archive + the artifact viewer** - every agent deliverable becomes a
   durable record with lineage (chat → task → file), one approval status synced
   with task review, a version chain, and a permanent link; records survive file
-  moves and deletion. ArtifactViewer v2 adds point annotations, rendered Mermaid,
-  editable Excalidraw conversion, and an editable feedback draft returned to the
-  producing Chat. **Run & Preview** remains available for dev servers behind a
-  credential-stripping proxy.
+  moves and deletion. Opening one gives it the whole main window, with rendered
+  Mermaid and editable Excalidraw conversion. **Run & Preview** remains available
+  for dev servers behind a credential-stripping proxy.
 
   ![Archive registry](docs/screenshots/archive-registry.png)
 - **In-browser terminal** — a real PTY shell scoped to the project. Work in the

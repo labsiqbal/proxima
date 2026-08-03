@@ -47,9 +47,9 @@ default off) · satpam supervision loop (stalled/looping/confused detection, ste
 continuing).
 
 **Current product layer:** first-class `/masterplan` intake · official Grok Build
-CLI over native ACP · ArtifactViewer v2 with point annotations, rendered Mermaid,
-editable Excalidraw conversion, and feedback handoff to the producing Chat ·
-replayable core tour and feature-aware Help chapters.
+CLI over native ACP · a full-width artifact viewer with rendered Mermaid and
+editable Excalidraw conversion (its review pins and chat feedback handoff were
+removed in #148) · replayable core tour and feature-aware Help chapters.
 
 ---
 

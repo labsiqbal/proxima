@@ -4,12 +4,12 @@ import {
 	nextFocusedWorkItemId,
 	projectSelectNavigatesToChat,
 	recentSessionForProject,
-	resolveArtifactReviewTarget,
 	resolvePreservedWorkSelection,
 	resolveRoutedWorkSession,
 	shellModeFromSearch,
 	shouldPushFocusedItemHistory,
 	isDelegateDestination,
+	navClickLeavesFocusedItem,
 	opsMigrationSlugFromHash,
 	workRouteDesignOpenSync,
 	workRouteFocusedItemIds,
@@ -26,6 +26,8 @@ import {
 	designSessionKeepAliveMatches,
 	designSessionOpenAbortReset,
 	designSessionOpenCancelStage,
+	nextCanvasBox,
+	remembersDesignAsLast,
 } from "./screens/DesignStudio";
 
 vi.mock("./api/jobs", () => ({
@@ -44,14 +46,6 @@ const request = {
 	profileId: 7,
 	executionPolicy: "guarded" as const,
 };
-
-const chatSession = (id: number, title: string): ChatSession => ({
-	id,
-	title,
-	runner_id: "claude-code",
-	project_slug: "master",
-	visibility: "private",
-});
 
 describe("Shell project selection", () => {
 	const master: ChatSession = {
@@ -1209,94 +1203,137 @@ describe("Shell project selection", () => {
 	});
 });
 
-describe("Artifact review session handoff", () => {
-	it("loads the exact producing session when it is omitted from the sidebar", async () => {
-		const producer = chatSession(7, "Hidden producer");
-		const unrelated = chatSession(9, "Unrelated active chat");
-		const loadSession = vi.fn().mockResolvedValue(producer);
-
-		await expect(resolveArtifactReviewTarget({
-			sessions: [unrelated],
-			sessionId: producer.id,
-			fallback: unrelated,
-			loadSession,
-			projects: [{ slug: "master", name: "Master" }],
-		})).resolves.toEqual({
-			ok: true,
-			session: producer,
-			project: { slug: "master", name: "Master" },
-		});
-		expect(loadSession).toHaveBeenCalledWith(producer.id);
+describe("A nav click enters a destination's own state (#148)", () => {
+	// The owner's repro: Artifacts -> a design card opens that design in the studio;
+	// clicking Design in the LEFT NAV then had to land on the studio home, but the
+	// keep-alive canvas simply stayed up and re-showed the visited design.
+	it("returns Design home on a re-click while the studio canvas is up", () => {
+		expect(navClickLeavesFocusedItem({
+			target: "design",
+			currentView: "design",
+			graphStage: "home",
+			designStage: "studio",
+			designIsVisit: true,
+		})).toEqual({ workflows: false, design: true });
 	});
 
-	it("uses the opening chat only when the artifact has no producing session", async () => {
-		const openingChat = chatSession(9, "Opening chat");
-		const loadSession = vi.fn();
-
-		await expect(resolveArtifactReviewTarget({
-			sessions: [],
-			sessionId: null,
-			fallback: openingChat,
-			loadSession,
-			projects: [{ slug: "master", name: "Master" }],
-		})).resolves.toMatchObject({ ok: true, session: openingChat });
-		expect(loadSession).not.toHaveBeenCalled();
+	// The same bug reached by another route: leave for Chat first, then click
+	// Design. Keep-alive would restore a canvas that was never this destination's.
+	it("returns Design home when arriving on a canvas that only holds a visit", () => {
+		expect(navClickLeavesFocusedItem({
+			target: "design",
+			currentView: "chat",
+			graphStage: "home",
+			designStage: "studio",
+			designIsVisit: true,
+		})).toEqual({ workflows: false, design: true });
 	});
 
-	it("resolves a producing chat in another available project", async () => {
-		const producer = { ...chatSession(7, "Client producer"), project_slug: "client" };
-		const project = { slug: "client", name: "Client" };
-
-		await expect(resolveArtifactReviewTarget({
-			sessions: [producer],
-			sessionId: producer.id,
-			fallback: chatSession(9, "Current chat"),
-			loadSession: vi.fn(),
-			projects: [{ slug: "master", name: "Master" }, project],
-		})).resolves.toEqual({ ok: true, session: producer, project });
+	// A design the owner opened INSIDE the studio (or named by the URL) is this
+	// destination's own work: keep-alive restores it, exactly as Workflows restores
+	// a plan. Only being already here means "show me home".
+	it("keeps a studio-owned canvas when arriving from another destination", () => {
+		expect(navClickLeavesFocusedItem({
+			target: "design",
+			currentView: "chat",
+			graphStage: "editor",
+			designStage: "studio",
+			designIsVisit: false,
+		})).toEqual({ workflows: false, design: false });
 	});
 
-	it("fails safely when the producer session no longer exists", async () => {
-		await expect(resolveArtifactReviewTarget({
-			sessions: [],
-			sessionId: 404,
-			fallback: chatSession(9, "Current chat"),
-			loadSession: vi.fn().mockRejectedValue(new Error("not found")),
-			projects: [{ slug: "master", name: "Master" }],
-		})).resolves.toEqual({
-			ok: false,
-			message: "The chat that produced this artifact is no longer available.",
-		});
+	it("still returns Design home when the owner re-clicks their own open design", () => {
+		expect(navClickLeavesFocusedItem({
+			target: "design",
+			currentView: "design",
+			graphStage: "home",
+			designStage: "studio",
+			designIsVisit: false,
+		})).toEqual({ workflows: false, design: true });
 	});
 
-	it("fails safely when the producer is not an available chat surface", async () => {
-		const producer = { ...chatSession(7, "Design producer"), mode: "design" };
-
-		await expect(resolveArtifactReviewTarget({
-			sessions: [producer],
-			sessionId: producer.id,
-			fallback: null,
-			loadSession: vi.fn(),
-			projects: [{ slug: "master", name: "Master" }],
-		})).resolves.toEqual({
-			ok: false,
-			message: "The chat that produced this artifact is no longer available.",
-		});
+	it("keeps the Workflows convention exactly as it was", () => {
+		expect(navClickLeavesFocusedItem({
+			target: "workflows",
+			currentView: "workflows",
+			graphStage: "editor",
+			designStage: "start",
+		})).toEqual({ workflows: true, design: false });
+		// Arriving at Workflows from elsewhere restores the plan (keep-alive).
+		expect(navClickLeavesFocusedItem({
+			target: "workflows",
+			currentView: "chat",
+			graphStage: "editor",
+			designStage: "start",
+		})).toEqual({ workflows: false, design: false });
 	});
 
-	it("fails safely when the producing project is unavailable", async () => {
-		const producer = { ...chatSession(7, "Removed project producer"), project_slug: "removed" };
+	it("leaves nothing when the destination holds no focused item", () => {
+		expect(navClickLeavesFocusedItem({
+			target: "design",
+			currentView: "design",
+			graphStage: "home",
+			designStage: "gallery",
+			designIsVisit: true,
+		})).toEqual({ workflows: false, design: false });
+		expect(navClickLeavesFocusedItem({
+			target: "chat",
+			currentView: "design",
+			graphStage: "editor",
+			designStage: "studio",
+			designIsVisit: true,
+		})).toEqual({ workflows: false, design: false });
+	});
+});
 
-		await expect(resolveArtifactReviewTarget({
-			sessions: [producer],
-			sessionId: producer.id,
-			fallback: null,
-			loadSession: vi.fn(),
-			projects: [{ slug: "master", name: "Master" }],
-		})).resolves.toEqual({
-			ok: false,
-			message: "The project that owns this artifact's chat is no longer available.",
-		});
+describe("Design Studio owns which design it resumes", () => {
+	// The resume key (`proxima.design.last.<slug>`) is the DESTINATION's own state.
+	// A design deep-opened from Artifacts is a visit to one file: recording it let
+	// Artifacts decide where Design landed on the next fresh entry (#148).
+	it("does not remember a design opened from another destination", () => {
+		expect(remembersDesignAsLast({
+			stage: "studio",
+			sceneId: "ai-bold-tech-poster",
+			isVisit: true,
+		})).toBe(false);
+	});
+
+	it("remembers a design this destination opened for itself", () => {
+		expect(remembersDesignAsLast({
+			stage: "studio",
+			sceneId: "poster-a",
+			isVisit: false,
+		})).toBe(true);
+	});
+
+	it("remembers nothing outside the canvas", () => {
+		expect(remembersDesignAsLast({
+			stage: "gallery",
+			sceneId: "poster-a",
+			isVisit: false,
+		})).toBe(false);
+		expect(remembersDesignAsLast({
+			stage: "studio",
+			sceneId: null,
+			isVisit: false,
+		})).toBe(false);
+	});
+});
+
+describe("Design canvas sizing survives keep-alive", () => {
+	// Hiding the Design pane fires the canvas ResizeObserver with 0x0, and a
+	// zero-wide Konva stage draws from a 0x0 source canvas - which throws and sends
+	// the whole cockpit to the render-error screen. Seen live while navigating away
+	// from a design; the last real size is kept instead.
+	it("ignores the zero measurement a hidden surface pane reports", () => {
+		expect(nextCanvasBox({ w: 0, h: 0 }, { w: 1180, h: 820 })).toEqual({ w: 1180, h: 820 });
+		expect(nextCanvasBox({ w: 1180, h: 0 }, { w: 1180, h: 820 })).toEqual({ w: 1180, h: 820 });
+		expect(nextCanvasBox({ w: 0, h: 820 }, { w: 1180, h: 820 })).toEqual({ w: 1180, h: 820 });
+	});
+
+	it("adopts every real measurement, including the first one", () => {
+		expect(nextCanvasBox({ w: 960, h: 640 }, { w: 0, h: 0 })).toEqual({ w: 960, h: 640 });
+		expect(nextCanvasBox({ w: 700, h: 500 }, { w: 1180, h: 820 })).toEqual({ w: 700, h: 500 });
 	});
 });
 

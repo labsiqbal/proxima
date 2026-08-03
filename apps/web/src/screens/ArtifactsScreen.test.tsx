@@ -68,17 +68,15 @@ vi.mock('../components/files/AppViewport', () => ({
   ),
 }))
 vi.mock('../components/artifacts/DocumentEditor', () => ({
-  DocumentEditor: ({ slug, path, target, backLabel, onClose, onReview }: {
+  DocumentEditor: ({ slug, path, target, backLabel, onClose }: {
     slug: string
     path: string
     target?: { path: string }
     backLabel?: string
     onClose: () => void
-    onReview?: () => void
   }) => (
     <div data-testid="editor">editor:{slug}:{path}:{target ? 'targeted' : 'plain'}
       <button type="button" onClick={onClose}>{`\u2190 ${backLabel}`}</button>
-      {onReview && <button type="button" onClick={onReview}>Review</button>}
     </div>
   ),
 }))
@@ -220,15 +218,16 @@ describe('ArtifactsScreen', () => {
     expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:exports/index.html')
   })
 
-  // Routing documents to the editor must not cost them the review loop: pins and
-  // the chat handoff stay one click away instead of one step in front.
-  it('opens a document in the review viewer through the editor Review action', async () => {
+  // The editor's "Review" action existed only to reach the viewer's feedback
+  // pins, and went with them (#148). A document opens in its editor and stays
+  // there; markdown still reads rendered through the editor's own Preview.
+  it('gives a document no second surface to step through', async () => {
     const user = userEvent.setup()
     vi.mocked(listArtifacts).mockResolvedValue(mixedArtifacts as never)
     render(<ArtifactsScreen token="t" projects={[alpha]} activeProject={alpha} />)
     await user.click(await screen.findByRole('button', { name: /plan\.md/ }))
-    await user.click(await screen.findByRole('button', { name: 'Review' }))
-    expect(await screen.findByTestId('viewer')).toHaveTextContent('viewer:alpha:reports/plan.md')
+    expect(await screen.findByTestId('editor')).toHaveTextContent('editor:alpha:reports/plan.md')
+    expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument()
   })
 
   it('returns focus to the artifact that was opened', async () => {

@@ -20,13 +20,14 @@ import { fileKind } from './fileKind'
 //
 // Media, data, and pages are NOT documents in this sense: they keep the viewer
 // and its renderers, and reach this editor through the viewer's "Edit source"
-// (see `fileKind.opensInEditor`). `onReview` is the door back the other way, so
-// pinned feedback stays reachable for a document without standing in front of it.
+// (see `fileKind.opensInEditor`). The door the other way was a "Review" action
+// that existed only to reach the viewer's feedback pins; it went with them
+// (#148), and markdown still reads rendered through the editor's own Preview.
 
 const WikiNote = React.lazy(() => import('../wiki/WikiNote').then(m => ({ default: m.WikiNote })))
 const FileEditor = React.lazy(() => import('../files/FileEditor').then(m => ({ default: m.FileEditor })))
 
-export function DocumentEditor({ token, slug, path, target, backLabel = 'Back', onClose, onReview }: {
+export function DocumentEditor({ token, slug, path, target, backLabel = 'Back', onClose }: {
   token: string
   slug: string
   path: string
@@ -35,8 +36,6 @@ export function DocumentEditor({ token, slug, path, target, backLabel = 'Back', 
   /** Where the way back leads - the surface this editor was opened from. */
   backLabel?: string
   onClose: () => void
-  /** Open the same document in the review viewer (pins + feedback to chat). */
-  onReview?: () => void
 }) {
   const fs = React.useMemo(() => projectFs(token, slug), [token, slug])
   const name = path.split('/').pop() || path
@@ -60,7 +59,6 @@ export function DocumentEditor({ token, slug, path, target, backLabel = 'Back', 
             closeLabel={closeLabel}
             closeTitle={closeTitle}
             onClose={onClose}
-            onReview={onReview}
           />
         : <FileEditor
             fs={fs}
@@ -71,7 +69,6 @@ export function DocumentEditor({ token, slug, path, target, backLabel = 'Back', 
             closeLabel={closeLabel}
             closeTitle={closeTitle}
             onClose={onClose}
-            onReview={onReview}
           />}
     </React.Suspense>
   </section>

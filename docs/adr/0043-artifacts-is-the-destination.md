@@ -93,18 +93,17 @@ now renders no tree at all, and `proxima:reveal-file` is answered by the dock.
 opening anything. An artifact takes over the destination's **main window**
 instead of a lightbox: markdown and text documents open **directly in the
 editor** (the wiki markdown editor, or the file editor for other text) and
-everything else in the **inline viewer**, which keeps its renderers, review
-pins, and neighbour walk and hands text-backed kinds to that editor through
+everything else in the **inline viewer**, which keeps its renderers and
+neighbour walk and hands text-backed kinds to that editor through
 **Edit source**. The popup is gone entirely - it was not kept for media either,
 because a second way to look at a file is exactly the intermediate step this
 decision removes. Data documents (CSV, JSON, Mermaid) stay with the viewer on
 purpose: their rendering, not their bytes, is why the owner opened them. The two
-surfaces are two-way - the viewer's **Edit source** reaches the editor, the
-editor's **Review** reaches the viewer - so routing a document to the editor
-costs it nothing: pinned feedback and the chat handoff stay one click away
-rather than one step in front. Both name their way back (**← Gallery** /
-**← Record**), and Delegate behaves the same, minus the chat handoff it has
-never had: it owns this destination, this editor, and this viewer.
+surfaces were two-way at the time - the viewer's **Edit source** reached the
+editor, the editor's **Review** reached the viewer's feedback pins - and the
+second door has since been removed with those pins (see the #148 refinement
+below). Both name their way back (**← Gallery** / **← Record**), and Delegate
+behaves the same: it owns this destination, this editor, and this viewer.
 
 **Landed 2026-08-03 (#147):** decision 4 is executed, and the decision set is
 complete. The **running app renders in the main window** (`AppViewport`), full
@@ -139,6 +138,25 @@ viewport automatically, through the same shell seam a handed-off file uses
   without a terminal, without a file tree, and without a design canvas; owner-power
   execution belongs with them.
 
+**Owner refinement 2026-08-03 (#148): the review panel is removed.** The viewer
+inherited a fixed 22rem side column from the native review workspace (#32) - pin
+count, **+ Pin**,
+**Annotate**, a general-feedback field, and **Add feedback to chat**, which
+resolved the artifact's producing session and seeded its composer with a
+path-linked brief. It is gone, and with it the editor's **Review** action, whose
+only job was to reach it. The reason is the one this ADR argues everywhere else:
+*the widest surface in the app should show the work*. A review column took a third
+of that surface from every artifact, and an HTML page - laid out for a viewport -
+had to be scrolled sideways to be read at all, so the panel cost more than the
+pins earned. Feedback on an artifact is written in Chat, where prompts are
+written, with the artifact @-mentioned.
+
+What this does NOT change: the renderers, the neighbour walk, **Edit source**, the
+Mermaid whiteboard (which saves to `<mapped artifacts>/whiteboards/` exactly as
+before), the active-preview consent boundary of ADR-0042, and the ledger. No API
+route backed the review loop - it was browser-local state plus a composer draft -
+so nothing was removed from the backend.
+
 ## Consequences
 
 Positive:
@@ -167,6 +185,12 @@ Negative / accepted trade-offs:
   but deliberately not a thumbnail: a card whose click starts an owner-power
   process is not the same gesture as opening a file, so a run still begins at the
   Run controls.
+- **Structured artifact feedback is gone with the review panel (#148).** Pinned
+  point notes carried coordinates an agent could act on; a Chat message has to
+  describe the same place in words, and there is no longer a one-click route from
+  an artifact to the exact session that produced it. Accepted: the owner judged
+  the width worth more than the structure, and the producing session is still
+  reachable from the deliverable record's lineage.
 
 ## Related
 

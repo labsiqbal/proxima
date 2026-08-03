@@ -704,7 +704,40 @@ export function designLeaveEmptyAbort(args: {
   }
 }
 
-export function DesignStudio({ token, project, profileId, openSession, openDesignId, onOpened, onExit, onStageChange, exitNonce }: { token: string; project: Project | null; profileId?: number | null; openSession?: { id: number; title: string } | null; openDesignId?: string | null; onOpened?: () => void; onExit?: () => void; onStageChange?: (stage: 'start' | 'studio' | 'gallery' | 'moodboard', designId: string | null) => void; /** Bumped by chrome Back to leave the canvas (flush + start, or onExit when deep-opened). */ exitNonce?: number }) {
+/**
+ * Which design the studio resumes on a fresh entry is the DESIGN destination's
+ * own state, so it only ever records a design that is genuinely on this canvas as
+ * this destination's own - opened from the start screen, its gallery, a design
+ * chat session, a resume, or the URL. A design another destination sent the owner
+ * here to look at (an Artifacts card, a task file link) is a VISIT: remembering it
+ * would let Artifacts decide where Design lands next time (#148). Who opened it is
+ * App's fact, not the studio's, so it arrives as the `designIsVisit` prop.
+ */
+export function remembersDesignAsLast(args: {
+  stage: 'start' | 'studio' | 'gallery' | 'moodboard'
+  sceneId: string | null | undefined
+  isVisit: boolean
+}): boolean {
+  return args.stage === 'studio' && !!args.sceneId && !args.isVisit
+}
+
+/**
+ * A hidden `surface-pane` measures 0x0: the Design destination stays MOUNTED while
+ * the owner works elsewhere (keep-alive), and its ResizeObserver fires with zeroes
+ * the moment the pane is hidden. Handing Konva a zero-wide stage makes it draw from
+ * a 0x0 source canvas, which throws `drawImage ... width or height of 0` and takes
+ * the whole cockpit to the render-error screen. There is nothing to react to while
+ * hidden, and keeping the last real size means the canvas is already correct when
+ * the owner comes back - no re-fit flash either.
+ */
+export function nextCanvasBox(
+  measured: { w: number; h: number },
+  current: { w: number; h: number },
+): { w: number; h: number } {
+  return measured.w > 0 && measured.h > 0 ? measured : current
+}
+
+export function DesignStudio({ token, project, profileId, openSession, openDesignId, designIsVisit = false, onOpened, onExit, onStageChange, exitNonce }: { token: string; project: Project | null; profileId?: number | null; openSession?: { id: number; title: string } | null; openDesignId?: string | null; /** The canvas is showing a design another destination sent the owner to (#148). */ designIsVisit?: boolean; onOpened?: () => void; onExit?: () => void; onStageChange?: (stage: 'start' | 'studio' | 'gallery' | 'moodboard', designId: string | null) => void; /** Bumped by chrome Back to leave the canvas (flush + start, or onExit when deep-opened). */ exitNonce?: number }) {
   const isMobile = useIsMobile()
   const mentionItems = useProjectMentionItems(token, project?.slug)
   const [mSheet, setMSheet] = React.useState<'panel' | 'inspector' | 'add' | null>(null)
@@ -1153,7 +1186,7 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
 
   React.useEffect(() => {
     const el = wrapRef.current; if (!el) return
-    const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }))
+    const ro = new ResizeObserver(() => setBox(current => nextCanvasBox({ w: el.clientWidth, h: el.clientHeight }, current)))
     ro.observe(el); return () => ro.disconnect()
   }, [stage])
 
@@ -1553,16 +1586,19 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
   }, [openDesignId, designFs])
 
   // Remember the last design open in this project, and reopen it when the studio is
-  // entered fresh (no deep-link). DesignStudio unmounts on every view change, so
-  // without this, leaving for another menu and coming back dropped you on the start
-  // screen with an empty chat — the design + its chat (which live on disk/in the DB)
-  // are still there, so we just reopen the last one and let hydrateChat restore it.
+  // entered fresh (no deep-link). A cold load — reload, or the first time this
+  // destination is reached in a session — would otherwise drop the owner on the
+  // start screen with an empty chat, while the design + its chat (which live on
+  // disk/in the DB) are still there; we reopen the last one and let hydrateChat
+  // restore it. Only a design the STUDIO opened is remembered, so a visit sent
+  // here by another destination cannot claim this resume slot (#148).
   const lastDesignKey = project ? `proxima.design.last.${project.slug}` : null
   React.useEffect(() => {
-    if (stage === 'studio' && scene?.id && lastDesignKey) {
-      try { localStorage.setItem(lastDesignKey, scene.id) } catch { /* storage disabled */ }
-    }
-  }, [stage, scene?.id, lastDesignKey])
+    const sceneId = scene?.id
+    if (!lastDesignKey || !sceneId) return
+    if (!remembersDesignAsLast({ stage, sceneId, isVisit: designIsVisit })) return
+    try { localStorage.setItem(lastDesignKey, sceneId) } catch { /* storage disabled */ }
+  }, [stage, scene?.id, lastDesignKey, designIsVisit])
   // History menu is design-scoped: close + clear when the open scene changes so a
   // previous design's saved-version list never lingers over a fresh canvas.
   React.useEffect(() => {

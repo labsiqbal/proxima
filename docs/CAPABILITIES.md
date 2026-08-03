@@ -1612,7 +1612,7 @@ Workspace discovery alone does not create deliverable records.
 HTML previews render inside a sandboxed iframe on Proxima's own origin - the sandbox
 never includes `allow-same-origin`, so the document sits in an opaque origin and cannot
 touch the owner's session, the app, or any other Area. Passive (default) means no
-scripts at all. Artifact Review labels the mode and requires an explicit owner
+scripts at all. The artifact viewer labels the mode and requires an explicit owner
 confirmation, bearer-authenticated and scoped to one owner session, Area, and viewer,
 before scripts run. The warning states that active content can run scripts and workers,
 use the network, and send selected Area data externally, so Proxima provides no
@@ -1899,46 +1899,46 @@ answers:
   before discarding unsaved bytes, and their close control is the way back.
 - **Everything else** - images, video, PDFs, HTML pages, and the data documents
   whose rendering is the point (CSV tables, JSON trees, Mermaid diagrams) -
-  opens in the **inline viewer** below, which keeps every renderer, its review
-  pins, and ←/→ walking of the Container's other visual artifacts. A **design**
+  opens in the **inline viewer** below, which keeps every renderer and ←/→
+  walking of the Container's other visual artifacts. A **design**
   opens in the Design Studio canvas where there is one (Work) and is drawn from
   its first artboard on the viewer stage where there is not (Delegate).
-  Its **Edit source** hands any text-backed artifact to that same editor, and the
-  editor's **Review** action is the door back, so a markdown report can still be
-  pinned and sent to chat.
+  Its **Edit source** hands any text-backed artifact to that same editor; there is
+  no door back, because a document's editor already reads it (markdown has its own
+  Preview tab).
 
 Both name where the way back leads - **← Gallery**, or **← Record** when the
 artifact was opened from a deliverable record. The lightbox is gone: nothing
 modal stands between the owner and the file, in Work or in Delegate (which has
 no dock and no Design Studio, but the same destination and the same behaviour).
 
-**Native rich review (ArtifactViewer v2):** the inline viewer keeps the
-existing image, video, PDF, Markdown, HTML, JSON, CSV, and text renderers, and wraps
-them in one review workspace. HTML uses the passive sandboxed preview from §11 until
-the owner enables trusted active mode for that viewer. The owner can pin numbered notes directly onto the
-rendered artifact, add overall feedback, and choose **Add feedback to chat**. Review
-notes are browser-local until that action; Proxima then opens the artifact's producing
-chat session and places an editable, path-linked review brief in the normal composer.
-Sending it uses the existing chat/run flow, so there is no Lavish poll, external URL,
-or second feedback service in the happy path. Unknown, binary, and directory-like
-paths immediately show the unsupported preview with a download action instead of an
-indefinite loading state. Artifact Review is a named main-window region with initial focus on
-its way back, and returning to the gallery restores focus to the card or row that
-opened it; it is not modal, so it never closes on Escape (its own active-preview
-consent alert still traps focus and owns that key). A
-successful feedback handoff validates the producer session and project, closes Review,
-opens that exact scoped Chat, and focuses its composer. Missing producers or projects
-leave Review open with an actionable error. Drafts are isolated per session and each
-project's new-chat scope; if the producing Chat already has unsent text, the owner must
-explicitly append the feedback while preserving both drafts or keep the current draft.
+**The viewer is the artifact, full width:** the inline viewer keeps the existing
+image, video, PDF, Markdown, HTML, JSON, CSV, and text renderers, and gives all of
+them the whole main window. HTML uses the passive sandboxed preview from §11 until
+the owner enables trusted active mode for that viewer; a page or a PDF fills the
+stage edge to edge, so a desktop layout renders at the width it was designed for
+instead of being scrolled sideways inside a column. Unknown, binary, and
+directory-like paths immediately show the unsupported preview with a download
+action instead of an indefinite loading state. The viewer is a named main-window
+region with initial focus on its way back, and returning to the gallery restores
+focus to the card or row that opened it; it is not modal, so it never closes on
+Escape (its own active-preview consent alert still traps focus and owns that key).
+
+The **review side panel was removed at the owner's request (#148)**: the pins,
+point annotations, general-feedback field, and the **Add feedback to chat** handoff
+into the producing session are all gone, along with the editor's **Review** action
+that reached them. Feedback on an artifact is written in Chat like any other
+prompt - the artifact can be @-mentioned - and the window the panel used to hold is
+spent on the file. Recorded as an owner refinement in ADR-0043.
 
 Mermaid fences in Markdown and standalone `.mmd` / `.mermaid` artifacts render as
 rich diagrams. **Edit as whiteboard** converts supported flowchart, sequence, class,
 ER, and state diagrams to native editable Excalidraw elements without leaving
-Proxima. The owner explicitly saves the scene under `artifacts/whiteboards/*.excalidraw`;
-that project-relative path is included in chat feedback so the same agent can inspect
-both the source artifact and the edited board. If Mermaid source changes after a saved
-board exists, the viewer asks whether to keep edits or rebuild from current source.
+Proxima. The owner explicitly saves the scene under `artifacts/whiteboards/*.excalidraw`
+(the project's mapped artifacts folder), a deterministic path derived from the source
+document and diagram index, so re-editing the same diagram lands on the same file. If
+Mermaid source changes after a saved board exists, the viewer asks whether to keep
+edits or rebuild from current source.
 This is ArtifactViewer functionality, not a Design Studio canvas path.
 
 **Endpoints:** `GET /api/archive`, `GET /api/archive/{slug}/{record_slug}`,

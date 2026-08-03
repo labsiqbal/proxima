@@ -2,12 +2,11 @@ import React from 'react'
 import { resume, setupStatus, logout } from './api/auth'
 import { listProfiles } from './api/profiles'
 import { listProjects, deleteProject } from './api/projects'
-import { listSessions, getSession, renameSession, deleteSession } from './api/sessions'
+import { listSessions, renameSession, deleteSession } from './api/sessions'
 import { activeRuns, createRun } from './api/runs'
 import { createJob, deleteJob, getJob, linkJobRun, startJob } from './api/jobs'
 import { api } from './api/client'
 import type { ChatSession, FileTarget, GraphWorkflowDraft, OutputLink, Profile, Project, Runner, User, View } from './types'
-import type { ArtifactReviewFeedback } from './components/artifacts/ArtifactViewer'
 import { AppShell } from './components/shell/AppShell'
 import { AuthGate } from './screens/AuthGate'
 import { HermesBanner } from './components/shell/HermesBanner'
@@ -78,38 +77,6 @@ const mediaBriefIsThin = (brief: string) => {
   if (/!\[[^\]]*\]\([^)]+\)/.test(brief)) return false
   const detail = brief.trim().replace(/^\/\S+\s*/i, '').trim()
   return detail.split(/\s+/).filter(Boolean).length < 3
-}
-
-export async function resolveArtifactReviewTarget<TProject extends { slug: string }>(args: {
-  sessions: ChatSession[]
-  sessionId: number | null
-  fallback: ChatSession | null
-  loadSession: (sessionId: number) => Promise<ChatSession>
-  projects: TProject[]
-}): Promise<
-  | { ok: true; session: ChatSession; project: TProject }
-  | { ok: false; message: string }
-> {
-  let session: ChatSession | null = null
-  if (args.sessionId == null) {
-    session = args.fallback
-  } else {
-    session = args.sessions.find(candidate => candidate.id === args.sessionId) ?? null
-    if (!session) {
-      try {
-        session = await args.loadSession(args.sessionId)
-      } catch {
-        return { ok: false, message: 'The chat that produced this artifact is no longer available.' }
-      }
-    }
-  }
-  if (!session) return { ok: false, message: 'This artifact has no producing chat to receive feedback.' }
-  if (session.mode === 'design') {
-    return { ok: false, message: 'The chat that produced this artifact is no longer available.' }
-  }
-  const project = args.projects.find(candidate => candidate.slug === session?.project_slug)
-  if (!project) return { ok: false, message: "The project that owns this artifact's chat is no longer available." }
-  return { ok: true, session, project }
 }
 
 export async function createAndStartOpsTask(token: string, request: OpsTaskRequest): Promise<number> {
@@ -238,6 +205,37 @@ export function shouldPushFocusedItemHistory(args: {
     return false
   }
   return true
+}
+
+/**
+ * A primary-nav click means "take me to this destination" - and to what is
+ * genuinely ITS state, not whatever happens to be left on its keep-alive surface.
+ * Two Work destinations stay mounted while holding a focused item, and both leave
+ * that item when the answer is "you are already here, so show me home":
+ *
+ * - Workflows leaves an open plan editor on a re-click. That is the older rule and
+ *   it is unchanged.
+ * - Design leaves its canvas on a re-click too, AND whenever the canvas is only
+ *   holding a VISIT - a design another destination sent the owner here to look at
+ *   (an Artifacts card, a task file link, a chat result). A visit was never the
+ *   Design destination's own state, so restoring it would let Artifacts decide
+ *   where Design lands (#148). A design opened inside the studio, or named by the
+ *   URL, is this destination's own and survives the trip like any keep-alive.
+ */
+export function navClickLeavesFocusedItem(args: {
+  target: string
+  currentView: string
+  graphStage: string
+  designStage: string
+  designIsVisit?: boolean
+}): { workflows: boolean; design: boolean } {
+  const reclick = args.target === args.currentView
+  return {
+    workflows: reclick && args.target === 'workflows' && args.graphStage === 'editor',
+    design: args.target === 'design'
+      && args.designStage === 'studio'
+      && (reclick || args.designIsVisit === true),
+  }
 }
 
 /** Route sync cancels request-scoped Design session opens while still applying a
@@ -488,6 +486,13 @@ export function App() {
   )
   // Task-linked Design binds FS to the Task owner without adopting it as Work.
   const [designProjectSlug, setDesignProjectSlug] = React.useState<string | null>(null)
+  // The design on the studio canvas is a VISIT: another destination sent the owner
+  // here to look at one file, so it is not the Design destination's own state and
+  // must not decide what Design shows next (#148). Cleared the moment the canvas is
+  // left, because anything that puts a design back on it after that is a studio
+  // action - and by the route sync, since a URL naming a design IS this
+  // destination's address rather than a foreign hand-off.
+  const [designIsVisit, setDesignIsVisit] = React.useState(false)
   // onOpenDesign pushWorkHistory owns the navigation entry; settle must replace-only.
   const designOpenHistoryOwnedRef = React.useRef(false)
   const pushWorkHistory = React.useCallback(() => {
@@ -522,10 +527,6 @@ export function App() {
   }, [])
   const [pendingMasterMessageId, setPendingMasterMessageId] = React.useState<number | null>(null)
   const [pendingArtifact, setPendingArtifact] = React.useState<OutputLink | null>(null)
-  const reviewDraftNonce = React.useRef(0)
-  const [reviewDraft, setReviewDraft] = React.useState<{ text: string; nonce: number } | null>(null)
-  const clearReviewDraft = React.useCallback(() => setReviewDraft(null), [])
-  const [returnToChat, setReturnToChat] = React.useState<ChatSession | null>(null)
   // Deep navigation stack: chrome Back returns to origin surface (not a fixed parent).
   const [navStack, setNavStack] = React.useState<NavStackEntry[]>([])
   const clearPendingNavigation = React.useCallback(() => {
@@ -539,7 +540,6 @@ export function App() {
     setPendingArtifact(null)
     setPendingApp(null)
     setPendingMasterMessageId(null)
-    setReturnToChat(null)
     setOpsMigrationSlug(null)
     if (window.location.hash.startsWith('#settings/projects/')) {
       window.history.replaceState(
@@ -660,6 +660,7 @@ export function App() {
   const openDesignById = React.useCallback((designId: string, originView: View, originLabel?: string) => {
     setPendingDesign(null)
     setDesignProjectSlug(null)
+    setDesignIsVisit(true)
     setPendingDesignId(designId)
     setDesignItemId(designId)
     setNavStack(stack => pushDeep(stack, {
@@ -763,6 +764,12 @@ export function App() {
     }
     designStageRef.current = stage
     setDesignStage(stage)
+    // LEAVING the canvas ends a visit: whatever puts a design back on it after
+    // this - the gallery, the start screen, a resume - is the studio's own doing.
+    // It has to be a leave, not merely "not studio": the studio reports `start`
+    // once while mounting, and clearing there would erase the flag a hand-off
+    // from Artifacts had just set, before the canvas even loaded (#148).
+    if (prevStage === 'studio' && stage !== 'studio') setDesignIsVisit(false)
     setDesignItemId(current => nextFocusedWorkItemId({
       prevStage,
       nextStage: stage,
@@ -843,13 +850,15 @@ export function App() {
       return
     }
     if (v === 'settings') setSettingsSection('account')
-    if (v === 'workflows') {
-      // Sidebar Workflows means the Workflows home. Re-clicking while a plan is open
-      // bumps the back signal so the list returns.
-      if (view === 'workflows' && graphStage === 'editor') {
-        setGraphBackNonce(n => n + 1)
-      }
-    }
+    // A nav item means that destination's own state. When its keep-alive surface
+    // is holding a focused item that the click should not restore, bump that
+    // surface's leave signal so it returns to where it was entered from - the plan
+    // list for Workflows, the studio start screen or gallery for Design. Without
+    // it a design opened from an Artifacts card kept the canvas and the nav click
+    // looked like a no-op (#148).
+    const leaves = navClickLeavesFocusedItem({ target: v, currentView: view, graphStage, designStage, designIsVisit })
+    if (leaves.workflows) setGraphBackNonce(n => n + 1)
+    if (leaves.design) setDesignExitNonce(n => n + 1)
     // Chat in the nav means the conversation front door — never a workflow's
     // iteration thread, which belongs to Workflows.
     if (v === 'chat' && activeSession?.workflow_id) {
@@ -1077,6 +1086,7 @@ export function App() {
       setGraphItemId(route.workflowJobId)
       setPendingDesignId(designOpen.pendingDesignId)
       setDesignItemId(route.designId)
+      setDesignIsVisit(false)
       setView(nextView)
     }
     if (!workRouteBootstrapped.current) {
@@ -1148,7 +1158,6 @@ export function App() {
   const sessionsSeq = React.useRef(0)
   const activeRunsSeq = React.useRef(0)
   const appActionSeq = React.useRef(0)
-  const reviewHandoffSeq = React.useRef(0)
   const mountedRef = React.useRef(true)
 
   React.useEffect(() => {
@@ -1159,7 +1168,6 @@ export function App() {
       sessionsSeq.current += 1
       activeRunsSeq.current += 1
       appActionSeq.current += 1
-      reviewHandoffSeq.current += 1
     }
   }, [])
 
@@ -1434,7 +1442,6 @@ export function App() {
     const targetSlug = link.project_slug || origin?.project_slug || activeProject?.slug || null
     const targetProject = targetSlug ? projects.find(p => p.slug === targetSlug) : null
     if (targetProject) setActiveProject(targetProject)
-    if (origin) setReturnToChat(origin)
     if (link.type === 'design') {
       setDesignProjectSlug(null)
       const designId = link.id || link.path.split('/').filter(Boolean).slice(-1)[0] || null
@@ -1462,39 +1469,6 @@ export function App() {
     if (sp) setActiveProject(sp)
     markSeen(session.id, session.updated_at)
     setView('chat')
-  }
-
-  async function continueArtifactReview(feedback: ArtifactReviewFeedback) {
-    const seq = ++reviewHandoffSeq.current
-    const resolved = await resolveArtifactReviewTarget({
-      sessions,
-      sessionId: feedback.sessionId,
-      fallback: returnToChat || activeSession,
-      loadSession: sessionId => getSession(token, sessionId),
-      projects,
-    })
-    if (!mountedRef.current || seq !== reviewHandoffSeq.current) {
-      return { ok: false as const, message: 'The artifact review changed before feedback could be handed off.' }
-    }
-    if (!resolved.ok) {
-      setError(resolved.message)
-      return resolved
-    }
-    pushWorkHistory()
-    const { session: target, project } = resolved
-    clearTaskHash()
-    clearArchiveHash()
-    setArchiveRecord(null)
-    clearPendingNavigation()
-    clearDeepStack()
-    setActiveSession(target)
-    setActiveProject(project)
-    markSeen(target.id, target.updated_at)
-    reviewDraftNonce.current += 1
-    setReviewDraft({ text: feedback.text, nonce: reviewDraftNonce.current })
-    setError('')
-    setView('chat')
-    return { ok: true as const }
   }
 
   const designCanvasOpen = designStage === 'studio'
@@ -1621,6 +1595,7 @@ export function App() {
         setDesignProjectSlug(null)
         setPendingDesignId(null)
         setDesignItemId(null)
+        setDesignIsVisit(false)
         setPendingDesign({ id: session.id, title: session.title })
         setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: view, originLabel: viewOriginLabel(view) }))
         setView('design')
@@ -1667,14 +1642,14 @@ export function App() {
       {(() => {
         // Keep Chat mounted (hidden when inactive) so draft text + busy run re-attach after leave/return.
         const mainSession = activeSession?.mode === 'design' ? null : activeSession
-        const chat = <ChatScreen active={chatActive} activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} onActiveProfile={setActiveProfile} onActiveProject={setActiveProjectOnly} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} draftSeed={reviewDraft?.text} draftSeedNonce={reviewDraft?.nonce} onDraftSeedConsumed={clearReviewDraft} />
+        const chat = <ChatScreen active={chatActive} activeProfile={activeProfile} activeProject={activeProject} activeSession={mainSession} profiles={profiles} projects={projects} runnerReadiness={runnerReadiness} token={token} onActiveProfile={setActiveProfile} onActiveProject={setActiveProjectOnly} onSession={setActiveSession} onRefresh={refreshAll} onNewSession={startNewSession} onGraphDraft={draft => { setPendingGraphDraft(draft); setView('workflows') }} onOpenOutput={openOutput} runRecipeNonce={runRecipeNonce} runRecipePrompt={runRecipePrompt} runRecipeLabel={runRecipeLabel} runRecipeInstantResult={runRecipeInstantResult} />
         const body = activeSession?.workflow_id
           ? <div className="iterate-split">{chat}<React.Suspense fallback={<ViewFallback label="Loading workflow stage..." />}><IterateStage token={token} workflowId={activeSession.workflow_id} sessionId={activeSession.id} projectSlug={activeSession.project_slug || activeProject?.slug || null} running={busySessions.includes(activeSession.id)} designStudioEnabled onOpenDesign={id => { openDesignById(id, 'chat', 'Chat') }} onRunRecipe={(prompt, label, instantResult) => { setRunRecipePrompt(prompt); setRunRecipeLabel(label); setRunRecipeInstantResult(instantResult); setRunRecipeNonce(n => n + 1) }} onOpenAppViewport={openAppViewportInMainWindow} /></React.Suspense></div>
           : chat
         return pane('chat', chatActive, body)
       })()}
       {view === 'wiki' && <React.Suspense fallback={<ViewFallback label="Loading wiki..." />}><WikiScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} /></React.Suspense>}
-      {keep('artifacts') && pane('artifacts', artifactsActive, <React.Suspense fallback={<ViewFallback label="Loading artifacts..." />}><ArtifactsScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} pendingApp={pendingApp} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onPendingAppConsumed={() => setPendingApp(null)} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={delegateActive ? undefined : openSessionById} designStudioEnabled={!delegateActive} onOpenDesign={delegateActive ? undefined : id => { openDesignById(id, 'artifacts') }} reviewSessionId={delegateActive ? null : returnToChat?.id ?? activeSession?.id ?? null} onSendFeedback={delegateActive ? undefined : continueArtifactReview} /></React.Suspense>)}
+      {keep('artifacts') && pane('artifacts', artifactsActive, <React.Suspense fallback={<ViewFallback label="Loading artifacts..." />}><ArtifactsScreen token={token} projects={projects} activeProject={delegateActive ? null : activeProject} globalScope={delegateActive} archiveRecord={archiveRecord} pendingFile={pendingFile} pendingArtifact={pendingArtifact} pendingApp={pendingApp} onPendingConsumed={() => setPendingFile(null)} onPendingArtifactConsumed={() => setPendingArtifact(null)} onPendingAppConsumed={() => setPendingApp(null)} onOpenRecord={openArchiveRecord} onCloseRecord={closeArchiveRecord} onOpenTask={openJobByEngine} onOpenSession={delegateActive ? undefined : openSessionById} designStudioEnabled={!delegateActive} onOpenDesign={delegateActive ? undefined : id => { openDesignById(id, 'artifacts') }} /></React.Suspense>)}
       {keep('workflows') && pane('workflows', workflowsActive, <React.Suspense fallback={<ViewFallback label="Loading workflows..." />}><WorkflowsScreen graphContent={<GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} backNonce={graphBackNonce} />} /></React.Suspense>)}
       {keep('activity') && pane('activity', activityActive, <React.Suspense fallback={<ViewFallback label="Loading tasks..." />}><ActivityScreen token={token} activeProject={delegateActive ? null : activeProject} projects={projects} globalScope={delegateActive} profiles={profiles} onOpenTask={jobId => openTask(jobId, 'activity')} onOpenPlan={jobId => {
         // A graph plan editor is a Work surface. Opening it is an explicit
@@ -1688,13 +1663,14 @@ export function App() {
             projectSlug,
             taskProjectContext?.jobId === activeTaskId ? taskProjectContext.projectSlug : null,
           ))
+          setDesignIsVisit(true)
           setPendingDesignId(id)
           setDesignItemId(id)
           setNavStack(stack => pushDeep(stack, { kind: 'design-canvas', originView: 'task', originLabel: 'Task' }))
           setView('design')
         }} onOpenFile={openFileInMainWindow} onOpenJob={(id, engine) => openJobByEngine(id, engine, 'task')} onOpenMaster={originMessageId => openMasterConversation(originMessageId)} /></section></React.Suspense>}
       {view === 'graph' && <React.Suspense fallback={<ViewFallback label="Loading workflow graph..." />}><GraphScreen token={token} projects={projects} activeProject={activeProject} onActiveProject={setActiveProject} profiles={profiles} profileId={activeProfile?.id ?? null} activeProfile={activeProfile} pendingDraft={pendingGraphDraft} onDraftConsumed={() => setPendingGraphDraft(null)} pendingJobId={pendingGraphJob} onPendingConsumed={() => setPendingGraphJob(null)} onStageChange={handleGraphStageChange} /></React.Suspense>}
-      {keep('design') && pane('design', designActive, <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={resolveDesignStudioProject(projects, designProjectSlug, activeProject)} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onStageChange={handleDesignStageChange} exitNonce={designExitNonce} /></React.Suspense>)}
+      {keep('design') && pane('design', designActive, <React.Suspense fallback={<div className="ds-loading muted">Loading Design Studio...</div>}><DesignStudio token={token} project={resolveDesignStudioProject(projects, designProjectSlug, activeProject)} profileId={activeProfile?.id ?? null} openSession={pendingDesign} openDesignId={pendingDesignId} designIsVisit={designIsVisit} onOpened={() => { setPendingDesign(null); setPendingDesignId(null) }} onStageChange={handleDesignStageChange} exitNonce={designExitNonce} /></React.Suspense>)}
       {view === 'profiles' && <React.Suspense fallback={<ViewFallback label="Loading agents..." />}><ProfilesScreen token={token} profiles={profiles} onActiveProfile={setActiveProfile} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'runners' && <React.Suspense fallback={<ViewFallback label="Loading..." />}><RunnersScreen runners={runners} runnerReadiness={runnerReadiness} token={token} onRefresh={refreshAll} /></React.Suspense>}
       {view === 'settings' && <React.Suspense fallback={<ViewFallback label="Loading settings..." />}><SettingsScreen token={token} user={user} profiles={profiles} projects={projects} activeProject={activeProject} opsMigrationSlug={opsMigrationSlug} onActiveProject={setActiveProject} onOpenOpsMigration={project => openOpsMigration(project.slug)} onCloseOpsMigration={closeOpsMigration} runners={runners} runnerReadiness={runnerReadiness} onRefresh={refreshAll} onTokenChange={setToken} updateStatus={updates.status} updateChecking={updates.checking} onCheckUpdates={updates.check} onOpenUpdate={updates.openModal} initialSection={settingsSection} /></React.Suspense>}

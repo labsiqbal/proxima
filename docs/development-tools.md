@@ -38,7 +38,6 @@ cd apps/api && .venv/bin/python -m pytest -q tests
 npm --prefix apps/web test -- --run
 npm --prefix apps/web run build
 npm --prefix apps/web run test:accessibility
-npm --prefix apps/web run test:artifact-feedback-browser
 python3 scripts/verify_preview_browser.py --evidence-dir /tmp/proxima-preview-evidence
 bash scripts/linux-daily-driver-acceptance
 npm run test:e2e:schedules
@@ -60,12 +59,6 @@ uses Astro as both the managed app and the pre-existing/rebound foreign listener
 proves foreign request bytes remain empty and the foreign process survives, and
 records conflict, ready, and stopped/rebound screenshots in the selected evidence
 directory.
-
-The artifact-feedback browser verifier builds the production web bundle, starts an
-isolated API database and Chrome profile, seeds two disposable projects plus one
-artifact lineage record, and proves dialog keyboard semantics, ordinary-close focus
-restoration, cross-project producer routing, explicit draft conflict handling, and
-composer focus. It does not read or write a live Proxima runtime.
 
 `test:e2e:schedules` owns the disposable scheduled-workflow trust browser pass
 (assertion-only by default). Details and before/after PNGs live in

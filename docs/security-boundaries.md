@@ -390,7 +390,7 @@ supersedes ADR-0029..ADR-0036.
 
 The sandbox is declared twice, deliberately:
 
-- **Embedder.** Artifact Review renders `<iframe sandbox="">` for passive
+- **Embedder.** The artifact viewer renders `<iframe sandbox="">` for passive
   preview and `<iframe sandbox="allow-scripts">` for active mode.
 - **Response.** Every preview body carries `Content-Security-Policy: sandbox`
   (passive) or `sandbox allow-scripts` (active), so the document stays opaque
@@ -411,7 +411,7 @@ XHTML, XML) is handed over as a download and never rendered inline. Other media
 (images, video, PDF) is served inline with `frame-ancestors 'self'`, `nosniff`,
 `no-store`, and `no-referrer`.
 
-**Active mode is an explicit owner decision.** Artifact Review labels the current
+**Active mode is an explicit owner decision.** The artifact viewer labels the current
 mode and, before enabling, states that active content can run scripts and
 workers, use the network, navigate inside the preview, and send any data in that
 Area to external services - so Proxima makes no Area-confidentiality guarantee

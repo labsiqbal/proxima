@@ -14,7 +14,7 @@ import type {
   ExcalidrawInitialDataState,
 } from '@excalidraw/excalidraw/types'
 import { projectFs } from '../../api/fsAdapter'
-import { sourceFingerprint, whiteboardPathFor } from './artifactReview'
+import { sourceFingerprint, whiteboardPathFor } from './whiteboard'
 import { useProjectAreaPaths } from '../../hooks/useProjectAreaPaths'
 
 const EXCALIDRAW_STYLE_ID = 'proxima-excalidraw-styles'
@@ -53,14 +53,13 @@ async function convertMermaid(source: string): Promise<ExcalidrawInitialDataStat
   }
 }
 
-export function ExcalidrawWhiteboard({ token, slug, sourcePath, source, diagramIndex, onClose, onSaved }: {
+export function ExcalidrawWhiteboard({ token, slug, sourcePath, source, diagramIndex, onClose }: {
   token: string
   slug: string
   sourcePath: string
   source: string
   diagramIndex: number
   onClose: () => void
-  onSaved: (path: string) => void
 }) {
   const fs = React.useMemo(() => projectFs(token, slug), [token, slug])
   // Whiteboards live in the project's mapped artifacts folder (layout map,
@@ -155,7 +154,6 @@ export function ExcalidrawWhiteboard({ token, slug, sourcePath, source, diagramI
       setDirty(false)
       setSaved(true)
       setSourceChanged(false)
-      onSaved(scenePath)
       window.dispatchEvent(new CustomEvent('proxima:files-changed'))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not save this whiteboard.')

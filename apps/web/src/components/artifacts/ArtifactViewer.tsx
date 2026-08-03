@@ -14,21 +14,14 @@ import { MermaidDiagram } from './MermaidDiagram'
 import { trapModalTab } from '../ui/modalFocus'
 import { DesignPreview } from './ArtifactThumb'
 import { EDITABLE_KINDS, fileKind } from './fileKind'
-import {
-  formatArtifactReviewDraft,
-  hasArtifactReviewFeedback,
-  loadArtifactReview,
-  saveArtifactReview,
-  splitMermaidSections,
-  type ArtifactAnnotation,
-  type ArtifactReviewState,
-} from './artifactReview'
+import { splitMermaidSections } from './whiteboard'
 
 const ExcalidrawWhiteboard = React.lazy(() => import('./ExcalidrawWhiteboard').then(module => ({ default: module.ExcalidrawWhiteboard })))
 
-// ArtifactViewer v2 is Proxima's native review surface. It keeps the existing
-// media/document/data renderers, adds point annotations, and turns Mermaid into
-// an editable Excalidraw whiteboard. Review feedback returns through Proxima chat.
+// The artifact viewer is where you LOOK at what a project produced: images,
+// video, PDFs, sandboxed HTML pages, and the data documents whose rendering is
+// the point (CSV tables, JSON trees, Mermaid diagrams and their editable
+// whiteboard). Anything with an "Edit source" reaches the editor from here.
 //
 // Since #146 it renders IN THE MAIN WINDOW, not as a lightbox over it: opening
 // an artifact is a destination, so the surface has a named way back instead of a
@@ -36,16 +29,12 @@ const ExcalidrawWhiteboard = React.lazy(() => import('./ExcalidrawWhiteboard').t
 // panel, a confirm dialog). Only its own preview-consent alert is still modal.
 // Which artifacts arrive here at all is `fileKind.opensInEditor`'s answer:
 // documents you write go straight to the editor and never pass through.
-
-export type ArtifactReviewFeedback = {
-  sessionId: number | null
-  text: string
-  artifact: Artifact
-}
-
-export type ArtifactReviewHandoffResult =
-  | { ok: true }
-  | { ok: false; message: string }
+//
+// The artifact IS the surface (#148, ADR-0043 owner refinement): the review side
+// panel that used to take a fixed 22rem column - pins, annotations, general
+// feedback, and the handoff into chat - is gone, and the stage now spends the
+// whole window on the file. A page too wide for a two-thirds column had to be
+// scrolled sideways to be read at all, which cost more than the pins earned.
 
 // Minimal RFC-ish CSV/TSV parse (handles quotes + escaped quotes + CRLF).
 function parseDelimited(text: string, delim: string): string[][] {
@@ -66,6 +55,11 @@ function parseDelimited(text: string, delim: string): string[][] {
 
 const MAX_ROWS = 1000
 
+// Kinds that are their own page and want every pixel: an HTML preview or a PDF
+// is a document laid out for a full viewport, and boxing it into a centred
+// column is what forced sideways scrolling to read it (#148).
+const FILLS_STAGE = new Set(['html', 'pdf'])
+
 function JsonNode({ label, value, depth }: { label?: string | number; value: unknown; depth: number }) {
   const [open, setOpen] = React.useState(depth < 2)
   const isObject = value !== null && typeof value === 'object'
@@ -81,10 +75,6 @@ function JsonNode({ label, value, depth }: { label?: string | number; value: unk
     </div>
   }
   return <div className="av-json-leaf">{label != null && <span className="jk">{label}</span>}<span className={`jv ${value === null ? 'null' : typeof value}`}>{value === undefined ? 'undefined' : JSON.stringify(value)}</span></div>
-}
-
-function reviewId(): string {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
 }
 
 // Identifies one mounted viewer so active-preview consent stays scoped to it.
@@ -109,7 +99,7 @@ type ActivePreviewState = {
   target: FileTarget
 }
 
-export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, backLabel = 'Back', onEditSource, reviewSessionId = null, onSendFeedback }: {
+export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, backLabel = 'Back', onEditSource }: {
   token: string
   slug: string
   items: Artifact[]
@@ -119,8 +109,6 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
   /** Where the way back leads - the surface this viewer was opened from. */
   backLabel?: string
   onEditSource?: (artifact: Artifact) => void
-  reviewSessionId?: number | null
-  onSendFeedback?: (feedback: ArtifactReviewFeedback) => ArtifactReviewHandoffResult | Promise<ArtifactReviewHandoffResult>
 }) {
   const item = items[index]
   const path = item?.path || ''
@@ -130,25 +118,16 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
   const [text, setText] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [zoom, setZoom] = React.useState(false)
-  const [annotating, setAnnotating] = React.useState(false)
-  const [pendingPoint, setPendingPoint] = React.useState<{ x: number; y: number } | null>(null)
-  const [pendingNote, setPendingNote] = React.useState('')
-  const [activeAnnotationId, setActiveAnnotationId] = React.useState<string | null>(null)
-  const [review, setReview] = React.useState<ArtifactReviewState>(() => loadArtifactReview(slug, path))
   const [whiteboard, setWhiteboard] = React.useState<{ source: string; diagramIndex: number } | null>(null)
-  const [handoffPending, setHandoffPending] = React.useState(false)
-  const [handoffError, setHandoffError] = React.useState('')
   const [activePreview, setActivePreview] = React.useState<ActivePreviewState | null>(null)
   const [previewConsentOpen, setPreviewConsentOpen] = React.useState(false)
   const [previewModePending, setPreviewModePending] = React.useState(false)
   const [previewModeError, setPreviewModeError] = React.useState('')
   const loadSeq = React.useRef(0)
-  const noteRef = React.useRef<HTMLTextAreaElement>(null)
   const consentRef = React.useRef<HTMLElement>(null)
   const consentCancelRef = React.useRef<HTMLButtonElement>(null)
   const closeRef = React.useRef<HTMLButtonElement>(null)
   const surfaceRef = React.useRef<HTMLElement>(null)
-  const handoffCompletedRef = React.useRef(false)
   const activePreviewRef = React.useRef<ActivePreviewState | null>(null)
   const previewSessionRef = React.useRef(previewSessionId())
   const descriptionId = React.useId()
@@ -174,14 +153,6 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
   React.useLayoutEffect(() => {
     closeRef.current?.focus()
   }, [])
-
-  const updateReview = React.useCallback((mutate: (current: ArtifactReviewState) => ArtifactReviewState) => {
-    setReview(current => {
-      const next = mutate(current)
-      saveArtifactReview(slug, path, next)
-      return next
-    })
-  }, [slug, path])
 
   const previous = React.useCallback(() => onIndex((index - 1 + items.length) % items.length), [index, items.length, onIndex])
   const next = React.useCallback(() => onIndex((index + 1) % items.length), [index, items.length, onIndex])
@@ -224,23 +195,12 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
     setZoom(false)
     setText(null)
     setError(null)
-    setAnnotating(false)
-    setPendingPoint(null)
-    setPendingNote('')
-    setActiveAnnotationId(null)
     setWhiteboard(null)
-    setHandoffPending(false)
-    setHandoffError('')
-    setReview(loadArtifactReview(slug, path))
     if (!['markdown', 'mermaid', 'csv', 'json', 'text'].includes(kind)) return
     const seq = ++loadSeq.current
     fs.read(item?.target || path).then(body => { if (seq === loadSeq.current) setText(body.content) })
       .catch(() => { if (seq === loadSeq.current) setError('Could not read this file.') })
   }, [fs, path, kind, slug, item?.target])
-
-  React.useEffect(() => {
-    if (pendingPoint) noteRef.current?.focus()
-  }, [pendingPoint])
 
   React.useEffect(() => {
     if (previewConsentOpen) consentCancelRef.current?.focus()
@@ -280,7 +240,6 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
 
   const openDiagram = (source: string, diagramIndex: number) => {
     setWhiteboard({ source, diagramIndex })
-    setAnnotating(false)
   }
 
   const stage = () => {
@@ -297,9 +256,9 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
         if (svgBlob.status !== 'ready' || !svgBlob.url) {
           return <div className="av-msg muted">Loading...</div>
         }
-        return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={svgBlob.url} alt={name} onClick={() => { if (!annotating) setZoom(current => !current) }} title={zoom ? 'Fit to screen' : 'Actual size'} />
+        return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={svgBlob.url} alt={name} onClick={() => setZoom(current => !current)} title={zoom ? 'Fit to screen' : 'Actual size'} />
       }
-      return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={previewUrl(slug, path, item.target)} alt={name} onClick={() => { if (!annotating) setZoom(current => !current) }} title={zoom ? 'Fit to screen' : 'Actual size'} />
+      return <img className={`av-img ${zoom ? 'actual' : 'fit'}`} src={previewUrl(slug, path, item.target)} alt={name} onClick={() => setZoom(current => !current)} title={zoom ? 'Fit to screen' : 'Actual size'} />
     }
     if (kind === 'video') return <video className="av-video" src={previewUrl(slug, path, item.target)} controls autoPlay playsInline />
     if (kind === 'pdf') return <iframe className="av-frame" title={name} src={previewUrl(slug, path, item.target)} />
@@ -350,40 +309,6 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
     }
     if (kind === 'text') return <pre className="av-text">{text}</pre>
     return null
-  }
-
-  const placeAnnotation = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!annotating) return
-    const bounds = event.currentTarget.getBoundingClientRect()
-    if (!bounds.width || !bounds.height) return
-    setPendingPoint({
-      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
-      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
-    })
-    setPendingNote('')
-  }
-
-  const addAnnotation = () => {
-    const note = pendingNote.trim()
-    if (!pendingPoint || !note) return
-    const annotation: ArtifactAnnotation = {
-      id: reviewId(),
-      x: pendingPoint.x,
-      y: pendingPoint.y,
-      note,
-      createdAt: new Date().toISOString(),
-    }
-    updateReview(current => ({ ...current, annotations: [...current.annotations, annotation] }))
-    setActiveAnnotationId(annotation.id)
-    setPendingPoint(null)
-    setPendingNote('')
-    setAnnotating(false)
-  }
-
-  const recordWhiteboard = (whiteboardPath: string) => {
-    updateReview(current => current.whiteboardPaths.includes(whiteboardPath)
-      ? current
-      : { ...current, whiteboardPaths: [...current.whiteboardPaths, whiteboardPath] })
   }
 
   const enableActivePreview = async () => {
@@ -438,34 +363,11 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
     }
   }
 
-  const addToChat = async () => {
-    if (!onSendFeedback || !hasArtifactReviewFeedback(review) || handoffPending) return
-    setHandoffPending(true)
-    setHandoffError('')
-    try {
-      const result = await onSendFeedback({
-        sessionId: reviewSessionId,
-        text: formatArtifactReviewDraft({ title: item.title || name, path, review }),
-        artifact: item,
-      })
-      if (!result.ok) {
-        setHandoffError(result.message)
-        return
-      }
-      handoffCompletedRef.current = true
-      onClose()
-    } catch {
-      setHandoffError('Feedback could not be handed off. The review is still open so you can try again.')
-    } finally {
-      setHandoffPending(false)
-    }
-  }
-
   return (
     <section
       className="av-surface"
       ref={surfaceRef}
-      aria-label={`Artifact review: ${item.title || name}`}
+      aria-label={`Artifact: ${item.title || name}`}
       aria-describedby={descriptionId}
       onKeyDown={event => {
         // Only the consent alert is modal; the surface itself is ordinary
@@ -473,7 +375,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
         if (previewConsentOpen && consentRef.current) trapModalTab(event, consentRef.current)
       }}
     >
-      <span className="sr-only" id={descriptionId}>Review this artifact and add editable feedback to its producing chat.</span>
+      <span className="sr-only" id={descriptionId}>Preview of this artifact, filling the main window. Editable kinds open their source in the editor.</span>
       {whiteboard
         ? <React.Suspense fallback={<div className="av-msg muted">Loading whiteboard...</div>}>
           <ExcalidrawWhiteboard
@@ -483,7 +385,6 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
             source={whiteboard.source}
             diagramIndex={whiteboard.diagramIndex}
             onClose={() => setWhiteboard(null)}
-            onSaved={recordWhiteboard}
           />
         </React.Suspense>
         : <>
@@ -496,8 +397,7 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
                 onClick={onClose}
                 aria-label={`Back to ${backLabel.toLowerCase()}`}
               >← {backLabel}</button>
-              <h2 title={path}>Artifact review: {item.title || name}</h2>
-              <span className="av-review-label">Review</span>
+              <h2 title={path}>{item.title || name}</h2>
               {kind === 'html' && <span className={`av-preview-mode ${activeForCurrentArea ? 'active' : 'passive'}`}>{activeForCurrentArea ? 'Active preview' : 'Passive preview'}</span>}
               {items.length > 1 && <span className="av-count">{index + 1} / {items.length}</span>}
             </div>
@@ -505,55 +405,19 @@ export function ArtifactViewer({ token, slug, items, index, onIndex, onClose, ba
               {kind === 'html' && item.target && (activeForCurrentArea
                 ? <button type="button" className="ghost-button" disabled={previewModePending} onClick={() => void disableActivePreview()}>{previewModePending ? 'Disabling...' : 'Disable active preview'}</button>
                 : <button type="button" className="ghost-button" disabled={previewModePending || !previewSessionRef.current} onClick={() => { setPreviewModeError(''); setPreviewConsentOpen(true) }}>Enable active preview</button>)}
-              <button type="button" className={`ghost-button ${annotating ? 'active' : ''}`} aria-pressed={annotating} onClick={() => { setAnnotating(current => !current); setPendingPoint(null) }}>{annotating ? 'Click artifact to pin' : 'Annotate'}</button>
               {EDITABLE_KINDS.has(kind) && onEditSource && <button type="button" className="ghost-button" onClick={() => onEditSource(item)}>Edit source</button>}
               {item.type !== 'design' && <a className="ghost-button" href={rawUrl(slug, path, item.target)} download={name}>Download</a>}
             </div>
           </header>
-          <div className="av-workspace">
-            <main className="av-stage">
-              {previewModeError && <p className="av-preview-mode-error" role="alert">{previewModeError}</p>}
-              <div className={`av-review-surface av-kind-${kind} ${annotating ? 'annotating' : ''}`}>
-                {stage()}
-                <div className={`av-annotation-layer ${annotating ? 'placing' : ''}`} onClick={placeAnnotation} aria-label={annotating ? 'Click to place an annotation' : undefined}>
-                  {review.annotations.map((annotation, annotationIndex) => <button
-                    type="button"
-                    key={annotation.id}
-                    className={`av-pin ${activeAnnotationId === annotation.id ? 'active' : ''}`}
-                    style={{ left: `${annotation.x * 100}%`, top: `${annotation.y * 100}%` }}
-                    aria-label={`Annotation ${annotationIndex + 1}: ${annotation.note}`}
-                    onClick={event => { event.stopPropagation(); setActiveAnnotationId(annotation.id) }}
-                  >{annotationIndex + 1}</button>)}
-                  {pendingPoint && <span className="av-pin pending" style={{ left: `${pendingPoint.x * 100}%`, top: `${pendingPoint.y * 100}%` }}>+</span>}
-                </div>
-              </div>
-            </main>
-            <aside className="av-review-panel" aria-label="Artifact feedback">
-              <div className="av-review-panel-head">
-                <div><p className="eyebrow">Artifact review</p><strong>{review.annotations.length} pin{review.annotations.length === 1 ? '' : 's'}</strong></div>
-                <button type="button" className="ghost-button" onClick={() => { setAnnotating(true); setPendingPoint(null) }}>+ Pin</button>
-              </div>
-              {pendingPoint && <div className="av-note-editor">
-                <label htmlFor="av-pending-note">What should change here?</label>
-                <textarea id="av-pending-note" ref={noteRef} value={pendingNote} onChange={event => setPendingNote(event.target.value)} placeholder="Be specific so your agent can act on it." />
-                <div><button type="button" className="ghost-button" onClick={() => { setPendingPoint(null); setPendingNote('') }}>Cancel</button><button type="button" className="primary-button" disabled={!pendingNote.trim()} onClick={addAnnotation}>Add note</button></div>
-              </div>}
-              <div className="av-annotation-list">
-                {review.annotations.map((annotation, annotationIndex) => <article key={annotation.id} className={`av-annotation-card ${activeAnnotationId === annotation.id ? 'active' : ''}`}>
-                  <button type="button" className="av-annotation-copy" onClick={() => setActiveAnnotationId(annotation.id)}><span className="av-pin static">{annotationIndex + 1}</span><span>{annotation.note}</span></button>
-                  <button type="button" className="av-annotation-remove" aria-label={`Remove annotation ${annotationIndex + 1}`} onClick={() => updateReview(current => ({ ...current, annotations: current.annotations.filter(entry => entry.id !== annotation.id) }))}>Remove</button>
-                </article>)}
-                {!review.annotations.length && !pendingPoint && <p className="muted av-review-empty">Choose Annotate, then click anywhere on the artifact to leave a precise note.</p>}
-              </div>
-              {review.whiteboardPaths.length > 0 && <div className="av-whiteboard-links"><strong>Edited whiteboard</strong>{review.whiteboardPaths.map(whiteboardPath => <span className="mono" key={whiteboardPath}>{whiteboardPath}</span>)}</div>}
-              <label className="av-general-note">General feedback<textarea name="artifact-general-feedback" value={review.generalNote} onChange={event => updateReview(current => ({ ...current, generalNote: event.target.value }))} placeholder="Overall direction, tone, or requested changes" /></label>
-              <div className="av-review-submit">
-                <button type="button" className="primary-button" disabled={!onSendFeedback || !hasArtifactReviewFeedback(review) || handoffPending} onClick={() => void addToChat()}>{handoffPending ? 'Opening chat...' : 'Add feedback to chat'}</button>
-                <p className="muted">Opens this artifact's Proxima chat with an editable feedback draft.</p>
-                {handoffError && <p className="av-handoff-error" role="alert">{handoffError}</p>}
-              </div>
-            </aside>
-          </div>
+          {/* The stage is the whole window under the bar (#148). A page or a PDF
+              fills it edge to edge, because it was laid out for a viewport of its
+              own; pictures and documents keep their breathing room, since a
+              picture pinned to the chrome and a line of prose stretched across a
+              desktop are each their own kind of unreadable. */}
+          <main className={`av-stage ${FILLS_STAGE.has(kind) ? 'fill' : ''} ${items.length > 1 ? 'walkable' : ''}`}>
+            {previewModeError && <p className="av-preview-mode-error" role="alert">{previewModeError}</p>}
+            <div className={`av-content av-kind-${kind}`}>{stage()}</div>
+          </main>
           {items.length > 1 && <button type="button" className="av-nav prev" onClick={previous} title="Previous (←)">‹</button>}
           {items.length > 1 && <button type="button" className="av-nav next" onClick={next} title="Next (→)">›</button>}
           {previewConsentOpen && <div className="av-preview-consent-scrim">

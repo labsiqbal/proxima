@@ -261,6 +261,24 @@ runs re-attach when the owner returns in the same browser session. Work Chat rel
 durability is owned under Chat above. Server work continues regardless; the client
 contract is keep-alive / re-attach, not remount-from-zero.
 
+**A nav click means that destination's own state.** Keep-alive restores what the
+owner left there; it must not restore something a *different* destination put on
+the surface. Two destinations can hold a focused item, and both leave it when a
+nav click asks for the destination itself (`navClickLeavesFocusedItem`):
+
+- **Re-clicking the destination you are already on** returns to its home - the
+  Workflows plan list, the Design Studio start screen (or its gallery, when the
+  canvas was entered from there). This is the older Workflows rule, now shared.
+- **Design also leaves a *visit*.** A design opened from an Artifacts card, a task
+  file link, or a chat result is one file another destination sent the owner to
+  look at. It was never Design's own state, so clicking **Design** in the nav goes
+  to the studio home even when the owner is arriving from elsewhere - and such a
+  design is never written to the studio's resume key (`proxima.design.last.<slug>`),
+  which is what a cold load reopens. A design opened inside the studio, named by
+  the URL, or reached from its chat session is Design's own and is restored
+  normally. Without this, opening a design from Artifacts silently became the
+  answer to "take me to Design" for the rest of the session (#148).
+
 **Teaching empty states:** top-level empties share one grammar — title, what the surface
 can do, short tutorial steps, and one primary CTA where it applies (Chat, Master, Tasks,
 Workflows library context, the Artifacts gallery and its Deliverables tab, Design home). Help/core tour
@@ -429,9 +447,7 @@ surface answers:
   bytes. Opened from Artifacts a markdown document carries **no wiki graph**: an
   artifact anywhere in the Container has no backlinks to show and no
   `[[wikilink]]` namespace to resolve against - that context belongs to the Wiki
-  destination. A **Review** action opens the same document in the viewer, so
-  pinned feedback stays reachable for a report without standing in front of the
-  editor. Extensionless documents (`README`, `Dockerfile`, `LICENSE`) count as
+  destination. Extensionless documents (`README`, `Dockerfile`, `LICENSE`) count as
   text; a genuinely binary file with no extension is refused by the Files API
   with a readable reason instead of being rendered as noise.
 - **Everything else** opens in the **inline viewer** (the same ArtifactViewer,
@@ -441,7 +457,9 @@ surface answers:
   Container's other viewer-bound artifacts; documents are not on that walk,
   since each opens alone in its editor. **Edit source** hands any text-backed
   artifact to the same editor, and the way back from there returns to the
-  artifact it came from.
+  artifact it came from. The artifact gets the whole window: a page or a PDF
+  fills the stage edge to edge so a desktop layout is readable without scrolling
+  sideways, while media and documents keep the padding that centres them.
 - A **design** is a folder of scene JSON, not a file with bytes. In Work it
   opens in the Design Studio canvas, which is the same main window. Where there
   is no studio - Delegate - the viewer draws its first artboard on the stage,
@@ -462,8 +480,15 @@ to the new Container, so another project's file cannot keep the window.
 **Delegate behaves identically**: it has no dock and no Design Studio, but it
 has this destination, the same editor, and the same viewer, because the editor
 is an Artifacts surface and the Files API it writes through is not Work-scoped.
-Only the chat handoff differs, and it never existed there - **Add feedback to
-chat** stays disabled because Delegate has no ordinary Chat to open.
+Nothing about opening an artifact differs between the two modes.
+
+**No review panel.** The viewer used to carry a fixed side column - pin counts,
+point annotations, a general-feedback field, and **Add feedback to chat**, which
+seeded the producing session's composer with a path-linked brief. The owner
+removed it (#148): it cost every artifact a third of the window, and an HTML page
+had to be scrolled sideways to be read at all. Feedback is written in Chat like
+any other prompt. The editor's **Review** action went with it, since reaching
+those pins was the only thing it did.
 
 ### The running app
 

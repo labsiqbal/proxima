@@ -1,5 +1,4 @@
 import React from "react";
-import { confirmDialog } from "../ui/Dialog";
 import { getCommandCatalog, type CatalogCommand } from "../../api/commands";
 import {
 	applyMention,
@@ -124,9 +123,6 @@ export function Composer({
 	onAttachmentsChange,
 	focusRequest,
 	clearOnSubmitStart = true,
-	draftSeed,
-	draftSeedNonce,
-	onDraftSeedConsumed,
 	onSubmit,
 	onCatalog,
 }: {
@@ -160,9 +156,6 @@ export function Composer({
 	onAttachmentsChange?: (attachments: ComposerAttachment[]) => void;
 	focusRequest?: number;
 	clearOnSubmitStart?: boolean;
-	draftSeed?: string;
-	draftSeedNonce?: number;
-	onDraftSeedConsumed?: () => void;
 	onSubmit: (text: string, promptMode?: PromptMode) => Promise<void>;
 	/** Optional: parent uses skill slash names to route agent-turn commands. */
 	onCatalog?: (commands: CatalogCommand[]) => void;
@@ -236,9 +229,6 @@ export function Composer({
 	const [submitting, setSubmitting] = React.useState(false);
 	const [uploadError, setUploadError] = React.useState("");
 	const taRef = React.useRef<HTMLTextAreaElement>(null);
-	const draftRef = React.useRef(draft);
-	draftRef.current = draft;
-	const handledDraftSeedNonce = React.useRef(0);
 	const pendingMentionCaret = React.useRef<{ caret: number; forText: string } | null>(null);
 	const mentionListRef = React.useRef<HTMLDivElement>(null);
 	const slashListRef = React.useRef<HTMLDivElement>(null);
@@ -326,31 +316,6 @@ export function Composer({
 			submitSeq.current += 1;
 		};
 	}, []);
-
-	React.useEffect(() => {
-		if (!draftSeedNonce || draftSeed == null || handledDraftSeedNonce.current === draftSeedNonce) return;
-		handledDraftSeedNonce.current = draftSeedNonce;
-		const existing = draftRef.current;
-		const finish = () => {
-			requestAnimationFrame(() => taRef.current?.focus());
-			onDraftSeedConsumed?.();
-		};
-		if (!existing.trim() || existing === draftSeed) {
-			setDraft(draftSeed);
-			finish();
-			return;
-		}
-		void confirmDialog({
-			title: "This chat already has an unsent draft",
-			message: "Append the artifact feedback to preserve both drafts, or keep the current draft unchanged.",
-			confirmLabel: "Append feedback",
-			cancelLabel: "Keep current draft",
-		}).then(append => {
-			if (!mountedRef.current) return;
-			if (append) setDraft(`${draftRef.current}\n\n${draftSeed}`);
-			finish();
-		});
-	}, [draftSeed, draftSeedNonce, onDraftSeedConsumed, setDraft]);
 
 	React.useEffect(() => {
 		if (!token) {

@@ -23,7 +23,7 @@ export type WikiNoteGraph = {
   onCreateNote?: (target: string) => void
 }
 
-export function WikiNote({ fs, path, target, wiki, onClose, closeLabel = 'Close', closeTitle, onReview, onSaved, autoFocus = false, defaultMode = 'preview' }: {
+export function WikiNote({ fs, path, target, wiki, onClose, closeLabel = 'Close', closeTitle, onSaved, autoFocus = false, defaultMode = 'preview' }: {
   fs: FsAdapter
   path: string
   /** Area-mapped ref when the document is not plain container-relative (#136/#138). */
@@ -33,8 +33,6 @@ export function WikiNote({ fs, path, target, wiki, onClose, closeLabel = 'Close'
   /** The close control doubles as the way back out of a main-window editor. */
   closeLabel?: string
   closeTitle?: string
-  /** Offered when this document also has a review surface to open (#146). */
-  onReview?: () => void
   onSaved?: () => void
   /** Put the caret in the document on mount - the editor IS the surface. */
   autoFocus?: boolean
@@ -124,7 +122,7 @@ export function WikiNote({ fs, path, target, wiki, onClose, closeLabel = 'Close'
     <div className="wiki-note-head">
       <strong title={path}>{baseName(path)}{dirty ? ' •' : ''}</strong>
       <div className="seg sm"><button className={mode === 'edit' ? 'active' : ''} onClick={() => setMode('edit')}>Edit</button><button className={mode === 'preview' ? 'active' : ''} onClick={() => setMode('preview')}>Preview</button></div>
-      <div>{onReview && <button className="ghost-button" onClick={onReview} title="Pin feedback on the rendered document">Review</button>}<button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button><button className="ghost-button" onClick={() => void requestClose()} disabled={status === 'saving'} title={closeTitle} aria-label={closeTitle}>{closeLabel}</button></div>
+      <div><button className="ghost-button" onClick={() => void save()} disabled={status === 'loading' || status === 'saving'}>{status === 'saving' ? 'Saving…' : 'Save'}</button><button className="ghost-button" onClick={() => void requestClose()} disabled={status === 'saving'} title={closeTitle} aria-label={closeTitle}>{closeLabel}</button></div>
     </div>
     {status === 'loading'
       ? <p className="muted wiki-note-loading">Loading…</p>

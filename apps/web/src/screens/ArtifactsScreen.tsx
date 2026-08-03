@@ -2,7 +2,7 @@ import React from 'react'
 import type { FileTarget, OutputLink, Project } from '../types'
 import { listArtifacts, type Artifact } from '../api/files'
 import { listArchive, listArchiveBadges, type ArchiveBadge, type ArchiveRecord } from '../api/archive'
-import { ArtifactViewer, type ArtifactReviewFeedback, type ArtifactReviewHandoffResult } from '../components/artifacts/ArtifactViewer'
+import { ArtifactViewer } from '../components/artifacts/ArtifactViewer'
 import { ArchiveRecordPage } from '../components/artifacts/ArchiveRecordPage'
 import { DeliverablesLens } from '../components/artifacts/DeliverablesLens'
 import { DocumentEditor } from '../components/artifacts/DocumentEditor'
@@ -76,7 +76,6 @@ type OpenArtifact = {
   slug: string
   items: Artifact[]
   index: number
-  sessionId?: number | null
   surface: 'viewer' | 'editor'
   fromViewer?: boolean
 }
@@ -91,7 +90,7 @@ const recordAsArtifact = (r: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'pro
   target: r.target || undefined,
 })
 
-export function ArtifactsScreen({ token, projects, activeProject, globalScope = false, archiveRecord, pendingFile, pendingArtifact, pendingApp, onPendingConsumed, onPendingArtifactConsumed, onPendingAppConsumed, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, designStudioEnabled = false, onOpenDesign, reviewSessionId = null, onSendFeedback }: {
+export function ArtifactsScreen({ token, projects, activeProject, globalScope = false, archiveRecord, pendingFile, pendingArtifact, pendingApp, onPendingConsumed, onPendingArtifactConsumed, onPendingAppConsumed, onOpenRecord, onCloseRecord, onOpenTask, onOpenSession, designStudioEnabled = false, onOpenDesign }: {
   token: string
   projects: Project[]
   activeProject?: Project | null
@@ -111,8 +110,6 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
   onOpenSession?: (sessionId: number) => void
   designStudioEnabled?: boolean
   onOpenDesign?: (id: string) => void
-  reviewSessionId?: number | null
-  onSendFeedback?: (feedback: ArtifactReviewFeedback) => ArtifactReviewHandoffResult | Promise<ArtifactReviewHandoffResult>
 }) {
   const [tab, setTab] = React.useState<Tab>('all')
   const [filter, setFilter] = React.useState('')
@@ -226,7 +223,7 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
 
   // The one place an artifact becomes a main-window surface. What the file is
   // decides which surface answers, so every entry point routes identically.
-  const openArtifactAt = React.useCallback((slug: string, walk: Artifact[], index: number, sessionId?: number | null) => {
+  const openArtifactAt = React.useCallback((slug: string, walk: Artifact[], index: number) => {
     const item = walk[index]
     if (!item) return
     setAppSlug(null)
@@ -234,14 +231,13 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
       slug,
       items: walk,
       index,
-      sessionId: sessionId ?? reviewSessionId,
       surface: opensInEditor(item) ? 'editor' : 'viewer',
     })
-  }, [reviewSessionId])
+  }, [])
 
-  const openViewerForRecord = React.useCallback((record: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug' | 'target'> & { session_id?: number | null }) => {
-    openArtifactAt(record.project_slug, [recordAsArtifact(record)], 0, record.session_id ?? reviewSessionId)
-  }, [openArtifactAt, reviewSessionId])
+  const openViewerForRecord = React.useCallback((record: Pick<ArchiveRecord, 'type' | 'name' | 'path' | 'project_slug' | 'target'>) => {
+    openArtifactAt(record.project_slug, [recordAsArtifact(record)], 0)
+  }, [openArtifactAt])
 
   // Chat result cards and task file links keep working: a pending artifact
   // resolves to its registry record (permanent address) when one exists, and
@@ -324,7 +320,6 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
         onClose={() => setOpen(current => current?.fromViewer
           ? { ...current, surface: 'viewer', fromViewer: false }
           : null)}
-        onReview={() => setOpen(current => current ? { ...current, surface: 'viewer', fromViewer: false } : current)}
       />
     : <ArtifactViewer
         token={token}
@@ -335,8 +330,6 @@ export function ArtifactsScreen({ token, projects, activeProject, globalScope = 
         onClose={() => setOpen(null)}
         backLabel={backLabel}
         onEditSource={() => setOpen(current => current ? { ...current, surface: 'editor', fromViewer: true } : current)}
-        reviewSessionId={open.sessionId ?? null}
-        onSendFeedback={onSendFeedback}
       />)
 
   if (surface) return <section className="artifacts-view">{surface}</section>

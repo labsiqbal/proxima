@@ -123,9 +123,6 @@ export function ChatScreen(props: {
 	runRecipePrompt?: string;
 	runRecipeLabel?: string;
 	runRecipeInstantResult?: string;
-	draftSeed?: string;
-	draftSeedNonce?: number;
-	onDraftSeedConsumed?: () => void;
 }) {
 	const [messages, setMessages] = React.useState<ChatMessage[]>([]);
 	const [goal, setGoal] = React.useState<GoalState | null>(null);
@@ -824,9 +821,6 @@ export function ChatScreen(props: {
 					token={props.token}
 						slug={projSlug}
 						profileId={props.activeProfile?.id ?? null}
-					draftSeed={props.draftSeed}
-					draftSeedNonce={props.draftSeedNonce}
-					onDraftSeedConsumed={props.onDraftSeedConsumed}
 					draftValue={workChat.state.draft}
 					onDraftChange={(draft) => workChat.update({ draft })}
 					selectionValue={workChat.state.selection}

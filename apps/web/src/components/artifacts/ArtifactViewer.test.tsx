@@ -1,6 +1,6 @@
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@testing-library/jest-dom/vitest'
 import { ArtifactViewer } from './ArtifactViewer'
@@ -39,8 +39,7 @@ vi.mock('./MermaidDiagram', () => ({
   MermaidDiagram: ({ source, onEdit }: { source: string; onEdit: () => void }) => <button type="button" onClick={onEdit}>Edit diagram {source}</button>,
 }))
 vi.mock('./ExcalidrawWhiteboard', () => ({
-  ExcalidrawWhiteboard: ({ onClose, onSaved }: { onClose: () => void; onSaved: (path: string) => void }) => <div data-testid="whiteboard">
-    <button type="button" onClick={() => onSaved('artifacts/whiteboards/flow.excalidraw')}>Save whiteboard</button>
+  ExcalidrawWhiteboard: ({ onClose }: { onClose: () => void }) => <div data-testid="whiteboard">
     <button type="button" onClick={onClose}>Back to artifact</button>
   </div>,
 }))
@@ -57,7 +56,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('ArtifactViewer v2 review flow', () => {
+describe('ArtifactViewer', () => {
   // #146: the viewer is the MAIN WINDOW, not a lightbox over it. No dialog role,
   // no portal, no scrim, no focus trap - and Escape belongs to whatever overlay
   // is genuinely on top (the dock panel, a confirm dialog), never to this.
@@ -67,7 +66,7 @@ describe('ArtifactViewer v2 review flow', () => {
     function Harness() {
       const [open, setOpen] = React.useState(false)
       return <>
-        <button type="button" onClick={() => setOpen(true)}>Review artifact</button>
+        <button type="button" onClick={() => setOpen(true)}>Open artifact</button>
         {open && <ArtifactViewer
           token="token"
           slug="master"
@@ -81,22 +80,95 @@ describe('ArtifactViewer v2 review flow', () => {
     }
 
     const view = render(<Harness />)
-    await userEvent.click(view.getByRole('button', { name: 'Review artifact' }))
+    await userEvent.click(view.getByRole('button', { name: 'Open artifact' }))
 
-    const surface = screen.getByRole('region', { name: 'Artifact review: Hero' })
+    const surface = screen.getByRole('region', { name: 'Artifact: Hero' })
     expect(surface).not.toHaveAttribute('aria-modal')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(surface.parentElement).not.toBe(document.body)
-    expect(surface).toHaveAccessibleDescription('Review this artifact and add editable feedback to its producing chat.')
 
     const back = screen.getByRole('button', { name: 'Back to gallery' })
     await waitFor(() => expect(back).toHaveFocus())
 
     await userEvent.keyboard('{Escape}')
-    expect(screen.getByRole('region', { name: 'Artifact review: Hero' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Artifact: Hero' })).toBeInTheDocument()
 
     await userEvent.click(back)
-    expect(screen.queryByRole('region', { name: 'Artifact review: Hero' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Artifact: Hero' })).not.toBeInTheDocument()
+  })
+
+  // #148: the owner removed the review side panel outright. The artifact is the
+  // whole surface now - no pins, no annotate mode, no general-feedback field, and
+  // no handoff into chat - so a page renders at the window's width instead of
+  // inside a two-thirds column that had to be scrolled sideways to read.
+  it('gives the whole surface to the artifact - no review panel beside it', () => {
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'image', title: 'Hero', path: 'artifacts/hero.png' }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    expect(screen.queryByRole('complementary', { name: 'Artifact feedback' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/pins?$/i)).not.toBeInTheDocument()
+    for (const name of ['+ Pin', 'Annotate', 'Add feedback to chat']) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
+    }
+    expect(screen.queryByRole('textbox', { name: 'General feedback' })).not.toBeInTheDocument()
+    expect(document.querySelector('.av-annotation-layer')).toBeNull()
+    // The stage is the only child under the bar, so it can be full width.
+    expect(document.querySelector('.av-review-panel')).toBeNull()
+    expect(document.querySelector('.av-workspace')).toBeNull()
+    expect(document.querySelector('.av-stage')).toBeInTheDocument()
+  })
+
+  // An HTML page is laid out for a viewport, so it fills the stage edge to edge
+  // rather than sitting in a centred, capped column (#148).
+  it('lets a page fill the stage instead of a centred column', () => {
+    render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'file', title: 'Terms', path: 'site/terms.html' }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    expect(document.querySelector('.av-stage')).toHaveClass('fill')
+    expect(document.querySelector('iframe.av-frame')).toBeInTheDocument()
+  })
+
+  it('keeps the padded, centred stage for documents and pictures', async () => {
+    fsRead.mockResolvedValue({ content: '# Report' })
+    const { rerender } = render(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'doc', title: 'Report', path: 'reports/report.md' }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+
+    await waitFor(() => expect(screen.getByTestId('message-content')).toBeInTheDocument())
+    expect(document.querySelector('.av-stage')).not.toHaveClass('fill')
+
+    // A design's artboard is a picture, not a page: pinned to the chrome it reads
+    // worse than centred, so it keeps the padding an image gets.
+    fsRead.mockResolvedValue({ content: JSON.stringify({
+      artboards: [{ id: 'a', width: 1080, height: 1080, background: '#fff', layers: [] }],
+    }) })
+    rerender(<ArtifactViewer
+      token="token"
+      slug="master"
+      items={[{ type: 'design', title: 'Poster', path: 'artifacts/design/poster' }]}
+      index={0}
+      onIndex={() => undefined}
+      onClose={() => undefined}
+    />)
+    await waitFor(() => expect(document.querySelector('.av-design')).toBeInTheDocument())
+    expect(document.querySelector('.av-stage')).not.toHaveClass('fill')
   })
 
   // A design has no bytes to preview; without its artboard the stage would be an
@@ -151,87 +223,22 @@ describe('ArtifactViewer v2 review flow', () => {
     expect(screen.queryByRole('button', { name: 'Edit source' })).not.toBeInTheDocument()
   })
 
-  it('closes only after a successful feedback handoff', async () => {
-    const successfulHandoff = vi.fn().mockResolvedValue({ ok: true })
-    const failedHandoff = vi.fn().mockResolvedValue({
-      ok: false,
-      message: 'The producing chat is no longer available.',
-    })
-    const onClose = vi.fn()
-    const view = render(<ArtifactViewer
-      token="token"
-      slug="master"
-      items={[{ type: 'image', title: 'Hero', path: 'artifacts/hero.png' }]}
-      index={0}
-      onIndex={() => undefined}
-      onClose={onClose}
-      reviewSessionId={7}
-      onSendFeedback={failedHandoff}
-    />)
-
-    await userEvent.type(screen.getByRole('textbox', { name: 'General feedback' }), 'Use the approved logo.')
-    await userEvent.click(screen.getByRole('button', { name: 'Add feedback to chat' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('producing chat is no longer available')
-    expect(onClose).not.toHaveBeenCalled()
-
-    view.rerender(<ArtifactViewer
-      token="token"
-      slug="master"
-      items={[{ type: 'image', title: 'Hero', path: 'artifacts/hero.png' }]}
-      index={0}
-      onIndex={() => undefined}
-      onClose={onClose}
-      reviewSessionId={7}
-      onSendFeedback={successfulHandoff}
-    />)
-    await userEvent.click(screen.getByRole('button', { name: 'Add feedback to chat' }))
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
-  })
-
-  it('does not treat arrow keys inside feedback fields as artifact navigation', async () => {
-    const onIndex = vi.fn()
-    render(<ArtifactViewer
-      token="token"
-      slug="master"
-      items={[
-        { type: 'image', title: 'Hero', path: 'artifacts/hero.png' },
-        { type: 'image', title: 'Detail', path: 'artifacts/detail.png' },
-      ]}
-      index={0}
-      onIndex={onIndex}
-      onClose={() => undefined}
-    />)
-
-    const feedback = screen.getByRole('textbox', { name: 'General feedback' })
-    await userEvent.click(feedback)
-    await userEvent.keyboard('{ArrowLeft}{ArrowRight}')
-    expect(onIndex).not.toHaveBeenCalled()
-  })
-
-  it('can hand off feedback for a stale artifact when its producing chat still exists', async () => {
+  // A stale artifact is still readable: the error belongs on the stage, and the
+  // walk to its neighbours keeps working.
+  it('reports an unreadable artifact on the stage without losing the way back', async () => {
     fsRead.mockRejectedValue(new Error('gone'))
-    const onSendFeedback = vi.fn().mockResolvedValue({ ok: true })
-    const onClose = vi.fn()
     render(<ArtifactViewer
       token="token"
       slug="master"
       items={[{ type: 'doc', title: 'Old report', path: 'reports/gone.md' }]}
       index={0}
       onIndex={() => undefined}
-      onClose={onClose}
-      reviewSessionId={7}
-      onSendFeedback={onSendFeedback}
+      backLabel="Gallery"
+      onClose={() => undefined}
     />)
 
     expect(await screen.findByText('Could not read this file.')).toBeInTheDocument()
-    await userEvent.type(screen.getByRole('textbox', { name: 'General feedback' }), 'Recreate this report.')
-    await userEvent.click(screen.getByRole('button', { name: 'Add feedback to chat' }))
-
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
-    expect(onSendFeedback).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 7,
-      text: expect.stringContaining('Recreate this report.'),
-    }))
+    expect(screen.getByRole('button', { name: 'Back to gallery' })).toBeInTheDocument()
   })
 
   it('uses the artifact target for text and media resolution instead of its display path', async () => {
@@ -448,64 +455,25 @@ describe('ArtifactViewer v2 review flow', () => {
     expect(fsRead).not.toHaveBeenCalled()
   })
 
-  it('pins an annotation and returns actionable feedback to the producing chat', async () => {
-    const onSendFeedback = vi.fn().mockResolvedValue({ ok: true })
-    render(<ArtifactViewer
-      token="token"
-      slug="master"
-      items={[{ type: 'image', title: 'Hero', path: 'artifacts/hero.png' }]}
-      index={0}
-      onIndex={() => undefined}
-      onClose={() => undefined}
-      reviewSessionId={7}
-      onSendFeedback={onSendFeedback}
-    />)
-
-    await userEvent.click(screen.getByRole('button', { name: 'Annotate' }))
-    const layer = screen.getByLabelText('Click to place an annotation')
-    vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue({
-      x: 10, y: 20, left: 10, top: 20, right: 210, bottom: 120, width: 200, height: 100,
-      toJSON: () => ({}),
-    })
-    fireEvent.click(layer, { clientX: 60, clientY: 90 })
-    await userEvent.type(screen.getByLabelText('What should change here?'), 'Use the approved logo lockup.')
-    await userEvent.click(screen.getByRole('button', { name: 'Add note' }))
-
-    expect(screen.getByRole('button', { name: /Annotation 1: Use the approved logo/ })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Add feedback to chat' }))
-
-    expect(onSendFeedback).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 7,
-      text: expect.stringContaining('Pin 1 (25% from left, 70% from top): Use the approved logo lockup.'),
-    }))
-  })
-
-  it('opens a Mermaid block as an editable whiteboard and includes its saved path in feedback', async () => {
+  it('opens a Mermaid block as an editable whiteboard and returns to the artifact', async () => {
     fsRead.mockResolvedValue({ content: '# Flow\n\n```mermaid\ngraph LR\n A-->B\n```' })
-    const onSendFeedback = vi.fn().mockResolvedValue({ ok: true })
     render(<ArtifactViewer
       token="token"
       slug="master"
       items={[{ type: 'doc', title: 'Flow', path: 'reports/flow.md' }]}
       index={0}
       onIndex={() => undefined}
+      backLabel="Gallery"
       onClose={() => undefined}
-      reviewSessionId={9}
-      onSendFeedback={onSendFeedback}
     />)
 
     const edit = await screen.findByRole('button', { name: /Edit diagram graph LR/ })
     await userEvent.click(edit)
     expect(await screen.findByTestId('whiteboard')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Save whiteboard' }))
     await userEvent.click(screen.getByRole('button', { name: 'Back to artifact' }))
 
-    await waitFor(() => expect(screen.getByText('artifacts/whiteboards/flow.excalidraw')).toBeInTheDocument())
-    await userEvent.click(screen.getByRole('button', { name: 'Add feedback to chat' }))
-    expect(onSendFeedback).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 9,
-      text: expect.stringContaining('[flow.excalidraw](artifacts/whiteboards/flow.excalidraw)'),
-    }))
+    await waitFor(() => expect(screen.queryByTestId('whiteboard')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Back to gallery' })).toBeInTheDocument()
   })
 
   it('downloads active media through the authenticated raw endpoint', () => {
