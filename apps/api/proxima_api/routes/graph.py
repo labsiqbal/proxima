@@ -462,6 +462,58 @@ def register(app, deps):
     ):
         return graph_job_payload(graph_job_or_404(job_id, user))
 
+    @app.post("/api/graph/jobs/{job_id}/chat")
+    def ensure_graph_job_chat(
+        job_id: int, user: dict[str, Any] = Depends(current_user)
+    ):
+        """The plan's chat thread, created and pinned if it is missing.
+
+        A graph job is created with a session, but ``jobs.session_id`` is
+        ``ON DELETE SET NULL``: deleting that thread from the Chat screen
+        detaches it and used to leave the plan permanently un-chattable, since
+        the panel could only ever read the id the job already had (#150).
+        Get-or-create keeps the thread pinned to the plan -- one plan, one
+        conversation -- while making the missing case recoverable instead of a
+        dead end.
+        """
+        job = graph_job_or_404(job_id, user)
+        session_id = _as_int(job["session_id"]) if job["session_id"] is not None else None
+        if session_id is not None:
+            return {"session_id": session_id, "created": False}
+        profile = profile_for_user(None, user)
+        project_id = _as_int(job["project_id"]) if job["project_id"] is not None else None
+        conn = db()
+        with app.state.db_lock:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT INTO sessions(
+                      title, project_id, owner_user_id, profile_id, runner_id,
+                      visibility, mode, job_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'chat', ?)
+                    """,
+                    (
+                        str(job["title"] or "Untitled plan")[:200],
+                        project_id,
+                        user["id"],
+                        profile["id"],
+                        profile["runner_id"],
+                        "project" if project_id else "private",
+                        job_id,
+                    ),
+                )
+                session_id = _as_int(cur.lastrowid)
+                conn.execute(
+                    "UPDATE jobs SET session_id = ? WHERE id = ?", (session_id, job_id)
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        return {"session_id": session_id, "created": True}
+
     @app.post("/api/graph/jobs/{job_id}/save-template", status_code=status.HTTP_201_CREATED)
     def save_graph_template(
         job_id: int,

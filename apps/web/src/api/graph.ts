@@ -30,6 +30,12 @@ export const listGraphTemplates = (token: string, projectSlug?: string | null, i
 export const getGraphJob = (token: string, jobId: number) =>
   api<GraphJob>(`/api/graph/jobs/${jobId}`, token)
 
+/** The plan's pinned chat thread, re-created server-side if it was deleted (#150). */
+export const ensureGraphJobChat = (token: string, jobId: number) =>
+  api<{ session_id: number; created: boolean }>(
+    `/api/graph/jobs/${jobId}/chat`, token, { method: 'POST' },
+  )
+
 export const updateGraphPlan = (
   token: string,
   jobId: number,

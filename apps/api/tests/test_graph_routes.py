@@ -1490,3 +1490,47 @@ def test_authoring_chat_style_multi_node_graph_is_runnable(tmp_path):
     # Research is the first agent after the trigger and should be ready/running.
     states = {n["node_id"]: n["status"] for n in body["node_states"]}
     assert states.get("research") in ("ready", "running", "done", "pending", "review")
+
+
+def test_plan_chat_reattaches_a_thread_after_its_session_is_deleted(tmp_path):
+    """#150: a plan whose chat thread was deleted must still be chattable.
+
+    ``jobs.session_id`` is ON DELETE SET NULL, so deleting the thread from the
+    Chat screen detaches it from the plan. The plan chat could then never open
+    again -- it only ever read the id the job already carried -- which is a dead
+    end for a plan the owner can still see and edit.
+    """
+    app = _app(tmp_path)
+    client = _client(app)
+    job = _create(client)
+    job_id = int(job["id"])
+    original_session = int(job["session_id"])
+
+    # Opening the chat on a healthy plan keeps the pinned thread.
+    assert client.post(f"/api/graph/jobs/{job_id}/chat").json() == {
+        "session_id": original_session,
+        "created": False,
+    }
+
+    app.state.db.execute("DELETE FROM sessions WHERE id = ?", (original_session,))
+    assert client.get(f"/api/graph/jobs/{job_id}").json()["session_id"] is None
+
+    reattached = client.post(f"/api/graph/jobs/{job_id}/chat")
+    assert reattached.status_code == 200, reattached.text
+    body = reattached.json()
+    assert body["created"] is True
+    new_session = int(body["session_id"])
+    assert new_session != original_session
+
+    # The new thread is pinned both ways, so the plan owns exactly one chat.
+    assert client.get(f"/api/graph/jobs/{job_id}").json()["session_id"] == new_session
+    pinned = app.state.db.execute(
+        "SELECT job_id, mode, project_id FROM sessions WHERE id = ?", (new_session,)
+    ).fetchone()
+    assert (pinned["job_id"], pinned["mode"]) == (job_id, "chat")
+    assert pinned["project_id"] == job["project_id"]
+    # A second open resumes rather than spawning another thread.
+    assert client.post(f"/api/graph/jobs/{job_id}/chat").json() == {
+        "session_id": new_session,
+        "created": False,
+    }

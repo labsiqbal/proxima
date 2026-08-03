@@ -3,7 +3,7 @@
 > **GENERATED FILE - do not edit by hand.** Regenerate with `python3 scripts/gen_docs.py`.
 
 
-199 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
+200 endpoints across 17 route modules. All paths are relative to the API base (e.g. `http://127.0.0.1:8765`). Auth: single-user - first run uses `POST /auth/auto` only until the owner sets a password; later sessions use `POST /auth/login`. Requests carry the HttpOnly `proxima_session` cookie or `Authorization: Bearer <token>`.
 
 
 ## Modules
@@ -15,7 +15,7 @@
 - [`routes/containers.py`](#routes-containers-py) - 3 endpoints
 - [`routes/design.py`](#routes-design-py) - 8 endpoints
 - [`routes/files.py`](#routes-files-py) - 37 endpoints
-- [`routes/graph.py`](#routes-graph-py) - 14 endpoints
+- [`routes/graph.py`](#routes-graph-py) - 15 endpoints
 - [`routes/graphs.py`](#routes-graphs-py) - 2 endpoints
 - [`routes/master.py`](#routes-master-py) - 20 endpoints
 - [`routes/profiles.py`](#routes-profiles-py) - 12 endpoints
@@ -166,6 +166,7 @@
 | POST | `/api/graph/jobs` | `create_graph_job` |  |
 | GET | `/api/graph/jobs/{job_id}` | `get_graph_job` |  |
 | POST | `/api/graph/jobs/{job_id}/approve` | `approve_graph_job` |  |
+| POST | `/api/graph/jobs/{job_id}/chat` | `ensure_graph_job_chat` | The plan's chat thread, created and pinned if it is missing. |
 | PATCH | `/api/graph/jobs/{job_id}/graph` | `update_graph_definition` |  |
 | POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/answer` | `answer_node_decision` | Answer a decision-held node's question (slice 12, T10 #4). The node |
 | POST | `/api/graph/jobs/{job_id}/nodes/{node_id}/approve` | `approve_node` |  |
@@ -329,4 +330,4 @@
 
 
 ---
-_Generated 2026-08-03 07:39 UTC._
+_Generated 2026-08-03 09:04 UTC._

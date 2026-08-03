@@ -390,6 +390,14 @@ at the same time, which is the whole reason to leave an ordered list behind.
 The chat is pinned to the graph job's **own session** (`jobs.session_id`, created with the
 job) rather than a second thread, so reopening a plan resumes its conversation.
 
+That pin can come undone: `jobs.session_id` is `ON DELETE SET NULL`, so deleting the
+thread from the Chat screen detaches it and leaves the plan with no session. Opening the
+plan chat therefore goes through `POST /api/graph/jobs/{id}/chat`, which is
+**get-or-create**: it returns the pinned session when there is one and otherwise creates a
+fresh `chat` session, pins it both ways (`sessions.job_id` + `jobs.session_id`) inside one
+transaction, and reports `created: true`. One plan still owns exactly one conversation -
+the detached case is recoverable instead of a dead end that refuses the plan forever.
+
 `parseGraphDraft` drops what the server would reject anyway — nodes with no id, duplicate
 ids, agent nodes with no instruction, self-edges, dangling and duplicate edges — rather
 than letting one bad entry cost the whole reply. A reply with no graph block at all

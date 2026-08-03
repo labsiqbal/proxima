@@ -8,6 +8,7 @@ import {
   deleteGraphJob,
   deleteGraphTemplate,
   editGraphNodeOutput,
+  ensureGraphJobChat,
   setGraphTemplateStatus,
   getGraphJob,
   listGraphJobs,
@@ -1931,9 +1932,20 @@ export function GraphScreen({
           profiles={profiles}
           activeProfile={activeProfile}
           projectSlug={resolveOwnedProjectSlug(job, activeProject?.slug)}
-          // A graph job already owns a chat session — the one it was created with — so
-          // the conversation is pinned to the plan without inventing a second thread.
-          ensureSession={async () => job.session_id}
+          // A graph job owns one chat session - the one it was created with - so the
+          // conversation stays pinned to the plan without inventing a second thread.
+          // Deleting that thread from the Chat screen nulls jobs.session_id, though,
+          // so ask the server to re-pin one rather than dead-ending the plan (#150).
+          ensureSession={async () => {
+            if (job.session_id != null) return job.session_id
+            const { session_id } = await ensureGraphJobChat(token, job.id)
+            setJob(current => current && current.id === job.id
+              ? { ...current, session_id }
+              : current)
+            setJobs(current => current.map(item =>
+              item.id === job.id ? { ...item, session_id } : item))
+            return session_id
+          }}
           buildPrompt={text => buildGraphPrompt({
             name: job.title,
             description: '',
