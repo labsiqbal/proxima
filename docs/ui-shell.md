@@ -362,6 +362,12 @@ include task detail, workflow graph editor, archive full record, design canvas, 
 settings stack when applicable. In-page Back buttons on those surfaces are removed so
 chrome owns the action.
 
+**Both modes carry it**, at every width. Delegate opens deep surfaces of its own -
+a deliverable record reached from an Artifacts badge or an `#archive/…` permalink -
+and the record panel drops its in-page Back on the strength of this control, so a
+Delegate shell without it left that panel with no back affordance at all (#151).
+Unlike search and the dock toggle, Back is global navigation rather than Work chrome.
+
 **Deep = project lock:** while a deep surface is open, the header/mobile **Project**
 switcher is disabled (locked). On top-level surfaces the switcher stays enabled and
 changing project **stays on the current view** (refilters content; does not force Chat).
@@ -581,7 +587,7 @@ Archive and Files merged into ONE destination (prune Part D, #139; decision #122
 - **Deliverables** - the durable deliverable registry (T4): every agent output is a record with lineage, ONE approval status (synced with the job-review approve), and a version chain, filterable by type/status/date/search.
 - **History** - records whose file no longer exists on disk. They are records, not phantom files: the ledger's survive-deletion property, kept visible.
 
-The combo detail is unchanged: an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address (the hash format outlives both retired destinations, so old bookmarks keep working - they open the record panel inside Artifacts, and a bookmarked `?view=files` URL lands there too). Record paths are container-relative real paths (#139) - the same paths the gallery shows. Approvals keep their two doors: the record panel and the Tasks review write the SAME status field. Locating a record's file on disk is **Reveal in Files** on the record panel, which raises the reveal event the dock browser answers (#145) - Delegate has no dock, so that action is absent there rather than dead. The record panel's **Open** actions use the same main-window surfaces as the gallery (see "Opening an artifact" below), and an app record's **Preview app** opens the Run controls inside the record with that app's folder prefilled; running from there hands the picture to the main-window viewport, which takes the window over (see "The running app" below) - in Work only, for the same reason Reveal in Files is. Design is a separate canvas destination whose internals are not part of the shell.
+The combo detail is unchanged: an expanding row plus a full record page at a permanent `#archive/<project>/<slug>` address (the hash format outlives both retired destinations, so old bookmarks keep working - they open the record panel inside Artifacts, and a bookmarked `?view=files` URL lands there too). Record paths are container-relative real paths (#139) - the same paths the gallery shows. Approvals keep their two doors: the record panel and the Tasks review write the SAME status field. Locating a record's file on disk is **Reveal in Files** on the record panel, which raises the reveal event the dock browser answers (#145) - Delegate has no dock, so that action is absent there rather than dead. The record panel's **Open** actions use the same main-window surfaces as the gallery (see "Opening an artifact" below), and each names the surface it actually opens: a design record offers **Open in Design** only where the studio exists, and reads plain **Open** in Delegate, where the same button draws the design on the viewer's stage (#151). An app record's **Preview app** opens the Run controls inside the record with that app's folder prefilled; running from there hands the picture to the main-window viewport, which takes the window over (see "The running app" below) - in Work only, for the same reason Reveal in Files is. Design is a separate canvas destination whose internals are not part of the shell.
 
 ### Opening an artifact
 

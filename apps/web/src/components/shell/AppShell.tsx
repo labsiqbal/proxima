@@ -278,13 +278,17 @@ export function AppShell(props: {
         {/* Collapse is a property of the sidebar, not of a mode: both navigations
             put away to the same rail with the same control (#154). */}
         <button className="tool-btn" onClick={toggleLeft} aria-label="Toggle sidebar" title={leftCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><IconPanelLeft size={17} /></button>
-        {!delegateMode && <>
         {/* Its twin for the right dock (#160), next to it so the two edges of
             the shell are put away from the same place. Absent while Project
             tools are suppressed: a toggle for a dock that is not there is a
             dead control. Delegate has no dock at all. */}
-        {props.projectToolsAvailable !== false && <button className="tool-btn" onClick={toggleDock} aria-label="Toggle tool dock" title={dockCollapsed ? 'Expand tool dock' : 'Collapse tool dock'}><IconPanelRight size={17} /></button>}
-        {/* Global chrome Back — always visible; disabled without a deep stack (Chrome-like). */}
+        {!delegateMode && props.projectToolsAvailable !== false && <button className="tool-btn" onClick={toggleDock} aria-label="Toggle tool dock" title={dockCollapsed ? 'Expand tool dock' : 'Collapse tool dock'}><IconPanelRight size={17} /></button>}
+        {/* Global chrome Back — always visible; disabled without a deep stack
+            (Chrome-like). Both modes carry it: Delegate opens deep surfaces of
+            its own (a deliverable record from an Artifacts badge or an
+            #archive/ permalink), and those surfaces drop their in-page Back
+            because this control owns return-to-origin, so leaving it out left
+            Delegate's record panel with no way back at all (#151). */}
         <button
           type="button"
           className="tool-btn chrome-back-btn"
@@ -300,8 +304,7 @@ export function AppShell(props: {
             </span>
           )}
         </button>
-        <button className="tool-btn" onClick={openSearch} aria-label="Search" title="Search"><IconSearch size={17} /></button>
-        </>}
+        {!delegateMode && <button className="tool-btn" onClick={openSearch} aria-label="Search" title="Search"><IconSearch size={17} /></button>}
         <span className="top-bar-spacer" />
         {/* The account menu is the only way to reach Projects, Agents, Settings,
             and Log out, so Delegate keeps it too — hiding it stranded owners in a
@@ -367,6 +370,19 @@ export function AppShell(props: {
       /> : <header className="mobile-topbar delegate-mobile-topbar">
         {/* Same glyph as Work's Menu: one drawer, one affordance (#154). */}
         <button ref={menuBtnRef} className="icon-button" onClick={() => setDrawerOpen(true)} aria-label="Menu" aria-expanded={drawerOpen} aria-controls="mobile-nav-drawer"><IconMenu size={18} /></button>
+        {/* And the same chrome Back, in the same slot as Work's mobile bar: at
+            phone width the record panel Delegate can open had no back control
+            at all without it (#151). */}
+        <button
+          type="button"
+          className="icon-button chrome-back-btn"
+          disabled={!props.chromeBackEnabled}
+          onClick={() => props.onChromeBack?.()}
+          aria-label={props.chromeBackEnabled ? (props.chromeBackLabel || 'Back') : 'Back'}
+          title={props.chromeBackEnabled ? (props.chromeBackLabel || 'Back') : 'Back'}
+        >
+          <IconChevronLeft size={18} />
+        </button>
         <div className="mobile-context"><ShellModeSwitch mode="delegate" delegateEnabled onChange={mode => props.onModeChange?.(mode)} /></div>
       </header>}
       <aside ref={sidebarRef} className={`sidebar ${drawerOpen ? 'is-open' : ''}`} id="mobile-nav-drawer">

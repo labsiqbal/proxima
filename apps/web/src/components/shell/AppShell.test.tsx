@@ -341,6 +341,25 @@ describe('AppShell sidebar collapse parity', () => {
     const bar = container.querySelector('.delegate-mobile-topbar') as HTMLElement
     expect(within(bar).getByRole('button', { name: 'Menu' })).toBeInTheDocument()
   })
+
+  // Delegate reaches deep surfaces of its own - a deliverable record opened from
+  // an Artifacts badge or an #archive/ permalink - and those surfaces carry no
+  // in-page Back, because chrome Back owns return-to-origin (#161). Without the
+  // control here, Delegate's record panel had no back affordance at any width
+  // (#151).
+  it('gives the Delegate mobile top bar the same chrome Back', async () => {
+    const user = userEvent.setup()
+    const onChromeBack = vi.fn()
+    const { container } = render(
+      <AppShell {...base} mode="delegate" chromeBackEnabled chromeBackLabel="Back to Artifacts" onChromeBack={onChromeBack}>
+        <div>main</div>
+      </AppShell>,
+    )
+    const bar = container.querySelector('.delegate-mobile-topbar') as HTMLElement
+    const back = within(bar).getByRole('button', { name: 'Back to Artifacts' })
+    await user.click(back)
+    expect(onChromeBack).toHaveBeenCalled()
+  })
 })
 
 describe('AppShell delegate header status cluster', () => {
@@ -357,6 +376,20 @@ describe('AppShell delegate header status cluster', () => {
     expect(screen.getByLabelText('Account actions')).toBeInTheDocument()
     // Search stays Work-only (Delegate has nothing project-scoped to search).
     expect(screen.queryByLabelText('Search')).not.toBeInTheDocument()
+  })
+
+  it('keeps chrome Back in Delegate, whose record panel has no in-page Back', async () => {
+    const user = userEvent.setup()
+    const onChromeBack = vi.fn()
+    const { rerender } = render(<AppShell {...delegateBase} chromeBackEnabled={false} />)
+    const topBar = () => document.querySelector('.top-bar') as HTMLElement
+    expect(within(topBar()).getByRole('button', { name: 'Back' })).toBeDisabled()
+
+    rerender(<AppShell {...delegateBase} chromeBackEnabled chromeBackLabel="Back to Artifacts" onChromeBack={onChromeBack} />)
+    const back = within(topBar()).getByRole('button', { name: 'Back to Artifacts' })
+    expect(back).toBeEnabled()
+    await user.click(back)
+    expect(onChromeBack).toHaveBeenCalled()
   })
 
   it('returns to Work before opening Settings from the Delegate account menu', async () => {

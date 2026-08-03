@@ -19,6 +19,13 @@ vi.mock('../../api/fsAdapter', () => ({
   })),
 }))
 
+// Both editors arrive through a dynamic import (CodeMirror is a lazy chunk), so
+// the first assertion after render waits on a module load, not on a state
+// update. The 1s default is an interaction budget and expired under full-suite
+// parallel load, which made these two the suite's standing flake; this is the
+// load budget instead.
+const EDITOR_LOAD = { timeout: 5000 }
+
 describe('DocumentEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -30,9 +37,9 @@ describe('DocumentEditor', () => {
     render(<DocumentEditor token="t" slug="alpha" path="reports/plan.md" onClose={() => {}} />)
 
     // Edit mode from the first frame: no preview step between owner and editor.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toHaveClass('active'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toHaveClass('active'), EDITOR_LOAD)
     expect(screen.getByRole('button', { name: 'Preview' })).not.toHaveClass('active')
-    await waitFor(() => expect(document.querySelector('.cm-content')).toHaveTextContent('Plan'))
+    await waitFor(() => expect(document.querySelector('.cm-content')).toHaveTextContent('Plan'), EDITOR_LOAD)
     expect(projectFs).toHaveBeenCalledWith('t', 'alpha')
   })
 
@@ -41,7 +48,7 @@ describe('DocumentEditor', () => {
     read.mockResolvedValue({ content: 'first line' })
     render(<DocumentEditor token="t" slug="alpha" path="notes/todo.txt" onClose={() => {}} />)
 
-    expect(await screen.findByText('first line')).toBeInTheDocument()
+    expect(await screen.findByText('first line', undefined, EDITOR_LOAD)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(write).toHaveBeenCalledWith('notes/todo.txt', 'first line'))
@@ -59,7 +66,7 @@ describe('DocumentEditor', () => {
     const user = userEvent.setup()
     const onClose = vi.fn()
     render(<DocumentEditor token="t" slug="alpha" path="notes/todo.txt" backLabel="Gallery" onClose={onClose} />)
-    const back = await screen.findByRole('button', { name: 'Back to gallery' })
+    const back = await screen.findByRole('button', { name: 'Back to gallery' }, EDITOR_LOAD)
     expect(back).toHaveTextContent('← Gallery')
     await user.click(back)
     expect(onClose).toHaveBeenCalled()
@@ -78,7 +85,7 @@ describe('DocumentEditor', () => {
       const found = document.querySelector(head)
       expect(found).not.toBeNull()
       return found as HTMLElement
-    })
+    }, EDITOR_LOAD)
     const controls = within(bar).getAllByRole('button')
     expect(controls[0]).toHaveAccessibleName('Back to gallery')
     expect(within(bar).getByRole('button', { name: 'Save' })).toBeInTheDocument()

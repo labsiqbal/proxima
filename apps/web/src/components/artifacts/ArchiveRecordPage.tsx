@@ -126,7 +126,11 @@ export function ArchiveRecordPage({ token, project, slug, onOpenRecord, onOpenSe
             <h4>Actions</h4>
             <div className="archive-record-actions">
               {(record.type !== 'app' || onOpenAppViewport) && <button className="primary-button" onClick={open} disabled={record.file_missing && record.type !== 'app'}>
-                {record.type === 'app' ? 'Preview app' : record.type === 'design' ? 'Open in Design' : 'Open'}
+                {/* Name the surface this actually opens: a design reaches the
+                    studio only where there is one, and in Delegate the same
+                    button opens the viewer, so it must not promise Design
+                    there (#151). */}
+                {record.type === 'app' ? 'Preview app' : record.type === 'design' && onOpenDesign ? 'Open in Design' : 'Open'}
               </button>}
               {canApprove && <button className="archive-approve-button" disabled={busy} onClick={() => void changeStatus('approved')}>✓ Approve</button>}
               {record.status === 'approved' && <button className="archive-approve-button" disabled>✓ Approved</button>}
