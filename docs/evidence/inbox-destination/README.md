@@ -8,6 +8,10 @@ The fixture seeds one of each kind the ledger has to carry: a job review that
 still needs a decision, a finished Task, a failed Task with its build error, and
 a Master budget stop.
 
+Captured at `206193e` and re-captured on top of the tool-dock work that landed
+alongside it (#156/#160), so the phone frames show the current shell - no tool
+rail at 390px.
+
 | | Light | Dark |
 |---|---|---|
 | Inbox, 1440px | `inbox-desktop-light.png` | `inbox-desktop-dark.png` |
