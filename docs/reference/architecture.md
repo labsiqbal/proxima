@@ -1690,8 +1690,9 @@ regardless of CLI:
 **Grok runner (native ACP).** Grok's spec spawns the owner's official Grok Build
 CLI as `grok agent stdio`. The CLI speaks ACP directly, so Proxima uses the normal
 persistent `AcpProcess` path without an npm or editor adapter. New profile homes
-seed `auth.json` and `config.toml` from `~/.grok`, refresh the auth file before a
-run, and set `GROK_HOME` to keep profile state isolated. Detection marks Grok ready
+seed `auth.json` and `config.toml` from `~/.grok`, sync the auth file before a
+run (see _Credential sync_ below), and set `GROK_HOME` to keep profile state
+isolated. Detection marks Grok ready
 only when both the binary and a non-empty JSON auth file are present; operators log
 in with `grok login` or `grok login --device-auth`.
 
@@ -1709,6 +1710,46 @@ it with a misleading _"requires a newer version of Codex"_ even when the owner's
 Codex. Driving the system CLI directly keeps the runner current with every Codex
 release; if that CLI is genuinely behind, the surfaced error now says so honestly
 and points at `codex update`.
+
+**Credential sync (single-use OAuth rotation).** Every profile home holds its own
+copy of the runner's login (`RunnerSpec.source_dir` → `seed_files` at profile
+creation, `refresh_files` on every run; `profile_seed.py`). That fan-out is only
+safe if rotation is followed correctly, because the ChatGPT/Codex login rotates
+**single-use**: refreshing burns the old refresh token and mints a new pair, so at
+any moment exactly one copy on disk is live. A one-way host → profile force-copy
+therefore *destroys* credentials - whichever home refreshed first holds the only
+live pair, and overwriting it with the host's burnt pair leaves every home
+replaying a dead token (`"your refresh token was already used"`), healed only by a
+re-login and broken again by the next rotation.
+
+So `sync_agent_credentials()` reconciles **newest wins**, with the host dir as the
+hub:
+
++ **Recency** comes from the credential itself (`last_refresh`) and falls back to
+  mtime for opaque files - copies preserve mtime, so the embedded stamp is the
+  reliable signal.
++ **Pre-run** (`RunPrompting.refresh_credentials_if_needed`) pulls a newer host
+  login into the profile, or publishes a newer profile token to the host. Only a
+  changed *profile* copy recycles the cached agent process (it holds the old token
+  in memory); publishing leaves the profile untouched, so no recycle is needed.
++ **Post-run** (`RunPrompting.publish_credentials_after_run`, called from
+  `execute_run`'s `finally`) pushes a token the runner rotated to during the run
+  back to the host, so sibling profiles pick it up on their next run instead of
+  presenting the burnt one. Push-only on purpose - the cached process keeps the
+  file it is holding.
++ **Identity guard** — a profile copy is published only when it is recognisably the
+  same login (same JSON shape, same `account_id`). A profile whose runner was
+  switched still carries the other runner's `auth.json`; the host must win there
+  and can never be overwritten with a foreign credential.
++ **Single-flight + atomic** — one exclusive `flock` per source dir (lock file in
+  the temp dir, never inside a CLI's config dir) serializes concurrent runs;
+  writes go to a private `0600` temp file and are `os.replace`d over the
+  destination, so a failure can never truncate a credential. A symlinked profile
+  credential is written *through* (multi-account setups keep their link).
+
+When a run still fails with a spent refresh token, the pair itself is gone rather
+than out of sync, so the error names the concrete recovery (`codex login`) instead
+of leaving the owner with CLI-only advice.
 
 **Capability bundle (Phase-1 slice 9, T8).** Profile homes get skills from TWO
 sources through one symlink mechanism (`capabilities.py`): the runner's own host

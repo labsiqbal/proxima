@@ -33,6 +33,18 @@ export function enrichRunnerError(text: string): string {
 	if (lower.includes("agents menu") || lower.includes("pick a different agent")) {
 		return body;
 	}
+	// ChatGPT/Codex OAuth rotation is single-use. Proxima keeps every profile on
+	// the newest pair automatically, so this error means the pair itself is spent:
+	// the only fix is a fresh login on the host.
+	if (
+		lower.includes("refresh token was already used") ||
+		lower.includes("access token could not be refreshed")
+	) {
+		return (
+			`${body.replace(/[.\s]+$/, "")}. Re-authenticate the Codex CLI on the host with ` +
+			"`codex login`, then retry - or pick a different agent from the Agents menu meanwhile."
+		);
+	}
 	const needsSwitch =
 		lower.includes("no llm provider configured") ||
 		lower.includes("relogin_required") ||

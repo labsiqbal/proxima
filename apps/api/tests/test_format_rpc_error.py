@@ -67,3 +67,24 @@ def test_joins_specific_message_with_details():
 
 def test_exception_instance_is_unwrapped():
     assert format_rpc_error(RuntimeError("{'message': 'Internal error', 'data': {'details': 'x'}}")) == "x"
+
+
+def test_spent_codex_refresh_token_names_the_relogin_command():
+    """#133: a genuinely unrecoverable auth failure must name the concrete next
+    step. Proxima already re-syncs profile copies silently, so this error can
+    only mean the host login itself is spent."""
+    out = format_rpc_error(
+        "Your access token could not be refreshed because your refresh token was "
+        "already used. Please log out and sign in again."
+    )
+    assert "`codex login`" in out
+    assert "Agents menu" in out
+
+
+def test_spent_codex_refresh_token_enrichment_is_idempotent():
+    once = format_rpc_error(
+        "Your access token could not be refreshed because your refresh token was "
+        "already used."
+    )
+    assert format_rpc_error(once) == once
+    assert once.count("codex login") == 1

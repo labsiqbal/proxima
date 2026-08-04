@@ -108,7 +108,7 @@ def format_rpc_error(error: Any) -> str:
 
 
 def _enrich_runner_error(text: str) -> str:
-    """Append a Proxima next step for known Hermes auth/provider failures."""
+    """Append a Proxima next step for known runner auth/provider failures."""
     body = (text or "").strip()
     if not body:
         return body
@@ -116,6 +116,18 @@ def _enrich_runner_error(text: str) -> str:
     # Already carries our next-step line (idempotent on re-format).
     if "agents menu" in lower or "pick a different agent" in lower:
         return body
+    # ChatGPT/Codex OAuth rotation is single-use. Proxima keeps every profile on
+    # the newest pair automatically (profile_seed.sync_agent_credentials), so
+    # reaching this error means the pair itself is spent, not out of sync: the
+    # only fix is a fresh login on the host.
+    if "refresh token was already used" in lower or (
+        "access token could not be refreshed" in lower
+    ):
+        return (
+            f"{body.rstrip('. ')}. Re-authenticate the Codex CLI on the host with "
+            "`codex login`, then retry - or pick a different agent from the "
+            "Agents menu meanwhile."
+        )
     needs_switch = (
         "no llm provider configured" in lower
         or "relogin_required" in lower

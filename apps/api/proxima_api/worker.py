@@ -1442,6 +1442,9 @@ class RunWorker:
         tool_write_event_seen = False
         project_activity_lease = None
         guarded_runner_key = None
+        # (spec, profile home) of the runner this run actually spawned, captured
+        # for the post-run credential publish in `finally`.
+        credential_target: tuple[Any, str] | None = None
         try:
             mode_row = db.execute(
                 "SELECT mode FROM sessions WHERE id = ?", (session_id,)
@@ -1488,6 +1491,7 @@ class RunWorker:
                 return
             hermes_home = run["hermes_home"] or ""
             spec = runner_spec(run["runner_id"])
+            credential_target = (spec, str(hermes_home))
             codex_master = (
                 session_mode == "master"
                 and getattr(spec, "protocol", "acp") == "codex-app-server"
@@ -2526,6 +2530,14 @@ class RunWorker:
                 with suppress(asyncio.CancelledError):
                     await hb_task
             self.active_runs.pop(run_id, None)
+            # If the runner rotated its OAuth token during this run, that new
+            # (single-use) pair only exists in this profile home. Publish it to
+            # the host so sibling profiles pick it up instead of replaying the
+            # burnt one. Fail-quiet inside.
+            if credential_target is not None:
+                self.prompting.publish_credentials_after_run(
+                    cfg, credential_target[0], credential_target[1]
+                )
             # The terminal run is the only point at which a pending Focus may
             # become current.  Re-checking durable run state makes restart and
             # retry races deterministic.

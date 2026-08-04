@@ -151,7 +151,7 @@ from .capabilities import (
     parse_selection,
     remove_fixed_code_graph_mcp,
 )
-from .profile_seed import refresh_agent_credentials
+from .profile_seed import publish_agent_credentials, sync_agent_credentials
 
 
 class RunPrompting:
@@ -266,6 +266,45 @@ class RunPrompting:
                 "capability re-apply failed (non-fatal)"
             )
 
+    @staticmethod
+    def _credential_source(cfg: dict[str, Any], spec: Any) -> Path:
+        """Host dir this runner's login lives in. Hermes honors the configured
+        override; every other runner uses its spec's source_dir."""
+        if spec.id == "hermes":
+            return Path(
+                cfg.get("source_hermes_home") or os.path.expanduser("~/.hermes")
+            )
+        if spec.source_dir:
+            return Path(os.path.expanduser(spec.source_dir))
+        return Path("/nonexistent")
+
+    def publish_credentials_after_run(
+        self, cfg: dict[str, Any], spec: Any, hermes_home: str
+    ) -> None:
+        """Publish a token the runner rotated to during this run back to the
+        host dir.
+
+        Single-use rotation means the profile that refreshed now holds the only
+        live pair; without this push it would stay bottled up in that one home
+        and every sibling profile would keep presenting the burnt token until
+        this profile happened to run again. Push-only - the live cached process
+        keeps the file it is holding.
+        """
+        if not (spec.refresh_files and hermes_home):
+            return
+        if not cfg.get("refresh_credentials", True):
+            return
+        try:
+            publish_agent_credentials(
+                self._credential_source(cfg, spec),
+                Path(hermes_home),
+                spec.refresh_files,
+            )
+        except Exception:
+            logging.getLogger("proxima.worker").exception(
+                "agent credential publish failed (non-fatal)"
+            )
+
     async def refresh_credentials_if_needed(
         self,
         cfg: dict[str, Any],
@@ -275,25 +314,22 @@ class RunPrompting:
         *,
         master_chat_only: bool = False,
     ) -> None:
-        """Refresh runner auth files before a run and recycle stale cached agents."""
+        """Sync runner auth files before a run and recycle stale cached agents."""
         # Keep this profile's credentials current: a copy made at account
         # creation goes stale when the host rotates its OAuth token, which
-        # shows up as the agent producing "no output". Refresh the runner's
-        # auth files from the host before each run so shared-account profiles
-        # keep working (applies to any runner with refresh_files).
+        # shows up as the agent producing "no output". Sync the runner's auth
+        # files with the host before each run so shared-account profiles keep
+        # working (applies to any runner with refresh_files).
+        #
+        # The sync is newest-wins, not host-wins: ChatGPT/Codex refresh tokens
+        # are single-use, so a profile that already rotated holds the ONLY live
+        # pair. Overwriting it with the host's burnt pair is what produced the
+        # recurring "your refresh token was already used" failures. See
+        # profile_seed.sync_agent_credentials.
         if spec.refresh_files and hermes_home and cfg.get("refresh_credentials", True):
             try:
-                if spec.id == "hermes":
-                    src = Path(
-                        cfg.get("source_hermes_home") or os.path.expanduser("~/.hermes")
-                    )
-                else:
-                    src = (
-                        Path(os.path.expanduser(spec.source_dir))
-                        if spec.source_dir
-                        else Path("/nonexistent")
-                    )
-                changed = refresh_agent_credentials(
+                src = self._credential_source(cfg, spec)
+                changed = sync_agent_credentials(
                     src, Path(hermes_home), spec.refresh_files
                 )
                 if changed:

@@ -49,6 +49,16 @@ describe("formatRunError", () => {
 		);
 	});
 
+	it("names `codex login` when the ChatGPT refresh token is spent", () => {
+		const out = formatRunError(
+			"Run failed: Your access token could not be refreshed because your refresh " +
+				"token was already used. Please log out and sign in again.",
+		);
+		expect(out).toContain("codex login");
+		expect(out).toContain("Agents menu");
+		expect(formatRunError(out)).toBe(out);
+	});
+
 	it("handles empty input", () => {
 		expect(formatRunError("")).toBe("Run failed");
 		expect(formatRunError(null)).toBe("Run failed");

@@ -38,7 +38,10 @@ plain details line in the error bubble (and in stored `runs.error`), not a raw d
 Known Hermes auth/provider failures (no LLM provider, expired/revoked OAuth,
 `hermes setup`/`hermes model` guidance) also get a Proxima next step - pick another
 agent from the Agents menu, or re-authenticate Hermes - so owners are not stuck
-with CLI-only advice. Hermes readiness (`hermes_status` / `runner_readiness` /
+with CLI-only advice. A spent ChatGPT/Codex refresh token gets its own next step
+(`codex login` on the host), because Proxima already re-syncs every profile's copy
+of that login silently (see *Credential sync* below) - reaching that error means
+the login itself is gone, not out of date. Hermes readiness (`hermes_status` / `runner_readiness` /
 Home auth health) treats `auth.json` `last_auth_error.relogin_required` as not
 ready, instead of green-lighting a home that only has stale credential files.
 The chat and Home task Agents menus badge each profile from that map (`not ready`
@@ -81,6 +84,19 @@ the profile home and its MCP config is filtered to the selection for Claude
 is re-applied idempotently before each run. Pi still uses its runner-global home;
 `claude_live_home` profiles likewise use the host config directly. **MCP stays
 enable/disable only** - never promoted to slash commands.
+**Credential sync (rotation-safe):** each profile home carries its own copy of the
+runner's login, seeded from `RunnerSpec.source_dir` and reconciled with the host on
+every run (`profile_seed.py`). ChatGPT/Codex refresh tokens are **single-use** - a
+refresh burns the old one - so the sync is *newest wins in both directions*, not
+host-wins: a host re-login lands in the profile, and a token a profile rotated to is
+published back to the host (also post-run, from `execute_run`'s `finally`) so the
+other profiles heal silently on their next run instead of replaying a burnt token. A
+copy is published only when it is the same login (same JSON shape and `account_id`),
+so a profile that was switched to another runner can never overwrite the host's
+credentials. The reconcile is single-flight (one `flock` per source dir) and writes
+atomically at mode `0600`, and only a changed *profile* copy recycles the cached
+agent process, which holds the old token in memory. Details:
+[architecture → Credential sync](reference/architecture.md#runner-abstraction).
 **Endpoints:** `GET/POST /api/profiles`, `PATCH/DELETE /api/profiles/{id}`,
 `GET /api/runners/{id}/capabilities`, `POST /api/runners/{id}/capabilities/rescan`,
 `GET/PUT /api/settings/skill-roots`, `GET /api/tools/recommended`.

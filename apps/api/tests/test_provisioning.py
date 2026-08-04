@@ -258,9 +258,10 @@ def test_scaffold_rejects_unsafe_slug(tmp_path):
         provisioning.scaffold_project_dir(cfg, "foo\\bar")
 
 
-def test_refresh_credentials_overwrites_stale_copy(tmp_path):
-    # seed copies once and never updates; refresh updates when the host rotates.
-    from proxima_api.profile_seed import seed_hermes_home, refresh_hermes_credentials
+def test_sync_credentials_overwrites_stale_copy(tmp_path):
+    # seed copies once and never updates; the pre-run sync updates when the host
+    # rotates (rotation-safety itself lives in tests/test_credential_sync.py).
+    from proxima_api.profile_seed import seed_hermes_home, sync_hermes_credentials
     src = tmp_path / "src"; src.mkdir()
     (src / "auth.json").write_text("token-v1"); (src / "config.yaml").write_text("cfg")
     tgt = tmp_path / "tgt"; tgt.mkdir()
@@ -270,7 +271,7 @@ def test_refresh_credentials_overwrites_stale_copy(tmp_path):
     (src / "auth.json").write_text("token-v2")
     seed_hermes_home(src, tgt)  # idempotent: does NOT update
     assert (tgt / "auth.json").read_text() == "token-v1"
-    changed = refresh_hermes_credentials(src, tgt)  # refresh DOES update
+    changed = sync_hermes_credentials(src, tgt)  # the sync DOES update
     assert "auth.json" in changed
     assert (tgt / "auth.json").read_text() == "token-v2"
-    assert refresh_hermes_credentials(src, tgt) == []  # idempotent when unchanged
+    assert sync_hermes_credentials(src, tgt) == []  # idempotent when unchanged
