@@ -45,7 +45,6 @@ def test_image_generation_defaults_to_codex(tmp_path):
     assert body["defaultProvider"] == "codex"
     assert [p["id"] for p in body["providers"]] == [
         "codex",
-        "xai-oauth",
         "higgsfield",
         "openai-compatible",
     ]
@@ -489,8 +488,8 @@ def test_design_from_image_missing_file_404(tmp_path):
 
 
 def test_design_image_edit_uses_codex_directly(tmp_path, monkeypatch):
-    """Codex now supports reference images, so an edit request with codex selected goes
-    straight to codex — no xAI fallback — and plain text→image is codex too."""
+    """Codex supports reference images, so an edit request with codex selected goes
+    straight to codex, and plain text→image is codex too."""
     from proxima_api import image_providers
 
     c = client(tmp_path)
@@ -507,18 +506,13 @@ def test_design_image_edit_uses_codex_directly(tmp_path, monkeypatch):
         return b"png-bytes"
 
     monkeypatch.setattr(image_providers, "generate", fake_generate)
-    # Even with an xAI OAuth available, codex handles the edit itself now (imageEdit=True),
-    # so the fallback never triggers.
-    monkeypatch.setattr(
-        image_providers, "xai_oauth_ready", lambda: {"ready": True, "detail": "ok"}
-    )
     res = c.post(
         "/api/projects/demo/design/image",
         headers=headers,
         json={"prompt": "variation", "image": "ops/artifacts/media/images/ref.png"},
     )
     assert res.status_code == 200, res.text
-    assert calls == ["codex"]  # codex edits directly, no fallback
+    assert calls == ["codex"]  # codex edits directly
 
     # plain text→image is codex too
     calls.clear()

@@ -430,23 +430,15 @@ def register(app, deps):
                         detail=f"cannot read source image: {exc.strerror}",
                     ) from exc
         caps = image_providers.get_provider(prov.get("provider")).capabilities or {}
-        # Edit/reference requests need an edit-capable provider. When the selected one
-        # is text-to-image only, fall back to xAI OAuth (single image) if connected.
+        # Edit/reference requests need an edit-capable provider. There is no
+        # cross-provider fallback: the retired xai-oauth provider used to serve as
+        # one, and silently generating on someone else's credentials was worse than
+        # saying which setting to change.
         if sources and caps.get("imageEdit") is False:
-            if image_providers.xai_oauth_ready().get("ready"):
-                prov = {
-                    **prov,
-                    "provider": "xai-oauth",
-                    "apiKey": None,
-                    "baseUrl": None,
-                    "model": None,
-                }
-                caps = image_providers.get_provider("xai-oauth").capabilities or {}
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail="The selected image provider is text-to-image only and no edit-capable fallback is connected. Switch the provider in Settings → Image generation (e.g. xAI OAuth) to edit or use reference images.",
-                )
+            raise HTTPException(
+                status_code=400,
+                detail="The selected image provider is text-to-image only. Switch to an edit-capable provider in Settings → Image generation to edit or use reference images.",
+            )
         # Only referenceImages-capable providers get multiple images; others use the first.
         if len(sources) > 1 and not caps.get("referenceImages"):
             sources = sources[:1]

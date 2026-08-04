@@ -13,6 +13,14 @@ from proxima_api.container_activity import acquire_container_activity_lease
 from proxima_api.db import connect, init_db
 from proxima_api.terminal import TerminalSession
 
+# TerminalSession spawns the host owner's login shell, and `bash -l` commonly
+# execs into fish/zsh from the owner's dotfiles - where `$!` is not a variable,
+# so the bash-only form of this line silently did nothing and the test failed on
+# the developer's own machine. Route the background job through POSIX `sh`; the
+# trailing `wait` keeps `sh` alive as the job's parent so close()'s process-tree
+# walk still has to find and kill it (that is what is under test).
+_BACKGROUND_JOB = b"sh -c 'sleep 30 & echo $! > child.pid; wait'\n"
+
 
 def test_close_reaps_child_no_zombie(tmp_path):
     # A closed terminal must reap its shell child — otherwise it lingers as a
@@ -34,7 +42,7 @@ def test_close_terminates_background_processes(tmp_path):
     child_path = tmp_path / "child.pid"
     terminal = TerminalSession(str(tmp_path))
     terminal.start()
-    terminal.write(b"sleep 30 & echo $! > child.pid\n")
+    terminal.write(_BACKGROUND_JOB)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline and not child_path.is_file():
         time.sleep(0.01)
@@ -219,7 +227,7 @@ def test_guarded_terminal_close_kills_descendants_and_releases_lease(tmp_path):
     terminal = TerminalSession(str(root), activity_lease=tracking)
     terminal.start()
     child_path = root / "child.pid"
-    terminal.write(b"sleep 30 & echo $! > child.pid\n")
+    terminal.write(_BACKGROUND_JOB)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline and not child_path.is_file():
         time.sleep(0.05)

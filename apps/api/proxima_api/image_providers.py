@@ -6,12 +6,18 @@ Two user-facing provider kinds, chosen in Settings:
                      Codex Responses image_generation surface (no API key).
   - openai-compatible  A generic OpenAI-shaped /v1/images/generations endpoint.
                      The user pastes an endpoint URL + key + model name; works for
-                     OpenAI, FAL, 9router, or any gateway that speaks that surface.
+                     OpenAI, FAL, 9router, xAI, or any gateway that speaks that
+                     surface.
 
 Higgsfield remains available to the app as a local CLI integration, but it is not
 the default image path because CLI/MCP image jobs are credit-based. Requests use
 httpx (already a dependency). Every failure raises ImageProviderError with a
 message safe to show the user.
+
+The `xai-oauth` provider (borrowing the Grok runner's `grok login` token) was
+removed: it was unreliable and the openai-compatible gateway covers the same
+models with an endpoint + key the owner controls. Only *media generation* was
+affected - the Hermes and Grok runners keep using their own auth stores.
 """
 from __future__ import annotations
 
@@ -63,17 +69,6 @@ PROVIDERS: dict[str, ImageProvider] = {
         note="Uses your `codex login` token directly — no API key needed. Supports text-to-image and, when you attach a source/reference image, image edits.",
         capabilities={"textToImage": True, "imageEdit": True, "referenceImages": True},
     ),
-    "xai-oauth": ImageProvider(
-        id="xai-oauth",
-        display_name="xAI / SuperGrok OAuth",
-        requires_key=False,
-        kind="oauth",
-        default_base_url="https://api.x.ai/v1",
-        note="Uses your `grok login` token from the Grok runner auth store - no API key stored in Proxima.",
-        # referenceImages stays False until _gen_http actually sends more than the
-        # single edit image — advertising it made consumers silently drop references.
-        capabilities={"textToImage": True, "imageEdit": True, "referenceImages": False},
-    ),
     "openai-compatible": ImageProvider(
         id="openai-compatible",
         display_name="OpenAI-compatible endpoint",
@@ -94,7 +89,11 @@ PROVIDERS: dict[str, ImageProvider] = {
 }
 
 DEFAULT_PROVIDER = "codex"
-IMAGE_PROVIDER_IDS = ("codex", "xai-oauth", "higgsfield", "openai-compatible")
+# Selectable in Settings. A saved config naming an id that is no longer here (the
+# removed "xai-oauth" media provider) resolves to DEFAULT_PROVIDER via
+# get_provider / media_settings.resolve_image_gen - the stored row is never
+# rewritten, the Settings card surfaces the fallback instead.
+IMAGE_PROVIDER_IDS = ("codex", "higgsfield", "openai-compatible")
 
 
 def provider_list() -> list[dict[str, Any]]:
@@ -141,69 +140,14 @@ def codex_ready(binary: str | None = None, path_env: str | None = None) -> dict[
     return {"ready": False, "detail": f"codex login status unclear (rc={r.returncode}): {out.strip()[:120]}"}
 
 
-# ── Grok runner OAuth (xAI / SuperGrok) ────────────────────────────────────
-
-def _grok_auth_path() -> Path:
-    """Resolve the Grok runner auth store (matches runner home).
-
-    Honors ``GROK_HOME`` when set (profile sandboxes and headless installs);
-    otherwise uses ``~/.grok/auth.json``.
-    """
-    home = os.environ.get("GROK_HOME")
-    if home:
-        return Path(home).expanduser() / "auth.json"
-    return Path.home() / ".grok" / "auth.json"
-
-
-def _read_grok_xai_token() -> str | None:
-    """Return a non-expired xAI JWT from the Grok runner auth store.
-
-    Grok ``auth.json`` maps issuer keys like ``https://auth.x.ai::<uuid>`` to
-    entries whose ``key`` field is the access JWT (from ``grok login``).
-    """
-    try:
-        data = json.loads(_grok_auth_path().read_text())
-    except Exception:
-        return None
-    if not isinstance(data, dict):
-        return None
-    for map_key, entry in data.items():
-        if not isinstance(map_key, str) or not map_key.startswith("https://auth.x.ai"):
-            continue
-        if not isinstance(entry, dict):
-            continue
-        token = entry.get("key")
-        if not isinstance(token, str) or not token.strip():
-            continue
-        exp = _jwt_payload(token).get("exp")
-        if isinstance(exp, (int, float)) and time.time() > exp:
-            continue
-        return token.strip()
-    return None
-
-
-_XAI_OAUTH_LOGIN_HINT = "Run `grok login` (or `grok login --device-auth` on a headless host)."
-
-
-def xai_oauth_ready() -> dict[str, Any]:
-    path = _grok_auth_path()
-    if not path.exists():
-        return {"ready": False, "detail": f"Grok auth store not found. {_XAI_OAUTH_LOGIN_HINT}"}
-    if _read_grok_xai_token():
-        return {"ready": True, "detail": "xAI OAuth is available from Grok login."}
-    return {"ready": False, "detail": f"xAI OAuth token not found or expired. {_XAI_OAUTH_LOGIN_HINT}"}
-
-
 def readiness_snapshot(
     *,
     codex: bool = False,
     higgsfield_cli: bool = False,
-    xai_oauth: bool = False,
 ) -> dict[str, dict[str, Any] | None]:
     return {
         "codex": codex_ready() if codex else None,
         "higgsfield": higgsfield.status() if higgsfield_cli else None,
-        "xaiOauth": xai_oauth_ready() if xai_oauth else None,
     }
 
 
@@ -249,15 +193,6 @@ def generate(
                 raise ImageProviderError(f"Higgsfield was not available ({exc}); Codex fallback also failed: {codex_exc}") from codex_exc
     if provider.kind == "codex":
         return _gen_codex(prompt=prompt, size=size, image_bytes=image_bytes, image_mime=image_mime, extra_images=extra_images, timeout=timeout)
-    if provider.kind == "oauth" and provider.id == "xai-oauth":
-        token = _read_grok_xai_token()
-        if not token:
-            raise ImageProviderError(xai_oauth_ready()["detail"])
-        return _gen_http(
-            provider, token,
-            prompt=prompt, model=model, size=size, image_bytes=image_bytes, image_mime=image_mime,
-            base_url=media_providers.normalize_base_url(base_url, provider.default_base_url), timeout=timeout,
-        )
     if provider.kind == "higgsfield":
         try:
             return higgsfield.generate_image(
@@ -294,9 +229,6 @@ def test_connection(provider_id: str, key: str | None, *, base_url: str | None =
         }
     if provider.kind == "codex":
         return codex_ready()
-    if provider.kind == "oauth" and provider.id == "xai-oauth":
-        ready = xai_oauth_ready()
-        return {"ok": bool(ready.get("ready")), **ready}
     if provider.kind == "higgsfield":
         hstatus = higgsfield.status()
         return {"ok": bool(hstatus.get("ready")), "detail": hstatus.get("detail") or "Higgsfield status unknown.", "higgsfield": hstatus}
@@ -519,8 +451,10 @@ def _gen_http(provider, key, *, prompt, model, size, image_bytes, image_mime, ba
         raise ImageProviderError("This provider requires an API key (set it in Settings).")
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     # xAI's grok image API derives its own resolution and rejects a `size` argument
-    # ("Argument not supported: size"), so never forward size to it.
-    is_xai = provider.id == "xai-oauth" or "api.x.ai" in (base_url or "")
+    # ("Argument not supported: size"), so never forward size to it. Keyed off the
+    # endpoint, not a provider id: the xai-oauth provider is gone, but an
+    # openai-compatible gateway can still point at api.x.ai.
+    is_xai = "api.x.ai" in (base_url or "")
     try:
         if image_bytes is not None:
             mime = image_mime or "image/png"

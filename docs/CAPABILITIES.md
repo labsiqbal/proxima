@@ -1843,7 +1843,20 @@ as reference/source images when the selected provider advertises `imageEdit` —
 first attachment is the primary source and the rest are passed as `extra_images` when
 the provider also supports `referenceImages`; the reference markdown is stripped from
 the prompt so the model gets clean instructions. If the provider is text-to-image only,
-the attachments are ignored and the reply says so. Existing image and media files remain
+the attachments are ignored and the reply says so - there is no cross-provider
+fallback, so the answer names the setting to change.
+
+**Providers:** Codex/ChatGPT OAuth (the default, no key), Higgsfield zero-credit CLI,
+and any OpenAI-compatible endpoint (`/v1/images/generations`; OpenAI, api.linc.id,
+FAL, xAI, …). The **`xai-oauth` provider was removed** - it borrowed the Grok runner's
+`grok login` token, proved unreliable, and the gateway reaches the same models with an
+endpoint + key the owner controls. Only media generation changed: the Hermes and Grok
+*runners* still use their own auth stores. An install whose saved row still names a
+retired provider keeps working - `resolve_image_gen` / `get_provider` fall back to the
+default and the Settings card shows `providerNote`
+(`media_settings.unavailable_provider_note`) asking the owner to pick a replacement.
+The stored row is left as they wrote it; Proxima does not silently rewrite an owner's
+configuration. Existing image and media files remain
 readable through the normal artifact/file surfaces.
 
 **Clarify-on-thin-brief:** when a `/image`, `/video`, or `/design` command carries almost

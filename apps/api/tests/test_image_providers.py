@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import base64
-import json
-import time
 
 import httpx
 import pytest
@@ -11,37 +9,32 @@ from proxima_api import image_providers
 from proxima_api import app_settings
 
 
-def _jwt(payload: dict) -> str:
-    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
-    return f"h.{body}.s"
-
-
-def _write_grok_auth(home, *, token: str | None = None, map_key: str = "https://auth.x.ai::test-uuid"):
-    home.mkdir(parents=True, exist_ok=True)
-    entry = {"key": token, "auth_mode": "oidc"} if token is not None else {"auth_mode": "oidc"}
-    (home / "auth.json").write_text(json.dumps({map_key: entry}))
-    return home / "auth.json"
-
-
 # ── provider metadata ──────────────────────────────────────────────────────
 
 def test_provider_list_has_media_backend_picker_options():
     ids = {p["id"] for p in image_providers.provider_list()}
-    assert ids == {"codex", "xai-oauth", "higgsfield", "openai-compatible"}
+    assert ids == {"codex", "higgsfield", "openai-compatible"}
     kinds = {p["kind"] for p in image_providers.provider_list()}
-    assert kinds == {"codex", "oauth", "higgsfield", "http"}
-    xai = next(p for p in image_providers.provider_list() if p["id"] == "xai-oauth")
-    assert xai["requiresKey"] is False
-    assert xai["capabilities"]["textToImage"] is True
-    assert xai["capabilities"]["imageEdit"] is True
-    assert "hermes" not in (xai.get("note") or "").lower()
-    assert "grok login" in (xai.get("note") or "")
+    assert kinds == {"codex", "higgsfield", "http"}
+
+
+def test_xai_oauth_media_provider_is_gone():
+    """Removed (unreliable, superseded by the openai-compatible gateway).
+
+    The Hermes/Grok *runners* keep their own auth - only the media provider went.
+    """
+    assert "xai-oauth" not in image_providers.IMAGE_PROVIDER_IDS
+    assert "xai-oauth" not in image_providers.PROVIDERS
+    assert not hasattr(image_providers, "xai_oauth_ready")
+    assert [p["id"] for p in image_providers.provider_list()].count("xai-oauth") == 0
 
 
 def test_default_provider_is_codex():
     assert image_providers.DEFAULT_PROVIDER == "codex"
     assert image_providers.get_provider(None).id == "codex"
     assert image_providers.get_provider("nope").id == "codex"
+    # A settings row left on the removed provider degrades to the default.
+    assert image_providers.get_provider("xai-oauth").id == "codex"
 
 
 def test_http_provider_requires_key():
@@ -51,56 +44,6 @@ def test_http_provider_requires_key():
     codex = image_providers.get_provider("codex")
     assert codex.requires_key is False
     assert codex.kind == "codex"
-
-
-def test_xai_oauth_provider_does_not_require_key():
-    xai = image_providers.get_provider("xai-oauth")
-    assert xai.requires_key is False
-    assert xai.kind == "oauth"
-
-
-# ── xAI OAuth via Grok runner auth ─────────────────────────────────────────
-
-def test_xai_oauth_ready_when_grok_auth_has_valid_jwt(tmp_path, monkeypatch):
-    home = tmp_path / "grok-home"
-    token = _jwt({"exp": int(time.time()) + 3600})
-    _write_grok_auth(home, token=token)
-    monkeypatch.setenv("GROK_HOME", str(home))
-    r = image_providers.xai_oauth_ready()
-    assert r["ready"] is True
-    assert "Grok" in r["detail"]
-    assert image_providers._read_grok_xai_token() == token
-
-
-def test_xai_oauth_ready_false_when_auth_missing(tmp_path, monkeypatch):
-    monkeypatch.setenv("GROK_HOME", str(tmp_path / "no-such-grok"))
-    r = image_providers.xai_oauth_ready()
-    assert r["ready"] is False
-    assert "grok login" in r["detail"]
-    assert "hermes" not in r["detail"].lower()
-
-
-def test_xai_oauth_ready_false_when_jwt_expired(tmp_path, monkeypatch):
-    home = tmp_path / "grok-home"
-    _write_grok_auth(home, token=_jwt({"exp": int(time.time()) - 60}))
-    monkeypatch.setenv("GROK_HOME", str(home))
-    r = image_providers.xai_oauth_ready()
-    assert r["ready"] is False
-    assert "expired" in r["detail"].lower() or "not found" in r["detail"].lower()
-    assert "grok login" in r["detail"]
-    assert image_providers._read_grok_xai_token() is None
-
-
-def test_xai_oauth_ready_false_when_no_xai_entry(tmp_path, monkeypatch):
-    home = tmp_path / "grok-home"
-    home.mkdir()
-    (home / "auth.json").write_text(json.dumps({
-        "https://other.example.com::id": {"key": _jwt({"exp": int(time.time()) + 3600})},
-    }))
-    monkeypatch.setenv("GROK_HOME", str(home))
-    r = image_providers.xai_oauth_ready()
-    assert r["ready"] is False
-    assert "grok login" in r["detail"]
 
 
 # ── codex auto-detect ──────────────────────────────────────────────────────
@@ -165,8 +108,12 @@ def test_openai_compatible_generate_forwards_size(monkeypatch):
     assert captured["json"].get("size") == "1024x1024"
 
 
-def test_xai_generate_omits_unsupported_size_argument(monkeypatch):
-    # xAI's grok image API 400s on a `size` argument; text-to-image must not send it.
+def test_xai_endpoint_omits_unsupported_size_argument(monkeypatch):
+    """An openai-compatible endpoint pointed at api.x.ai keeps the xAI quirks.
+
+    The removed provider is gone, the endpoint behaviour is not: xAI's image API
+    400s on a `size` argument, so text-to-image must not send it.
+    """
     png = b"GROK"
     b64 = base64.b64encode(png).decode()
     captured = {}
@@ -174,37 +121,13 @@ def test_xai_generate_omits_unsupported_size_argument(monkeypatch):
         captured["url"] = url
         captured["json"] = json
         return _Resp(200, {"data": [{"b64_json": b64}]})
-    monkeypatch.setattr(image_providers, "_read_grok_xai_token", lambda: "tok-xai")
     monkeypatch.setattr(httpx.Client, "post", fake_post)
-    out = image_providers.generate("xai-oauth", None, prompt="a fox", size="1024x1024", base_url="https://api.x.ai/v1")
+    out = image_providers.generate(
+        "openai-compatible", "sk-test", prompt="a fox", size="1024x1024", base_url="https://api.x.ai/v1"
+    )
     assert out == png
     assert captured["url"].endswith("/images/generations")
     assert "size" not in (captured["json"] or {})
-
-
-def test_xai_generate_uses_token_from_grok_auth(tmp_path, monkeypatch):
-    home = tmp_path / "grok-home"
-    token = _jwt({"exp": int(time.time()) + 3600})
-    _write_grok_auth(home, token=token)
-    monkeypatch.setenv("GROK_HOME", str(home))
-    png = b"GROK-AUTH"
-    b64 = base64.b64encode(png).decode()
-    captured = {}
-
-    def fake_post(self, url, headers=None, json=None, data=None, files=None):
-        captured["headers"] = headers or {}
-        return _Resp(200, {"data": [{"b64_json": b64}]})
-
-    monkeypatch.setattr(httpx.Client, "post", fake_post)
-    out = image_providers.generate("xai-oauth", None, prompt="a fox", base_url="https://api.x.ai/v1")
-    assert out == png
-    assert captured["headers"].get("Authorization") == f"Bearer {token}"
-
-
-def test_xai_generate_raises_with_grok_login_hint_when_missing(tmp_path, monkeypatch):
-    monkeypatch.setenv("GROK_HOME", str(tmp_path / "empty-grok"))
-    with pytest.raises(image_providers.ImageProviderError, match="grok login"):
-        image_providers.generate("xai-oauth", None, prompt="a fox")
 
 
 def test_http_generate_edit_uses_edits_endpoint(monkeypatch):

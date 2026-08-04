@@ -28,9 +28,36 @@ def test_image_gen_settings_default_codex(tmp_path):
     data = r.json()
     assert data["provider"] == "codex"
     assert data["defaultProvider"] == "codex"
-    assert {p["id"] for p in data["providers"]} == {"codex", "xai-oauth", "higgsfield", "openai-compatible"}
-    assert any(p["id"] == "xai-oauth" and p["kind"] == "oauth" for p in data["providers"])
+    assert {p["id"] for p in data["providers"]} == {"codex", "higgsfield", "openai-compatible"}
     assert "codexReady" in data
+    assert data["providerNote"] is None
+
+
+def test_image_gen_settings_surface_a_removed_stored_provider(tmp_path):
+    """A settings row on the removed xai-oauth provider degrades, loudly.
+
+    The owner's row is left alone (no silent rewrite) - requests fall back to the
+    default provider and the Settings card gets an actionable note.
+    """
+    c = _client(tmp_path)
+    app_settings.set_json(c.app.state.db, app_settings.IMAGE_GEN_KEY, {
+        "provider": "xai-oauth", "apiKey": None, "baseUrl": None, "model": None,
+    })
+
+    data = c.get("/api/settings/image-gen").json()
+
+    assert data["provider"] == "codex"  # falls back, never 500s
+    assert "xai-oauth" in data["providerNote"]
+    assert "codex" in data["providerNote"]
+    # The stored row is untouched until the owner picks a replacement.
+    stored = app_settings.get_json(c.app.state.db, app_settings.IMAGE_GEN_KEY)
+    assert stored["provider"] == "xai-oauth"
+
+
+def test_image_gen_rejects_saving_the_removed_provider(tmp_path):
+    c = _client(tmp_path)
+    assert c.put("/api/settings/image-gen", json={"provider": "xai-oauth"}).status_code == 400
+    assert c.post("/api/settings/image-gen/test", json={"provider": "xai-oauth"}).status_code == 400
 
 
 def test_image_gen_test_codex_accepts_ready_shape(tmp_path):

@@ -564,7 +564,6 @@ def register(app, deps):
         readiness = image_providers.readiness_snapshot(
             codex=spec.kind in ("auto", "codex"),
             higgsfield_cli=spec.kind in ("auto", "higgsfield"),
-            xai_oauth=True,
         )
         return {
             "provider": cfg["provider"],
@@ -575,9 +574,13 @@ def register(app, deps):
             "defaultProvider": image_providers.DEFAULT_PROVIDER,
             "codexReady": readiness["codex"],
             "higgsfieldReady": readiness["higgsfield"],
-            # Edit/reference requests can fall back to xAI OAuth when the selected
-            # provider is text-to-image only — the UI keeps "Edit with AI" enabled.
-            "xaiOauthReady": readiness["xaiOauth"],
+            # Set when the stored row names a retired provider: the card says so
+            # instead of silently showing the fallback as if it were the choice.
+            "providerNote": media_settings.unavailable_provider_note(
+                app_settings.get_json(db(), app_settings.IMAGE_GEN_KEY),
+                image_providers.IMAGE_PROVIDER_IDS,
+                image_providers.DEFAULT_PROVIDER,
+            ),
         }
 
     @app.put("/api/settings/image-gen")
@@ -644,7 +647,7 @@ def register(app, deps):
         payload: dict[str, Any] | None = None,
         user: dict[str, Any] = Depends(current_user),
     ):
-        """Test a provider. Codex/xAI → OAuth status; openai-compatible → endpoint probe.
+        """Test a provider. Codex → OAuth login status; openai-compatible → endpoint probe.
         Uses the submitted key/baseUrl directly (no save needed)."""
         payload = payload or {}
         provider_id = payload.get("provider") or image_providers.DEFAULT_PROVIDER
@@ -688,6 +691,11 @@ def register(app, deps):
             "hasApiKey": bool(cfg.get("apiKey")),
             "providers": video_providers.provider_list(),
             "defaultProvider": video_providers.DEFAULT_PROVIDER,
+            "providerNote": media_settings.unavailable_provider_note(
+                app_settings.get_json(db(), app_settings.VIDEO_GEN_KEY),
+                video_providers.VIDEO_PROVIDER_IDS,
+                video_providers.DEFAULT_PROVIDER,
+            ),
         }
 
     @app.put("/api/settings/video-gen")

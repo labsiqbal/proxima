@@ -145,7 +145,7 @@
 | POST | `/api/settings/higgsfield/test` | `test_higgsfield_settings` |  |
 | GET | `/api/settings/image-gen` | `get_image_gen_settings` | The saved image-gen config + provider metadata + codex readiness. |
 | PUT | `/api/settings/image-gen` | `put_image_gen_settings` | Save the image-gen provider/model/key/baseUrl. An empty apiKey keeps the |
-| POST | `/api/settings/image-gen/test` | `test_image_gen` | Test a provider. Codex/xAI → OAuth status; openai-compatible → endpoint probe. |
+| POST | `/api/settings/image-gen/test` | `test_image_gen` | Test a provider. Codex → OAuth login status; openai-compatible → endpoint probe. |
 | GET | `/api/settings/permissions` | `get_permission_settings` | Auto-approve toggle: when on, agent permission prompts are approved |
 | PUT | `/api/settings/permissions` | `set_permission_settings` |  |
 | GET | `/api/settings/runs` | `get_run_settings` | Turn quota (T5): the per-turn run timeout as a first-class in-app |
@@ -335,4 +335,4 @@
 
 
 ---
-_Generated 2026-08-03 16:04 UTC._
+_Generated 2026-08-04 10:16 UTC._

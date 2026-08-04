@@ -120,4 +120,28 @@ describe('Media generation settings', () => {
 
     expect(await within(card as HTMLElement).findByText(/^Not ready .* Key rejected \(401\)\./)).toBeVisible()
   })
+
+  it('surfaces a retired stored provider instead of pretending the fallback was chosen', async () => {
+    getImageGenSettings.mockResolvedValue({
+      provider: 'codex',
+      model: null,
+      baseUrl: null,
+      hasApiKey: false,
+      providers: imageProviders,
+      defaultProvider: 'codex',
+      providerNote: 'The saved provider "xai-oauth" is no longer available, so requests use "codex". Pick a provider and save to update your configuration.',
+    })
+    render(<MediaGenerationPanels token="t" />)
+
+    const card = (await screen.findByRole('heading', { level: 3, name: 'Image generation' })).closest('.panel')!
+    expect(await within(card as HTMLElement).findByText(/xai-oauth.*no longer available/)).toBeVisible()
+  })
+
+  it('says nothing when the stored provider is fine', async () => {
+    render(<MediaGenerationPanels token="t" />)
+
+    const card = (await screen.findByRole('heading', { level: 3, name: 'Image generation' })).closest('.panel')!
+    await waitFor(() => expect(getImageGenSettings).toHaveBeenCalled())
+    expect(within(card as HTMLElement).queryByText(/no longer available/)).toBeNull()
+  })
 })

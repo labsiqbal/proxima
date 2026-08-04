@@ -35,12 +35,13 @@ export type MediaGenSettings = {
   hasApiKey: boolean
   providers: MediaProviderMeta[]
   defaultProvider: string
+  /** Set when the saved row names a retired provider; requests use the default. */
+  providerNote?: string | null
 }
 
 export type ImageGenSettings = MediaGenSettings & {
   codexReady?: CodexReady | null
   higgsfieldReady?: HiggsfieldStatus | null
-  xaiOauthReady?: { ready: boolean; detail?: string } | null
 }
 
 export type VideoGenSettings = MediaGenSettings

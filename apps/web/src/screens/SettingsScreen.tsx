@@ -544,12 +544,11 @@ type MediaPanelSpec<T extends MediaGenSettings = MediaGenSettings> = {
 
 const IMAGE_PANEL: MediaPanelSpec<ImageGenSettings> = {
   title: 'Image generation',
-  blurb: 'Image generation can use Codex/ChatGPT OAuth, xAI OAuth, Higgsfield, or an OpenAI-compatible endpoint. Chat stays on ACP; this only changes the image backend.',
+  blurb: 'Image generation can use Codex/ChatGPT OAuth, Higgsfield, or an OpenAI-compatible endpoint. Chat stays on ACP; this only changes the image backend.',
   defaultProvider: 'codex',
   endpointPlaceholder: 'https://api.openai.com/v1',
-  modelPlaceholder: provider => provider === 'xai-oauth'
-    ? 'grok-2-image or provider default'
-    : provider === 'higgsfield' ? 'nano_banana_2' : 'gpt-image-1 or provider model id',
+  modelPlaceholder: provider =>
+    provider === 'higgsfield' ? 'nano_banana_2' : 'gpt-image-1 or provider model id',
   load: getImageGenSettings,
   save: saveImageGenSettings,
   test: testImageGenSettings,
@@ -639,6 +638,7 @@ function MediaGenerationPanel<T extends MediaGenSettings>({ token, spec }: { tok
   return <div className="panel">
     <div className="panel-head"><h3>{spec.title}</h3><span>{selected?.displayName || 'endpoint'}</span></div>
     <p className="muted">{spec.blurb}</p>
+    {cfg?.providerNote && <p className="settings-provider-note">{cfg.providerNote}</p>}
     {busy === 'load' && <p className="muted">Loading…</p>}
     {cfg && <div className="settings-rows">
       <span className="srow-label">Provider</span>

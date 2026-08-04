@@ -23,6 +23,28 @@ def resolve_image_gen(conn: sqlite3.Connection) -> dict[str, Any]:
     return {"provider": image_providers.DEFAULT_PROVIDER, "apiKey": None, "baseUrl": None, "model": None}
 
 
+def unavailable_provider_note(
+    stored: Any, valid_ids: tuple[str, ...], default_id: str
+) -> str | None:
+    """Actionable note when the saved provider no longer exists (else None).
+
+    Retiring a provider (e.g. the xai-oauth media provider) must not break an
+    install that had it selected: `resolve_*` falls back to the default so
+    generation keeps working. The owner's stored row is deliberately *not*
+    rewritten - their choice is data, not ours to edit - so the Settings card
+    tells them what happened and asks them to pick a replacement.
+    """
+    if not isinstance(stored, dict):
+        return None
+    provider_id = stored.get("provider")
+    if not isinstance(provider_id, str) or not provider_id or provider_id in valid_ids:
+        return None
+    return (
+        f'The saved provider "{provider_id}" is no longer available, so requests use '
+        f'"{default_id}". Pick a provider and save to update your configuration.'
+    )
+
+
 def resolve_video_gen(conn: sqlite3.Connection) -> dict[str, Any]:
     """Active video provider config from Settings.
 

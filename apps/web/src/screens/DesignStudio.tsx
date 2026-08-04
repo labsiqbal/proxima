@@ -1092,10 +1092,10 @@ export function DesignStudio({ token, project, profileId, openSession, openDesig
     getImageGenSettings(token).then(cfg => {
       if (!mountedRef.current || seq !== settingsSeq.current) return
       const p = cfg.providers.find(x => x.id === cfg.provider)
-      // The provider advertises whether it can edit/use reference images (codex now
-      // can, via the Codex OAuth Responses surface). A text-to-image-only provider
-      // still edits when the backend can fall back to a connected xAI OAuth.
-      setImageEditReady(!!p?.capabilities?.imageEdit || !!cfg.xaiOauthReady?.ready)
+      // The provider advertises whether it can edit/use reference images (codex
+      // can, via the Codex OAuth Responses surface). There is no cross-provider
+      // fallback, so a text-to-image-only provider means edits stay off.
+      setImageEditReady(!!p?.capabilities?.imageEdit)
       // Multiple-reference composition follows the selected model's capability.
       setImageMultiReady(!!p?.capabilities?.referenceImages)
     }).catch(() => {

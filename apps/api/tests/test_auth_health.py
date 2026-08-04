@@ -28,16 +28,30 @@ def _conn() -> sqlite3.Connection:
 
 def test_media_checks_only_selected_provider(monkeypatch):
     conn = _conn()
-    app_settings.set_json(conn, app_settings.IMAGE_GEN_KEY, {"provider": "xai-oauth", "apiKey": None, "baseUrl": None})
+    app_settings.set_json(conn, app_settings.IMAGE_GEN_KEY, {"provider": "higgsfield", "apiKey": None, "baseUrl": None})
     image_calls = []
     monkeypatch.setattr("proxima_api.image_providers.test_connection",
                         lambda pid, key, base_url=None: (image_calls.append(pid), {"ok": False, "detail": "token expired"})[1])
     checks = auth_health._media_checks(conn)
 
-    assert image_calls == ["xai-oauth"]
+    assert image_calls == ["higgsfield"]
     by_id = {c["id"]: c for c in checks}
-    assert by_id["image:xai-oauth"]["ok"] is False
-    assert "token expired" in by_id["image:xai-oauth"]["detail"]
+    assert by_id["image:higgsfield"]["ok"] is False
+    assert "token expired" in by_id["image:higgsfield"]["detail"]
+
+
+def test_media_checks_degrade_when_the_stored_provider_was_removed(monkeypatch):
+    """A row still on the removed xai-oauth provider checks the default instead."""
+    conn = _conn()
+    app_settings.set_json(conn, app_settings.IMAGE_GEN_KEY, {"provider": "xai-oauth", "apiKey": None, "baseUrl": None})
+    seen = []
+    monkeypatch.setattr("proxima_api.image_providers.test_connection",
+                        lambda pid, key, base_url=None: (seen.append(pid), {"ok": True})[1])
+
+    checks = auth_health._media_checks(conn)
+
+    assert seen == ["codex"]
+    assert [c["id"] for c in checks] == ["image:codex"]
 
 
 def test_media_checks_default_providers_when_unset(monkeypatch):

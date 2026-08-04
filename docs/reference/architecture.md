@@ -201,9 +201,13 @@ reject action is a review verdict, not worktree machinery. See flow 6b.
 Chat and coding-agent runs stay on ACP (`RunWorker` → `AcpManager` → runner CLI).
 Active image generation is deliberately separate and chosen from Settings:
 
-+ **Image generation:** Codex/ChatGPT OAuth, xAI OAuth via the Grok runner
-  (`grok login` → `~/.grok/auth.json` or `$GROK_HOME/auth.json`), Higgsfield
-  zero-credit CLI, or an OpenAI-compatible endpoint.
++ **Image generation:** Codex/ChatGPT OAuth, Higgsfield zero-credit CLI, or an
+  OpenAI-compatible endpoint (OpenAI, api.linc.id, FAL, xAI, …). The `xai-oauth`
+  provider - which borrowed the Grok runner's `grok login` token - was removed as
+  unreliable; the gateway covers the same models with an endpoint + key the owner
+  controls. A settings row still naming it resolves to the default provider and
+  the Settings card says so (`media_settings.unavailable_provider_note`), rather
+  than being rewritten behind the owner's back.
 + **Video generation:** an OpenAI-compatible video endpoint (`video_gen`, its own
   settings row so it cannot disturb `image_gen`).
 

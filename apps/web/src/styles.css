@@ -3538,6 +3538,14 @@ button:disabled {
 	font-size: var(--text-sm);
 	font-weight: 600;
 }
+/* A saved media provider that no longer exists: the card keeps working on the
+   fallback, and this line says so rather than letting the picker imply a choice
+   the owner never made. */
+.settings-provider-note {
+	margin: var(--space-2) 0 0;
+	color: var(--ui-warning-text);
+	font-size: var(--text-sm);
+}
 .ui-select {
 	justify-self: start;
 	border: 1px solid var(--ui-stroke-secondary);
