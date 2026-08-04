@@ -104,7 +104,9 @@ def _runner_checks(conn) -> list[dict[str, Any]]:
             if rid == "hermes":
                 st = hermes_status(path_env=runtime_path)
                 ok = bool(st.get("ready"))
-                detail = "Ready." if ok else (st.get("guidance") or "Hermes is not ready.")
+                # A note (dead provider Hermes is not using) is worth reading but
+                # never turns the check red - see runners._hermes_auth_state.
+                detail = (st.get("note") or "Ready.") if ok else (st.get("guidance") or "Hermes is not ready.")
             elif rid == "codex":
                 st = image_providers.codex_ready()
                 ok = bool(st.get("ready"))

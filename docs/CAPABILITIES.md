@@ -43,7 +43,15 @@ with CLI-only advice. A spent ChatGPT/Codex refresh token gets its own next step
 of that login silently (see *Credential sync* below) - reaching that error means
 the login itself is gone, not out of date. Hermes readiness (`hermes_status` / `runner_readiness` /
 Home auth health) treats `auth.json` `last_auth_error.relogin_required` as not
-ready, instead of green-lighting a home that only has stale credential files.
+ready, instead of green-lighting a home that only has stale credential files -
+but only for the login Hermes actually uses. `runners._hermes_auth_state` gates on
+the `active_provider` (or, when none is pinned, refuses only if *every* stored
+provider needs re-login), and ignores an error stamped before that provider's last
+successful auth (`last_refresh`, or an `ok` pooled credential) because Hermes never
+clears the record when a later login succeeds. A dead provider Hermes is not using
+becomes an informational `note` (shown as the Home auth-health detail) instead of a
+refusal - reporting Hermes broken on a months-old incident while the host CLI ran
+fine was the bug that produced this rule.
 The chat and Home task Agents menus badge each profile from that map (`not ready`
 vs the runner display name), Settings → Agents runner pickers show
 `ready` / `not ready`, and the Settings → Agents runner grid chips each installed

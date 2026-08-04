@@ -72,6 +72,139 @@ def test_hermes_status_not_ready_when_auth_requires_relogin(tmp_path):
     assert "Agents menu" in st["guidance"]
 
 
+def _write_hermes_auth(home: Path, payload: dict) -> None:
+    import json
+
+    home.mkdir(exist_ok=True)
+    (home / "auth.json").write_text(json.dumps(payload))
+
+
+def test_hermes_status_ready_when_error_sits_on_a_non_active_provider(tmp_path):
+    """A stale error left on a provider Hermes is not using must not refuse the runner.
+
+    Real-host shape: the active provider is healthy and a provider Hermes no
+    longer uses still carries a past incident's ``relogin_required``. Refusing on
+    it made Proxima claim Hermes was broken while `hermes` on the host ran fine.
+    """
+    home = tmp_path / "hermes-home"
+    _write_hermes_auth(home, {
+        "active_provider": "openai-codex",
+        "providers": {
+            "openai-codex": {"last_refresh": "2026-08-02T12:21:58.807239Z"},
+            "xai-oauth": {
+                "last_refresh": "2026-07-01T00:00:00Z",
+                "last_auth_error": {
+                    "message": "xAI token refresh failed",
+                    "relogin_required": True,
+                    "at": "2026-07-23T02:53:24.881814+00:00",
+                },
+            },
+        },
+    })
+    st = hermes_status(source_home=str(home), path_env=_make_hermes_bin(tmp_path))
+    assert st["ready"] is True
+    assert st["guidance"] == ""
+    # The dead provider is still worth mentioning - as a note, never a refusal.
+    assert "xai-oauth" in st["note"]
+
+
+def test_hermes_status_ready_when_recorded_error_predates_a_later_refresh(tmp_path):
+    """An error older than that provider's last successful refresh is history."""
+    home = tmp_path / "hermes-home"
+    _write_hermes_auth(home, {
+        "active_provider": "xai-oauth",
+        "providers": {
+            "xai-oauth": {
+                "last_refresh": "2026-08-04T09:58:07.092401Z",
+                "last_auth_error": {
+                    "message": "xAI token refresh failed",
+                    "relogin_required": True,
+                    "at": "2026-07-23T02:53:24.881814+00:00",
+                },
+            },
+        },
+    })
+    st = hermes_status(source_home=str(home), path_env=_make_hermes_bin(tmp_path))
+    assert st["ready"] is True
+    assert st["guidance"] == ""
+    # Superseded by a later refresh: not even worth a note.
+    assert st["note"] == ""
+
+
+def test_hermes_status_not_ready_when_active_provider_error_is_current(tmp_path):
+    """The active provider's own live error still refuses, with #133 wording."""
+    home = tmp_path / "hermes-home"
+    _write_hermes_auth(home, {
+        "active_provider": "xai-oauth",
+        "providers": {
+            "openai-codex": {"last_refresh": "2026-08-04T09:58:07.092401Z"},
+            "xai-oauth": {
+                "last_refresh": "2026-07-01T00:00:00Z",
+                "last_auth_error": {
+                    "message": 'refresh failed: {"error":"invalid_grant"}',
+                    "relogin_required": True,
+                    "at": "2026-07-23T02:53:24.881814+00:00",
+                },
+            },
+        },
+    })
+    st = hermes_status(source_home=str(home), path_env=_make_hermes_bin(tmp_path))
+    assert st["ready"] is False
+    assert "revoked" in st["guidance"].lower()
+    assert "xai-oauth" in st["guidance"]
+    assert "hermes -z" in st["guidance"] or "hermes setup" in st["guidance"]
+    assert "Agents menu" in st["guidance"]
+
+
+def test_hermes_status_ready_without_active_provider_when_one_login_is_healthy(tmp_path):
+    """`active_provider: null` (the real host) means Hermes picks from the pool.
+
+    One healthy login is enough; a broken sibling is a note.
+    """
+    home = tmp_path / "hermes-home"
+    _write_hermes_auth(home, {
+        "active_provider": None,
+        "providers": {
+            "openai-codex": {"last_refresh": "2026-08-02T12:21:58.807239Z"},
+            "xai-oauth": {
+                "last_auth_error": {
+                    "message": "refresh failed",
+                    "relogin_required": True,
+                    "at": "2026-07-23T02:53:24.881814+00:00",
+                },
+            },
+        },
+    })
+    st = hermes_status(source_home=str(home), path_env=_make_hermes_bin(tmp_path))
+    assert st["ready"] is True
+    assert st["guidance"] == ""
+    assert "xai-oauth" in st["note"]
+
+
+def test_hermes_status_not_ready_without_active_provider_when_every_login_is_dead(tmp_path):
+    """No active provider and nothing usable left → refuse, actionably."""
+    home = tmp_path / "hermes-home"
+    _write_hermes_auth(home, {
+        "active_provider": None,
+        "providers": {
+            "openai-codex": {
+                "last_auth_error": {"message": "refresh failed", "relogin_required": True},
+            },
+            "xai-oauth": {
+                "last_auth_error": {
+                    "message": "refresh failed",
+                    "relogin_required": True,
+                    "at": "2026-07-23T02:53:24.881814+00:00",
+                },
+            },
+        },
+    })
+    st = hermes_status(source_home=str(home), path_env=_make_hermes_bin(tmp_path))
+    assert st["ready"] is False
+    assert "hermes -z" in st["guidance"] or "hermes setup" in st["guidance"]
+    assert "Agents menu" in st["guidance"]
+
+
 def test_runner_readiness_marks_hermes_not_ready_on_relogin(tmp_path, monkeypatch):
     import json
     import proxima_api.runners as r

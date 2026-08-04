@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -362,50 +363,122 @@ def _hermes_home_usable(home: str) -> bool:
     return p.is_dir() and ((p / "auth.json").exists() or (p / "config.yaml").exists())
 
 
-def _hermes_auth_problem(home: str) -> str | None:
-    """Return owner-facing guidance when auth.json says credentials need re-login.
+def _parse_iso_ts(value: object) -> datetime | None:
+    """Parse a Hermes timestamp; naive values are read as UTC. None when unusable."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _hermes_last_success_at(data: dict, name: str, prov: dict) -> datetime | None:
+    """When this provider last authenticated successfully, as far as auth.json knows.
+
+    Hermes records success in two places: ``last_refresh`` on the provider and, per
+    pooled credential, ``last_refresh`` / an ``ok`` ``last_status``. The newest of
+    them is what a recorded error has to beat to still count as current.
+    """
+    stamps = [_parse_iso_ts(prov.get("last_refresh"))]
+    pool = data.get("credential_pool")
+    entries = pool.get(name) if isinstance(pool, dict) else None
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        stamps.append(_parse_iso_ts(entry.get("last_refresh")))
+        if str(entry.get("last_status") or "").lower() == "ok":
+            stamps.append(_parse_iso_ts(entry.get("last_status_at")))
+    known = [s for s in stamps if s is not None]
+    return max(known) if known else None
+
+
+def _hermes_blocking_error(data: dict, name: str, prov: dict) -> str | None:
+    """The provider's *current* re-login error message, or None.
 
     Hermes writes ``last_auth_error.relogin_required`` onto a provider after a
-    failed token refresh (revoked grant, expired refresh token, etc.). Presence
-    of auth.json alone used to count as ready, so Settings/Home showed Hermes
-    green while every Default-profile run failed with a vague provider error.
+    failed token refresh (revoked grant, expired refresh token, …) and never
+    clears it when a later login succeeds. An error stamped before that
+    provider's last successful auth is therefore history, not a fault.
+    """
+    err = prov.get("last_auth_error")
+    if not isinstance(err, dict) or not err.get("relogin_required"):
+        return None
+    recorded_at = _parse_iso_ts(err.get("at"))
+    success_at = _hermes_last_success_at(data, name, prov)
+    if recorded_at is not None and success_at is not None and success_at >= recorded_at:
+        return None
+    return str(err.get("message") or "")
+
+
+def _hermes_relogin_guidance(name: str, message: str) -> str:
+    short = (
+        "Hermes login expired or was revoked"
+        if ("revoked" in message.lower() or "invalid_grant" in message.lower())
+        else "Hermes login expired"
+    )
+    return (
+        f"{short} ({name}). Run `hermes -z` or `hermes setup` to re-authenticate, "
+        "then retry - or pick a different agent in the Agents menu."
+    )
+
+
+def _hermes_auth_state(home: str) -> dict[str, str]:
+    """Read auth.json and split it into a refusal and an informational note.
+
+    Only the login Hermes actually uses gates readiness: the ``active_provider``,
+    or - when none is pinned - the pool as a whole, which is usable as long as one
+    provider is healthy. A dead *other* provider is reported as a note, because
+    refusing on it told the owner Hermes was broken while `hermes` on the host ran
+    fine (the auth store keeps old incidents around forever).
+
+    Returns ``{"guidance": …}`` and/or ``{"note": …}``; missing keys mean "nothing
+    to say". Token values are never read.
     """
     auth_path = Path(home) / "auth.json"
     if not auth_path.is_file():
-        return None
+        return {}
     try:
         data = json.loads(auth_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
+        return {}
     if not isinstance(data, dict):
-        return None
+        return {}
     providers = data.get("providers")
     if not isinstance(providers, dict) or not providers:
-        return None
+        return {}
+
+    known = {name: prov for name, prov in providers.items() if isinstance(prov, dict)}
+    blocked = {
+        name: message
+        for name, prov in known.items()
+        if (message := _hermes_blocking_error(data, name, prov)) is not None
+    }
+    if not blocked:
+        return {}
 
     active = data.get("active_provider")
-    names: list[str] = []
-    if isinstance(active, str) and active in providers:
-        names.append(active)
-    names.extend(name for name in providers if name not in names)
+    active = active if isinstance(active, str) and active in known else None
+    if active is not None:
+        if active in blocked:
+            return {"guidance": _hermes_relogin_guidance(active, blocked[active])}
+        return {"note": _hermes_stale_note(sorted(blocked), active)}
 
-    for name in names:
-        prov = providers.get(name)
-        if not isinstance(prov, dict):
-            continue
-        err = prov.get("last_auth_error")
-        if not isinstance(err, dict) or not err.get("relogin_required"):
-            continue
-        msg = str(err.get("message") or "").lower()
-        if "revoked" in msg or "invalid_grant" in msg:
-            short = "Hermes login expired or was revoked"
-        else:
-            short = "Hermes login expired"
-        return (
-            f"{short} ({name}). Run `hermes -z` or `hermes setup` to re-authenticate, "
-            "then retry - or pick a different agent in the Agents menu."
-        )
-    return None
+    if any(name not in blocked for name in known):
+        return {"note": _hermes_stale_note(sorted(blocked), None)}
+    # Nothing left to fall back to: every stored login needs re-authentication.
+    name = sorted(blocked)[0]
+    return {"guidance": _hermes_relogin_guidance(name, blocked[name])}
+
+
+def _hermes_stale_note(names: list[str], active: str | None) -> str:
+    who = ", ".join(names)
+    where = f"`{active}` is the login in use" if active else "another login is still usable"
+    return (
+        f"Hermes has a recorded login error on {who}, but {where}, so runs are unaffected. "
+        "Run `hermes -z` for that provider if you want it back."
+    )
 
 
 def hermes_status(source_home: str | None = None, binary: str | None = None, path_env: str | None = None) -> dict:
@@ -424,7 +497,8 @@ def hermes_status(source_home: str | None = None, binary: str | None = None, pat
         resolved_binary = resolve_binary("hermes", resolved)
     home = source_home or os.path.expanduser("~/.hermes")
     home_ok = _hermes_home_usable(home)
-    auth_problem = _hermes_auth_problem(home) if home_ok else None
+    auth_state = _hermes_auth_state(home) if home_ok else {}
+    auth_problem = auth_state.get("guidance")
     ready = bool(resolved_binary) and home_ok and not auth_problem
     if ready:
         guidance = ""
@@ -439,4 +513,11 @@ def hermes_status(source_home: str | None = None, binary: str | None = None, pat
     else:
         guidance = (f"`hermes` is installed but no usable Hermes home at {home}. "
                     "Run `hermes -z` to authenticate, or set PROXIMA_SOURCE_HERMES_HOME.")
-    return {"ready": ready, "binary": resolved_binary, "home": home if home_ok else None, "guidance": guidance}
+    return {
+        "ready": ready,
+        "binary": resolved_binary,
+        "home": home if home_ok else None,
+        "guidance": guidance,
+        # Informational only (a dead non-active provider); never gates readiness.
+        "note": auth_state.get("note", "") if ready else "",
+    }

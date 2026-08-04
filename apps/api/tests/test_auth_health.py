@@ -84,6 +84,23 @@ def test_runner_checks_cover_runners_used_by_profiles(monkeypatch):
     assert checks["runner:grok"]["ok"] is False and "grok login" in checks["runner:grok"]["detail"]
 
 
+def test_hermes_note_is_informational_and_keeps_the_check_green(monkeypatch):
+    """A dead non-active Hermes provider is reported, not treated as a fault."""
+    conn = _conn()
+    conn.execute("INSERT INTO profiles(runner_id) VALUES ('hermes')")
+    monkeypatch.setattr("proxima_api.auth_health.runner_readiness", lambda **_kwargs: {
+        "hermes": {"id": "hermes", "displayName": "Hermes", "installed": True, "ready": True, "authHint": ""},
+    })
+    monkeypatch.setattr("proxima_api.auth_health.hermes_status", lambda **_kwargs: {
+        "ready": True, "guidance": "", "note": "Hermes has a recorded login error on xai-oauth, but …",
+    })
+
+    checks = {c["id"]: c for c in auth_health._runner_checks(conn)}
+
+    assert checks["runner:hermes"]["ok"] is True
+    assert "xai-oauth" in checks["runner:hermes"]["detail"]
+
+
 # ── snapshot cache ───────────────────────────────────────────────────────────
 
 def test_snapshot_before_first_refresh_reports_checking():
