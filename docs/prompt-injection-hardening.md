@@ -72,7 +72,44 @@ provider bearer remains only in its HTTP header. The schema-validated
 `MasterToolBroker` accepts only bounded product IDs and text and returns no
 absolute host paths or secret material.
 `query_context` may return validated source citations relative to the selected Ops
-or Code Area scope. A streaming parser, durable root-turn envelope ledger, and
+or Code Area scope.
+
+The broker's two directions use two different policies (#165):
+
+- **Arguments** the model supplies are rejected outright if they contain anything
+  path-shaped or credential-like (`strict_path_or_secret`). A tool call carries
+  IDs and product prose; it never needs a filesystem reference. Unchanged.
+- **Results** the broker returns are **sanitized, not blocked**
+  (`master_tool_sanitizer.py`). Follow-the-folder made a project a real folder, so
+  container payloads, identity text read from a project's own `README`/`AGENTS.md`,
+  Task titles, and code-graph node labels inherently carry absolute paths. Refusing
+  the whole response on a match - the original rule - left Master unable to name the
+  owner's projects at all. Sanitization restores the tools without moving the
+  boundary:
+  1. **allowlist-shaped per payload** - every tool result has a declared shape, and
+     only declared fields are carried (ids, slugs, display names, identity
+     summaries, Area labels, statuses, counts, timestamps, scope-relative
+     citations). A path planted in an undeclared field never has to be *detected*,
+     because it is never carried. This is deliberately not a blocklist regex over
+     serialized JSON;
+  2. **redaction inside declared free text** - absolute paths, home and config
+     locations, local-file URIs, drive and UNC paths, traversal, percent-encoded
+     separators, secret file names, and credential material are replaced with
+     `[host path removed]` / `[redacted]`. Scope-relative references
+     (`docs/architecture.md`) survive on purpose - they are what makes an answer
+     citable;
+  3. **verify, then refuse loudly** - every sanitized value is re-checked. A payload
+     that still reads as a host path is refused on its own with
+     `unsanitizable_tool_result`, naming the tool, the field, and the next step
+     (never silently dropped, never passed through). Broker error text gets the same
+     redaction, since it is model-visible too.
+
+  An absolute host path therefore has to survive all three at once. Known limit: an
+  unquoted path containing a space loses its absolute prefix (the part that carries
+  the home directory) and can leave a trailing relative fragment, which is
+  indistinguishable from ordinary product text.
+
+A streaming parser, durable root-turn envelope ledger, and
 byte/round/call caps make malformed, replayed, duplicate, and oversized model output
 visible without partial hidden actions. See
 [runner-conformance.md](runner-conformance.md).
@@ -179,6 +216,8 @@ expiry + audit event. Not implemented; noted so it isn't assumed to exist.
 - runner subprocess env omits unrelated service secrets;
 - app subprocess env omits provider/service secrets unless allowlisted;
 - preview capability is not the owner session and is tamper-evident;
+- planted absolute paths (in nested JSON, in free prose, in undeclared fields) never
+  reach the model through any Master tool result;
 - generated HTML never executes on the Proxima origin; an Area-only origin may retain
   `allow-same-origin` because that router exposes no Proxima routes, binds framing to
   the authenticated Proxima origin, and rejects Service Workers;

@@ -75,7 +75,9 @@ connections), `migrations.py` (versioned migrations), `worker.py` (run worker),
 `run_reaper.py` (dead-run watchdog) + `satpam.py` (its sibling: the slice-12
 supervision loop over alive-but-unproductive jobs), `master_runtime.py` (system
 identity + restricted chat-only Master runtime), `master_tool_broker.py` (typed,
-schema-validated, filesystem-isolated product tools), `codex_master_proxy.py` (Codex loopback
+schema-validated, filesystem-isolated product tools) +
+`master_tool_sanitizer.py` (allowlist-shaped, per-payload result sanitization),
+`codex_master_proxy.py` (Codex loopback
 provider firewall), `master_supervisor.py` (budgeted unattended
 queue starter), `graph_context.py` (scoped Graphify adapter),
 `code_graph_lifecycle.py` (Code rebuild queue/audit/debounce) +
@@ -906,7 +908,12 @@ nested, oversized, duplicate, unknown, and disallowed envelopes with stable erro
 written to the Master thread. The broker's closed JSON schemas admit only bounded
 product IDs and text. Results never include absolute host or internal graph paths,
 runner homes, bearer material, or configuration; `query_context` may include
-validated scope-relative citations as provenance. Request, result, round, call, and
+validated scope-relative citations as provenance. `master_tool_sanitizer.py` is what
+keeps that true now that a project is a real folder: every result is reduced to its
+declared per-tool shape (undeclared fields are dropped before serialization), host
+paths inside declared product text are redacted, and a payload that survives
+redaction still carrying one is refused on its own with `unsanitizable_tool_result`
+instead of blocking the entire response. Request, result, round, call, and
 aggregate output caps fail before a truncated envelope can become a hidden action. The
 `master_tool_calls` ledger binds each envelope hash to the durable root turn; mutation
 idempotency is derived from that identity.

@@ -427,6 +427,21 @@ path inputs or returns absolute host paths, credentials, runner homes,
 configuration, or arbitrary tool input. `query_context` citations intentionally
 carry validated paths relative to the selected Ops or Code Area scope.
 
+**Tool results are sanitized, not blocked.** Since follow-the-folder a project
+*is* a real folder, so Container records, identity summaries read from a
+project's own docs, Task titles, and code-graph labels all inherently carry
+absolute paths. The broker used to refuse an entire tool response on any
+path-shaped text, which left Master unable to even name the owner's projects.
+`master_tool_sanitizer.py` replaces that with allowlist-shaped sanitization per
+payload: only declared fields survive (ids, slugs, display names, identity
+summaries, Area labels, statuses, counts, timestamps, scope-relative
+citations), host paths inside declared product text are redacted to
+`[host path removed]`, credential material to `[redacted]`, and every sanitized
+value is re-verified. A payload that still carries a host path - an escaped
+citation, say - is refused on its own with `unsanitizable_tool_result`, naming
+the tool, the field, and the next step; it is never silently dropped. Model
+*arguments* keep the strict rule: any path-shaped text at all is rejected.
+
 Group 9 supplies the host-path-free graph state boundary beneath that tool.
 With Master enabled, authenticated owners can read exact Container and Area graph
 state and request one explicit rebuild. The adapter pins Graphify `0.9.28`, resolves

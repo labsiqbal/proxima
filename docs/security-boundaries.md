@@ -177,7 +177,15 @@ Master product actions cross only `MasterToolBroker`. Its closed JSON schemas ac
 bounded product IDs and text, never paths. The broker resolves owner-scoped IDs in
 trusted Proxima code and returns bounded records without absolute host or internal
 graph paths. `query_context` is the narrow exception that returns validated
-scope-relative source citations. Delegation and start call `TaskDelegationService`,
+scope-relative source citations. Results reach that state by **sanitization, not
+blocking**: each payload is reduced to its declared allowlisted shape, host paths
+inside declared product text are redacted, and a payload that is still unsafe is
+refused on its own (`unsanitizable_tool_result`) rather than the whole response
+being destroyed - necessary since follow-the-folder made every Container record
+carry a real folder path. The broker's authority is unchanged: it still decides
+what may leave, and nothing undeclared leaves. See
+[prompt-injection-hardening.md](prompt-injection-hardening.md).
+Delegation and start call `TaskDelegationService`,
 preserving exact Container/Area binding, dependency validation, atomicity, and
 idempotency. A streaming parser, per-turn durable envelope ledger, and
 request/result/round/output caps turn malformed, replayed, duplicate, or oversized

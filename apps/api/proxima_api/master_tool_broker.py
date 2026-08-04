@@ -6,21 +6,37 @@ code, and returns small product records. It never accepts filesystem paths or
 returns absolute host paths, credentials, runner homes, configuration, or
 arbitrary MCP/native tools. Graph citations are validated scope-relative
 references.
+
+Two different policies meet here (#165):
+
+- **arguments** the model supplies are rejected outright if they contain
+  anything path-shaped (:func:`strict_path_or_secret`) - a tool call has no
+  legitimate need for one;
+- **results** the broker returns are *sanitized*, not blocked
+  (:mod:`master_tool_sanitizer`). Since follow-the-folder (#130-#138) a project
+  is a real folder, so container records inherently carry absolute paths;
+  refusing the whole response made Master's basic tools useless. Each payload
+  is reduced to its declared shape, host paths inside declared product text are
+  redacted, and anything still unsafe is refused loudly per payload.
 """
 from __future__ import annotations
 
 import json
 import logging
-import re
 import sqlite3
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 from typing import Any, Callable, Mapping
 
 from fastapi import HTTPException
 from jsonschema import Draft202012Validator
 
 from . import container_registry, master_decisions
+from .master_tool_sanitizer import (
+    UnsanitizablePayload,
+    sanitize_runner_message,
+    sanitize_tool_result,
+    strict_path_or_secret,
+)
 from .task_delegation import (
     DependencyRequest,
     TaskDelegationError,
@@ -46,95 +62,6 @@ _STATUS = {
     "enum": ["queued", "running", "review", "done", "failed", "cancelled"],
 }
 _EXECUTION_POLICY = {"type": "string", "enum": ["guarded", "autonomous"]}
-# Remote schemes may appear in product text. Local-file schemes must not.
-_SAFE_REMOTE_URI = re.compile(
-    r"""(?i)\b(?!(?:file|vscode):)[a-z][a-z0-9+.-]*://[^\s"'<>]+"""
-)
-_LOCAL_FILE_URI = re.compile(
-    r"""(?i)\b(?:file:|vscode://file)[^\s"'<>]*"""
-)
-_WINDOWS_DRIVE_PATH = re.compile(
-    r"""(?i)(?<![A-Za-z0-9])[A-Za-z]:[/\\]+[^\s"'<>]+"""
-)
-_ABSOLUTE_PATH_TEXT = re.compile(
-    r"""(?ix)(?<![A-Za-z0-9])(?:"""
-    r"""file:(?:/{1,3}|\\\\)[^\s"'<>]*|"""
-    r"""vscode://file[^\s"'<>]*|"""
-    r"""[A-Za-z]:[/\\][^\s"'<>]+|"""
-    r"""\\\\[^\s"'<>]+|"""
-    r"""~(?:[/\\][^\s"'<>]*)?|"""
-    r"""(?:\.\.?[/\\])[^\s"'<>]+|"""
-    r"""/(?!/)[^\s"'<>]*"""
-    r""")"""
-)
-_RELATIVE_CANDIDATE = re.compile(
-    r"""(?u)(?<![A-Za-z0-9._\-/])"""
-    r"""(?:[\w.-]+(?:/[\w.-]+)+|\./[\w./-]+|\.\./[\w./-]+)"""
-    r"""(?![A-Za-z0-9._\-/])"""
-)
-_FILE_BASENAME = re.compile(
-    r"""(?ix)(?<![A-Za-z0-9._-])(?:"""
-    r"""(?:README|LICENSE|CHANGELOG|package|pyproject|Cargo|go|tsconfig|vite\.config)"""
-    r"""\.[A-Za-z0-9._-]+"""
-    r"""|"""
-    r"""(?:\.env(?:\.[A-Za-z0-9._-]+)?|id_rsa|id_ed25519|secrets?|credentials?)"""
-    r"""(?:\.[A-Za-z0-9._-]+)?"""
-    r""")(?![A-Za-z0-9._-])"""
-)
-_FILE_EXT = re.compile(
-    r"""(?i)\.(?:md|mdx|txt|rst|py|ts|tsx|js|jsx|json|toml|ya?ml|env|pem|key|"""
-    r"""html?|css|go|rs|java|c|cc|cpp|h|hpp|sh|bash|zsh|sql|graphql)$"""
-)
-_KNOWN_PATH_ROOTS = frozenset(
-    {
-        "wiki",
-        "ops",
-        "artifacts",
-        "reports",
-        "graphify-out",
-        "src",
-        "apps",
-        "docs",
-        "scripts",
-        "tasks",
-        "uploads",
-        "exports",
-        "node_modules",
-        "home",
-        "users",
-        "etc",
-        "var",
-        "tmp",
-    }
-)
-# Ordinary English slash compounds - never treat as filesystem paths.
-_PROSE_SLASH_PHRASES = frozenset(
-    {
-        "and/or",
-        "ci/cd",
-        "read/write",
-        "i/o",
-        "tcp/ip",
-        "frontend/backend",
-        "client/server",
-        "input/output",
-        "pass/fail",
-        "on/off",
-        "yes/no",
-        "source/target",
-        "test/production",
-        "app/server",
-        "black/white",
-        "in/out",
-        "up/down",
-        "he/she",
-        "s/he",
-    }
-)
-_SECRET_TEXT = re.compile(
-    r"""(?i)(?:\bbearer\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----|"""
-    r"""\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,})"""
-)
 
 
 class MasterToolError(RuntimeError):
@@ -409,62 +336,22 @@ def validate_master_tool_call(
     return {
         "ok": False,
         "tool": name or None,
-        "error": {"code": error.code, "message": str(error)},
+        "error": {
+            "code": error.code,
+            "message": sanitize_runner_message(name, error),
+        },
     }
 
 
-def _mask_safe_remote_uris(value: str) -> str:
-    """Blank out ordinary remote URIs so path scans do not match their slashes.
-
-    Local-file URI schemes are left in place so absolute-path detection can
-    still catch them.
-    """
-
-    def _blank(match: re.Match[str]) -> str:
-        return " " * len(match.group(0))
-
-    return _SAFE_REMOTE_URI.sub(_blank, value)
-
-
-def _relative_path_like(candidate: str) -> bool:
-    """True when a slash-separated token looks like a filesystem path."""
-    lowered = candidate.replace("\\", "/").strip().lower()
-    if not lowered or lowered in _PROSE_SLASH_PHRASES:
-        return False
-    if lowered.startswith("./") or lowered.startswith("../") or ".." in lowered.split("/"):
-        return True
-    parts = [part for part in lowered.split("/") if part]
-    if len(parts) < 2:
-        return False
-    if parts[0] in _KNOWN_PATH_ROOTS:
-        return True
-    if any(_FILE_EXT.search(part) for part in parts):
-        return True
-    # Unicode multi-component paths without extension are still path-like.
-    if any(ord(ch) > 127 for ch in candidate):
-        return True
-    return False
-
-
-def _unsafe_string(value: str) -> str | None:
-    if _LOCAL_FILE_URI.search(value) or _WINDOWS_DRIVE_PATH.search(value):
-        return "a filesystem path"
-    masked = _mask_safe_remote_uris(value)
-    if _ABSOLUTE_PATH_TEXT.search(masked):
-        return "a filesystem path"
-    if _FILE_BASENAME.search(masked):
-        return "a filesystem path"
-    for match in _RELATIVE_CANDIDATE.finditer(masked):
-        if _relative_path_like(match.group(0)):
-            return "a filesystem path"
-    if _SECRET_TEXT.search(value):
-        return "credential-like material"
-    return None
-
-
 def _unsafe_input_text(value: Any) -> str | None:
+    """Reject any path-shaped or credential-like text the model supplied.
+
+    Arguments are the strict side of the boundary: a tool call carries IDs and
+    product prose, never a filesystem reference (#165 changed result filtering
+    only).
+    """
     if isinstance(value, str):
-        return _unsafe_string(value)
+        return strict_path_or_secret(value)
     if isinstance(value, dict):
         for nested in value.values():
             unsafe = _unsafe_input_text(nested)
@@ -473,75 +360,6 @@ def _unsafe_input_text(value: Any) -> str | None:
     elif isinstance(value, list):
         for nested in value:
             unsafe = _unsafe_input_text(nested)
-            if unsafe is not None:
-                return unsafe
-    return None
-
-
-def _valid_scope_relative_path(value: Any) -> bool:
-    if not isinstance(value, str) or not value or len(value) > 4_000:
-        return False
-    if (
-        "\\" in value
-        or "\x00" in value
-        or value.startswith("~")
-        or re.match(r"(?i)[a-z][a-z0-9+.-]*:", value)
-        or _SECRET_TEXT.search(value)
-    ):
-        return False
-    parts = value.split("/")
-    if any(part in {"", ".", "..", "~"} for part in parts):
-        return False
-    path = PurePosixPath(value)
-    return not path.is_absolute() and path.as_posix() == value
-
-
-def _unsafe_citations(value: Any) -> str | None:
-    if not isinstance(value, list):
-        return "an invalid scope-relative citation"
-    for citation in value:
-        if not isinstance(citation, dict):
-            return "an invalid scope-relative citation"
-        if set(citation) - {"path", "path_kind", "location"}:
-            return "an invalid scope-relative citation"
-        if citation.get("path_kind") != "scope_relative":
-            return "an invalid scope-relative citation"
-        if not _valid_scope_relative_path(citation.get("path")):
-            return "an invalid scope-relative citation"
-        if "location" in citation and not isinstance(citation["location"], str):
-            return "an invalid scope-relative citation"
-        for key in ("path_kind", "location"):
-            if key in citation:
-                unsafe = _unsafe_result_text(citation[key])
-                if unsafe is not None:
-                    return unsafe
-    return None
-
-
-def _unsafe_result_text(
-    value: Any,
-    *,
-    allow_scope_relative_citations: bool = False,
-) -> str | None:
-    if isinstance(value, str):
-        return _unsafe_string(value)
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            if allow_scope_relative_citations and key == "citations":
-                unsafe = _unsafe_citations(nested)
-            else:
-                unsafe = _unsafe_result_text(
-                    nested,
-                    allow_scope_relative_citations=allow_scope_relative_citations,
-                )
-            if unsafe is not None:
-                return unsafe
-    elif isinstance(value, list):
-        for nested in value:
-            unsafe = _unsafe_result_text(
-                nested,
-                allow_scope_relative_citations=allow_scope_relative_citations,
-            )
             if unsafe is not None:
                 return unsafe
     return None
@@ -653,16 +471,19 @@ class MasterToolBroker:
             return self._error(name, error.code, str(error))
         try:
             data = self._definitions[name].handler(dict(arguments))
-            unsafe = _unsafe_result_text(
-                data,
-                allow_scope_relative_citations=name == "query_context",
-            )
-            if unsafe is not None:
-                return self._error(
-                    name,
-                    "unsafe_tool_result",
-                    f"{name} result contained {unsafe}",
+            # Sanitize-then-pass (#165): reduce the payload to its declared
+            # shape and redact host paths inside declared product text, instead
+            # of destroying a whole response because a project is a folder.
+            try:
+                data = sanitize_tool_result(name, data)
+            except UnsanitizablePayload as exc:
+                log.warning(
+                    "Master refused an unsanitizable %s payload at %s (%s)",
+                    exc.tool,
+                    exc.field,
+                    exc.reason,
                 )
+                return self._error(name, exc.code, str(exc))
             result = {"ok": True, "tool": name, "result": data}
             encoded = json.dumps(
                 result, ensure_ascii=False, separators=(",", ":")
@@ -700,10 +521,15 @@ class MasterToolBroker:
 
     @staticmethod
     def _error(name: str | None, code: str, message: str) -> dict[str, Any]:
+        # Error text is model-visible too: schema failures quote arguments and
+        # product errors quote product state, so it gets the same redaction.
         return {
             "ok": False,
             "tool": name,
-            "error": {"code": code, "message": message},
+            "error": {
+                "code": code,
+                "message": sanitize_runner_message(name, message),
+            },
         }
 
     def _owned_container(self, container_id: int) -> dict[str, Any]:
