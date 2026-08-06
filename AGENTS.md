@@ -1,3 +1,11 @@
+# proxima
+
+Type: coding · Ownership: tool · Delivery mode: local-only · STATUS: ON HOLD
+
+Self-hosted cockpit for delegating work to agent CLIs. ON HOLD per the owner
+(2026-08-06) while the workspace Standards stack settles. Follow the
+Standards: ~/projects/.standards/.
+
 # Proxima Agent Rules
 
 This repo is for building Proxima, a runner-agnostic PWA/control-plane for human + AI agent teams.
