@@ -7,14 +7,14 @@ On-hold self-hosted single-user control plane for delegating work to agent CLIs.
 
 | Need | Open |
 | --- | --- |
-| Hold status, rules, and documentation contract | `AGENTS.md` |
-| Documentation index | `docs/README.md` |
-| System structure and main flows | `docs/reference/architecture.md` |
-| Feature behavior and status | `docs/CAPABILITIES.md` |
-| Security and runner isolation | `docs/security-boundaries.md`, `docs/prompt-injection-hardening.md` |
-| Backend entry and routes | `apps/api/proxima_api/main.py`, `apps/api/proxima_api/routes/` |
-| Frontend shell and navigation | `apps/web/src/App.tsx`, `apps/web/src/lib/workRoute.ts` |
-| Build, test, and service commands | `package.json`, `scripts/proxima` |
+| Hold status, rules, and documentation contract | [AGENTS.md](AGENTS.md) |
+| Documentation index | [docs/README.md](docs/README.md) |
+| System structure and main flows | [docs/reference/architecture.md](docs/reference/architecture.md) |
+| Feature behavior and status | [docs/CAPABILITIES.md](docs/CAPABILITIES.md) |
+| Security and runner isolation | [docs/security-boundaries.md](docs/security-boundaries.md), [docs/prompt-injection-hardening.md](docs/prompt-injection-hardening.md) |
+| Backend entry and routes | [apps/api/proxima_api/main.py](apps/api/proxima_api/main.py), [apps/api/proxima_api/routes/](apps/api/proxima_api/routes/) |
+| Frontend shell and navigation | [apps/web/src/App.tsx](apps/web/src/App.tsx), [apps/web/src/lib/workRoute.ts](apps/web/src/lib/workRoute.ts) |
+| Build, test, and service commands | [package.json](package.json), [scripts/proxima](scripts/proxima) |
 
 ## Layout
 - `apps/api/`: FastAPI control plane, ACP runners, orchestration, jobs/worktrees, workflows, artifacts, previews, auth, DB, routes, and backend tests
